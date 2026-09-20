@@ -1,0 +1,13 @@
+import { readFileSync, writeFileSync } from 'node:fs';
+const { version } = JSON.parse(readFileSync('package.json', 'utf8'));
+if (!/^0\.\d+\.\d+$/.test(version)) throw new Error('This preview workflow only releases 0.x.x. Review the process before a stable major release.');
+const changelog = readFileSync('CHANGELOG.md', 'utf8');
+const heading = `## [${version}]`;
+const section = changelog.split('\n').findIndex(line => line.startsWith(heading));
+if (section < 0) throw new Error('Add human-readable release notes to CHANGELOG.md first.');
+const lines = changelog.split('\n').slice(section + 1);
+const next = lines.findIndex(line => line.startsWith('## '));
+const notes = (next < 0 ? lines : lines.slice(0, next)).join('\n').trim();
+if (!notes) throw new Error('Release notes cannot be empty.');
+writeFileSync(process.argv[2] || '.tmp/release-notes.md', notes + '\n');
+console.log(`v${version}`);

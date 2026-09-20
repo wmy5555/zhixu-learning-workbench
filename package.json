@@ -2,12 +2,18 @@
   "name": "learning-workbench",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@11.19.0",
   "type": "module",
-  "engines": { "node": ">=24.0.0" },
+  "engines": {
+    "node": ">=24.0.0"
+  },
   "scripts": {
     "start": "node src/server.mjs",
     "test": "node --test --test-concurrency=1 tests/*.test.mjs",
-    "mcp": "node src/mcp.mjs"
+    "mcp": "node src/mcp.mjs",
+    "check": "node scripts/check-project.mjs",
+    "quality": "node scripts/quality-check.mjs",
+    "verify": "pnpm check && pnpm test && pnpm quality"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",

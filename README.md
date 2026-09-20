@@ -1,5 +1,9 @@
 # 知序 · 个人学习工作台
 
+[![CI](https://github.com/wmy5555/zhixu-learning-workbench/actions/workflows/ci.yml/badge.svg)](https://github.com/wmy5555/zhixu-learning-workbench/actions/workflows/ci.yml)
+
+当前版本 **0.1.0 开发预览**。仓库保持私有，尚未选择开源许可证；暂不授予再分发授权。
+
 本地运行的中文 Web 应用。原始资料、知识、个人理解和错题修正保存为 Markdown；学习记录与任务保存到 SQLite。支持 Obsidian 外部编辑、来源追踪、独立配置的模型/搜索/向量服务和真实 MCP。
 
 **当前状态：可运行开发版。** 本地数据流程、权限与 MCP 已实测；你尚未配置真实模型、搜索或嵌入凭据，所以联网核验质量、语义检索质量和真实教学反馈仍待验收。没有把模拟结果当作在线成功。详见 [测试结果](docs/TEST_RESULTS.md) 和 [需求覆盖](docs/COVERAGE.md)。
@@ -13,7 +17,28 @@
 5. 需要 AI 时，在「系统」填写供应商地址、模型和密钥并测试连接；再单独允许具体资料外发。联网研究还需搜索和网页读取两项能力。
 6. 双击 `stop.cmd` 停止由启动脚本启动的后台服务。关闭网页不会停止后台调度；关机或休眠时不保证执行，重启后补算今日安排。
 
-这台电脑已安装项目依赖。换电脑需 Node.js 24+，双击 `install.cmd` 安装锁定依赖。运行 `node --test --test-concurrency=1 tests/*.test.mjs` 可复测；`node scripts/quality-check.mjs` 运行小型中文查找材料。
+换电脑需 Node.js 24，双击 `install.cmd` 安装锁定依赖；无需安装 Codex。本地缓存运行时只是已有环境的兼容入口。
+
+## 开发者快速开始
+
+安装 Node.js 24 和 `package.json` 指定的 pnpm 11.19.0，在项目目录运行：
+
+```sh
+npm install --global pnpm@11.19.0
+pnpm install --frozen-lockfile
+pnpm start
+```
+
+浏览器打开 `http://127.0.0.1:4318`。Linux/macOS 要保存供应商凭据，需先设置私有的 `LEARNING_MASTER_KEY`，参见 [.env.example](.env.example)；应用不自动加载 `.env`，显式加载可运行 `node --env-file=.env src/server.mjs`。没有供应商凭据也能使用本地资料功能。
+
+```sh
+pnpm verify
+pnpm audit --prod --audit-level high
+```
+
+`verify` 运行语法/配置/上传边界检查、全部测试和本地中文检索检查。Linux/macOS 加密测试需临时随机主密钥，勿使用真实密钥。测试仅在 `.tmp/` 创建合成数据。项目无需构建，无 TypeScript 类型检查；真实模型和联网质量须单独验收。
+
+参与修改请读 [CONTRIBUTING](CONTRIBUTING.md)；AI Agent 先读 [AGENTS](AGENTS.md)。版本、PR、自动检查和发布步骤见 [维护说明](docs/MAINTENANCE.md)，版本变化见 [CHANGELOG](CHANGELOG.md)，漏洞报告见 [SECURITY](SECURITY.md)。
 
 ## 怎样试用一条完整流程
 
