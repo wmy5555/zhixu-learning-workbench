@@ -1,0 +1,7 @@
+node_modules/
+.data/
+vault/
+.tmp/
+*.log
+test-results/
+playwright-report/
