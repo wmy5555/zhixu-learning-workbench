@@ -4,6 +4,8 @@
 
 当前版本 **0.1.0 开发预览**。仓库保持私有，尚未选择开源许可证；暂不授予再分发授权。
 
+首次公开前检查见 [Public Release Audit](docs/PUBLIC_RELEASE_AUDIT.md) 和 [第三方许可证清单](docs/DEPENDENCY_LICENSES.md)。完成审计不自动授权公开；须另行确认许可证和 Public 操作。
+
 本地运行的中文 Web 应用。原始资料、知识、个人理解和错题修正保存为 Markdown；学习记录与任务保存到 SQLite。支持 Obsidian 外部编辑、来源追踪、独立配置的模型/搜索/向量服务和真实 MCP。
 
 **当前状态：可运行开发版。** 本地数据流程、权限与 MCP 已实测；你尚未配置真实模型、搜索或嵌入凭据，所以联网核验质量、语义检索质量和真实教学反馈仍待验收。没有把模拟结果当作在线成功。详见 [测试结果](docs/TEST_RESULTS.md) 和 [需求覆盖](docs/COVERAGE.md)。
