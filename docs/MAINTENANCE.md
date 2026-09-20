@@ -4,6 +4,8 @@
 
 使用 main + 短期分支 + PR。主分支变更运行 CI；PR 运行同样检查；每周定时运行以发现新增依赖风险；Dependabot 每周提出 npm/pnpm 和 GitHub Actions 更新，不自动合并。
 
+`pnpm-workspace.yaml` 禁止 pnpm 在运行脚本前隐式重装依赖。安装始终显式执行 `pnpm install --frozen-lockfile`；CI 使用干净环境重新安装，而本机验证不会擅自替换正在使用的依赖目录。
+
 必需检查名称：`Quality (ubuntu-latest)`、`Quality (windows-latest)`、`Secrets`、`Dependencies`。Quality 使用 Node 24、固定 pnpm、锁定依赖，运行仓库检查、全部 Node 测试和小型中文检索质量检查。Linux 临时加密密钥仅用于合成测试。无构建/类型系统，因此不设置虚假的构建/类型检查。
 
 CI 文件不等于服务器端合并保护。Branch protection 是否可用取决于 GitHub 套餐和仓库可见性；私有仓库保持私有，不为启用功能而自动公开或付费升级。若服务器不支持，维护 Agent 仍须等待四项检查全部通过，且明确说明不是强制阻断。
