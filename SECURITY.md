@@ -25,3 +25,5 @@
 - 扫描只能识别已知模式，不证明所有隐私、商业秘密或漏洞均已发现。上传前仍需人工/Agent 检查变更内容。
 
 应用加密和隐私行为详见 [DATA](docs/DATA.md)。不要将 `.env.example` 的注释替换成真实凭据后提交。
+
+首次公开仓库必须执行 [Public Release Audit](docs/PUBLIC_RELEASE_AUDIT.md)，包括历史工作流日志；仅扫描 Git 文件不覆盖日志暴露。即使是随机生成的测试密钥，也应在写入 job 环境前注册日志遮蔽。

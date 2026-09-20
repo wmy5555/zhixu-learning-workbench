@@ -30,7 +30,7 @@ jobs:
       - run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Create an ephemeral test-only encryption key
         shell: bash
-        run: node -e "require('node:fs').appendFileSync(process.env.GITHUB_ENV, 'LEARNING_MASTER_KEY=' + require('node:crypto').randomBytes(32).toString('hex') + '\n')"
+        run: node -e "const key = require('node:crypto').randomBytes(32).toString('hex'); console.log('::add-mask::' + key); require('node:fs').appendFileSync(process.env.GITHUB_ENV, 'LEARNING_MASTER_KEY=' + key + '\n')"
       - run: pnpm verify
   secrets:
     name: Secrets
