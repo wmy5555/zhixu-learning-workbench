@@ -2869,6 +2869,15 @@
     "rawScannerFindings": 36,
     "uniqueEphemeralTestKeys": 18,
     "productionCredentialFindings": 0,
-    "classification": "All findings are dynamically generated LEARNING_MASTER_KEY values from isolated CI jobs, duplicated in combined and per-step logs. No real user database or production key was used. Masking added; old logs retained."
+    "classification": "All findings are dynamically generated LEARNING_MASTER_KEY values from isolated CI jobs, duplicated in combined and per-step logs. No real user database or production key was used. Masking added; old logs retained.",
+    "remediationVerification": {
+      "workflowRun": 35518569317,
+      "url": "https://github.com/wmy5555/zhixu-learning-workbench/actions/runs/35518569317",
+      "allFourChecks": "success",
+      "logTextFiles": 44,
+      "maskedOccurrences": 4,
+      "unmaskedOccurrences": 0,
+      "gitleaksFindings": 0
+    }
   }
 }
