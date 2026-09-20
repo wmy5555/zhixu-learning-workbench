@@ -1,0 +1,23 @@
+name: 问题报告
+description: 描述使用中遇到的问题（请勿提供真实资料或凭据）
+body:
+  - type: markdown
+    attributes:
+      value: '安全漏洞请阅读 SECURITY.md，通过私密渠道报告。'
+  - type: textarea
+    id: behavior
+    attributes:
+      label: 发生了什么？你原本希望怎样？
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 如何重现
+      description: 请使用虚构资料，并注明操作系统、Node 版本和项目版本。
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 脱敏后的错误或截图
