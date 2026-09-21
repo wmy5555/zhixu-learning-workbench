@@ -68,7 +68,7 @@ pnpm audit --prod --audit-level high
 
 ## 文档
 
-- [新手使用指南](public/guide.html)：运行后点击 Web 左下角的「?」，或访问 `/guide.html`。涵盖首次体验、资料加工、学习复习、检索输出、能力设置和备份排障。
+- [新手使用指南](public/guide.html)：运行后点击 Web 左下角的「?」，或访问 `/guide.html`。涵盖首次体验、资料加工、学习复习、检索输出、能力设置和备份排障。单独打开时提供顶部知序 Logo、固定目录与指南全文搜索；搜索在浏览器本地完成，支持正文、表格和折叠问答，点击结果直接定位。窄屏通过菜单展开目录，弹窗内仍保留原布局。
 - [架构与接口](docs/ARCHITECTURE.md)
 - [接入模型、搜索与向量](docs/PROVIDERS.md)
 - [MCP 连接与实测说明](docs/MCP.md)

@@ -6,10 +6,20 @@
   <title>知序使用指南 · 从第一份资料开始</title>
   <script src="/theme.js"></script>
   <link rel="stylesheet" href="guide.css">
+  <script type="module" src="/guide.mjs"></script>
 </head>
 <body>
+  <header class="guide-topbar">
+    <button class="guide-menu" type="button" aria-label="展开指南目录" aria-expanded="false" aria-controls="guide-navigation">☰</button>
+    <a class="guide-brand" href="/guide.html"><span class="guide-logo" aria-hidden="true">知</span><strong>知序指南</strong></a>
+    <div class="guide-search" role="search">
+      <label class="search-field"><span aria-hidden="true">⌕</span><input id="guide-query" type="search" placeholder="搜索使用指南…" aria-label="搜索使用指南" aria-controls="guide-results" autocomplete="off"></label>
+      <div id="guide-results" class="guide-results" hidden><p id="guide-search-status" role="status"></p><ul></ul></div>
+    </div>
+    <a class="guide-home" href="/">返回工作台 ↗</a>
+  </header>
   <div class="guide-layout">
-    <aside class="guide-toc" aria-label="使用指南目录">
+    <aside class="guide-toc" id="guide-navigation" aria-label="使用指南目录">
       <strong>第一次使用 · 阅读导航</strong>
       <nav>
         <a href="#start">01　先完成一次体验</a>
