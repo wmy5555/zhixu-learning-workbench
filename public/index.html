@@ -3,9 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="light" />
+    <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" content="#173a45" />
     <title>知序 · 个人学习工作台</title>
+    <script src="/theme.js"></script>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -14,6 +15,10 @@
         <div class="brand">
           <span class="brand-mark" aria-hidden="true">知</span>
           <span><strong>知序</strong><small>个人学习工作台</small></span>
+          <button id="theme-toggle" class="theme-toggle" type="button" aria-label="夜间模式" aria-pressed="false" title="切换夜间模式">
+            <svg class="theme-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.4 1.4m11.2 11.2L19 19M5 19l1.4-1.4M17.6 6.4 19 5"/></svg>
+            <svg class="theme-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.8 13.1A9 9 0 0 1 10.9 3.2 9 9 0 1 0 20.8 13.1Z"/></svg>
+          </button>
         </div>
         <nav class="nav-list" id="nav-list">
           <button class="nav-item is-active" data-view="today"><span>◫</span>今日</button>

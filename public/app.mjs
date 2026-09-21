@@ -1347,16 +1347,67 @@ function systemTabButton(value, label) {
 async function renderSystem() {
   const wrapper = el("div", { class: "page-stack" });
   wrapper.append(el("div", { class: "tabs" }, [
-    systemTabButton("settings", "能力设置"), systemTabButton("jobs", "任务"), systemTabButton("data", "备份与恢复"),
+    systemTabButton("settings", "能力设置"), systemTabButton("appearance", "外观"), systemTabButton("jobs", "任务"), systemTabButton("data", "备份与恢复"),
     systemTabButton("diagnostics", "诊断与 MCP"), systemTabButton("proposals", "写入提案"), systemTabButton("conflicts", "冲突"),
   ]));
-  if (state.systemTab === "jobs") wrapper.append(await jobsPanel());
+  if (state.systemTab === "appearance") wrapper.append(appearancePanel());
+  else if (state.systemTab === "jobs") wrapper.append(await jobsPanel());
   else if (state.systemTab === "data") wrapper.append(dataPanel());
   else if (state.systemTab === "diagnostics") wrapper.append(await diagnosticsPanel());
   else if (state.systemTab === "proposals") wrapper.append(await proposalsPanel());
   else if (state.systemTab === "conflicts") wrapper.append(conflictsPanel());
   else wrapper.append(await settingsPanel());
   clear(refs.main).append(wrapper);
+}
+
+function appearancePanel() {
+  const appearance = window.zhixuAppearance;
+  const saved = appearance.getAccent();
+  let selected = saved;
+  const initial = saved || "#a8b4ef";
+  const picker = el("input",{type:"color",value:initial,"aria-label":"选择强调色"});
+  const code = el("input",{value:initial.toUpperCase(),maxLength:7,placeholder:"#A8B4EF",spellcheck:false,"aria-label":"强调色代码"});
+  const message = el("p",{class:"fine-print",role:"status",text:saved ? "当前使用自定义强调色。" : "当前使用默认配色：日间青绿，夜间柔和蓝紫。"});
+  const preview = el("div",{class:"two-column appearance-previews"});
+  const save = button("保存强调色",{kind:"primary",onClick:()=>{
+    try { appearance.saveAccent(selected); message.textContent=selected ? "强调色已保存，刷新后仍然生效。" : "已恢复默认配色。"; toast("外观设置已保存","success"); }
+    catch(error) { handleError(error); }
+  }});
+  function showPreview() {
+    clear(preview);
+    for (const theme of ["light","dark"]) {
+      const sample=el("section",{class:"appearance-sample",dataset:{previewTheme:theme},"aria-label":theme==="dark"?"夜间配色预览":"日间配色预览"});
+      for (const [name,value] of Object.entries(appearance.palette(selected,theme))) sample.style.setProperty(name,value);
+      sample.append(el("p",{class:"eyebrow",text:theme==="dark"?"夜间模式":"日间模式"}),el("h3",{text:"把注意力留给值得学习的内容"}),el("p",{class:"sample-muted",text:"背景保持中性，强调色用于按钮、链接和选中状态。"}),el("div",{class:"form-actions"},[el("span",{class:"sample-button",text:"开始学习"}),el("span",{class:"sample-selected",text:"已选中"}),el("span",{class:"sample-link",text:"查看笔记"})]));
+      preview.append(sample);
+    }
+  }
+  function choose(value) {
+    selected=value; picker.value=value; code.value=value.toUpperCase(); code.setCustomValidity(""); save.disabled=false;
+    message.textContent="预览已更新，点击保存后应用到整个界面。"; showPreview();
+  }
+  picker.addEventListener("input",()=>choose(picker.value));
+  code.addEventListener("input",()=>{
+    const value=code.value.trim();
+    if (/^#[0-9a-f]{6}$/i.test(value)) choose(value.toLowerCase());
+    else { code.setCustomValidity("请输入 # 开头的六位颜色代码。"); save.disabled=true; message.textContent="请输入完整颜色代码，例如 #A8B4EF。"; }
+  });
+  const presets=el("div",{class:"form-actions appearance-presets"},[["柔和蓝紫","#a8b4ef"],["雾蓝","#8ab4d8"],["青绿","#83bfb3"],["玫瑰","#d7a3b8"],["暖杏","#d6b58e"]].map(([name,color])=>{
+    const item=button(name,{kind:"quiet",onClick:()=>choose(color)});
+    item.classList.add("compact");
+    const dot=el("span",{class:"accent-swatch","aria-hidden":"true"});dot.style.backgroundColor=color;item.prepend(dot);return item;
+  }));
+  const reset=button("恢复默认配色",{onClick:()=>{
+    try { appearance.saveAccent(null); selected=null; picker.value="#a8b4ef"; code.value="#A8B4EF"; code.setCustomValidity(""); save.disabled=false; message.textContent="已恢复默认配色：日间青绿，夜间柔和蓝紫。"; showPreview(); toast("已恢复默认配色","success"); }
+    catch(error) { handleError(error); }
+  }});
+  showPreview();
+  return el("section",{class:"panel page-stack"},[
+    sectionHeading("外观与强调色","日夜模式通过左上角开关切换；强调色会同时适配两种模式。"),
+    presets,el("div",{class:"form-grid"},[field("取色器",picker),field("颜色代码",code)]),
+    preview,message,el("div",{class:"form-actions"},[save,reset]),
+    el("p",{class:"fine-print",text:"保存在当前浏览器。为保证可读性，系统会按日夜模式微调颜色亮度；成功、警告和错误仍保留各自的状态色。"}),
+  ]);
 }
 
 async function settingsPanel() {
@@ -1757,7 +1808,7 @@ document.addEventListener("keydown", (event) => { if (event.key === "Escape") cl
 
 async function init() {
   const [hashView, systemTab] = window.location.hash.slice(1).split("/");
-  if (hashView === "system" && ["settings", "jobs", "data", "diagnostics", "proposals", "conflicts"].includes(systemTab)) state.systemTab = systemTab;
+  if (hashView === "system" && ["settings", "appearance", "jobs", "data", "diagnostics", "proposals", "conflicts"].includes(systemTab)) state.systemTab = systemTab;
   setPage(pages[hashView] ? hashView : "today");
   try {
     await startSession();
