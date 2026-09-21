@@ -84,7 +84,7 @@ export const api = {
   import: (body) => request("/api/import", { method: "POST", body }),
   updateNote: (id, body) => request(`/api/notes/${encodeURIComponent(id)}`, { method: "PUT", body }),
   deleteNote: (id, expectedHash) => request(`/api/notes/${encodeURIComponent(id)}`, { method: "DELETE", body: { expectedHash } }),
-  processNote: (id) => request(`/api/notes/${encodeURIComponent(id)}/process`, { method: "POST", body: {} }),
+  processNote: (id, options = {}) => request(`/api/notes/${encodeURIComponent(id)}/process`, { method: "POST", body: options }),
   extractSource: (id, body) => request(`/api/notes/${encodeURIComponent(id)}/extract`, { method: "POST", body }),
   promote: (id, body) => request(`/api/notes/${encodeURIComponent(id)}/promote`, { method: "POST", body }),
   confirmNote: (id, body) => request(`/api/notes/${encodeURIComponent(id)}/confirm`, { method: "POST", body }),

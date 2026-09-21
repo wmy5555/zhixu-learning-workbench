@@ -249,7 +249,7 @@ test('processing batches unique claims once inside the source budget and leaves 
   const { service } = await harness(t, ai);
   const imported = service.importItems({
     items: [{ title: '批量研究原始资料', body: '两个候选会共享一项事实主张。', privacy: 'cloud' }],
-    process: true,
+    process: true, research: true,
   });
   const source = imported.notes[0];
 

@@ -318,7 +318,7 @@ test('local-only source processing reaches the offline privacy guard without ext
   h.service.updateSettings({ ai: { enabled: true } });
   const imported = h.service.importItems({
     items: [{ title: '私有资料', body: '不允许外发的私人原文', privacy: 'local' }],
-    process: true,
+    process: true, research: true,
   });
   await h.service.runJobs();
 

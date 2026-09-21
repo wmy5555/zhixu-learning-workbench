@@ -193,6 +193,23 @@ test('unknown state-changing actions are rejected and leave the job unchanged', 
   assert.equal(app.service.store.get('jobs', job.id).state, 'queued');
 });
 
+test('HTTP processing defaults to extraction and keeps explicit research in a separate task', async t => {
+  const app = await startApp(t);
+  const session = await webSession(app);
+  const source = app.service.importItems({ items: [{ title: '可选核验', body: '接口测试正文' }] }).notes[0];
+  const endpoint = `/api/notes/${source.id}/process`;
+  const plain = await request(app.baseUrl, endpoint, { method: 'POST', headers: session.headers, body: {} });
+  assert.equal(plain.status, 200);
+  assert.equal(plain.body.payload.research, false);
+  const explicit = await request(app.baseUrl, endpoint, { method: 'POST', headers: session.headers, body: { research: true, reuseExtracted: true } });
+  assert.equal(explicit.status, 200);
+  assert.equal(explicit.body.payload.research, true);
+  assert.notEqual(explicit.body.id, plain.body.id);
+  const imported = await request(app.baseUrl, '/api/import', { method: 'POST', headers: session.headers, body: { items: [{ title: '勾选核验', body: '导入接口测试正文' }], process: true, research: true } });
+  assert.equal(imported.status, 200);
+  assert.equal(imported.body.jobs[0].payload.research, true);
+});
+
 test('instructions inside imported text remain inert data and trigger no tool action', async t => {
   const app = await startApp(t);
   const session = await webSession(app);
