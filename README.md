@@ -21,6 +21,14 @@
 
 换电脑需 Node.js 24，双击 `install.cmd` 安装锁定依赖；无需安装 Codex。本地缓存运行时只是已有环境的兼容入口。
 
+### 启动速度与排查
+
+关闭网页后服务仍在后台运行，再次双击快捷方式会先确认本机服务就绪，直接交给默认浏览器打开。仅在服务未运行时查找 Node 并启动；不会为了加速自动设置开机启动。桌面快捷方式继续指向 `start.ps1`，无需重建。
+
+需要定位延迟时可运行 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\start.ps1 -Timing`。输出的 `ReadyMs` 为脚本开始到服务可用，`BrowserDispatchMs` 为调用默认浏览器的耗时，二者都**不代表浏览器已完成首屏显示**，也不包含 PowerShell 自身加载时间。`-NoBrowser` 仅取消打开浏览器，服务未运行时仍会启动服务；`-Port` 可指定端口，默认读取 `PORT`，未设置时为 4318。
+
+测试结果和一秒目标的适用范围见 [启动性能说明](docs/STARTUP_PERFORMANCE.md)。
+
 ## 开发者快速开始
 
 安装 Node.js 24 和 `package.json` 指定的 pnpm 11.19.0，在项目目录运行：
