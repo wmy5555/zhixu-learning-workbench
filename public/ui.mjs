@@ -23,7 +23,8 @@ export function clear(node) {
 }
 
 export function button(label, { kind = "quiet", onClick, disabled = false, type = "button", title = "" } = {}) {
-  return el("button", { class: `${kind}-button`, text: label, type, disabled, title, on: onClick ? { click: onClick } : {} });
+  const [variant, ...modifiers] = kind.trim().split(/\s+/);
+  return el("button", { class: [`${variant}-button`, ...modifiers].join(" "), text: label, type, disabled, title, on: onClick ? { click: onClick } : {} });
 }
 
 export function badge(label, tone = "neutral") {
