@@ -156,12 +156,52 @@ function createKnowledge(service, { title, body, privacy = 'local', stage = 'can
   });
 }
 
+test('default extraction does not research; explicit later research reuses extraction and preserves identity', async t => {
+  const { service, mock } = await harness(t);
+  const imported = service.importItems({ items: [{ title: '可选核验', body: '待验证资料', privacy: 'cloud' }], process: true });
+  await drainQueuedJobs(service);
+  assert.equal(mock.events.filter(e => e.capability === 'research').length, 0);
+  assert.equal(service.store.get('jobs', imported.jobs[0].id).state, 'done');
+  const before = service.listNotes({ kind: 'knowledge' })[0];
+  assert.ok(before.meta.researchLimitations.some(l => l.includes('未执行联网检验')));
+  assert.equal(before.meta.researchedAt, null);
+  assert.equal(before.meta.reviewAfter, null);
+  assert.equal(service.today().items.some(item => item.noteId === before.id), false);
+  assert.throws(() => service.startStudy({ noteId: before.id }), error => error.code === 'RESEARCH_REQUIRED');
+  const generateCount = mock.events.filter(e => e.capability === 'generate').length;
+  const job = service.processNote(imported.notes[0].id, { research: true, reuseExtracted: true });
+  assert.equal(service.processNote(imported.notes[0].id, { research: true, reuseExtracted: true }).id, job.id);
+  await drainQueuedJobs(service);
+  assert.equal(mock.events.filter(e => e.capability === 'generate').length, generateCount);
+  assert.equal(mock.events.filter(e => e.capability === 'research').length, 1);
+  const after = service.listNotes({ kind: 'knowledge' })[0];
+  assert.equal(after.id, before.id);
+  assert.deepEqual(after.meta.researchLimitations, []);
+  assert.ok(after.meta.researchedAt);
+  service.processNote(imported.notes[0].id);
+  await drainQueuedJobs(service);
+  assert.equal(service.getNote(after.id).hash, after.hash);
+});
+
+test('legacy queued extraction and non-boolean research values never opt into network research', async t => {
+  const { service, mock } = await harness(t);
+  let batches = 0;
+  mock.api.researchBatch = async () => { batches++; throw new Error('不应自动调用批量核验'); };
+  const source = service.importItems({ items: [{ title: '旧任务', body: '旧任务资料', privacy: 'cloud' }] }).notes[0];
+  service.queue('process', { noteId: source.id, hash: source.hash }, 'legacy');
+  await drainQueuedJobs(service);
+  service.processNote(source.id, { research: 'true' });
+  await drainQueuedJobs(service);
+  assert.equal(mock.events.filter(e => e.capability === 'research').length, 0);
+  assert.equal(batches, 0);
+});
+
 test('orchestration-only mock covers source evidence, learning, mistake dispute, and user confirmation', async t => {
   const { service, mock } = await harness(t);
   service.updateSettings({ ai: { enabled: true } });
   const imported = service.importItems({
     items: [{ title: '云端授权测试资料', body: '用于本地编排测试的来源正文。', privacy: 'cloud' }],
-    process: true,
+    process: true, research: true,
   });
   await drainQueuedJobs(service);
 
@@ -199,7 +239,7 @@ test('simulated research failure keeps a limited candidate out of learning and R
   const { service } = await harness(t, { researchFailure: true });
   const imported = service.importItems({
     items: [{ title: '研究失败资料', body: '需要研究但测试桩故意失败。', privacy: 'cloud' }],
-    process: true,
+    process: true, research: true,
   });
   await drainQueuedJobs(service);
   const processJob = service.store.get('jobs', imported.jobs[0].id);
@@ -221,7 +261,7 @@ test('a changed source makes its old processKey candidate ineligible for study a
   const { service } = await harness(t);
   const imported = service.importItems({
     items: [{ title: '会变化的来源', body: '来源初始版本。', privacy: 'cloud' }],
-    process: true,
+    process: true, research: true,
   });
   await drainQueuedJobs(service);
   let candidate = service.listNotes({ kind: 'knowledge' })[0];
@@ -364,7 +404,7 @@ test('a cached research result with limitations is retried instead of suppressin
   mock.state.researchMode = 'limited';
   const imported = service.importItems({
     items: [{ title: '受限缓存重试', body: '第一次研究返回限制，第二次应重新研究。', privacy: 'cloud' }],
-    process: true,
+    process: true, research: true,
   });
   await drainQueuedJobs(service);
   const firstJob = service.store.get('jobs', imported.jobs[0].id);
@@ -377,7 +417,7 @@ test('a cached research result with limitations is retried instead of suppressin
   mock.state.researchMode = 'success';
   const retry = service.queue(
     'process',
-    { noteId: imported.notes[0].id, hash: imported.notes[0].hash },
+    { noteId: imported.notes[0].id, hash: imported.notes[0].hash, research: true },
     `limited-cache-retry:${imported.notes[0].id}`,
   );
   await drainQueuedJobs(service);
@@ -392,7 +432,7 @@ test('reprocessing a user-edited candidate creates a pending proposal and applie
   const { service, mock } = await harness(t);
   const imported = service.importItems({
     items: [{ title: '用户编辑保护', body: '加工后用户会修改候选知识。', privacy: 'cloud' }],
-    process: true,
+    process: true, research: true,
   });
   await drainQueuedJobs(service);
   let candidate = service.listNotes({ kind: 'knowledge' })[0];
@@ -405,7 +445,7 @@ test('reprocessing a user-edited candidate creates a pending proposal and applie
   mock.state.candidateTopic = '重新研究主题';
   const retry = service.queue(
     'process',
-    { noteId: imported.notes[0].id, hash: imported.notes[0].hash },
+    { noteId: imported.notes[0].id, hash: imported.notes[0].hash, research: true },
     `user-edit-retry:${candidate.id}`,
   );
   await drainQueuedJobs(service);
@@ -433,7 +473,7 @@ test('reprocessing detects an external body edit through generatedBodyHash and p
   const { service, mock } = await harness(t);
   const imported = service.importItems({
     items: [{ title: '外部编辑保护', body: '加工后从 Vault 外部编辑候选。', privacy: 'cloud' }],
-    process: true,
+    process: true, research: true,
   });
   await drainQueuedJobs(service);
   let candidate = service.listNotes({ kind: 'knowledge' })[0];
@@ -448,7 +488,7 @@ test('reprocessing detects an external body edit through generatedBodyHash and p
   mock.state.candidateBody = '再次加工生成但尚未确认的新正文。';
   const retry = service.queue(
     'process',
-    { noteId: imported.notes[0].id, hash: imported.notes[0].hash },
+    { noteId: imported.notes[0].id, hash: imported.notes[0].hash, research: true },
     `external-edit-retry:${candidate.id}`,
   );
   await drainQueuedJobs(service);

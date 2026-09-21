@@ -236,7 +236,7 @@ function jobRow(job) {
   progressBar.firstChild.style.width = `${Math.max(0, Math.min(100, progress))}%`;
   return el("div", { class: "list-item no-icon" }, [
     el("div", { class: "item-copy" }, [
-      el("h3", { text: ({process:"资料拆解与核验",relate:"知识关联",discover:"知识发现",grade:"学习反馈",index:"更新索引",topics:"主题整理"})[job.type] || "后台任务" }),
+      el("h3", { text: ({process:"资料加工",relate:"知识关联",discover:"知识发现",grade:"学习反馈",index:"更新索引",topics:"主题整理"})[job.type] || "后台任务" }),
       el("p", { text: jobSummary(job) }),
       progress > 0 ? progressBar : null,
       el("div", { class: "item-meta" }, [badge(labels.state(displayState), stateTone(displayState))]),
@@ -266,6 +266,7 @@ async function renderCapture() {
   const title = el("input", { name: "title", placeholder: "例如：关于检索增强生成的一段资料", required: true });
   const body = el("textarea", { name: "body", placeholder: "粘贴原文。系统会保留这份原始快照，不用摘要替代。", required: true, rows: 12 });
   const process = el("input", { name: "process", type: "checkbox" });
+  const research = el("input", { name: "research", type: "checkbox" });
   const localOnly = el("input", { name: "localOnly", type: "checkbox" });
   const titleField = field("标题", title);
   titleField.classList.add("span-2");
@@ -283,7 +284,8 @@ async function renderCapture() {
       ])),
     ]),
     el("label", { class: "check-field" }, [localOnly, el("span", { text: "仅本地，不发送给外部 AI 或联网服务" })]),
-    el("label", { class: "check-field" }, [process, el("span", { text: "保存后提交 AI 拆解与核验任务（若服务不可用，将保留为等待或失败状态）" })]),
+    el("label", { class: "check-field" }, [process, el("span", { text: "保存后提交 AI 拆解任务" })]),
+    el("label", { class: "check-field" }, [research, el("span", { text: "拆解时联网检验正确性并寻找反例（可选，需同时勾选 AI 拆解）" })]),
     el("div", { class: "form-actions" }, [button("保存原始资料", { kind: "primary", type: "submit" }), button("清空", { onClick: () => sourceForm.reset() })]),
   );
   sourceForm.addEventListener("submit", async (event) => {
@@ -296,7 +298,7 @@ async function renderCapture() {
     try {
       const submit = sourceForm.querySelector("button[type='submit']");
       submit.disabled = true;
-      const result = await api.import({ items: [item], process: process.checked });
+      const result = await api.import({ items: [item], process: process.checked, research: research.checked });
       sourceForm.reset();
       toast(`已保存 ${asArray(result.notes).length || 1} 条原始资料`, "success");
       await refreshBootstrap();
@@ -463,7 +465,7 @@ function renderSourceGroupDrawer(source) {
   content.append(el("section", { class: "panel soft group-process-actions" }, [
     sectionHeading("继续整理", "生成的拆解会继续归入这个窗口。"),
     el("div", { class: "form-actions" }, [
-      button("提交拆解与核验", { kind: "primary", onClick: () => processNote(source, source.id) }),
+      processControls(source, source.id),
       button("手动整理为待选学", { onClick: () => manualExtract(source, source.id) }),
     ]),
     jobs.length ? el("div", { class: "group-job-list" }, jobs.slice(0, 3).map((job) => el("div", { class: "group-job" }, [
@@ -474,7 +476,7 @@ function renderSourceGroupDrawer(source) {
 
   content.append(sectionHeading("资料拆解", children.length ? `共 ${children.length} 条，按独立学习单元保留` : "这份资料还没有拆解"));
   if (children.length) content.append(el("div", { class: "source-children" }, children.map((child, index) => childSection(child, source, index))));
-  else content.append(emptyState("尚未形成拆解", "可以提交自动拆解与核验，或手动整理一条待选学知识。"));
+  else content.append(emptyState("尚未形成拆解", "可以提交 AI 拆解，按需勾选联网核验，或手动整理一条待选学知识。"));
   clear(refs.drawerBody).append(content);
 }
 
@@ -581,7 +583,7 @@ function renderNoteDrawer(note) {
   if (url) content.append(el("a", { href: url, target: "_blank", rel: "noopener noreferrer", text: "打开原始网页 ↗" }));
   const nextActions = el("div", { class: "form-actions" });
   if (note.kind === "source") nextActions.append(
-    button("提交拆解与核验", { kind: "primary", onClick: () => processNote(note) }),
+    processControls(note),
     button("手动整理为待选学", { onClick: () => manualExtract(note) }),
   );
   if (note.kind === "knowledge") nextActions.append(
@@ -662,11 +664,23 @@ async function deleteNote(note, returnToSourceId = "") {
   } catch (error) { handleError(error); }
 }
 
-async function processNote(note, returnToSourceId = "") {
+function processControls(note, returnToSourceId = "") {
+  const research = el("input", { type: "checkbox", name: "research" });
+  return el("div", { class: "page-stack" }, [
+    el("label", { class: "check-field" }, [research, el("span", { text: "拆解时联网检验正确性并寻找反例（可选）" })]),
+    el("div", { class: "form-actions" }, [
+      button("提交 AI 拆解", { kind: "primary", onClick: () => processNote(note, returnToSourceId, { research: research.checked }) }),
+      button("联网检验并找反例", { onClick: () => processNote(note, returnToSourceId, { research: true, reuseExtracted: true }) }),
+    ]),
+    el("p", { class: "muted", text: "默认只拆解。生成后可手动联网核验整份资料；已有拆解会复用，人工编辑内容将生成修订建议。" }),
+  ]);
+}
+
+async function processNote(note, returnToSourceId = "", options = {}) {
   try {
-    const job = await api.processNote(note.id);
+    const job = await api.processNote(note.id, options);
     const waitingForQuota = isQuotaWaitMessage(job.error);
-    toast(waitingForQuota || job.state === "waiting" ? "任务已保存，待条件满足后继续" : job.state === "failed" ? "任务已记录失败原因" : "已提交拆解与核验任务", job.state === "failed" && !waitingForQuota ? "error" : "success");
+    toast(waitingForQuota || job.state === "waiting" ? "任务已保存，待条件满足后继续" : job.state === "failed" ? "任务已记录失败原因" : (options.research ? "已提交联网核验任务" : "已提交 AI 拆解任务"), job.state === "failed" && !waitingForQuota ? "error" : "success");
     await refreshBootstrap();
     if (returnToSourceId || note.kind === "source") await refreshSourceGroup(returnToSourceId || note.id);
     else renderNoteDrawer(note);
@@ -1560,7 +1574,7 @@ const jobTableState = { type: "", status: "", size: "10", page: 1 };
 async function jobsPanel() {
   const data = await api.jobs();
   const jobs = asArray(data.jobs).sort((a,b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")));
-  const names = {process:"资料拆解与核验",relate:"知识关联",discover:"知识发现",grade:"学习反馈",index:"更新索引",topics:"主题学习包整理"};
+  const names = {process:"资料加工",relate:"知识关联",discover:"知识发现",grade:"学习反馈",index:"更新索引",topics:"主题学习包整理"};
   const panel = el("section", {class:"panel call-history"});
   const type = selectControl([["","全部类型"],...Object.entries(names)], jobTableState.type, "jobType");
   type.setAttribute("aria-label", "筛选任务类型");
