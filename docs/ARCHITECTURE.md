@@ -79,3 +79,18 @@ settings `{dailyMinutes:25,timezone:'Asia/Singapore',scheduleTime:'08:00',focusT
 导出 `createAI({getSettings,getSecret,recordCall,getUsage,fetchImpl?})` → `{generate({system,prompt,privacy,signal,json?}),embed({texts,privacy,signal}),search({query,privacy,signal}),readPage({url,privacy,signal}),research({claim,privacy,signal}),test(capability)}`。
 getSecret(capability) 返回实际密钥；getUsage() → `{callsToday,costMonth}`；recordCall({capability,model,inputTokens,outputTokens,cost,durationMs,ok,error?})。
 generate 返回 `{text,usage}`；embed → `{vectors}`；search → `{results:[{title,url,snippet}]}`；readPage → `{url,title,text,fetchedAt}`；research → `{claim,evidence:[{url,title,excerpt,locator,fetchedAt,role}],limitations:[]}`。research 必须真实搜索、读取支持与反对方向，不可把 search snippet 当已读正文。错误抛 Error 带 code；默认不外发 local 数据。禁止服务返回/日志记录密钥，记录供应商错误需截断清洗。
+
+## 2026-09-29 对齐接口
+
+- `src/learning.mjs` 集中主题、今日安排、错题与结束练习结算；`src/knowledge-lifecycle.mjs` 根据已有证据提出建议，不自动确认理解。
+- `GET /api/notes/:id/evidence` 按需返回保留的原文证据；列表仍隐藏内部摘录。
+- `GET /api/recommendations`、`POST /api/recommendations/:id/action {action:'accept'|'dismiss'}`：阶段建议走原晋级规则；合并返回预览；研究返回原始资料入口，不自动调用研究。
+- `POST /api/study/start` 支持 `topicId`、`mistakeId`；`POST /api/study/:id/finish` 幂等完成整场练习，争议不结算复习。
+- `PUT /api/topics/:id` 校验并保存 `meta.noteIds/prerequisites/minutes`；`GET /api/topics` 带有序成员、进度与下一项。
+- `POST /api/notes/:id/relate {useAI:false}` 默认本地候选；明确 true 才扩展检索与模型核对。`GET /api/relations` 区分 `candidates` 与 `relations`，并带 `deferredCount`。
+- `POST /api/discover {useAI:false}` 默认本地报告及可处理建议；true 受单次预算约束并最多细查两个节点。
+- `POST /api/index/update` 和旧 rebuild 入口均复用未变片段，只补建缺失且获准的向量；diagnostics.index.pending 显示缺口。
+- `GET /api/notes/:id/links-preview`、`POST /api/notes/:id/links-sync {expectedHash}` 提供管理链接预览与确认；冲突不得覆盖。
+- 原始资料 `meta.researchIntervalDays` 可设 1–365，默认 30，仅影响后续研究新结果的 reviewAfter。
+
+上述接口沿用原会话、CSRF、只监听回环地址及 MCP 只读/提案限制。当前设置默认值以 `src/service.mjs` 的 defaults 为准，本文件早期示例不是当前配置快照。

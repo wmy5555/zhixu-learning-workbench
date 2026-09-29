@@ -24,6 +24,12 @@ export const promptDefaults = Object.freeze({
     '依据材料评价理解，不要求措辞相同。争议或题目模糊用ambiguous。只给一条下一步追问，逐步涉及机制/条件/反例/陌生场景。输出JSON {"assessment":"correct|partial|incorrect|ambiguous","feedback":"具体反馈和材料依据","omission":"具体误解或遗漏","correction":"修正解释和依据","nextQuestion":"一道追问","suggestion":"可修改的理解草稿"}。材料：{{material}}\n问题：{{question}}\n用户原答：{{answer}}\n使用提示：{{hintUsed}}',
     ['material', 'question', 'answer', 'hintUsed'],
   ),
+  relationQueries: metadata(
+    '关联检索扩展',
+    '用户选择 AI 探索后，用机制与相反条件寻找不同领域的旧知识。',
+    '根据当前材料提出最多2个不同于标题的知识库检索短语：一个概括其机制，一个寻找相反条件或跨领域可迁移机制。只生成检索线索，不判断联系成立，不编造资料。每项最多120字符。JSON {"queries":["短语"]}。材料：{{current}}',
+    ['current'],
+  ),
   relate: metadata(
     '知识关联',
     '比较当前材料与有限候选，推荐少量有证据且高价值的关系。',
