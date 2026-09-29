@@ -147,7 +147,7 @@ function todayItem(item) {
   const actions = el("div", { class: "item-actions" });
   if (item.state === "pending") {
     if (["study", "learn", "review", "mistake"].includes(item.kind)) {
-      actions.append(button("开始", { kind: "primary compact", onClick: () => beginStudy(item.noteId, item.id) }));
+      actions.append(button("开始", { kind: "primary compact", onClick: () => beginStudy(item.noteId, item.id, item) }));
     }
     actions.append(button("延期", { kind: "quiet compact", onClick: () => actToday(item.id, "defer", 1) }));
     actions.append(button("跳过", { kind: "text compact", onClick: () => actToday(item.id, "skip") }));
@@ -370,7 +370,7 @@ async function renderLibrary() {
   const standaloneCards = standalone.map((note) => el("article", { class: "card" }, [
     el("div", { class: "card-head" }, [badge(labels.kind(note.kind)), badge(labels.stage(note.meta?.stage), stateTone(note.meta?.stage))]),
     el("h3", { text: note.title || "未命名" }),
-    el("p", { text: truncate(note.body, 135) || "暂无正文" }),
+    el("p", { text: truncate(readableBody(note.body), 135) || "暂无正文" }),
     el("div", { class: "card-foot" }, [el("span", { text: formatDate(note.updatedAt, true) }), button("查看", { kind: "text", onClick: () => openNote(note.id) })]),
   ]));
   const visibleCount = groups.length + standalone.length;
@@ -381,7 +381,8 @@ async function renderLibrary() {
   ]) : null;
   clear(refs.main).append(el("div", { class: "page-stack" }, [
     conflictPanel,
-    el("section", {}, [sectionHeading("资料与拆解", `${groups.length} 份原始资料，${standalone.length} 条独立内容；联网核验摘录只保留在后台溯源中`, button("收集资料", { kind: "primary", onClick: () => navigate("capture") })), form]),
+    el("section", {}, [sectionHeading("资料与拆解", `${groups.length} 份原始资料，${standalone.length} 条独立内容；核验依据可在知识详情中展开`, button("收集资料", { kind: "primary", onClick: () => navigate("capture") })), form]),
+    await recommendationsPanel(),
     visibleCount ? el("div", { class: "library-sections" }, [
       groups.length ? el("section", {}, [sectionHeading("原始资料", "每份资料及其拆解集中在同一个窗口"), el("div", { class: "card-grid group-grid" }, groupCards)]) : null,
       standalone.length ? el("section", {}, [sectionHeading("独立内容", "没有归属于某份原始资料的内容"), el("div", { class: "card-grid" }, standaloneCards)]) : null,
@@ -391,6 +392,104 @@ async function renderLibrary() {
 
 function isExcerptOnly(note) {
   return Boolean(note?.meta?.excerptOnly);
+}
+
+function evidenceRow(evidence) {
+  const url = safeExternalUrl(evidence.url);
+  return el("article", { class: "citation" }, [
+    el("div", { class: "card-head" }, [el("strong", { text: evidence.title || "保存的核验来源" }), badge(sourceRole(evidence.role))]),
+    url ? el("a", { href: url, target: "_blank", rel: "noopener noreferrer", text: "打开原始网页" }) : null,
+    el("div", { class: "prose", text: evidence.excerpt || "未保存可展示的正文摘录。" }),
+    evidence.rationale ? el("p", { text: `与主张的关系：${evidence.rationale}` }) : null,
+    evidence.locator ? el("p", { class: "fine-print", text: `原文定位：${evidence.locator}` }) : null,
+    evidence.fetchedAt ? el("p", { class: "fine-print", text: `读取时间：${formatDate(evidence.fetchedAt, true)}` }) : null,
+  ]);
+}
+
+function evidenceDetails(noteId, sources = null) {
+  const content = el("div", { class: "page-stack original-body" });
+  const details = el("details", { class: "original-material" }, [el("summary", { text: "查看核验依据与底层来源" }), content]);
+  let loaded = false, loading = false;
+  const load = async () => {
+    if (loaded || loading) return;
+    loading = true;
+    clear(content).append(el("p", { text: "正在读取已保存的证据…" }));
+    try {
+      const data = sources === null ? await api.evidence(noteId) : { evidence: sources };
+      const evidence = asArray(data.evidence);
+      clear(content).append(el("p", { class: "fine-print", text: "这里展示已保存的正文与定位。来源存在不等于结论正确，个人理解仍需你确认。" }));
+      if (data.researchedAt) content.append(el("p", { class: "fine-print", text: `上次核验：${formatDate(data.researchedAt, true)}` }));
+      content.append(evidence.length ? el("div", { class: "list" }, evidence.map(evidenceRow)) : el("p", { text: "尚无已保存的外部核验依据。" }));
+      if (asArray(data.limitations).length) content.append(el("div", { class: "notice" }, el("ul", {}, data.limitations.map(value => el("li", { text: value })))));
+      loaded = true;
+    } catch (error) {
+      clear(content).append(el("p", { text: errorMessage(error) }), button("重新读取依据", { onClick: load }));
+    } finally { loading = false; }
+  };
+  details.addEventListener("toggle", () => { if (details.open) load(); });
+  return details;
+}
+
+function relationControls(note) {
+  const useAI = el("input", { type: "checkbox", checked: false });
+  const status = el("p", { class: "fine-print", role: "status" });
+  const run = button("查找关联", { onClick: async () => {
+    run.disabled = true;
+    try {
+      await api.relate(note.id, { useAI: useAI.checked });
+      status.textContent = "关联任务已排队，可在检索与发现页查看结果。";
+    } catch (error) { status.textContent = errorMessage(error); }
+    finally { run.disabled = false; }
+  } });
+  return el("details", { class: "child-more-actions" }, [
+    el("summary", { text: "查找关联" }),
+    el("div", { class: "page-stack original-body" }, [el("p", { class: "fine-print", text: "默认仅在本机查找可探索的材料。AI 分析会发送获准材料，并可能产生费用。" }),
+      el("label", { class: "check-field" }, [useAI, el("span", { text: "本次允许 AI 分析关联（可能产生费用）" })]),
+      el("div", { class: "form-actions" }, [run, button("查看关联结果", { kind: "text", onClick: () => { closeDrawer(); navigate("discover"); } })]), status]),
+  ]);
+}
+
+async function recommendationsPanel() {
+  const panel = el("section", { class: "panel" }, [sectionHeading("知识使用建议", "根据实际采用、学习和已有关系提出建议；是否调整由你决定，不自动宣称掌握")]);
+  try {
+    const data = await api.recommendations();
+    const suggestions = asArray(data.suggestions);
+    panel.append(suggestions.length ? el("div", { class: "list" }, suggestions.map(suggestion => el("article", { class: "list-item no-icon" }, [
+      el("div", { class: "item-copy" }, [el("h3", { text: suggestion.title || "知识建议" }), el("p", { text: suggestion.reason }),
+        el("div", { class: "item-meta" }, [badge(({ promotion: "调整学习阶段", relearn: "重新学习", reference: "转为查阅", merge: "检查重复", research: "补充研究" })[suggestion.type] || "建议"), suggestion.targetStage ? badge(labels.stage(suggestion.targetStage)) : null]),
+        asArray(suggestion.signals).length ? el("ul", {}, suggestion.signals.map(signal => el("li", { text: signal }))) : null]),
+      el("div", { class: "item-actions wrap" }, [
+        button("查看知识", { kind: "text compact", onClick: () => openNote(suggestion.noteId) }),
+        button(suggestion.type === "merge" ? "预览合并" : suggestion.type === "research" ? "打开待核验资料" : "采用建议", { kind: "primary compact", onClick: async () => {
+          try {
+            if (suggestion.type === "merge") { const note = await api.note(suggestion.noteId); openDrawer(note.title, "合并建议", el("div")); await renderMerge(note, suggestion.relatedId); return; }
+            const result = await api.recommendationAction(suggestion.id, { action: "accept" });
+            if (result.requiresResearch && result.sourceId) { await openNote(result.sourceId); return; }
+            toast("已按你的选择调整；个人理解和掌握证据分别保留", "success");
+            await refreshBootstrap(); await renderLibrary();
+          } catch (error) { handleError(error); }
+        } }),
+        button("暂不采用", { kind: "text compact", onClick: async () => { try { await api.recommendationAction(suggestion.id, { action: "dismiss" }); await renderLibrary(); } catch (error) { handleError(error); } } }),
+      ]),
+    ]))) : el("p", { class: "muted", text: "目前没有新的调整建议。继续学习或标记输出中实际采用的知识后，可再次查看。" }));
+  } catch (error) { panel.append(el("p", { text: `建议暂不可用：${errorMessage(error)}` })); }
+  return panel;
+}
+
+async function previewNoteLinks(noteId) {
+  try {
+    const preview = await api.linksPreview(noteId);
+    openDrawer("核对 Obsidian 链接", "稳定身份与可读链接", el("div", { class: "page-stack" }, [
+      el("p", { text: "请核对来源、主题和关系链接。确认后仅更新应用维护的链接区块。" }),
+      preview.conflict ? el("div", { class: "notice danger", text: "链接区块已被手动修改，请先处理冲突；本次不会覆盖。" }) : null,
+      preview.privacyChanged ? el("div", { class: "notice info", text: "链接中包含仅本地知识的标题。确认更新后，这份笔记也将收紧为仅本地，避免这些标题被外发。" }) : null,
+      el("div", { class: "two-column" }, [el("section", {}, [el("h3", { text: "更新前" }), el("div", { class: "prose", text: preview.before || "无" })]), el("section", {}, [el("h3", { text: "更新后" }), el("div", { class: "prose", text: preview.body || "无" })])]),
+      button(preview.changed ? "确认更新链接" : "链接已是最新", { kind: "primary", disabled: !preview.changed || Boolean(preview.conflict), onClick: async () => {
+        try { await api.syncLinks(noteId, { expectedHash: preview.expectedHash }); toast("可读链接已更新", "success"); await openNote(noteId); }
+        catch (error) { handleError(error); }
+      } }),
+    ]));
+  } catch (error) { handleError(error); }
 }
 
 function sourceGroupCard(group) {
@@ -506,13 +605,15 @@ function childSection(note, source, index) {
       el("div", {}, [el("p", { class: "eyebrow", text: `拆解 ${index + 1}` }), el("h3", { text: note.title || "未命名拆解" })]),
       el("div", { class: "item-meta" }, [badge(labels.stage(meta.stage), stateTone(meta.stage)), meta.topic ? badge(meta.topic, "accent") : null]),
     ]),
-    el("div", { class: "prose child-note-body", text: note.body || "暂无正文" }),
+    el("div", { class: "prose child-note-body", text: readableBody(note.body) || "暂无正文" }),
+    evidenceDetails(note.id),
     limitations.length ? el("div", { class: "notice danger child-limitations" }, [
       el("strong", { text: "尚需补充研究" }),
       el("p", { text: "这些事实仍需进一步核验，暂不用于学习计划或有据回答。" }),
       el("ul", {}, limitations.map((limitation) => el("li", { text: limitation }))),
     ]) : null,
     actions,
+    relationControls(note),
     more,
   ]);
 }
@@ -535,7 +636,9 @@ function renderNoteDrawer(note) {
     button("删除", { kind: "danger", onClick: () => deleteNote(note) }),
   ]);
   if (note.kind === "knowledge") headActions.insertBefore(button("合并", { onClick: () => renderMerge(note) }), headActions.lastChild);
-  content.append(noteMeta(note), headActions, el("div", { class: "prose", text: note.body || "暂无正文" }));
+  content.append(noteMeta(note), headActions, el("div", { class: "prose", text: readableBody(note.body) || "暂无正文" }));
+  if (note.kind === "knowledge") content.append(evidenceDetails(note.id), relationControls(note));
+  content.append(button("查看 Obsidian 链接更新", { onClick: () => previewNoteLinks(note.id) }));
   const values = el("dl", { class: "key-values" });
   [
     ["稳定 ID", note.id], ["文件路径", note.path], ["内容哈希", note.hash],
@@ -617,12 +720,13 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
       field("原始地址", el("input", { name: "url", type: "url", value: meta.url || "", placeholder: "https://…" })),
       field("资料日期", el("input", { name: "date", type: "date", value: String(meta.date || "").slice(0, 10) })),
       field("原文定位", el("input", { name: "locator", value: meta.locator || "", placeholder: "页码、时间点或段落" })),
+      field("本资料下次核验有效天数", el("input", { name: "researchIntervalDays", type: "number", min: 1, max: 365, step: 1, value: meta.researchIntervalDays ?? 30, required: true }), "仅在后续成功核验时生效；默认 30 天，可设置 1–365 天。"),
     ]),
   ]) : null;
   form.append(
     el("div", { class: "notice", text: "保存时会核对内容哈希；若文件已被 Obsidian 或其他窗口修改，本次保存会停下并显示冲突。" }),
     field("标题", title), field("正文", body),
-    sourceFields,
+    ...(sourceFields ? [sourceFields] : []),
     el("div", { class: "form-grid" }, [
       field("学习状态", el("input", { value: labels.stage(meta.stage), disabled: true }), "学习状态请通过相应操作调整，以便保留理由。"),
       field("隐私", selectControl([["local", "仅本地"], ["cloud", "允许云端"]], meta.privacy || "local", "privacy")),
@@ -635,7 +739,8 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
     event.preventDefault();
     const data = serializeForm(form);
     try {
-      const sourceMeta = note.kind === "source" ? { platform: data.platform || "", author: data.author || "", url: data.url || "", date: data.date || "", locator: data.locator || "" } : {};
+      if (note.kind === "source" && (!Number.isInteger(Number(data.researchIntervalDays)) || Number(data.researchIntervalDays) < 1 || Number(data.researchIntervalDays) > 365)) throw new Error("核验有效天数应为 1–365 的整数。");
+      const sourceMeta = note.kind === "source" ? { platform: data.platform || "", author: data.author || "", url: data.url || "", date: data.date || "", locator: data.locator || "", researchIntervalDays: Number(data.researchIntervalDays) } : {};
       const updated = await api.updateNote(note.id, { body: data.body, title: data.title, expectedHash: note.hash, meta: { privacy: data.privacy, topic: data.topic, depth: data.depth, ...sourceMeta } });
       toast("已保存，并保留版本记录", "success");
       await refreshBootstrap();
@@ -753,13 +858,13 @@ function confirmDirect(note, returnToSourceId = "") {
   clear(refs.drawerBody).append(form);
 }
 
-async function renderMerge(note) {
+async function renderMerge(note, relatedId = "") {
   try {
     const data = await api.notes({ kind: "knowledge" });
     const candidates = asArray(data.notes).filter((item) => item.id !== note.id);
     if (!candidates.length) { toast("目前没有可与此条合并的其他知识", "error"); return; }
     const form = el("form", { class: "page-stack" });
-    const select = selectControl(candidates.map((item) => [item.id, item.title || item.id]), candidates[0].id, "mergeId");
+    const select = selectControl(candidates.map((item) => [item.id, item.title || item.id]), candidates.some(item => item.id === relatedId) ? relatedId : candidates[0].id, "mergeId");
     const preview = el("div");
     form.append(el("div", { class: "notice", text: "合并仅适用于明确重复的知识。不同观点会保留为独立段落和来源，不会自动抹平分歧。" }), field("合并另一条知识", select), button("生成合并预览", { kind: "primary", type: "submit" }), preview);
     form.addEventListener("submit", async (event) => {
@@ -823,10 +928,11 @@ function sourceRole(value) {
   return ({ input: "原始输入", support: "支持", oppose: "反对", limit: "适用限制" })[value] || value || "来源";
 }
 
-async function beginStudy(noteId, planId) {
+async function beginStudy(noteId, planId, context = {}) {
   if (!noteId) { toast("这项任务没有关联知识，暂时无法开始", "error"); return; }
   try {
-    state.currentStudy = await api.startStudy({ noteId, ...(planId ? { planId } : {}) });
+    state.currentStudy = await api.startStudy({ noteId, ...(planId ? { planId } : {}), ...(context.topicId ? { topicId: context.topicId } : {}), ...(context.mistakeId ? { mistakeId: context.mistakeId } : {}) });
+    closeDrawer();
     state.studyMaterialVisible = true;
     state.studyTab = "session";
     await navigate("study");
@@ -838,7 +944,7 @@ async function renderStudy() {
   const tabs = el("div", { class: "tabs" }, [
     tabButton("queue", "学习队列"), tabButton("session", "当前学习"), tabButton("mistakes", "错题库"),
   ]);
-  wrapper.append(tabs, capabilityNotice());
+  wrapper.append(...[tabs, capabilityNotice()].filter(Boolean));
   if (state.studyTab === "session") wrapper.append(await studySessionPanel());
   else if (state.studyTab === "mistakes") wrapper.append(await mistakesPanel());
   else wrapper.append(await studyQueuePanel());
@@ -863,7 +969,7 @@ async function studyQueuePanel() {
     items.length ? el("div", { class: "list" }, items.map((item) => el("article", { class: "list-item" }, [
       el("div", { class: "item-symbol", text: item.inToday ? "今" : "学" }),
       el("div", { class: "item-copy" }, [el("h3", { text: item.title || "未命名知识" }), el("p", { text: item.reason || "等待学习" }), el("div", { class: "item-meta" }, [item.minutes ? badge(`${item.minutes} 分钟`) : null, item.inToday ? badge("今日", "accent") : badge("学习池")])]),
-      el("div", { class: "item-actions" }, button("开始学习", { kind: "primary compact", onClick: () => beginStudy(item.noteId, item.inToday ? item.id : undefined) })),
+      el("div", { class: "item-actions" }, button("开始学习", { kind: "primary compact", onClick: () => beginStudy(item.noteId, item.inToday ? item.id : undefined, item) })),
     ]))) : emptyState("学习队列为空", "在知识详情中选择“加入学习”，或先处理一份原始资料。", button("浏览知识", { onClick: () => navigate("library") })),
     sectionHeading("最近学习记录", "服务重启后仍可继续已有会话，原始回答和提示使用不会丢失"),
     sessions.length ? el("div", { class: "list" }, sessions.map((session) => {
@@ -875,7 +981,7 @@ async function studyQueuePanel() {
           el("p", { text: session.question || "学习会话" }),
           el("div", { class: "item-meta" }, [badge(`${asArray(session.turns).length} 轮回答`), badge(studyStatusLabel(session.status), stateTone(session.status)), badge(formatDate(session.createdAt, true))]),
         ]),
-        el("div", { class: "item-actions" }, button("继续", { kind: "primary compact", disabled: !related, onClick: () => continueStudy(session) })),
+        el("div", { class: "item-actions" }, button(session.status === "completed" ? "查看记录" : "继续", { kind: "primary compact", disabled: !related, onClick: () => continueStudy(session) })),
       ]);
     })) : emptyState("还没有学习记录", "开始一次学习后，可从这里恢复。"),
   ]);
@@ -897,23 +1003,37 @@ async function studySessionPanel() {
   if (!session) return emptyState("还没有进行中的学习", "从学习队列开始一次回忆与解释。系统会保留你的原始回答。", button("打开学习队列", { kind: "primary", onClick: () => { state.studyTab = "queue"; renderStudy(); } }));
   const turns = asArray(session.turns);
   const latest = turns.at(-1);
+  const goalPanel = () => el("div", { class: "notice info" }, [
+    el("strong", { text: `本次目标：${session.goal || depthLabel(session.depth || "explain")}` }),
+    session.mistakeId ? el("p", { text: "误解专项练习：重点检查此前的遗漏或错误，实际反馈会保留为后续纠正依据。" }) : null,
+    session.topicId ? el("p", { text: "本次属于主题学习包，结束后可按顺序继续。" }) : null,
+    el("p", { text: "结束练习保存本轮表现；确认个人理解保存你自己的表达。这两项记录分别保留，均不等于永久掌握。" }),
+  ]);
   if (state.studyMaterialVisible && !turns.length) {
     return el("div", { class: "page-stack" }, [
+      goalPanel(),
       el("section", { class: "panel accent-panel" }, [
         el("p", { class: "eyebrow", text: "先阅读必要材料" }),
         el("h2", { text: "理解内容后，再隐藏原文主动回忆" }),
         el("p", { class: "muted", text: "隐藏后请用自己的语言解释问题、条件和边界。重新查看原文会被记录为使用提示。" }),
       ]),
       el("section", { class: "panel" }, [sectionHeading("学习材料", "完整正文，仅在阅读阶段显示"), el("div", { class: "prose", text: session.material || "这次会话没有可显示的材料。" })]),
+      evidenceDetails(session.noteId),
       button("隐藏材料，开始回忆", { kind: "primary", onClick: () => { state.studyMaterialVisible = false; renderStudy().catch(handleError); } }),
     ]);
   }
   const awaiting = session.status === "awaiting_feedback" || Boolean(session.pendingJobId);
-  const answer = el("textarea", { placeholder: "先不看答案，用自己的语言解释。可以写出不确定处。", rows: 7, disabled: awaiting });
+  const completed = session.status === "completed";
+  const answer = el("textarea", { placeholder: "先不看答案，用自己的语言解释。可以写出不确定处。", rows: 7, disabled: awaiting || completed });
   const hintArea = el("div");
   const hintUsed = { value: false };
   const feedback = latest?.feedback || session.feedback;
   const form = el("form", { class: "page-stack" }, [
+    goalPanel(),
+    completed ? el("div", { class: "notice info" }, [el("strong", { text: "本轮练习已结束" }), el("p", { text: "本轮原答、提示与反馈已保留。可以继续主题中的下一项，或稍后复习。" }),
+      session.completion?.reason ? el("p", { text: session.completion.reason }) : null,
+      session.completion?.evidence ? el("div", { class: "item-meta" }, [badge(({ correct: "独立完成", needs_practice: "还需练习", with_hints: "借助提示完成", ambiguous: "存在争议" })[session.completion.evidence.assessment] || "已保留本轮记录"), session.completion.evidence.spacedRecall ? badge("跨日保持证据", "good") : null, session.completion.evidence.applicationPractice ? badge("本次应用练习", "good") : null]) : null,
+      session.topicId ? button("回到主题，继续下一条", { onClick: () => openTopic({ id: session.topicId }).catch(handleError) }) : button("回到学习队列", { onClick: () => { state.studyTab = "queue"; renderStudy().catch(handleError); } })]) : null,
     el("section", { class: "study-question" }, [
       el("p", { class: "eyebrow", text: ["waiting", "awaiting_feedback"].includes(session.status) ? "回答已保存 · 等待反馈" : "主动回忆" }),
       el("h2", { text: session.question || "请用自己的语言解释这项知识。" }),
@@ -923,15 +1043,15 @@ async function studySessionPanel() {
     field("你的回答", answer, "措辞不必像标准答案；系统关注概念、条件、机制和应用。"),
     hintArea,
     el("div", { class: "form-actions" }, [
-      button("提交回答", { kind: "primary", type: "submit", disabled: awaiting }),
+      button("提交回答", { kind: "primary", type: "submit", disabled: awaiting || completed }),
       button("分级提示", { onClick: async () => {
         try {
           const result = await api.hint(session.id);
           hintUsed.value = true;
           clear(hintArea).append(el("div", { class: "notice info", text: result.hint || "当前没有可用提示" }));
         } catch (error) { handleError(error); }
-      }, disabled: awaiting }),
-      button("查看原文（记为提示）", { disabled: awaiting, onClick: async () => {
+      }, disabled: awaiting || completed }),
+      button("查看原文（记为提示）", { disabled: awaiting || completed, onClick: async () => {
         if (!session.noteId) return;
         try {
           await api.hint(session.id);
@@ -939,10 +1059,15 @@ async function studySessionPanel() {
           openNote(session.noteId);
         } catch (error) { handleError(error); }
       } }),
+      button("结束本轮练习", { kind: "primary", disabled: completed || awaiting || session.status !== "feedback" || !latest?.feedback, onClick: async () => {
+        try { state.currentStudy = await api.finishStudy(session.id); toast("本轮练习已结束，表现已保留", "success"); await refreshBootstrap(); await renderStudy(); }
+        catch (error) { handleError(error); }
+      } }),
     ]),
   ]);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (awaiting || completed) return;
     if (!answer.value.trim()) { toast("请先写下你的理解", "error"); return; }
     const submit = form.querySelector("button[type='submit']");
     submit.disabled = true;
@@ -958,6 +1083,7 @@ async function studySessionPanel() {
     el("p", { class: "muted", text: feedback ? "可参考反馈修改，但最终文字必须由你确认。" : "当前没有 AI 反馈，你仍可基于自己的回答整理个人理解。" }),
     button("整理并确认个人理解", { kind: "primary", onClick: () => confirmUnderstanding(session) }),
   ]));
+  if (completed) form.append(evidenceDetails(session.noteId));
   if (turns.length) form.append(el("section", {}, [sectionHeading("学习记录", `${turns.length} 轮回答`), el("div", { class: "step-list" }, turns.map((turn, index) => el("div", { class: "step is-done" }, [
     el("h3", { text: `第 ${index + 1} 轮 · ${formatDate(turn.createdAt, true)}` }),
     el("p", { text: turn.question || "问题" }),
@@ -1018,8 +1144,9 @@ function mistakeRow(mistake) {
   const status = mistake.status || meta.correctionState || meta.status || "open";
   const actions = el("div", { class: "item-actions wrap" }, [
     button("查看", { kind: "quiet compact", onClick: () => mistake.noteId || mistake.kind ? openNote(mistake.noteId || mistake.id) : showMistake(mistake) }),
+    status === "open" ? button("专项练习", { kind: "primary compact", disabled: !(meta.noteId || mistake.noteId), onClick: () => beginStudy(meta.noteId || mistake.noteId, undefined, { mistakeId: mistake.id }) }) : null,
     status === "disputed" ? button("重新打开", { kind: "text compact", onClick: () => actMistake(mistake.id, "reopen") }) : button("质疑判定", { kind: "text compact", onClick: () => actMistake(mistake.id, "dispute") }),
-    status !== "resolved" ? button("标记已纠正", { kind: "primary compact", onClick: () => actMistake(mistake.id, "resolve") }) : badge("已纠正", "good"),
+    status !== "resolved" ? button("手动标记已纠正", { kind: "primary compact", onClick: () => actMistake(mistake.id, "resolve") }) : badge("已标记纠正", "good"),
   ]);
   return el("article", { class: "list-item" }, [
     el("div", { class: "item-symbol", text: "错" }),
@@ -1069,6 +1196,9 @@ async function suggestTopics() {
   } catch (error) { handleError(error); }
 }
 
+const topicManagedBlock = body => String(body || '').match(/<!-- zhixu-managed-links:start -->[\s\S]*?<!-- zhixu-managed-links:end -->/)?.[0] || '';
+const topicDescription = body => String(body || '').replace(topicManagedBlock(body), '').trim();
+const readableBody = body => topicDescription(body).replace(/\[\[([^|\]]+)\|([^\]]+)\]\]/g, '$2');
 function topicCard(topic) {
   const meta = asObject(topic.meta);
   const noteIds = asArray(topic.noteIds || meta.noteIds);
@@ -1076,65 +1206,92 @@ function topicCard(topic) {
   return el("article", { class: "card" }, [
     el("div", { class: "card-head" }, [badge(paused ? "已暂停" : "进行中", paused ? "neutral" : "accent"), badge(`${noteIds.length} 条知识`)]),
     el("h3", { text: topic.title || "未命名学习包" }),
-    el("p", { text: truncate(topic.body, 150) || "还没有写下这个主题要解决的问题。" }),
+    el("p", { text: truncate(readableBody(topic.body), 150) || "还没有写下这个主题要解决的问题。" }),
     el("div", { class: "card-foot" }, [el("span", { text: `${number(topic.minutes || meta.minutes || 20)} 分钟` }), el("div", { class: "item-actions" }, [button("查看", { kind: "text", onClick: () => openTopic(topic) }), button(paused ? "恢复" : "暂停", { kind: "text", onClick: () => actTopic(topic.id, paused ? "resume" : "pause") })])]),
   ]);
 }
 
-async function createTopicDrawer() {
-  const noteData = await api.notes({});
-  const notes = asArray(noteData.notes);
-  const form = el("form", { class: "page-stack" });
-  const chooser = el("div", { class: "list" }, notes.slice(0, 100).map((note) => el("label", { class: "list-item no-icon" }, [el("div", { class: "item-copy" }, [el("h3", { text: note.title || "未命名" }), el("p", { text: `${labels.kind(note.kind)} · ${labels.stage(note.meta?.stage)}` })]), el("input", { type: "checkbox", name: "noteId", value: note.id })])));
-  form.append(field("学习包标题", el("input", { name: "title", required: true, placeholder: "例如：我怎样判断一条搜索结果是否可靠？" })), field("要解决的问题与边界", el("textarea", { name: "body", required: true, rows: 6 })), el("div", { class: "form-grid" }, [field("预计投入（分钟）", el("input", { name: "minutes", type: "number", min: 5, max: 300, value: 20 })), field("缺失的前置知识", el("input", { name: "prerequisites", placeholder: "用逗号分隔，可留空" }))]), sectionHeading("选择已有知识", "这里最多显示前 100 条；之后可在主题中继续调整"), chooser, button("创建主题学习包", { kind: "primary", type: "submit" }));
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const data = serializeForm(form);
-    const noteIds = [...form.querySelectorAll("input[name='noteId']:checked")].map((input) => input.value);
-    try {
-      await api.createTopic({ title: data.title, body: data.body, noteIds, prerequisites: String(data.prerequisites || "").split(/[,，]/).map((x) => x.trim()).filter(Boolean), minutes: number(data.minutes) || 20 });
-      toast("主题学习包已创建", "success");
-      closeDrawer();
-      await renderTopics();
-    } catch (error) { handleError(error); }
-  });
-  openDrawer("新建主题学习包", "主题学习包", form);
+async function createTopicDrawer(seed = null) {
+  return topicEditor(seed?.id ? seed : null, true);
 }
 
-function openTopic(topic) {
-  const meta = asObject(topic.meta);
-  const prerequisites = asArray(topic.prerequisites || meta.prerequisites);
-  openDrawer(topic.title || "主题学习包", "主题学习包", el("div", { class: "page-stack" }, [
-    el("div", { class: "prose", text: topic.body || "暂无说明" }),
-    el("dl", { class: "key-values" }, [
-      el("div", { class: "key-value" }, [el("dt", { text: "预计投入" }), el("dd", { text: `${number(topic.minutes || meta.minutes || 20)} 分钟` })]),
-      el("div", { class: "key-value" }, [el("dt", { text: "前置知识" }), el("dd", { text: prerequisites.join("、") || "未标记缺口" })]),
-      el("div", { class: "key-value" }, [el("dt", { text: "包含内容" }), el("dd", { text: `${asArray(topic.noteIds || meta.noteIds).length} 条` })]),
-    ]),
-    el("div", { class: "notice info", text: "自动生成的主题摘要可以重建；只有用户编辑确认的综合地图才作为长期资产。" }),
-    button("编辑主题学习包", { kind: "primary", onClick: () => editTopic(topic) }),
-  ]));
+async function openTopic(topic) {
+  try {
+    const data = await api.topics();
+    topic = asArray(data.topics).find(item => item.id === topic.id);
+    if (!topic) { toast("主题学习包已删除或暂不可读", "error"); return; }
+    const meta = asObject(topic.meta), progress = asObject(topic.progress);
+    const prerequisites = topic.prerequisites ?? meta.prerequisites;
+    const members = asArray(topic.members);
+    const paused = topic.paused === true || meta.paused === true;
+    openDrawer(topic.title || "主题学习包", "主题学习包", el("div", { class: "page-stack" }, [
+      el("div", { class: "prose", text: readableBody(topic.body) || "暂无说明" }),
+      el("dl", { class: "key-values" }, [
+        el("div", { class: "key-value" }, [el("dt", { text: "预计投入" }), el("dd", { text: `${number(topic.minutes || meta.minutes || 20)} 分钟` })]),
+        el("div", { class: "key-value" }, [el("dt", { text: "前置知识" }), el("dd", { text: Array.isArray(prerequisites) ? prerequisites.join("、") || "未标记缺口" : prerequisites || "未标记缺口" })]),
+        el("div", { class: "key-value" }, [el("dt", { text: "本包进度" }), el("dd", { text: `${number(progress.completedCount)} / ${number(progress.total || members.length)} 条已有练习结束或理解确认记录` })]),
+      ]),
+      el("div", { class: "notice info", text: "按下面的顺序学习。下方成员列表为当前顺序，说明原文可自行编辑。进度表示已有学习记录，不代表永久掌握；文本前置缺口仍需补充材料。" }),
+      progress.blockedNoteId ? el("div", { class: "notice" }, [el("p", { text: "下一项知识或前置内容暂不可学习，请先查看其研究限制或状态。" }), button("查看待处理知识", { kind: "text", onClick: () => openNote(progress.blockedNoteId) })]) : null,
+      button(progress.nextNoteId ? `开始下一条：${progress.nextNoteTitle || "前置知识"}` : "本包暂无待继续内容", { kind: "primary", disabled: paused || !progress.nextNoteId, onClick: () => beginStudy(progress.nextNoteId, undefined, { topicId: topic.id }) }),
+      el("ol", { class: "list" }, members.map((member, index) => el("li", { class: "list-item" }, [
+        el("div", { class: "item-symbol", text: String(index + 1) }),
+        el("div", { class: "item-copy" }, [el("h3", { text: member.title || "知识暂不可读" }), el("div", { class: "item-meta" }, [badge(depthLabel(member.depth || "explain")), badge(member.completed ? "已有学习记录" : member.available ? "待学习" : "暂不可学习", member.completed ? "good" : "neutral")])]),
+        el("div", { class: "item-actions wrap" }, [button("查看", { kind: "text compact", onClick: () => openNote(member.id) }), button("开始", { kind: "quiet compact", disabled: paused || !member.available, onClick: () => beginStudy(member.id, undefined, { topicId: topic.id }) })]),
+      ]))),
+      el("div", { class: "form-actions" }, [button("调整成员与顺序", { kind: "primary", onClick: () => editTopic(topic).catch(handleError) }), button("复制或拆分为新学习包", { onClick: () => createTopicDrawer(topic).catch(handleError) })]),
+    ]));
+  } catch (error) { handleError(error); }
 }
 
-function editTopic(topic) {
-  const meta = asObject(topic.meta);
+function editTopic(topic) { return topicEditor(topic, false); }
+
+async function topicEditor(topic, create) {
+  const noteData = await api.notes({ kind: "knowledge" });
+  const notes = asArray(noteData.notes).filter(note => note.kind === "knowledge" && !isExcerptOnly(note));
+  const meta = asObject(topic?.meta);
+  const selected = [...new Set(asArray(topic?.noteIds || meta.noteIds))];
   const form = el("form", { class: "page-stack" });
-  const title = el("input", { name: "title", value: topic.title || "", required: true });
-  const body = el("textarea", { name: "body", textContent: topic.body || "", rows: 12, required: true });
-  const minutes = el("input", { name: "minutes", type: "number", min: 5, max: 300, value: topic.minutes || meta.minutes || 20 });
-  const prerequisites = el("input", { name: "prerequisites", value: asArray(topic.prerequisites || meta.prerequisites).join("，") });
-  form.append(el("div", { class: "notice", text: "保存时核对内容哈希；主题包含的知识保持不变，可通过新建主题学习包重新组合。" }), field("学习包标题", title), field("问题、顺序与边界", body), el("div", { class: "form-grid" }, [field("预计投入（分钟）", minutes), field("前置知识", prerequisites)]), el("div", { class: "form-actions" }, [button("保存主题学习包", { kind: "primary", type: "submit" }), button("取消", { onClick: () => openTopic(topic) })]));
+  const title = el("input", { name: "title", value: topic ? `${topic.title}${create ? "（副本）" : ""}` : "", required: true });
+  const body = el("textarea", { name: "body", textContent: topicDescription(topic?.body), rows: 7, required: true });
+  const minutes = el("input", { name: "minutes", type: "number", min: 5, max: 300, value: topic?.minutes || meta.minutes || 20 });
+  const originalPrerequisites = topic?.prerequisites ?? meta.prerequisites ?? [];
+  const prerequisiteText = Array.isArray(originalPrerequisites) ? originalPrerequisites.join("，") : String(originalPrerequisites);
+  const prerequisites = el("input", { name: "prerequisites", value: prerequisiteText });
+  const order = el("div", { class: "list" });
+  const available = el("div", { class: "list" });
+  const query = el("input", { type: "search", placeholder: "筛选可添加的知识", ariaLabel: "筛选可添加的知识" });
+  const move = (index, offset) => { const next = index + offset; if (next < 0 || next >= selected.length) return; [selected[index], selected[next]] = [selected[next], selected[index]]; renderMembers(); };
+  function renderMembers() {
+    clear(order).append(...selected.map((id, index) => {
+      const note = notes.find(item => item.id === id);
+      return el("div", { class: "list-item no-icon" }, [el("div", { class: "item-copy" }, [el("strong", { text: `${index + 1}. ${note?.title || "知识暂不可读"}` })]), el("div", { class: "item-actions wrap" }, [
+        button("上移", { kind: "quiet compact", disabled: index === 0, onClick: () => move(index, -1), title: `上移 ${note?.title || id}` }),
+        button("下移", { kind: "quiet compact", disabled: index === selected.length - 1, onClick: () => move(index, 1), title: `下移 ${note?.title || id}` }),
+        button("移出本包", { kind: "text compact", onClick: () => { selected.splice(index, 1); renderMembers(); } }),
+      ])]);
+    }));
+    if (!selected.length) order.append(el("p", { class: "muted", text: "尚未选择知识。移出只影响这个学习包，不删除知识。" }));
+    const matches = notes.filter(note => !selected.includes(note.id) && note.meta?.stage !== "retired" && `${note.title} ${note.meta?.topic || ""}`.toLowerCase().includes(query.value.toLowerCase()));
+    clear(available).append(...matches.slice(0, 50).map(note => el("div", { class: "list-item no-icon" }, [el("div", { class: "item-copy" }, [el("strong", { text: note.title }), el("p", { text: labels.stage(note.meta?.stage) })]), button("加入本包", { kind: "quiet compact", onClick: () => { selected.push(note.id); renderMembers(); } })])));
+    if (matches.length > 50) available.append(el("p", { class: "fine-print", text: `另有 ${matches.length - 50} 条，请输入标题或主题缩小范围。` }));
+  }
+  query.addEventListener("input", renderMembers);
+  form.append(el("div", { class: "notice", text: create && topic ? "这是新学习包的副本。选择要保留的成员并调整顺序后保存，原包保持不变；可用于拆分主题。" : "学习顺序由你调整。成员变化不会删除原知识；保存时检查是否有外部修改。" }), field("学习包标题", title), field("问题、顺序与边界", body), el("div", { class: "form-grid" }, [field("预计投入（分钟）", minutes), field("前置知识", prerequisites, "可以继续保留现有文本缺口；逗号分隔新条目")]), sectionHeading("学习顺序", "上移、下移只调整本包中的顺序"), order, field("添加已有知识", query), available, el("div", { class: "form-actions" }, [button(create ? "创建主题学习包" : "保存主题学习包", { kind: "primary", type: "submit" }), button("取消", { onClick: () => topic ? openTopic(topic) : closeDrawer() })]));
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const data = serializeForm(form);
+    const submit = form.querySelector("button[type='submit']"); submit.disabled = true;
+    const nextPrerequisites = prerequisites.value === prerequisiteText ? originalPrerequisites : prerequisites.value.split(/[,，]/).map(value => value.trim()).filter(Boolean);
     try {
-      const updated = await api.updateTopic(topic.id, { title: data.title, body: data.body, expectedHash: topic.hash, meta: { minutes: number(data.minutes), prerequisites: String(data.prerequisites || "").split(/[,，]/).map((x) => x.trim()).filter(Boolean) } });
-      toast("主题学习包已更新", "success");
-      openTopic(updated);
-      await renderTopics();
+      const values = { minutes: number(minutes.value), prerequisites: nextPrerequisites, noteIds: [...selected] };
+      const updated = create ? await api.createTopic({ title: title.value, body: body.value, ...values }) : await api.updateTopic(topic.id, { title: title.value, body: body.value + (topicManagedBlock(topic.body) ? "\n\n" + topicManagedBlock(topic.body) : ""), expectedHash: topic.hash, meta: values });
+      toast(create ? "主题学习包已创建" : "主题成员与顺序已保存", "success");
+      await refreshBootstrap(); await renderTopics(); await openTopic(updated);
     } catch (error) { handleError(error); }
+    finally { submit.disabled = false; }
   });
-  clear(refs.drawerBody).append(form);
+  renderMembers();
+  openDrawer(create ? "新建主题学习包" : "调整主题学习包", "主题学习包", form);
 }
 
 async function actTopic(id, action) {
@@ -1211,7 +1368,7 @@ function searchResultRow(result) {
     el("div", { class: "item-symbol", text: note.kind === "source" ? "源" : note.kind === "mistake" ? "错" : "知" }),
     el("div", { class: "item-copy" }, [
       el("h3", { text: note.title || "未命名" }),
-      el("p", { text: truncate(result.excerpt || note.body, 180) || "暂无摘要" }),
+      el("p", { text: truncate(readableBody(result.excerpt || note.body), 180) || "暂无摘要" }),
       reasons ? el("p", { text: Array.isArray(reasons) ? reasons.join(" · ") : String(reasons) }) : null,
       el("div", { class: "item-meta" }, [badge(labels.kind(note.kind)), note.meta?.stage ? badge(labels.stage(note.meta.stage), stateTone(note.meta.stage)) : null, result.score !== undefined ? badge(`相关度 ${Number(result.score).toFixed(2)}`) : null]),
     ]),
@@ -1222,19 +1379,24 @@ function searchResultRow(result) {
 async function renderRelationsPanel() {
   const data = await api.relations();
   const relations = asArray(data.relations);
+  const candidates = asArray(data.candidates);
   const reports = asArray(data.reports);
+  const allowAI = el("input", { type: "checkbox", checked: false });
   const panel = el("section", {}, [
-    sectionHeading("关系发现", "只呈现有原文依据和具体用途的联系，每次最多确认 3 条", button("运行发现检查", { kind: "primary", onClick: async () => {
-      try { const job = await api.discover(); toast(`发现任务已${labels.state(job.state)}`, "success"); await refreshBootstrap(); }
+    sectionHeading("关系发现", "分别保留探索候选和有依据的联系，每次最多确认 3 条", button("运行发现检查", { kind: "primary", onClick: async () => {
+      try { const job = await api.discover({ useAI: allowAI.checked }); toast(`发现任务已${labels.state(job.state)}`, "success"); await refreshBootstrap(); }
       catch (error) { handleError(error); }
     } })),
+    el("label", { class: "check-field" }, [allowAI, el("span", { text: "本次允许 AI 跨领域探索（发送获准材料，可能产生费用）" })]),
+    el("p", { class: "fine-print", text: "默认只做本地结构检查；自动定期检查也仅在本地运行。" }),
   ]);
-  if (!relations.length && !reports.length) {
+  if (!relations.length && !reports.length && !candidates.length) {
     panel.append(emptyState("暂时没有值得确认的新联系", "普通文字相似不需要逐条确认。"));
     return panel;
   }
   const pending = relations.filter(r => r.state === "suggested");
   const accepted = relations.filter(r => r.state === "accepted");
+  if (candidates.length) panel.append(sectionHeading("本地探索候选", "仅表示值得比较的材料，还不是稳定联系；打开知识后可选择允许 AI 进一步分析"), el("div", { class: "list" }, candidates.map(relationRow)));
   if (pending.length) panel.append(sectionHeading("值得确认", "请结合具体用途判断是否保留"), el("div", { class: "list" }, pending.map(relationRow)));
   else panel.append(el("p", { class: "muted", text: "暂时没有需要确认的新联系。" }));
   if (accepted.length) panel.append(sectionHeading("已保留的联系", ""), el("div", { class: "list" }, accepted.map(relationRow)));
@@ -1251,12 +1413,13 @@ function relationRow(relation) {
       el("p", { text: relation.reason || relation.explanation || "尚未提供联系说明" }),
       relation.use ? el("p", { text: `用途：${relation.use}` }) : null,
       relation.boundary ? el("p", { text: `边界：${relation.boundary}` }) : null,
-      el("div", { class: "item-meta" }, [badge(({similarity:"内容相似",analogy:"机制类比",prerequisite:"前置知识",support:"支持",oppose:"不同观点",example:"实例",counterexample:"反例",application:"应用",correction:"修正"})[relation.type] || "知识联系", "accent"), badge(labels.state(stateValue), stateTone(stateValue))]),
+      el("div", { class: "item-meta" }, [badge(({similarity:"内容相似",analogy:"机制类比",prerequisite:"前置知识",support:"支持",oppose:"不同观点",example:"实例",counterexample:"反例",application:"应用",correction:"修正"})[relation.type] || "知识联系", "accent"), badge(stateValue === "candidate" ? "可探索，尚未确认" : labels.state(stateValue), stateTone(stateValue))]),
     ]),
     el("div", { class: "item-actions" }, [
       button("查看左侧知识", { kind: "quiet compact", onClick: () => openNote(relation.fromId) }),
       button("查看右侧知识", { kind: "quiet compact", onClick: () => openNote(relation.toId) }),
       ...(["pending", "suggested"].includes(stateValue) ? [button("接受", { kind: "primary compact", onClick: () => actRelation(relation.id, "accept") }), button("拒绝", { kind: "quiet compact", onClick: () => actRelation(relation.id, "reject") })] : []),
+      stateValue === "candidate" ? button("忽略候选", { kind: "text compact", onClick: () => actRelation(relation.id, "reject") }) : null,
       stateValue === "accepted" ? button("移除联系", { kind: "danger compact", onClick: () => actRelation(relation.id, "remove") }) : null,
     ]),
   ]);
@@ -1292,7 +1455,7 @@ async function renderOutput() {
     } catch (error) { clear(answerArea).append(emptyState("本次生成未完成", errorMessage(error), button("重试", { onClick: () => form.requestSubmit() }))); }
   });
   const draftsPanel = await renderDraftsPanel();
-  wrapper.append(capabilityNotice(), form, answerArea, draftsPanel);
+  wrapper.append(...[capabilityNotice(), form, answerArea, draftsPanel].filter(Boolean));
   clear(refs.main).append(wrapper);
 }
 
@@ -1303,7 +1466,7 @@ function renderAnswer(container, result) {
     sectionHeading("生成结果", result.draftId ? "已保存到输出工作区，可继续编辑" : "本次结果尚未成为个人知识"),
     el("div", { class: "prose", text: result.answer || "没有生成可用内容" }),
     limitations.length ? el("div", { class: "notice", text: `限制：${limitations.join("；")}` }) : null,
-    citations.length ? el("div", {}, [sectionHeading("实际引用", "关键主张应能回到笔记与底层来源"), el("div", { class: "list" }, citations.map((citation) => el("div", { class: "citation" }, [el("strong", { text: citation.title || citation.noteId || citation.id || "引用材料" }), citation.excerpt ? el("p", { text: citation.excerpt }) : null, citation.locator ? el("p", { text: `定位：${citation.locator}` }) : null, citation.noteId || citation.id ? button("打开材料", { kind: "text", onClick: () => openNote(citation.noteId || citation.id) }) : null])))]) : el("div", { class: "notice danger", text: "本次结果没有返回可追溯引用，请不要把它视为有据回答。" }),
+    citations.length ? el("div", {}, [sectionHeading("实际引用", "关键主张应能回到笔记与底层来源"), el("div", { class: "list" }, citations.map((citation) => el("div", { class: "citation" }, [el("strong", { text: citation.title || citation.noteId || citation.id || "引用材料" }), citation.excerpt ? el("p", { text: citation.excerpt }) : null, citation.locator ? el("p", { text: `定位：${citation.locator}` }) : null, citation.noteId || citation.id ? button("打开材料", { kind: "text", onClick: () => openNote(citation.noteId || citation.id) }) : null, evidenceDetails(citation.noteId || citation.id, asArray(citation.sources))])))]) : el("div", { class: "notice danger", text: "本次结果没有返回可追溯引用，请不要把它视为有据回答。" }),
   ]));
 }
 
@@ -1330,7 +1493,7 @@ function openDraft(draft) {
     el("div", { class: "item-copy" }, [el("h3", { text: citation.title || citation.id || "引用材料" }), el("p", { text: truncate(citation.excerpt, 120) })]),
     el("input", { type: "checkbox", name: "usedId", value: citation.id, checked: used.has(citation.id) }),
   ]))) : el("div", { class: "notice danger", text: "这份草稿没有可标记的实际引用。" });
-  form.append(field("正文", body), sectionHeading("标记实际采用的知识", "这些反馈可用于后续晋级和关联，但不会自动证明知识正确。"), chooser, el("div", { class: "form-actions" }, [button("保存草稿", { kind: "primary", type: "submit" }), button("送回收集箱", { onClick: () => captureDraft(draft, body.value) })]));
+  form.append(field("正文", body), sectionHeading("标记实际采用的知识", "这些反馈会用于知识使用建议，但不会自动证明知识正确。"), chooser, el("div", { class: "form-actions" }, [button("保存草稿", { kind: "primary", type: "submit" }), button("送回收集箱", { onClick: () => captureDraft(draft, body.value) })]));
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
@@ -1691,7 +1854,11 @@ async function diagnosticsPanel() {
     el("section", { class: "stats" }, [statCard("今日调用", usage.callsToday ?? calls.length, "实际记录"), statCard("本月费用", usage.costMonth === null || usage.costMonth === undefined ? "未知" : usage.costMonth, "供应商价格未知时不估算"), statCard("索引条目", index.documents ?? index.count ?? 0, "可重建衍生数据"), statCard("MCP", mcp.connected ? "已连接" : mcp.enabled ? "已启用" : "未启用", "以实际状态为准")]),
     el("section", { class: "panel soft" }, [sectionHeading("系统怎样工作", "只展示可核对的输入、工具调用与结果，不展示模型隐藏推理"), el("div", { class: "step-list" }, [step("1. 切分与索引", "本地资料被拆成检索片段；关键词索引可离线使用，向量索引按隐私许可构建。", true), step("2. 召回候选", "关键词与可选语义结果分别返回，再合并为有限候选。", true), step("3. 形成回答", "只有实际召回且可用的材料进入回答，并返回引用与限制。", true), step("4. MCP 调用", "外部客户端通过同一知识服务搜索、读取；写入只能生成待确认提案。", true)])]),
     el("div", { class: "two-column" }, [
-      el("section", { class: "panel" }, [sectionHeading("存储与索引", "Vault 内容是知识权威，索引可重建"), keyValueObject(storage), keyValueObject(index), button("重建索引", { kind: "primary", onClick: async () => { try { const result = await api.rebuildIndex(); toast(`索引任务已${labels.state(result.state)}`, "success"); } catch (error) { handleError(error); } } })]),
+      el("section", { class: "panel" }, [sectionHeading("存储与索引", "Vault 内容是知识权威，索引可重建"), keyValueObject(storage),
+        el("p", { text: `检索片段 ${number(index.count)} 条，已有向量 ${number(index.vectors)} 条，待补建 ${number(index.pending)} 条。` }),
+        el("p", { class: "fine-print", text: "保存知识只更新本地索引。点击补建后，仅获准外发且缺少向量的片段会发送给已配置的嵌入服务，可能产生费用。" }),
+        el("div", { class: "form-actions" }, [button("只补建缺失向量", { kind: "primary", disabled: !number(index.pending), onClick: async () => { try { const result = await api.updateIndex(); toast(`补建任务已${labels.state(result.state)}`, "success"); } catch (error) { handleError(error); } } }), button("全量重建索引", { onClick: async () => { try { const result = await api.rebuildIndex(); toast(`索引任务已${labels.state(result.state)}`, "success"); } catch (error) { handleError(error); } } })]),
+        asArray(storage.pendingLinks).length ? el("section", {}, [sectionHeading("待更新的 Obsidian 链接", "文件改名后，先核对预览再更新引用"), el("div", { class: "list" }, storage.pendingLinks.map(note => el("div", { class: "list-item no-icon" }, [el("strong", { text: note.title }), button("核对链接", { kind: "text compact", onClick: () => previewNoteLinks(note.id) })])))]) : null]),
       el("section", { class: "panel" }, [sectionHeading("MCP 状态", "MCP 是外部 AI 应用调用知识工具的协议，不替代模型 API"), keyValueObject(mcp), el("div", { class: "notice info", text: mcp.enabled ? "服务默认只读。写入能力只会创建待确认提案，不能直接覆盖正式知识。" : "启用后，请按后端文档配置兼容客户端，并在这里核对真实调用结果。" })]),
     ]),
     callHistoryPanel(calls),

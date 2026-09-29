@@ -936,18 +936,46 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     }
 
     const normalizedClaims = claims.map((claim) => claim.trim());
-    const promptOverrides = (await settings()).prompts;
+    const config = await settings(), promptOverrides = config.prompts;
+    if (!sourceBudget.getStore()) {
+      return withBudget({ limit: clampInteger(config.ai.sourceCallLimit, 12, 1, 30), sourceId: `research-batch-${hashKey(normalizedClaims).slice(0, 16)}` },
+        () => researchBatch({ claims: normalizedClaims, topic, privacy, signal }));
+    }
     const subject = String(topic ?? '').trim();
     const compact = (value, limit) => String(value).replace(/\s+/g, ' ').trim().slice(0, limit);
-    const searchContext = [
-      ...(subject ? [`topic: ${compact(subject, 120)}`] : []),
-      `facts: ${normalizedClaims.slice(0, 3).map((claim) => compact(claim, 60)).join('; ')}`,
-    ].join('; ');
-    const directions = [
-      { direction: 'support', query: renderPrompt('researchSearchSupport', { context: searchContext }, promptOverrides).slice(0, 350) },
-      { direction: 'oppose', query: renderPrompt('researchSearchOppose', { context: searchContext }, promptOverrides).slice(0, 350) },
-    ];
-    const notes = [];
+    // Earlier extraction, redirects, and retries already count against this source budget.
+    const budget = sourceBudget.getStore(), remaining = Math.max(0, budget.limit - budget.used);
+    const pageLimit = Math.min(4, Math.max(0, remaining - 3));
+    const groupLimit = pageLimit ? Math.min(3, Math.max(0, Math.floor((remaining - pageLimit - 1) / 2))) : 0;
+    const groups = [];
+    for (let index = 0; index < normalizedClaims.length; index += 3) groups.push(Array.from({ length: Math.min(3, normalizedClaims.length - index) }, (_, offset) => index + offset));
+    const coverageLimitations = normalizedClaims.map(() => ['该主张所在检索组未纳入本轮请求预算或分组上限，尚未进行针对检索；请继续后续研究批次。']);
+    const queryFor = (indexes, key) => {
+      for (const title of [compact(subject, 60), '']) {
+        const build = limit => renderPrompt(key, { context: [
+          ...(title ? [`topic: ${title}`] : []),
+          `facts: ${indexes.map(index => compact(normalizedClaims[index], limit)).join('; ')}`,
+        ].join('; ') }, promptOverrides);
+        if (build(24).length > 350) continue;
+        let low = 24, high = 100;
+        while (low < high) {
+          const middle = Math.ceil((low + high) / 2);
+          if (build(middle).length <= 350) low = middle;
+          else high = middle - 1;
+        }
+        return build(low);
+      }
+      return null;
+    };
+    const selected = groups.slice(0, groupLimit).map((indexes, groupIndex) => ({ indexes, groupIndex,
+      support: queryFor(indexes, 'researchSearchSupport'), oppose: queryFor(indexes, 'researchSearchOppose') }));
+    const scheduled = selected.filter(group => group.support && group.oppose);
+    for (const group of selected) for (const index of group.indexes) coverageLimitations[index] = group.support && group.oppose ? [] : ['搜索提示词与该组主张无法在 350 字符内共同保留，未执行该组检索；请缩短搜索模板或拆分主张。'];
+    const claimIndexes = scheduled.flatMap(group => group.indexes);
+    const directions = ['support', 'oppose'].flatMap(direction => scheduled.map(group => ({ direction, query: group[direction], claimIndexes: group.indexes, groupIndex: group.groupIndex })));
+    const notes = [`共 ${groups.length} 个检索组，本轮安排 ${scheduled.length} 组、${claimIndexes.length} 项主张；每组同时搜索支持与反证，网页读取总上限 ${pageLimit}。`];
+    const uncovered = (claim, claimIndex) => ({ claim, evidence: [], limitations: coverageLimitations[claimIndex], conclusion: '本轮未执行该主张的针对检索，暂不能形成证据结论。', notice: notes.join(' ') });
+    if (!directions.length) return { results: normalizedClaims.map(uncovered) };
     const searches = await Promise.allSettled(directions.map(({ query }) => search({ query, privacy, signal })));
     const foundByDirection = directions.map(() => []);
     for (let index = 0; index < searches.length; index += 1) {
@@ -959,14 +987,15 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
       } else {
         if (mustPropagateResearchError(item.reason)) throw item.reason;
         notes.push(`${label}方向共享搜索失败：${item.reason?.code ?? 'UNKNOWN'}`);
+        for (const claimIndex of directions[index].claimIndexes) coverageLimitations[claimIndex].push(`该主张的${label}方向检索失败，研究覆盖尚不完整。`);
       }
     }
 
     const unique = [];
     const seen = new Set();
     const maxCandidates = Math.max(...foundByDirection.map((items) => items.length), 0);
-    for (let rank = 0; rank < maxCandidates && unique.length < 4; rank += 1) {
-      for (let directionIndex = 0; directionIndex < foundByDirection.length && unique.length < 4; directionIndex += 1) {
+    for (let rank = 0; rank < maxCandidates && unique.length < pageLimit; rank += 1) {
+      for (let directionIndex = 0; directionIndex < foundByDirection.length && unique.length < pageLimit; directionIndex += 1) {
         const item = foundByDirection[directionIndex][rank];
         if (!item) continue;
         let canonical;
@@ -980,14 +1009,14 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
         unique.push({ ...item, url: canonical, searchDirection: directions[directionIndex].direction });
       }
     }
-    notes.push(`两次共享搜索合并去重后，选取 ${unique.length} 个网页尝试读取（上限 4 个）。`);
+    notes.push(`${directions.length} 次分组搜索合并去重后，选取 ${unique.length} 个网页尝试读取（上限 ${pageLimit} 个）。`);
 
     const settled = await Promise.allSettled(unique.map(async (item) => {
       const page = await readPage({ url: item.url, privacy, signal });
       return {
         page,
         item,
-        windows: normalizedClaims.map((claim) => pageWindow(page.text, claim)),
+        windows: claimIndexes.map(index => pageWindow(page.text, normalizedClaims[index])),
       };
     }));
     const pages = [];
@@ -1009,12 +1038,12 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
 
     if (!pages.length) {
       return {
-        results: normalizedClaims.map((claim) => ({
+        results: normalizedClaims.map((claim, claimIndex) => ({
           claim,
           evidence: [],
-          limitations: ['未取得任何可读取且不重复的网页正文，无法评价该主张。'],
+          limitations: [...coverageLimitations[claimIndex], '未取得任何可读取且不重复的网页正文，无法评价该主张。'],
           conclusion: '当前没有足够的已读正文形成证据结论。',
-          notice: `已尝试两次共享搜索。${notes.join(' ')}`,
+          notice: notes.join(' '),
         })),
       };
     }
@@ -1022,8 +1051,8 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     const evaluationPages = pages.map((entry, pageIndex) => {
       const groupedWindows = [];
       const byText = new Map();
-      for (let claimIndex = 0; claimIndex < entry.windows.length; claimIndex += 1) {
-        const text = entry.windows[claimIndex].text;
+      for (let windowIndex = 0; windowIndex < entry.windows.length; windowIndex += 1) {
+        const claimIndex = claimIndexes[windowIndex], text = entry.windows[windowIndex].text;
         const existing = byText.get(text);
         if (existing) existing.claimIndexes.push(claimIndex);
         else {
@@ -1041,7 +1070,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     });
     const evaluationPrompt = renderPrompt('researchBatchEvaluation', {
       topic: subject || '未单独提供主题',
-      claims: JSON.stringify(normalizedClaims.map((claim, claimIndex) => ({ claimIndex, claim }))),
+      claims: JSON.stringify(claimIndexes.map(claimIndex => ({ claimIndex, claim: normalizedClaims[claimIndex] }))),
       pages: JSON.stringify(evaluationPages),
     }, promptOverrides);
     const evaluation = parseModelJson((await generate({
@@ -1064,6 +1093,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
 
     return {
       results: normalizedClaims.map((claim, claimIndex) => {
+        if (!claimIndexes.includes(claimIndex)) return uncovered(claim, claimIndex);
         const item = evaluations.get(claimIndex);
         const claimNotes = [...notes];
         if (!item || !Array.isArray(item.assessments) || !item.assessments.length) {
@@ -1071,7 +1101,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
           return {
             claim,
             evidence: [],
-            limitations: ['研究评价模型未返回该主张的评估，不能将其视为已核实。'],
+            limitations: [...coverageLimitations[claimIndex], '研究评价模型未返回该主张的评估，不能将其视为已核实。'],
             conclusion: '本轮缺少该主张的模型评估，不能判定为已核实。',
             notice: claimNotes.join(' '),
           };
@@ -1108,7 +1138,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
         const modelLimitations = Array.isArray(item.limitations)
           ? item.limitations.filter((value) => typeof value === 'string' && value.trim()).map((value) => value.trim().slice(0, 1_000))
           : [];
-        const limitations = [];
+        const limitations = [...coverageLimitations[claimIndex]];
         if (!evidence.length) limitations.push('模型评价未留下任何可在已读正文中逐字定位的相关证据。');
         if (item.evidenceSufficient !== true) {
           limitations.push(...(modelLimitations.length ? modelLimitations : ['现有正文证据不足以支持有边界的结论。']));

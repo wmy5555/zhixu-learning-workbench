@@ -128,7 +128,7 @@ test('relationReview shows only the three highest-value valid suggestions and ke
   });
   const review = service.relationReview();
 
-  assert.deepEqual(Object.keys(review).sort(), ['deferredCount', 'relations', 'reports']);
+  assert.deepEqual(Object.keys(review).sort(), ['candidates', 'deferredCount', 'relations', 'reports']);
   const suggested = review.relations.filter(relation => relation.state === 'suggested');
   assert.deepEqual(suggested.map(relation => relation.id), ['valid-4', 'valid-2', 'valid-5']);
   assert.deepEqual(suggested.map(relation => relation.valueScore), [55, 45, 35]);
@@ -216,6 +216,7 @@ test('relationReview keeps valid accepted relations and enriches UUID-like label
     toTitle: '044a2b67-fca0-4896-b469-81201297b138',
   });
 
+  service.store.update(from.id, {expectedHash:from.hash,meta:{relations:[accepted]}});
   const review = service.relationReview();
   assert.equal(review.relations.length, 1);
   assert.equal(review.relations[0].id, accepted.id);

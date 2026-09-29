@@ -75,6 +75,12 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
       else if(resource==='notes'&&action==='process'&&method==='POST')result=service.processNote(id,body);
       else if(resource==='notes'&&action==='promote'&&method==='POST')result=service.promote(id,body);
       else if(resource==='notes'&&action==='confirm'&&method==='POST')result=service.confirmNote(id,body);
+      else if(resource==='notes'&&action==='evidence'&&method==='GET')result=service.noteEvidence(id);
+      else if(resource==='notes'&&action==='relate'&&method==='POST')result=service.requestRelations(id,body);
+      else if(resource==='notes'&&action==='links-preview'&&method==='GET')result=service.linksPreview(id);
+      else if(resource==='notes'&&action==='links-sync'&&method==='POST')result=service.syncLinks(id,body);
+      else if(resource==='recommendations'&&!id&&method==='GET')result=service.recommendations();
+      else if(resource==='recommendations'&&action==='action'&&method==='POST')result=service.recommendationAction(id,body);
       else if(resource==='import'&&method==='POST')result=service.importItems(body);
       else if(resource==='search'&&method==='GET'){result=await service.search(query.q,{...query,browse:true});result.results=result.results.map(n=>{const clean=service.publicNote(n);return {...clean,snippet:clean.body.slice(0,500)};});}
       else if(resource==='ask'&&method==='POST')result=await service.ask(body);
@@ -89,16 +95,17 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
       else if(resource==='study'&&action==='answer'&&method==='POST')result=service.answerStudy(id,body);
       else if(resource==='study'&&action==='hint'&&method==='POST')result=service.hintStudy(id);
       else if(resource==='study'&&action==='confirm'&&method==='POST')result=service.confirmStudy(id,body);
+      else if(resource==='study'&&action==='finish'&&method==='POST')result=service.finishStudy(id);
       else if(resource==='mistakes'&&!id&&method==='GET')result={mistakes:service.listNotes({kind:'mistake'})};
       else if(resource==='mistakes'&&action==='action'&&method==='POST')result=service.mistakeAction(id,body);
       else if(resource==='topics'&&!id&&method==='GET')result={topics:service.topics()};
       else if(resource==='topics'&&id==='suggest'&&method==='POST')result=service.queue('topics',{},'topics:manual');
       else if(resource==='topics'&&!id&&method==='POST')result=service.createTopic(body);
-      else if(resource==='topics'&&id&&!action&&method==='PUT')result=service.editNote(id,body);
+      else if(resource==='topics'&&id&&!action&&method==='PUT')result=service.updateTopic(id,body);
       else if(resource==='topics'&&action==='action'&&method==='POST')result=service.topicAction(id,body);
       else if(resource==='relations'&&!id&&method==='GET')result=service.relationReview();
       else if(resource==='relations'&&action==='action'&&method==='POST')result=service.relationAction(id,body);
-      else if(resource==='discover'&&method==='POST')result=service.queue('discover',{},`discovery:manual:${new Date().toISOString().slice(0,10)}`);
+      else if(resource==='discover'&&method==='POST')result=service.queue('discover',{useAI:body.useAI===true},`discovery:manual:${new Date().toISOString().slice(0,10)}:${body.useAI===true}`);
       else if(resource==='jobs'&&!id&&method==='GET')result={jobs:service.store.records('jobs').map(service.publicJob)};
       else if(resource==='jobs'&&action==='action'&&method==='POST')result=service.jobAction(id,body);
       else if(resource==='prompts'&&method==='GET')result=service.getPrompts();
@@ -108,6 +115,7 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
       else if(resource==='settings'&&id==='test'&&method==='POST')result=await service.ai.test(body.capability);
       else if(resource==='diagnostics'&&method==='GET')result=service.diagnostics();
       else if(resource==='index'&&id==='rebuild'&&method==='POST')result=service.queue('index',{},'index:manual');
+      else if(resource==='index'&&id==='update'&&method==='POST')result=service.queue('index',{incremental:true},'index:manual');
       else if(resource==='backup'&&method==='GET')return json(res,200,service.backup(),{'Content-Disposition':`attachment; filename="learning-backup-${Date.now()}.json"`});
       else if(resource==='restore'&&method==='POST')result=service.restore(body);
       else if(resource==='history'&&id&&!action&&method==='GET')result={versions:service.store.history(id)};

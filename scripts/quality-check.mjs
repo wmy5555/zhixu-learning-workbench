@@ -46,10 +46,11 @@ try {
     fromHash: exact.hash,
     toHash: related.hash,
     type: 'prerequisite',
-    state: 'accepted',
+    state: 'suggested',
     explanation: '导数概念是理解该定理陈述的前置。',
     evidence: [exact.id, related.id],
   });
+  service.relationAction(relationId, {action:'accept',reason:'合成质量样本中明确确认的前置联系。'});
 
   const started = performance.now();
   const exactResult = await service.search('拉格朗日中值定理');

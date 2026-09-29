@@ -269,7 +269,7 @@ test('processing batches unique claims once inside the source budget and leaves 
   const processJob = service.store.get('jobs', imported.jobs[0].id);
   assert.equal(processJob.state, 'waiting');
   assert.equal(processJob.code, 'RESEARCH_INCOMPLETE');
-  assert.equal(service.store.records('jobs').some(job => job.type === 'relate'), false);
+  assert.ok(service.store.records('jobs').filter(job => job.type === 'relate').every(job => job.payload.useAI === false));
 
   const group = service.library().groups.find(item => item.source.id === source.id);
   assert.ok(group);

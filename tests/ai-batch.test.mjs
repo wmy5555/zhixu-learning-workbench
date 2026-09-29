@@ -115,7 +115,7 @@ test('researchBatch shares two searches, four pages, and one conservative model 
   assert.doesNotMatch(result.results[1].conclusion, /VERIFIED/);
 });
 
-test('researchBatch bounds search queries and groups identical claim windows in the model prompt', async () => {
+test('researchBatch bounds grouped queries and evaluates only claims covered by the scheduled searches', async () => {
   const tailClaim = `TAIL_SENTINEL ${'very long tail fact '.repeat(20)}`;
   const claims = [
     ...Array.from({ length: 19 }, (_, index) => `Fact ${index} ${'descriptive detail '.repeat(12)}`),
@@ -153,14 +153,16 @@ test('researchBatch bounds search queries and groups identical claim windows in 
     privacy: 'cloud',
   });
 
-  assert.equal(queries.length, 2);
+  assert.equal(queries.length, 6);
   assert.ok(queries.every((query) => query.length <= 350));
   assert.ok(queries.every((query) => !query.includes('TAIL_SENTINEL')));
-  assert.match(modelPrompt, /TAIL_SENTINEL/);
+  assert.doesNotMatch(modelPrompt, /TAIL_SENTINEL/);
+  assert.match(result.results.at(-1).limitations.join(' '), /未纳入本轮/);
+  assert.deepEqual(result.results.at(-1).evidence, []);
   const candidatePages = JSON.parse(modelPrompt.match(/候选正文：(.*?)\n\n输出 JSON：/s)[1]);
   assert.equal(candidatePages.length, 1);
   assert.equal(candidatePages[0].windows.length, 1);
-  assert.deepEqual(candidatePages[0].windows[0].claimIndexes, Array.from({ length: claims.length }, (_, index) => index));
+  assert.deepEqual(candidatePages[0].windows[0].claimIndexes, Array.from({ length: 9 }, (_, index) => index));
   assert.match(result.results[0].limitations.join(' '), /未提供该主张的综合结论/);
   assert.equal(result.results[0].conclusion, '当前没有可逐字定位的正文证据支持自动结论。');
 });

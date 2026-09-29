@@ -17,6 +17,9 @@ export function atomicWrite(file, content) {
 }
 const folders = { source: '01 原始资料', knowledge: '02 知识', mistake: '03 错题修正', topic: '04 主题', report: '05 发现' };
 const reserved = new Set(['id', 'kind', 'title', 'createdAt', 'updatedAt']);
+const linkStart = '<!-- zhixu-managed-links:start -->';
+const linkEnd = '<!-- zhixu-managed-links:end -->';
+const stableJSON = value => JSON.stringify(value, (_, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
 function parse(raw) {
   const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
   const doc = YAML.parseDocument(match?.[1] || '{}');
@@ -71,9 +74,21 @@ export class Store {
     this.db.prepare('INSERT INTO versions VALUES(?,?,?,?,?,?,?)').run(randomUUID(), row.id, row.path, row.hash, row.raw, reason, now());
   }
   index(id, body) {
-    this.db.prepare('DELETE FROM index_chunks WHERE noteId=?').run(id);
-    const insert = this.db.prepare('INSERT INTO index_chunks(id,noteId,body) VALUES(?,?,?)');
-    for (let i = 0; i < body.length; i += 700) insert.run(`${id}:${i}`, id, body.slice(i, i + 900));
+    const previous = this.db.prepare('SELECT * FROM index_chunks WHERE noteId=?').all(id);
+    const reusable = new Map();
+    for (const chunk of previous) if (!reusable.has(chunk.body) || chunk.vector !== null) reusable.set(chunk.body, chunk);
+    const keep = new Set();
+    const insert = this.db.prepare('INSERT INTO index_chunks(id,noteId,body,vector,model) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body,vector=excluded.vector,model=excluded.model');
+    for (let i = 0; i < body.length; i += 700) {
+      const chunkId = `${id}:${i}`, text = body.slice(i, i + 900), old = reusable.get(text);
+      keep.add(chunkId); insert.run(chunkId, id, text, old?.vector ?? null, old?.model ?? null);
+    }
+    for (const chunk of previous) if (!keep.has(chunk.id)) this.db.prepare('DELETE FROM index_chunks WHERE id=?').run(chunk.id);
+  }
+  missingEmbeddings({ model, noteIds } = {}) {
+    const selected = noteIds ? new Set(noteIds) : null;
+    return this.db.prepare('SELECT * FROM index_chunks WHERE vector IS NULL OR model IS NULL OR model != ? ORDER BY noteId,id').all(model ?? '')
+      .filter(chunk => (!selected || selected.has(chunk.noteId)) && (model !== undefined || chunk.vector === null));
   }
   upsert(file, raw, id, parsed) {
     const { meta, body } = parsed || parse(raw);
@@ -121,13 +136,158 @@ export class Store {
         if (!currentIds.has(row.id) || row.path !== path.relative(this.vaultDir, current.file).replaceAll('\\', '/')) {
           if (!currentIds.has(row.id)) this.version(row, '文件移除或冲突隔离');
           this.db.prepare('DELETE FROM notes WHERE id=?').run(row.id);
-          this.db.prepare('DELETE FROM index_chunks WHERE noteId=?').run(row.id);
+          if (!currentIds.has(row.id)) this.db.prepare('DELETE FROM index_chunks WHERE noteId=?').run(row.id);
         }
       }
       for (const entry of accepted) this.upsert(entry.file, entry.raw, entry.id, entry.parsed);
+      const blocked = new Set(previous.filter(row => conflicts.some(c => c.id === row.id || c.path === row.path || c.other === row.path)).map(row => row.id));
+      this.syncMirrors(conflicts, blocked);
       this.db.exec('COMMIT');
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
-    this.conflicts = conflicts; return { count: accepted.length, conflicts };
+    return { count: accepted.length, conflicts: this.conflicts };
+  }
+  syncMirrors(conflicts = this.conflicts.filter(item => item.type !== 'mirror'), blocked = new Set()) {
+    const notes = this.list(), byId = new Map(notes.map(note => [note.id, note])), claims = new Map();
+    const owners = new Map(this.records('vaultRelations').map(item => [item.id, item]));
+    for (const owner of owners.values()) for (const entry of owner.ownerPaths || []) {
+      if (conflicts.some(item => item.id === entry.id || item.path === entry.path || item.other === entry.path)) blocked.add(entry.id);
+    }
+    const issue = (note, error, extra = {}) => conflicts.push({ type: 'mirror', path: note?.path || '', error, ...extra });
+    for (const note of notes) {
+      if (note.kind === 'topic') {
+        const noteIds = note.meta.noteIds ?? [], paused = note.meta.paused ?? false;
+        if (!Array.isArray(noteIds) || noteIds.some(id => typeof id !== 'string') || typeof paused !== 'boolean') {
+          issue(note, '主题的 noteIds 或 paused 属性无效；未覆盖已有调度镜像。');
+        } else this.put('topics', note.id, { ...this.get('topics', note.id, {}), id: note.id, noteIds: [...new Set(noteIds)], paused });
+      }
+      if (note.meta.relations === undefined) continue;
+      if (!Array.isArray(note.meta.relations)) { issue(note, 'relations 必须是已确认关系的列表。'); blocked.add(note.id); continue; }
+      for (const relation of note.meta.relations) {
+        if (!relation || typeof relation !== 'object' || typeof relation.id !== 'string' || !relation.id ||
+          typeof relation.fromId !== 'string' || typeof relation.toId !== 'string' || relation.fromId === relation.toId ||
+          ![relation.fromId, relation.toId].includes(note.id) || ![undefined, 'accepted'].includes(relation.state)) {
+          issue(note, '关系属性无效或并非已确认关系；未当作可用联系。'); blocked.add(note.id); continue;
+        }
+        const entries = claims.get(relation.id) || [];
+        entries.push({ note, relation }); claims.set(relation.id, entries);
+      }
+    }
+    for (const topic of this.records('topics')) if (!byId.has(topic.id) && !blocked.has(topic.id)) this.remove('topics', topic.id);
+    for (const [id, entries] of claims) {
+      const relation = entries[0].relation, ownerIds = [...new Set(entries.map(entry => entry.note.id))];
+      const conflict = entries.some(entry => stableJSON(entry.relation) !== stableJSON(relation));
+      const missing = !byId.has(relation.fromId) || !byId.has(relation.toId);
+      const message = conflict ? '同一关系在多个笔记中的定义不一致；请检查原文件。' : missing ? '确认关系引用的笔记已删除或被冲突隔离。' : '';
+      const mirrored = { ...this.get('relations', id, {}), ...relation, state: conflict ? 'conflict' : missing ? 'orphaned' : 'accepted', vaultOwnerIds: ownerIds };
+      delete mirrored.vaultRemovedAt; delete mirrored.mirrorConflict;
+      if (message) { mirrored.mirrorConflict = message; issue(entries[0].note, message, { relationId: id }); }
+      this.put('relations', id, mirrored);
+      this.put('vaultRelations', id, { id, ownerIds, ownerPaths: entries.map(entry => ({ id: entry.note.id, path: entry.note.path })) });
+    }
+    for (const relation of this.records('relations')) {
+      if (claims.has(relation.id) || !['accepted', 'conflict', 'orphaned'].includes(relation.state)) continue;
+      const prior = owners.get(relation.id), unavailable = prior?.ownerIds.some(id => blocked.has(id) || (!byId.has(id) && conflicts.some(item => item.type !== 'mirror')));
+      if (prior && !unavailable) {
+        this.put('relations', relation.id, { ...relation, state: 'rejected', vaultRemovedAt: relation.vaultRemovedAt || now(), mirrorConflict: null });
+      } else {
+        const message = unavailable ? '确认关系所属文件存在冲突，未覆盖或删除原关系。' : '数据库中的确认关系没有对应的 Vault 记录；请检查原笔记。';
+        this.put('relations', relation.id, { ...relation, state: 'conflict', mirrorConflict: message });
+        issue(byId.get(relation.fromId), message, { relationId: relation.id });
+      }
+    }
+    this.conflicts = conflicts;
+  }
+  outboundPrivacy(noteOrId) {
+    const visited = new Set();
+    const visit = (id, expectedHash) => {
+      if (typeof id !== 'string' || !id) return 'local';
+      if (visited.has(id)) return 'cloud';
+      const row = this.row(id);
+      if (!row) return 'local';
+      let meta, body;
+      try {
+        const file = assertTree(path.resolve(this.vaultDir, row.path), this.vaultDir);
+        if (fs.lstatSync(this.vaultDir).isSymbolicLink()) return 'local';
+        const raw = fs.readFileSync(file, 'utf8');
+        if (expectedHash && hash(raw) !== expectedHash) return 'local';
+        ({ meta, body } = parse(raw));
+      } catch { return 'local'; }
+      if (meta.privacy !== 'cloud' || (meta.id !== undefined && meta.id !== id)) return 'local';
+      const ids = meta.managedLinkIds ?? [], start = body.indexOf(linkStart), end = body.indexOf(linkEnd);
+      if (!Array.isArray(ids) || ids.some(target => typeof target !== 'string' || !target)) return 'local';
+      if (meta.managedLinksHash || ids.length || start !== -1 || end !== -1) {
+        if (!meta.managedLinksHash || !Array.isArray(meta.managedLinkIds) || !ids.length || start === -1 || end < start ||
+          body.indexOf(linkStart, start + linkStart.length) !== -1 || body.indexOf(linkEnd, end + linkEnd.length) !== -1 ||
+          hash(body.slice(start, end + linkEnd.length)) !== meta.managedLinksHash) return 'local';
+      }
+      const targets = new Set(ids);
+      if (meta.kind === 'topic') {
+        if (meta.noteIds !== undefined && !Array.isArray(meta.noteIds)) return 'local';
+        for (const target of meta.noteIds || []) targets.add(target);
+      }
+      if (meta.relations !== undefined && !Array.isArray(meta.relations)) return 'local';
+      for (const relation of meta.relations || []) {
+        if (!relation || ![undefined, 'accepted'].includes(relation.state) || ![relation.fromId, relation.toId].includes(id)) return 'local';
+        targets.add(relation.fromId === id ? relation.toId : relation.fromId);
+      }
+      for (const relation of this.records('relations')) {
+        if (!relation.vaultOwnerIds?.includes(id) && relation.fromId !== id) continue;
+        if (['conflict', 'orphaned'].includes(relation.state)) return 'local';
+        if (relation.state === 'accepted') targets.add(relation.fromId === id ? relation.toId : relation.fromId);
+      }
+      visited.add(id);
+      for (const target of targets) if (visit(target) !== 'cloud') return 'local';
+      return 'cloud';
+    };
+    return visit(typeof noteOrId === 'string' ? noteOrId : noteOrId?.id, typeof noteOrId === 'string' ? undefined : noteOrId?.hash);
+  }
+  managedLinksPreview(id, { scan = true } = {}) {
+    if (scan) this.scan();
+    const note = this.read(id), before = note.body;
+    const rows = [], seen = new Set(), labels = { analogy: '类比', prerequisite: '前置知识', support: '支持', oppose: '反对', example: '例子', counterexample: '反例', application: '应用', correction: '修正', similarity: '相关材料' };
+    let hasLocalTarget = false;
+    const plain = value => String(value || '').replace(/[\r\n<>]/g, ' ');
+    const link = target => `[[${target.path.replace(/\.md$/i, '')}|${plain(target.title).replace(/[\[\]|]/g, ' ')}]]`;
+    const failPreview = message => ({ id, path: note.path, expectedHash: note.hash, before, body: before, meta: {}, changed: false, conflict: message });
+    for (const relation of this.records('relations').filter(item => item.state === 'accepted' && item.vaultOwnerIds?.includes(id))) {
+      const targetId = relation.fromId === id ? relation.toId : relation.fromId;
+      if (!this.row(targetId)) continue;
+      const target = this.read(targetId);
+      if (/[\[\]|#^\r\n]/.test(target.path)) return failPreview('目标文件名包含 Obsidian 链接保留符号，请先调整文件名。');
+      hasLocalTarget ||= this.outboundPrivacy(target) !== 'cloud';
+      rows.push(`- ${link(target)} — ${labels[relation.type] || plain(relation.type) || '已确认联系'}${relation.explanation ? `：${plain(relation.explanation)}` : ''}${relation.use ? `；用途：${plain(relation.use)}` : ''}${relation.boundary ? `；边界：${plain(relation.boundary)}` : ''}`);
+      seen.add(targetId);
+    }
+    if (note.kind === 'topic' && Array.isArray(note.meta.noteIds)) for (const targetId of note.meta.noteIds) {
+      if (seen.has(targetId) || !this.row(targetId)) continue;
+      const target = this.read(targetId);
+      if (/[\[\]|#^\r\n]/.test(target.path)) return failPreview('目标文件名包含 Obsidian 链接保留符号，请先调整文件名。');
+      hasLocalTarget ||= this.outboundPrivacy(target) !== 'cloud';
+      rows.push(`- ${link(target)}`); seen.add(targetId);
+    }
+    const start = before.indexOf(linkStart), end = before.indexOf(linkEnd);
+    const hasBlock = start !== -1 || end !== -1;
+    if (hasBlock && (start === -1 || end < start || before.indexOf(linkStart, start + linkStart.length) !== -1 || before.indexOf(linkEnd, end + linkEnd.length) !== -1)) return failPreview('自动链接区标记不完整或重复，请先核对该笔记。');
+    const oldBlock = hasBlock ? before.slice(start, end + linkEnd.length) : '';
+    if (hasBlock && (!note.meta.managedLinksHash || hash(oldBlock) !== note.meta.managedLinksHash)) return failPreview('自动链接区曾被外部修改，已保留原文；请人工核对后再更新。');
+    if (!hasBlock && note.meta.managedLinksHash) return failPreview('自动链接区已被外部移除，未重新写回。');
+    const block = rows.length ? `${linkStart}\n## 已确认的知识链接\n\n${rows.join('\n')}\n${linkEnd}` : '';
+    const body = hasBlock ? `${before.slice(0, start)}${block}${before.slice(end + linkEnd.length)}` : block ? `${before}\n\n${block}` : before;
+    const privacyChanged = hasLocalTarget && note.meta.privacy === 'cloud';
+    const managedLinkIds = [...seen], referencesChanged = stableJSON(note.meta.managedLinkIds || []) !== stableJSON(managedLinkIds);
+    return { id, path: note.path, expectedHash: note.hash, before, body, meta: { managedLinksHash: block ? hash(block) : null, managedLinkIds, ...(hasLocalTarget ? { privacy: 'local' } : {}) }, changed: body !== before || privacyChanged || referencesChanged, conflict: null, privacyChanged, privacyNotice: privacyChanged ? '链接包含仅本地笔记的标题；更新后本笔记也将保持仅本地，避免这些内容外发。' : '' };
+  }
+  pendingManagedLinks() {
+    this.scan();
+    return this.list().filter(note => note.meta.managedLinksHash || note.meta.relations?.length || (note.kind === 'topic' && note.meta.noteIds?.length))
+      .map(note => this.managedLinksPreview(note.id, { scan: false })).filter(preview => preview.changed || preview.conflict);
+  }
+  syncManagedLinks(id, { expectedHash } = {}) {
+    const preview = this.managedLinksPreview(id);
+    if (!expectedHash || preview.expectedHash !== expectedHash) fail('链接预览后笔记已变化，请重新检查。', 'CONFLICT', 409);
+    if (preview.conflict) fail(preview.conflict, 'MANAGED_LINK_CONFLICT', 409);
+    if (!preview.changed) return this.read(id);
+    return this.update(id, { expectedHash, body: preview.body, meta: preview.meta });
   }
   create({ id = randomUUID(), kind = 'knowledge', title, body, meta = {} }) {
     if (!folders[kind]) fail('不支持的知识文件类型。');
@@ -136,7 +296,7 @@ export class Store {
     const file = assertTree(path.join(this.vaultDir, folders[kind], `${id}.md`), this.vaultDir);
     const fields = { ...meta, id, kind, title: String(title).slice(0, 200), createdAt: now(), updatedAt: now() };
     const raw = serialize('', fields, String(body)); atomicWrite(file, raw);
-    const result = this.upsert(file, raw, id); this.version(this.row(id), kind === 'source' ? '原始输入快照' : '首次创建'); return result;
+    const result = this.upsert(file, raw, id); this.version(this.row(id), kind === 'source' ? '原始输入快照' : '首次创建'); this.syncMirrors(); return result;
   }
   update(id, { body, title, meta = {}, expectedHash }) {
     this.scan(); const old = this.row(id), note = this.read(id);
@@ -145,7 +305,7 @@ export class Store {
     if (hash(fs.readFileSync(file)) !== expectedHash) fail('外部编辑冲突，未覆盖文件。', 'CONFLICT', 409);
     const safeMeta = Object.fromEntries(Object.entries(meta).filter(([key]) => !reserved.has(key)));
     const raw = serialize(old.raw, { ...safeMeta, id, kind: note.kind, title: title ?? note.title, updatedAt: now() }, body ?? note.body);
-    this.version(old, 'Web 修改前'); atomicWrite(file, raw); return this.upsert(file, raw, id);
+    this.version(old, 'Web 修改前'); atomicWrite(file, raw); const result = this.upsert(file, raw, id); this.syncMirrors(); return result;
   }
   delete(id, expectedHash) {
     this.scan(); const row = this.row(id); this.read(id);
@@ -153,7 +313,7 @@ export class Store {
     this.version(row, '用户删除');
     fs.unlinkSync(assertTree(path.join(this.vaultDir, row.path), this.vaultDir));
     this.db.prepare('DELETE FROM notes WHERE id=?').run(id); this.db.prepare('DELETE FROM index_chunks WHERE noteId=?').run(id);
-    this.remove('changed', id); this.put('deleted', id, { id, deletedAt: now() }); return { deleted: true };
+    this.remove('changed', id); this.put('deleted', id, { id, deletedAt: now() }); this.syncMirrors(); return { deleted: true };
   }
   history(id) { return this.db.prepare('SELECT id as versionId,noteId,path,hash,raw,reason,createdAt FROM versions WHERE noteId=? ORDER BY createdAt DESC').all(id); }
   restoreVersion(id, versionId, expectedHash) {
@@ -263,7 +423,8 @@ export class Store {
       for (const r of backup.records) this.db.prepare('INSERT INTO records VALUES(?,?,?)').run(r.namespace, r.key, r.json);
       for (const v of backup.versions) this.db.prepare('INSERT INTO versions VALUES(?,?,?,?,?,?,?)').run(v.id, v.noteId, v.path, v.hash, v.raw, v.reason, v.createdAt);
       for (const item of incoming) this.upsert(item.target, item.raw, item.id, parse(item.raw));
-      this.db.exec('COMMIT'); transaction = false; committed = true; this.conflicts = [];
+      this.syncMirrors([]);
+      this.db.exec('COMMIT'); transaction = false; committed = true;
     } catch (error) {
       if (transaction) {
         try { this.db.exec('ROLLBACK'); } catch (rollback) { rollbackError = rollback; }
