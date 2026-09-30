@@ -1621,7 +1621,11 @@ function appearancePanel() {
   }});
   showPreview();
   return el("section",{class:"panel page-stack"},[
-    tour(sectionHeading("外观与强调色","日夜模式通过左上角开关切换；强调色会同时适配两种模式。"), "system-appearance"),
+    tour(sectionHeading("外观与强调色","切换整个工作台的日夜模式；强调色会同时适配两种模式。"), "system-appearance"),
+    el("div", { class: "form-actions" }, [["日间模式", "light"], ["夜间模式", "dark"]].map(([label, theme]) => button(label, { onClick: () => {
+      if (document.documentElement.dataset.theme !== theme) document.querySelector("#theme-toggle")?.click();
+      else recordTourEvent("appearance-theme");
+    } }))),
     presets,el("div",{class:"form-grid"},[field("取色器",picker),field("颜色代码",code)]),
     preview,message,el("div",{class:"form-actions"},[save,reset]),
     el("p",{class:"fine-print",text:"保存在当前浏览器。为保证可读性，系统会按日夜模式微调颜色亮度；成功、警告和错误仍保留各自的状态色。"}),
@@ -1989,7 +1993,7 @@ function openProposal(proposal) {
   openDrawer(proposal.title || "写入提案", "MCP 待确认", el("div", { class: "page-stack" }, [
     el("div", { class: "notice", text: "这里显示外部客户端建议的修改。接受前会检查目标文件是否已经变化。" }),
     el("div", { class: "two-column" }, [
-      el("section", { class: "panel soft" }, [el("p", { class: "eyebrow", text: "修改前" }), el("h3", { text: "当前正式内容" }), el("div", { class: "prose", text: proposal.before || "未返回修改前内容；请勿在无法核对时接受。" })]),
+      el("section", { class: "panel soft" }, [el("p", { class: "eyebrow", text: "修改前" }), el("h3", { text: "当前内容" }), el("div", { class: "prose", text: proposal.before || "未返回修改前内容；请勿在无法核对时接受。" })]),
       el("section", { class: "panel soft" }, [el("p", { class: "eyebrow", text: "修改后" }), el("h3", { text: "外部建议稿" }), el("div", { class: "prose", text: proposal.body || proposal.proposedBody || "未提供建议正文" })]),
     ]),
     proposal.diff ? el("pre", { class: "mono-block", text: proposal.diff }) : null,

@@ -191,6 +191,8 @@ test('destructive practice, proposal and relationship branches are independent a
   loadCase(service, 'duplicates', seed.roles);
   assert.equal(service.store.row(deletion.id), undefined, 'Reloading must not recreate a deleted lesson object');
   const proposals = loadCase(service, 'proposals', seed.roles);
+  assert.equal(service.store.get('proposals', proposals.roles.proposal).title, '预设演示案例 · 待接受写入提案');
+  assert.equal(service.store.get('proposals', proposals.roles.proposalReject).title, '预设演示案例 · 待拒绝写入提案');
   assert.equal(service.settings().mcp.allowProposals, false);
   service.proposalAction(proposals.roles.proposal, { action: 'accept' });
   service.proposalAction(proposals.roles.proposalReject, { action: 'reject' });

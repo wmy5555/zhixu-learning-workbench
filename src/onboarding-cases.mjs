@@ -93,7 +93,7 @@ export function loadCase(service, caseId, roles = {}) {
     for (const [role, purpose] of [['proposal', '待接受'], ['proposalReject', '待拒绝']]) {
       const knowledge = note(role === 'proposal' ? 'proposalNote' : 'proposalRejectNote', `${purpose}提案的专用知识`, '原文：这次虚构分享要为观点保留出处。');
       const id = randomUUID();
-      record('proposals', id, { id, noteId: knowledge.id, before: knowledge.body, body: `${label}\n\n修改建议：这次虚构分享要为观点保留出处，并核对出处的上下文。`, reason: `${label}\n${purpose}：练习手动审阅，没有调用外部 MCP。`, expectedHash: knowledge.hash, state: 'pending', createdAt: stamp });
+      record('proposals', id, { id, title: `预设演示案例 · ${purpose}写入提案`, noteId: knowledge.id, before: knowledge.body, body: `${label}\n\n修改建议：这次虚构分享要为观点保留出处，并核对出处的上下文。`, reason: `${label}\n${purpose}：练习手动审阅，没有调用外部 MCP。`, expectedHash: knowledge.hash, state: 'pending', createdAt: stamp });
       caseRoles[role] = id;
     }
   } else if (caseId === 'conflicts') {
