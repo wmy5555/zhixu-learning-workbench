@@ -107,18 +107,32 @@ export function toast(message, tone = "default", timeout = 4200) {
   window.setTimeout(() => item.remove(), timeout);
 }
 
+function containDialogKeyboard(dialog, cancel) {
+  dialog.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); cancel(); return; }
+    if (event.key !== "Tab") return;
+    const controls = [...dialog.querySelectorAll("button, [href], input, select, textarea, [tabindex]")].filter(node => !node.disabled && node.getAttribute("tabindex") !== "-1" && node.getClientRects().length);
+    const first = controls[0], last = controls.at(-1);
+    if (!first) { event.preventDefault(); return; }
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  });
+}
+
 export function confirmAction({ title, message, confirmText = "确认", danger = false }) {
   return new Promise((resolve) => {
+    const returnFocus = document.activeElement;
     const overlay = el("div", { class: "dialog-backdrop" });
     const dialog = el("div", { class: "dialog", role: "dialog", ariaModal: "true" }, [
       el("h2", { text: title }),
       el("p", { text: message }),
     ]);
-    const finish = (value) => { overlay.remove(); resolve(value); };
+    const finish = (value) => { overlay.remove(); if (returnFocus?.isConnected) returnFocus.focus(); resolve(value); };
     dialog.append(el("div", { class: "dialog-actions" }, [
       button("取消", { onClick: () => finish(false) }),
       button(confirmText, { kind: danger ? "danger" : "primary", onClick: () => finish(true) }),
     ]));
+    containDialogKeyboard(dialog, () => finish(false));
     overlay.append(dialog);
     document.body.append(overlay);
     dialog.querySelector("button")?.focus();
@@ -127,6 +141,7 @@ export function confirmAction({ title, message, confirmText = "确认", danger =
 
 export function promptAction({ title, message = "", label = "说明", initialValue = "", placeholder = "", submitText = "提交", danger = false, required = false }) {
   return new Promise((resolve) => {
+    const returnFocus = document.activeElement;
     const overlay = el("div", { class: "dialog-backdrop" });
     const textarea = el("textarea", { rows: 5, value: initialValue, placeholder, required, ariaLabel: label });
     const form = el("form", { class: "dialog", role: "dialog", ariaModal: "true" }, [
@@ -134,11 +149,12 @@ export function promptAction({ title, message = "", label = "说明", initialVal
       message ? el("p", { text: message }) : null,
       el("label", { class: "field" }, [el("span", { class: "field-label", text: label }), textarea]),
     ]);
-    const finish = (value) => { overlay.remove(); resolve(value); };
+    const finish = (value) => { overlay.remove(); if (returnFocus?.isConnected) returnFocus.focus(); resolve(value); };
     form.append(el("div", { class: "dialog-actions" }, [
       button("取消", { onClick: () => finish(null) }),
       button(submitText, { kind: danger ? "danger" : "primary", type: "submit" }),
     ]));
+    containDialogKeyboard(form, () => finish(null));
     form.addEventListener("submit", (event) => {
       event.preventDefault();
       const value = textarea.value.trim();

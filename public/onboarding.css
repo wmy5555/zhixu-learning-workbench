@@ -1,0 +1,53 @@
+.practice-banner { padding: 12px 24px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 12px; background: var(--panel-soft); }
+.practice-banner strong { color: var(--accent); }
+.practice-date { display: block; margin-top: 4px; color: var(--muted); }
+.practice-banner[hidden], .onboarding-panel[hidden], .onboarding-content[hidden] { display: none; }
+.onboarding-entry { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.onboarding-entry h2 { margin: 5px 0 8px; font-size: 20px; }
+.onboarding-entry p { margin-bottom: 0; }
+.onboarding-entry-compact { padding: 14px 20px; }
+.onboarding-open .workspace { margin-right: 350px; }
+.onboarding-panel { position: fixed; inset: 0 0 0 auto; z-index: 65; width: 350px; padding: 22px 20px; overflow-y: auto; background: var(--paper); border-left: 1px solid var(--line); color: var(--ink); box-shadow: -4px 0 20px rgba(0,0,0,.04); }
+.onboarding-heading { display: flex; gap: 8px; justify-content: space-between; align-items: flex-start; }
+.onboarding-heading h2 { font-size: 19px; margin: 5px 0 14px; }
+.onboarding-heading button { white-space: nowrap; }
+.onboarding-content { display: grid; gap: 12px; }
+.onboarding-content p { margin: 0; }
+.onboarding-content select { width: 100%; min-width: 0; }
+.onboarding-catalog { padding: 10px 12px; background: var(--panel-soft); border-radius: 10px; }
+.onboarding-catalog summary, .onboarding-clock summary { cursor: pointer; font-size: 12px; }
+.onboarding-catalog button { display: block; width: 100%; text-align: left; font-size: 12px; margin-top: 3px; }
+.onboarding-catalog button.is-current { color: var(--accent); background: var(--accent-soft); }
+.onboarding-step-head { display: flex; gap: 8px; align-items: flex-start; justify-content: space-between; }
+.onboarding-step-head h3 { margin: 3px 0; font-size: 17px; }
+.onboarding-step-head .badge { flex-shrink: 0; }
+.onboarding-instruction { line-height: 1.85; font-size: 13px; white-space: pre-line; overflow-wrap: anywhere; }
+.onboarding-expected { padding: 12px; border-left: 3px solid var(--accent); background: var(--panel-soft); font-size: 12px; line-height: 1.7; }
+.onboarding-expected strong { display: block; margin-bottom: 4px; }
+.onboarding-actions, .onboarding-controls { display: flex; gap: 8px; flex-wrap: wrap; }
+.onboarding-actions button { font-size: 12px; padding: 9px 11px; }
+.onboarding-step-nav { display: flex; justify-content: space-between; border-top: 1px solid var(--line); padding-top: 8px; }
+.onboarding-clock { padding: 12px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.onboarding-clock[open] > * + * { margin-top: 10px; }
+.onboarding-controls button { font-size: 11px; }
+.onboarding-open .drawer { right: 350px; width: min(760px, calc(100vw - 366px)); }
+.tour-target { outline: 3px solid var(--accent); outline-offset: 5px; scroll-margin: 22px; }
+.practice-settings-note { margin-bottom: 16px; }
+.practice-readonly { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 24px; }
+.practice-readonly:disabled { opacity: .65; }
+@media (max-width: 1100px) {
+  .onboarding-open .workspace { margin-right: 0; }
+  .onboarding-panel { position: static; width: auto; max-width: 100%; padding: 18px; border-left: 0; border-bottom: 1px solid var(--line); box-shadow: none; overflow: visible; }
+  .onboarding-open .drawer { right: 0; width: min(760px, 96vw); }
+  .drawer-body > .onboarding-panel { margin: -6px -8px 24px; border: 1px solid var(--line); border-radius: 12px; }
+  .onboarding-entry { flex-direction: column; align-items: stretch; }
+  .practice-banner { padding: 10px 18px; flex-wrap: wrap; }
+  .onboarding-actions button { flex: 1 1 auto; }
+}
+@media (max-width: 520px) {
+  .onboarding-heading h2 { font-size: 17px; }
+  .onboarding-panel { padding: 15px; }
+  .practice-banner span { display: block; margin-top: 4px; }
+  .onboarding-catalog button { white-space: normal; }
+}
+@media (prefers-reduced-motion: reduce) { .tour-target { scroll-behavior: auto; } }

@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createService } from './service.mjs';
 import { atomicWrite, fail, now } from './store.mjs';
+import { createOnboarding } from './onboarding.mjs';
 
 const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
 const safeEqual = (a, b) => typeof a === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
@@ -16,6 +17,8 @@ async function readJSON(req) {
 }
 export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR || '.data'), vaultDir = process.env.LEARNING_VAULT_DIR ? path.resolve(process.env.LEARNING_VAULT_DIR) : undefined, scheduler = true, service: supplied } = {}) {
   const service = supplied || createService({ dataDir, vaultDir });
+  const mainService = service;
+  const onboarding = createOnboarding({ dataDir, mainService });
   const tokenPath = path.join(dataDir,'mcp-token');
   if (!fs.existsSync(tokenPath)) atomicWrite(tokenPath, randomBytes(32).toString('hex'));
   let mcpToken = fs.readFileSync(tokenPath,'utf8').trim();
@@ -34,12 +37,15 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
         let rel=url.pathname==='/'?'index.html':decodeURIComponent(url.pathname.slice(1));
         if (rel.includes('..') || rel.includes('\\') || rel.includes('\0')) fail('路径无效。','PATH_ESCAPE',403);
         const file=path.join(publicDir,rel); if(!fs.existsSync(file)||!fs.statSync(file).isFile())fail('页面不存在。','NOT_FOUND',404);
-        const types={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.js':'text/javascript; charset=utf-8','.svg':'image/svg+xml'};
+        const types={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.js':'text/javascript; charset=utf-8','.svg':'image/svg+xml','.txt':'text/plain; charset=utf-8','.md':'text/plain; charset=utf-8'};
         // Only the read-only guide may be embedded by our own help dialog.
         const frameAncestors = file === path.join(publicDir, 'guide.html') ? "'self'" : "'none'";
         res.writeHead(200,{'Content-Type':types[path.extname(file)]||'application/octet-stream','Cache-Control':'no-cache','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Content-Security-Policy':`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors ${frameAncestors}; form-action 'self'`}); if(method==='HEAD')res.end();else fs.createReadStream(file).pipe(res);return;
       }
       if (parts[1]==='session'&&method==='GET') {
+        const existingId = (req.headers.cookie || '').split(';').map(x=>x.trim()).find(x=>x.startsWith('learning_session='))?.slice(17);
+        const existing = sessions.get(existingId);
+        if (existing && Date.now()-existing.at <= 86400000) return json(res,200,{csrf:existing.csrf});
         const id=randomBytes(32).toString('hex'),csrf=randomBytes(32).toString('hex');
         sessions.set(id,{csrf,at:Date.now()});
         for(const [key,value]of sessions)if(Date.now()-value.at>86400000)sessions.delete(key);
@@ -63,8 +69,32 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
       if(!session||Date.now()-session.at>86400000)fail('会话已过期，请刷新页面。','SESSION_REQUIRED',401);
       if(!['GET','HEAD'].includes(method)&&!safeEqual(req.headers['x-csrf-token']||'',session.csrf))fail('请求缺少有效的操作凭据，请刷新页面。','CSRF_DENIED',403);
       const body=['POST','PUT','DELETE'].includes(method)?await readJSON(req):{};
-      const route=parts.slice(1),[resource,id,action]=route;let result;
-      if(resource==='bootstrap'&&method==='GET')result=service.bootstrap();
+      if (parts[1] === 'onboarding') {
+        let result;
+        if (parts[2] === 'state' && method === 'GET') result = onboarding.state();
+        else if (method === 'POST') {
+          if (parts[2] === 'start') result = onboarding.start();
+          else if (parts[2] === 'resume') result = onboarding.resume(body.practiceId);
+          else if (parts[2] === 'pause') result = await onboarding.pause(body.practiceId);
+          else if (parts[2] === 'reset') result = await onboarding.reset(body.practiceId);
+          else if (parts[2] === 'advance') result = onboarding.advance(body.practiceId, body.action);
+          else if (parts[2] === 'case') result = onboarding.caseAction(body.practiceId, body.caseId);
+          else if (parts[2] === 'abandon') result = onboarding.abandon(body.practiceId, body.sessionId);
+          else if (parts[2] === 'checkpoint') result = onboarding.checkpoint(body.practiceId, body);
+          else if (parts[2] === 'event') result = onboarding.clientEvent(body.practiceId, body.event);
+          else if (parts[2] === 'test') result = await onboarding.test(body.capability);
+          else if (parts[2] === 'dismiss') result = onboarding.dismiss();
+          else fail('引导接口不存在。', 'NOT_FOUND', 404);
+        } else fail('引导接口不存在。', 'NOT_FOUND', 404);
+        return json(res, 200, result);
+      }
+      const practiceId = parts[1] === 'practice' ? parts[2] : null;
+      const route=parts.slice(practiceId !== null ? 3 : 1),[resource,id,action]=route;
+      const lease = practiceId !== null ? onboarding.acquire(practiceId, { resource, method, query }) : null;
+      try {
+      const service = lease?.service || mainService;
+      let result;
+      if(resource==='bootstrap'&&method==='GET'){result=service.bootstrap();if(practiceId)result.conflicts.push(...service.store.records('onboardingConflicts'));}
       else if(resource==='library'&&method==='GET')result=service.library(query);
       else if(resource==='notes'&&!id&&method==='GET')result={notes:service.listNotes(query).filter(n=>!n.meta.excerptOnly).map(service.publicNote)};
       else if(resource==='notes'&&id==='merge'&&method==='POST')result=service.merge(body);
@@ -111,12 +141,16 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
       else if(resource==='prompts'&&method==='GET')result=service.getPrompts();
       else if(resource==='prompts'&&method==='PUT')result=service.updatePrompts(body);
       else if(resource==='settings'&&!id&&method==='GET')result=service.settings();
-      else if(resource==='settings'&&!id&&method==='PUT')result=service.updateSettings(body);
-      else if(resource==='settings'&&id==='test'&&method==='POST')result=await service.ai.test(body.capability);
-      else if(resource==='diagnostics'&&method==='GET')result=service.diagnostics();
+      else if(resource==='settings'&&!id&&method==='PUT'){if(!practiceId&&body.vaultDir)onboarding.assertVaultIsolation(body.vaultDir);result=service.updateSettings(body);if(!practiceId)onboarding.settingsChanged(body);}
+      else if(resource==='settings'&&id==='test'&&method==='POST')result=(await onboarding.test(body.capability)).testResult;
+      else if(resource==='diagnostics'&&method==='GET'){result=service.diagnostics();if(practiceId){result.usage=mainService.usage();result.calls=mainService.store.records('calls').slice(0,100);result.sharedUsage=true;result.usageNotice='请求上限与日常使用共用。下方调用记录来自共用 AI 服务，包含正式与练习请求；仅在此查看，不写入练习备份。';}}
       else if(resource==='index'&&id==='rebuild'&&method==='POST')result=service.queue('index',{},'index:manual');
       else if(resource==='index'&&id==='update'&&method==='POST')result=service.queue('index',{incremental:true},'index:manual');
-      else if(resource==='backup'&&method==='GET')return json(res,200,service.backup(),{'Content-Disposition':`attachment; filename="learning-backup-${Date.now()}.json"`});
+      else if(resource==='backup'&&method==='GET'){
+        result=service.backup();
+        if(practiceId){result.learningTime=onboarding.state().clock.now;onboarding.observe(practiceId,{resource,itemId:id,action,method,body,query,result});}
+        return json(res,200,result,{'Content-Disposition':`attachment; filename="${practiceId?'practice':'learning'}-backup-${Date.now()}.json"`});
+      }
       else if(resource==='restore'&&method==='POST')result=service.restore(body);
       else if(resource==='history'&&id&&!action&&method==='GET')result={versions:service.store.history(id)};
       else if(resource==='history'&&action==='restore'&&method==='POST')result=service.store.restoreVersion(id,body.versionId,body.expectedHash);
@@ -124,12 +158,15 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
       else if(resource==='proposals'&&action==='action'&&method==='POST')result=service.proposalAction(id,body);
       else if(resource==='demo'&&method==='POST')result=service.demo();
       else fail('接口不存在。','NOT_FOUND',404);
+      if(practiceId)onboarding.observe(practiceId,{resource,itemId:id,action,method,body,query,result});
       json(res,200,result);
+      } finally { lease?.release(); }
     }catch(error){if(!res.headersSent)json(res,error.status||400,{error:error.message||'请求失败。',code:error.code||'REQUEST_FAILED'});else res.end();}
   });
   server.requestTimeout=60000;server.headersTimeout=15000;
-  server.on('listening',()=>{if(scheduler){const tick=async()=>{if(busyTick)return;busyTick=true;try{await service.tick();}catch(error){console.error('后台任务暂时失败：',error.code||'ERROR');}finally{busyTick=false;}};timer=setInterval(tick,3000);timer.unref();tick();}});
-  return {server,service,async close(){clearInterval(timer);await new Promise(resolve=>server.close(resolve));await service.close();}};
+  let practiceTimer;
+  server.on('listening',()=>{if(scheduler){const tick=async()=>{if(busyTick)return;busyTick=true;try{await service.tick();}catch(error){console.error('后台任务暂时失败：',error.code||'ERROR');}finally{busyTick=false;}};timer=setInterval(tick,3000);timer.unref();tick();practiceTimer=setInterval(()=>{onboarding.pump().catch(error=>console.error('练习任务暂时失败：',error.code||'ERROR'));},1000);practiceTimer.unref();}});
+  return {server,service,onboarding,async close(){clearInterval(timer);clearInterval(practiceTimer);await new Promise(resolve=>server.close(resolve));await onboarding.close();await service.close();}};
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href){
   const app=createApp();const port=Number(process.env.PORT||4318);
