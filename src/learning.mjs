@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { now, hash, fail } from './store.mjs';
+import { hash, fail } from './store.mjs';
 
 const dayAt = (date, timezone) => new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
 const learningStages = new Set(['learning', 'integrated', 'core']);
@@ -15,6 +15,12 @@ const textList = value => Array.isArray(value) ? value.filter(x => typeof x === 
 
 export function createLearning(dependencies) {
   const { settings, getNote, eligible, queue, ai, promptText, parseJSON, confirmNote, updateSettings } = dependencies;
+  const learningClock = dependencies.learningClock || (() => new Date());
+  const now = () => learningClock().toISOString();
+  const practiceTags = (...records) => {
+    const presetCase = dependencies.practice && records.map(record => record?.presetCase || record?.meta?.presetCase).find(value => typeof value === 'string' && value);
+    return presetCase ? { presetCase, demo: true, practice: true } : {};
+  };
   // Read the getter at each operation so changing the configured Vault does not retain an old Store.
   const storage = () => dependencies.store;
   const privacyFor = note => dependencies.privacyFor ? dependencies.privacyFor(note) : note.meta.privacy;
@@ -60,7 +66,7 @@ export function createLearning(dependencies) {
 
   function today() {
     const store = storage(); store.scan();
-    const config = settings(), date = dayAt(new Date(), config.timezone), timestamp = now();
+    const config = settings(), timestamp = now(), date = dayAt(new Date(timestamp), config.timezone);
     const all = store.list(), byId = new Map(all.map(n => [n.id, n]));
     const bundles = all.filter(n => n.kind === 'topic').sort((a, b) => Number(config.focusTopics.includes(b.title)) - Number(config.focusTopics.includes(a.title)) || a.id.localeCompare(b.id));
     const pausedMembers = new Set(bundles.filter(topicPaused).flatMap(n => textList(n.meta.noteIds)));
@@ -110,7 +116,7 @@ export function createLearning(dependencies) {
       const item = {
         id: `${date}:${note.id}`, date, noteId: note.id, title: note.title, kind: mistake ? 'mistake' : review ? 'review' : 'learn',
         reason: mistake ? '针对尚未解决的具体误解练习' : review ? '优先安排已经到期的复习' : bundle ? `按「${bundle.title}」的前置知识与顺序学习` : `当前主题 ${note.meta.topic || '自主学习'} 的新知识`,
-        minutes, state: 'pending', depth: depthOf(note), ...(mistake ? { mistakeId: mistake.id } : {}),
+        minutes, state: 'pending', depth: depthOf(note), ...practiceTags(mistake, note), ...(mistake ? { mistakeId: mistake.id } : {}),
         ...(bundle ? { topicId: bundle.id, topicIndex: (bundle.meta.noteIds || []).indexOf(note.id) } : {}),
       };
       store.put('plans', item.id, item); pending.push(item); scheduledIds.add(note.id); used += minutes;
@@ -125,7 +131,7 @@ export function createLearning(dependencies) {
     if (!plan) fail('找不到学习安排。', 'NOT_FOUND', 404);
     if (!['skip', 'defer', 'pause'].includes(action)) fail('安排动作无效。');
     if (plan.state === 'done') fail('已结束的学习安排不能改成跳过或延期。');
-    if (action === 'defer') store.put('reviews', plan.noteId, { ...store.get('reviews', plan.noteId, {}), noteId: plan.noteId, dueAt: new Date(Date.now() + Math.min(365, Math.max(1, +days || 1)) * 86400000).toISOString() });
+    if (action === 'defer') store.put('reviews', plan.noteId, { ...store.get('reviews', plan.noteId, {}), ...practiceTags(plan, dependencies.practice && store.row(plan.noteId) ? getNote(plan.noteId) : null), noteId: plan.noteId, dueAt: new Date(Date.parse(now()) + Math.min(365, Math.max(1, +days || 1)) * 86400000).toISOString() });
     if (action === 'pause') updateSettings({ pausedIds: [...new Set([...settings().pausedIds, plan.noteId])] });
     return store.put('plans', id, { ...plan, state: action, updatedAt: now() });
   }
@@ -169,7 +175,7 @@ export function createLearning(dependencies) {
     const question = mistake ? mistakeContext.nextQuestion || `请针对上次的误解「${mistakeContext.omission || mistake.title}」重新解释，并说明修正依据和适用边界。` : goals[depth].question(note.title);
     const id = randomUUID();
     const privacy = privacyFor(note) === 'cloud' && (!mistake || privacyFor(mistake) === 'cloud') ? 'cloud' : 'local';
-    store.put('sessions', id, { id, noteId, planId, status: 'reading', question, material: note.body, sourceHash: note.hash, depth, goal, privacy, turns: [], createdAt: now(), hintCount: 0, ...(topic ? { topicId, topicIndex: textList(topic.meta.noteIds).indexOf(noteId) } : {}), ...(mistake ? { mistakeId, mistakeContext } : {}) });
+    store.put('sessions', id, { id, noteId, planId, status: 'reading', question, material: note.body, sourceHash: note.hash, depth, goal, privacy, turns: [], createdAt: now(), hintCount: 0, ...practiceTags(mistake, note), ...(topic ? { topicId, topicIndex: textList(topic.meta.noteIds).indexOf(noteId) } : {}), ...(mistake ? { mistakeId, mistakeContext } : {}) });
     return session(id);
   }
   function answerStudy(id, { answer, hintUsed = false, requestId }) {
@@ -213,15 +219,15 @@ export function createLearning(dependencies) {
     const evidence = {
       sessionId: s.id, noteId: s.noteId, day: date, completedAt: timestamp, depth, independent, usedHints, errorObserved: errors, ambiguous,
       explanationPractice: independent && ['explain', 'apply'].includes(depth), applicationPractice: independent && depth === 'apply', spacedRecall: spaced,
-      assessment, turnIds: s.turns.map(t => t.id), reviewSettled,
+      assessment, turnIds: s.turns.map(t => t.id), reviewSettled, ...practiceTags(s, note),
     };
     s.status = 'completed'; s.completedAt = timestamp;
-    s.completion = { reviewSettled, interval: reviewSettled ? interval : null, sameDayPractice: sameDay, evidence, reason: ambiguous ? '本次存在争议，已保留练习记录，未更新复习间隔。' : usedHints || errors ? '本次使用提示或出现错误，安排近期再练。' : spaced ? '到期后在另一天独立作答，增加复习间隔。' : sameDay ? '同日追加练习不叠加复习间隔。' : '首次独立练习先安排近期复习，之后依据跨日表现调整。' };
+    s.completion = { reviewSettled, interval: reviewSettled ? interval : null, sameDayPractice: sameDay, evidence, ...practiceTags(s, note), reason: ambiguous ? '本次存在争议，已保留练习记录，未更新复习间隔。' : usedHints || errors ? '本次使用提示或出现错误，安排近期再练。' : spaced ? '到期后在另一天独立作答，增加复习间隔。' : sameDay ? '同日追加练习不叠加复习间隔。' : '首次独立练习先安排近期复习，之后依据跨日表现调整。' };
     store.db.exec('BEGIN IMMEDIATE');
     try {
       if (reviewSettled) {
-        const dueAt = sameDay && !usedHints && !errors && old.dueAt ? old.dueAt : new Date(Date.now() + interval * 86400000).toISOString();
-        store.put('reviews', s.noteId, { ...old, noteId: s.noteId, interval, dueAt, lastSession: s.id, lastSettledDay: date, lastSuccessfulDay: independent ? date : old.lastSuccessfulDay || null, lastAssessment: assessment, hintUsed: usedHints });
+        const dueAt = sameDay && !usedHints && !errors && old.dueAt ? old.dueAt : new Date(Date.parse(timestamp) + interval * 86400000).toISOString();
+        store.put('reviews', s.noteId, { ...old, ...practiceTags(s, note), noteId: s.noteId, interval, dueAt, lastSession: s.id, lastSettledDay: date, lastSuccessfulDay: independent ? date : old.lastSuccessfulDay || null, lastAssessment: assessment, hintUsed: usedHints });
         for (const plan of store.records('plans').filter(p => p.noteId === s.noteId && p.state === 'pending' && (p.id === s.planId || p.date === date))) store.put('plans', plan.id, { ...plan, state: 'done', completedAt: timestamp });
       }
       store.put('studyEvidence', s.id, evidence);
@@ -288,6 +294,7 @@ export function createLearning(dependencies) {
   async function grade(job, signal) {
     const store = storage();
     let s = session(job.payload.sessionId), t = s.turns.find(turn => turn.id === job.payload.turnId);
+    if (s.completion?.abandoned) fail('这次未完成练习已由用户结束，原回答保留；请开始新的练习。', 'SESSION_COMPLETED', 409);
     if (!t) fail('找不到对应的学习回答。', 'NOT_FOUND', 404);
     if (t.feedback) return;
     const n = getNote(s.noteId);
@@ -318,7 +325,7 @@ export function createLearning(dependencies) {
         return;
       }
       const body = `## 问题\n${t.question}\n\n## 用户当时的回答（错误记录，不能作为正确知识引用）\n${t.answer}\n\n## AI 指出的误解或遗漏（可质疑）\n${result.omission}\n\n## 修正与依据\n${result.correction || result.feedback}\n\n## 后续练习\n${s.question}`;
-      const meta = { noteId: n.id, misconceptionKey: key, correctionState: 'open', sources: [{ id: n.id, role: 'input' }], privacy: existing?.meta.privacy === 'local' ? 'local' : privacy, sessions: [...textList(existing?.meta.sessions), s.id], omission: result.omission, correction: result.correction || result.feedback, nextQuestion: s.question };
+      const meta = { noteId: n.id, misconceptionKey: key, correctionState: 'open', sources: [{ id: n.id, role: 'input' }], privacy: existing?.meta.privacy === 'local' ? 'local' : privacy, sessions: [...textList(existing?.meta.sessions), s.id], omission: result.omission, correction: result.correction || result.feedback, nextQuestion: s.question, ...practiceTags(s, n) };
       if (existing) store.update(existing.id, { body: `${existing.body}\n\n---\n${body}`, meta, expectedHash: existing.hash });
       else store.create({ kind: 'mistake', title: `误解：${n.title}`, body, meta });
     }

@@ -9,6 +9,27 @@ export class ApiError extends Error {
 }
 
 let csrfToken = "";
+const CONTEXT_KEY = "zhixu.practiceContext.v1";
+let practiceId = "";
+let contextVersion = 0;
+let inFlight = 0;
+try { practiceId = sessionStorage.getItem(CONTEXT_KEY) || ""; } catch { /* Storage may be unavailable. */ }
+
+export function getApiContext() { return { practiceId, version: contextVersion, pending: inFlight }; }
+
+export function setApiContext(id = "") {
+  const next = String(id || "");
+  if (next === practiceId) return getApiContext();
+  if (inFlight) throw new ApiError("请等当前操作完成后再切换知识库。", { code: "CONTEXT_BUSY" });
+  practiceId = next;
+  contextVersion++;
+  try { if (next) sessionStorage.setItem(CONTEXT_KEY, next); else sessionStorage.removeItem(CONTEXT_KEY); } catch { /* Context remains explicit for this page. */ }
+  return getApiContext();
+}
+
+function notifyRequest(detail) {
+  if (typeof window !== "undefined" && typeof CustomEvent !== "undefined") window.dispatchEvent(new CustomEvent("zhixu:request", { detail }));
+}
 
 function toQuery(params = {}) {
   const query = new URLSearchParams();
@@ -41,6 +62,20 @@ export async function startSession() {
 }
 
 export async function request(path, options = {}) {
+  const version = contextVersion;
+  const id = options.scope === "main" ? "" : practiceId;
+  const target = id && path.startsWith("/api/") && !path.startsWith("/api/onboarding/")
+    ? `/api/practice/${encodeURIComponent(id)}${path.slice(4)}` : path;
+  inFlight++;
+  try {
+    const result = await performRequest(target, options);
+    if (options.scope !== "main" && version !== contextVersion) throw new ApiError("知识库已切换，已忽略旧页面的返回结果。", { code: "STALE_CONTEXT" });
+    notifyRequest({ path, method: options.method || "GET", practiceId: id, ok: true });
+    return result;
+  } finally { inFlight--; }
+}
+
+async function performRequest(path, options = {}) {
   const method = options.method || "GET";
   const headers = new Headers(options.headers || {});
   const init = { method, headers, credentials: "same-origin" };
@@ -77,6 +112,11 @@ export async function request(path, options = {}) {
 }
 
 export const api = {
+  getContext: getApiContext,
+  setContext: setApiContext,
+  onboarding: (action = "state", body = {}) => request(`/api/onboarding/${action}${action === "state" ? toQuery(body) : ""}`, action === "state" ? { scope: "main" } : { method: "POST", body, scope: "main" }),
+  mainSettings: () => request("/api/settings", { scope: "main" }),
+  updateMainSettings: (body) => request("/api/settings", { method: "PUT", body, scope: "main" }),
   bootstrap: () => request("/api/bootstrap"),
   library: (filters) => request(`/api/library${toQuery(filters)}`),
   notes: (filters) => request(`/api/notes${toQuery(filters)}`),

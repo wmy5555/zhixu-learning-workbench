@@ -12,7 +12,19 @@ export function fail(message, code = 'INVALID', status = 400) {
 export function atomicWrite(file, content) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${randomUUID()}.tmp`;
-  try { fs.writeFileSync(tmp, content, { mode: 0o600 }); fs.renameSync(tmp, file); }
+  try {
+    fs.writeFileSync(tmp, content, { mode: 0o600 });
+    const delays = [20, 50, 100];
+    for (let attempt = 0; ; attempt++) {
+      try { fs.renameSync(tmp, file); break; }
+      catch (error) {
+        // Windows scanners and synced folders may briefly hold the destination open.
+        // Retry the same atomic replacement; never remove the previous good file.
+        if (!['EPERM', 'EACCES', 'EBUSY'].includes(error.code) || attempt >= delays.length) throw error;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delays[attempt]);
+      }
+    }
+  }
   finally { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); }
 }
 const folders = { source: '01 原始资料', knowledge: '02 知识', mistake: '03 错题修正', topic: '04 主题', report: '05 发现' };
@@ -44,7 +56,9 @@ function assertTree(file, root) {
   return file;
 }
 export class Store {
-  constructor({ dataDir, vaultDir }) {
+  constructor({ dataDir, vaultDir, backupPurpose }) {
+    if (backupPurpose !== undefined && backupPurpose !== 'onboarding-practice') fail('备份用途无效。');
+    this.backupPurpose = backupPurpose;
     this.dataDir = path.resolve(dataDir); this.vaultDir = path.resolve(vaultDir);
     fs.mkdirSync(this.dataDir, { recursive: true }); fs.mkdirSync(this.vaultDir, { recursive: true });
     if (fs.lstatSync(this.vaultDir).isSymbolicLink()) fail('Vault 根目录不能是链接。');
@@ -328,7 +342,7 @@ export class Store {
   backup() {
     this.scan();
     if (this.conflicts.length) fail('Vault 中仍有冲突或无法解析的 Markdown；为避免静默遗漏，修复后再备份。', 'BACKUP_CONFLICT', 409);
-    return { format: 'learning-workbench-backup', version: 1, createdAt: now(), scope: { managedMarkdown: true, runtimeRecords: true, attachments: false, obsidianConfig: false }, notes: this.db.prepare('SELECT id,path,raw FROM notes').all(), records: this.db.prepare("SELECT * FROM records WHERE namespace NOT IN ('settings','changed','restore')").all(), versions: this.db.prepare('SELECT * FROM versions').all() };
+    return { format: 'learning-workbench-backup', version: 1, ...(this.backupPurpose ? { purpose: this.backupPurpose } : {}), createdAt: now(), scope: { managedMarkdown: true, runtimeRecords: true, attachments: false, obsidianConfig: false }, notes: this.db.prepare('SELECT id,path,raw FROM notes').all(), records: this.db.prepare("SELECT * FROM records WHERE namespace NOT IN ('settings','changed','restore')").all(), versions: this.db.prepare('SELECT * FROM versions').all() };
   }
   validateBackup(backup) {
     if (backup?.format !== 'learning-workbench-backup' || backup.version !== 1 || !Array.isArray(backup.notes) || !Array.isArray(backup.records) || !Array.isArray(backup.versions)) fail('备份格式不正确。');

@@ -7,6 +7,8 @@ launcher.addEventListener("click", () => {
   dialog.showModal();
 });
 document.querySelector("#help-close").addEventListener("click", () => dialog.close());
+document.querySelector("#onboarding-launcher")?.addEventListener("click", () => dialog.close());
+document.querySelector("#onboarding-reset")?.addEventListener("click", () => dialog.close());
 dialog.addEventListener("keydown", (event) => {
   // Keep the application's Escape handler from closing an editor underneath.
   if (event.key === "Escape") event.stopPropagation();

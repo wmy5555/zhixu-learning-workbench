@@ -4,7 +4,7 @@ import https from 'node:https';
 import { createHash } from 'node:crypto';
 import { BlockList, isIP } from 'node:net';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { renderPrompt } from './prompts.mjs';
+import { renderPrompt, validatePromptOverrides } from './prompts.mjs';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const PAGE_TIMEOUT_MS = 20_000;
@@ -793,10 +793,10 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     throw fail('TOO_MANY_REDIRECTS', '网页重定向次数过多。');
   }
 
-  async function research({ claim, privacy, signal } = {}) {
+  async function research({ claim, privacy, signal, prompts } = {}) {
     assertCloud(privacy);
     if (typeof claim !== 'string' || !claim.trim()) throw fail('INVALID_INPUT', 'claim 不能为空。');
-    const promptOverrides = (await settings()).prompts;
+    const promptOverrides = validatePromptOverrides(prompts ?? (await settings()).prompts);
     const directions = [
       { direction: 'support', query: renderPrompt('researchSearchSupport', { context: claim.trim() }, promptOverrides).slice(0, 350) },
       { direction: 'oppose', query: renderPrompt('researchSearchOppose', { context: claim.trim() }, promptOverrides).slice(0, 350) },
@@ -926,7 +926,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     };
   }
 
-  async function researchBatch({ claims, topic = '', privacy, signal } = {}) {
+  async function researchBatch({ claims, topic = '', privacy, signal, prompts } = {}) {
     assertCloud(privacy);
     if (!Array.isArray(claims) || !claims.length || claims.some((claim) => typeof claim !== 'string' || !claim.trim())) {
       throw fail('INVALID_INPUT', 'claims 必须是非空字符串数组。');
@@ -936,10 +936,10 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     }
 
     const normalizedClaims = claims.map((claim) => claim.trim());
-    const config = await settings(), promptOverrides = config.prompts;
+    const config = await settings(), promptOverrides = validatePromptOverrides(prompts ?? config.prompts);
     if (!sourceBudget.getStore()) {
       return withBudget({ limit: clampInteger(config.ai.sourceCallLimit, 12, 1, 30), sourceId: `research-batch-${hashKey(normalizedClaims).slice(0, 16)}` },
-        () => researchBatch({ claims: normalizedClaims, topic, privacy, signal }));
+        () => researchBatch({ claims: normalizedClaims, topic, privacy, signal, prompts: promptOverrides }));
     }
     const subject = String(topic ?? '').trim();
     const compact = (value, limit) => String(value).replace(/\s+/g, ' ').trim().slice(0, limit);

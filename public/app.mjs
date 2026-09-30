@@ -44,6 +44,12 @@ const state = {
   restoreBackup: null,
   restoreToken: "",
 };
+let onboarding = null;
+function tour(node, id) { node.dataset.tour = id; return node; }
+function recordTourEvent(event) {
+  const practiceId = api.getContext?.().practiceId;
+  if (practiceId) api.onboarding("event", { practiceId, event }).catch(handleError);
+}
 
 function asArray(value) { return Array.isArray(value) ? value : []; }
 function asObject(value) { return value && typeof value === "object" ? value : {}; }
@@ -72,7 +78,12 @@ function errorMessage(error) {
 }
 
 function renderFailure(error, retry) {
-  clear(refs.main).append(emptyState("暂时无法读取", errorMessage(error), button("重试", { kind: "primary", onClick: retry })));
+  const actions = el("div", { class: "form-actions" }, [button("重试", { kind: "primary", onClick: retry })]);
+  if (api.getContext?.().practiceId) actions.append(button("明确返回正式知识库", { onClick: async () => {
+    try { api.setContext(""); onboarding?.dispose(); onboarding = null; state.currentStudy = null; state.bootstrap = null; await init(); }
+    catch (nextError) { handleError(nextError); }
+  } }));
+  clear(refs.main).append(emptyState("暂时无法读取", errorMessage(error), actions));
 }
 
 function handleError(error) { toast(errorMessage(error), "error", 6500); }
@@ -107,12 +118,14 @@ function openDrawer(title, eyebrow, content) {
   refs.drawer.classList.add("is-open");
   refs.drawer.setAttribute("aria-hidden", "false");
   refs.drawerBackdrop.hidden = false;
+  onboarding?.rendered();
 }
 
 function closeDrawer() {
   refs.drawer.classList.remove("is-open");
   refs.drawer.setAttribute("aria-hidden", "true");
   refs.drawerBackdrop.hidden = true;
+  onboarding?.rendered();
 }
 
 async function refreshBootstrap() {
@@ -151,6 +164,7 @@ function todayItem(item) {
     }
     actions.append(button("延期", { kind: "quiet compact", onClick: () => actToday(item.id, "defer", 1) }));
     actions.append(button("跳过", { kind: "text compact", onClick: () => actToday(item.id, "skip") }));
+    actions.append(button("暂停", { kind: "text compact", onClick: () => actToday(item.id, "pause") }));
   } else actions.append(badge(planStateLabel(item.state), stateTone(item.state)));
   return el("article", { class: "list-item" }, [
     el("div", { class: "item-symbol", text: item.kind === "mistake" ? "错" : item.kind === "review" ? "复" : "学" }),
@@ -188,7 +202,7 @@ async function renderToday() {
     ]),
     el("div", { class: "hero-actions" }, [
       button("收集资料", { onClick: () => navigate("capture") }),
-      button(items.length ? "重新安排" : "生成今日清单", { kind: "primary", onClick: generateToday }),
+      tour(button(items.length ? "重新安排" : "生成今日清单", { kind: "primary", onClick: generateToday }), "today-generate"),
     ]),
   ]);
 
@@ -199,7 +213,7 @@ async function renderToday() {
     statCard("异常任务", jobs.filter((x) => x.state === "failed").length, "保留失败原因"),
   ]);
 
-  const taskPanel = el("section", {}, [
+  const taskPanel = el("section", { dataset: { tour: "today-plan" } }, [
     sectionHeading("今日安排", "主题学习、到期复习与错题会在这里汇合", button("调整预算", { onClick: () => { state.systemTab = "settings"; navigate("system"); } })),
     items.length ? el("div", { class: "list" }, items.map(todayItem)) : emptyState("还没有今日任务", "生成清单只会安排已有内容，并受时间预算和暂停项限制。", button("生成清单", { kind: "primary", onClick: generateToday })),
   ]);
@@ -217,7 +231,7 @@ async function renderToday() {
     ]),
   ]);
 
-  clear(refs.main).append(el("div", { class: "page-stack" }, [hero, capabilityNotice(), statsRow, el("div", { class: "split-layout" }, [taskPanel, side])]));
+  clear(refs.main).append(el("div", { class: "page-stack" }, [onboarding?.entryCard(), hero, capabilityNotice(), statsRow, el("div", { class: "split-layout" }, [taskPanel, side])]));
 }
 
 async function generateToday() {
@@ -262,7 +276,7 @@ function groupJobSummary(job) {
 }
 
 async function renderCapture() {
-  const sourceForm = el("form", { class: "panel capture-form" });
+  const sourceForm = el("form", { class: "panel capture-form", dataset: { tour: "capture-form" } });
   const title = el("input", { name: "title", placeholder: "例如：关于检索增强生成的一段资料", required: true });
   const body = el("textarea", { name: "body", placeholder: "粘贴原文。系统会保留这份原始快照，不用摘要替代。", required: true, rows: 12 });
   const process = el("input", { name: "process", type: "checkbox" });
@@ -308,7 +322,7 @@ async function renderCapture() {
 
   const fileInput = el("input", { type: "file", accept: ".txt,.md,text/plain,text/markdown", multiple: true });
   const fileList = el("div", { class: "list" });
-  const batchPanel = el("section", { class: "panel" }, [
+  const batchPanel = el("section", { class: "panel", dataset: { tour: "capture-batch" } }, [
     sectionHeading("批量导入", "支持 UTF-8 文本和 Markdown，每个文件保留为一份原始资料"),
     field("选择文件", fileInput, "文件内容先在浏览器读取，再通过本地会话保存。"),
     fileList,
@@ -353,7 +367,7 @@ async function renderLibrary() {
   const data = await api.library(state.libraryFilters);
   const groups = asArray(data.groups).filter((group) => group?.source && !isExcerptOnly(group.source));
   const standalone = asArray(data.standalone).filter((note) => !isExcerptOnly(note));
-  const form = el("form", { class: "filter-bar" });
+  const form = el("form", { class: "filter-bar", dataset: { tour: "library-filter" } });
   const q = el("input", { name: "q", value: state.libraryFilters.q, placeholder: "搜索标题和正文" });
   form.append(
     el("div", { class: "search-input" }, q),
@@ -364,6 +378,7 @@ async function renderLibrary() {
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     state.libraryFilters = serializeForm(form);
+    recordTourEvent("library-filter");
     renderLibrary().catch(handleError);
   });
   const groupCards = groups.map((group) => sourceGroupCard(group));
@@ -383,7 +398,7 @@ async function renderLibrary() {
     conflictPanel,
     el("section", {}, [sectionHeading("资料与拆解", `${groups.length} 份原始资料，${standalone.length} 条独立内容；核验依据可在知识详情中展开`, button("收集资料", { kind: "primary", onClick: () => navigate("capture") })), form]),
     await recommendationsPanel(),
-    visibleCount ? el("div", { class: "library-sections" }, [
+    visibleCount ? el("div", { class: "library-sections", dataset: { tour: "library-content" } }, [
       groups.length ? el("section", {}, [sectionHeading("原始资料", "每份资料及其拆解集中在同一个窗口"), el("div", { class: "card-grid group-grid" }, groupCards)]) : null,
       standalone.length ? el("section", {}, [sectionHeading("独立内容", "没有归属于某份原始资料的内容"), el("div", { class: "card-grid" }, standaloneCards)]) : null,
     ]) : emptyState("没有匹配的内容", "尝试清除筛选，或先收集一份原始资料。", button("清除筛选", { onClick: () => { state.libraryFilters = { q: "", kind: "", stage: "" }; renderLibrary(); } })),
@@ -408,7 +423,7 @@ function evidenceRow(evidence) {
 
 function evidenceDetails(noteId, sources = null) {
   const content = el("div", { class: "page-stack original-body" });
-  const details = el("details", { class: "original-material" }, [el("summary", { text: "查看核验依据与底层来源" }), content]);
+  const details = el("details", { class: "original-material", dataset: { tour: "note-evidence" } }, [el("summary", { text: "查看核验依据与底层来源" }), content]);
   let loaded = false, loading = false;
   const load = async () => {
     if (loaded || loading) return;
@@ -441,7 +456,7 @@ function relationControls(note) {
     } catch (error) { status.textContent = errorMessage(error); }
     finally { run.disabled = false; }
   } });
-  return el("details", { class: "child-more-actions" }, [
+  return el("details", { class: "child-more-actions", dataset: { tour: "note-relations" } }, [
     el("summary", { text: "查找关联" }),
     el("div", { class: "page-stack original-body" }, [el("p", { class: "fine-print", text: "默认仅在本机查找可探索的材料。AI 分析会发送获准材料，并可能产生费用。" }),
       el("label", { class: "check-field" }, [useAI, el("span", { text: "本次允许 AI 分析关联（可能产生费用）" })]),
@@ -450,9 +465,10 @@ function relationControls(note) {
 }
 
 async function recommendationsPanel() {
-  const panel = el("section", { class: "panel" }, [sectionHeading("知识使用建议", "根据实际采用、学习和已有关系提出建议；是否调整由你决定，不自动宣称掌握")]);
+  const panel = el("section", { class: "panel", dataset: { tour: "library-recommendations" } }, [sectionHeading("知识使用建议", "根据实际采用、学习和已有关系提出建议；是否调整由你决定，不自动宣称掌握")]);
   try {
     const data = await api.recommendations();
+    recordTourEvent("recommendations-open");
     const suggestions = asArray(data.suggestions);
     panel.append(suggestions.length ? el("div", { class: "list" }, suggestions.map(suggestion => el("article", { class: "list-item no-icon" }, [
       el("div", { class: "item-copy" }, [el("h3", { text: suggestion.title || "知识建议" }), el("p", { text: suggestion.reason }),
@@ -477,6 +493,7 @@ async function recommendationsPanel() {
 }
 
 async function previewNoteLinks(noteId) {
+  refs.drawerBody.dataset.tour = "note-links";
   try {
     const preview = await api.linksPreview(noteId);
     openDrawer("核对 Obsidian 链接", "稳定身份与可读链接", el("div", { class: "page-stack" }, [
@@ -530,6 +547,7 @@ async function openNote(id) {
 }
 
 function renderSourceGroupDrawer(source) {
+  refs.drawerBody.dataset.tour = "note-detail";
   const meta = asObject(source.meta);
   const children = asArray(source.children).filter((note) => !isExcerptOnly(note));
   const jobs = asArray(source.jobs);
@@ -582,7 +600,7 @@ function renderSourceGroupDrawer(source) {
 function childSection(note, source, index) {
   const meta = asObject(note.meta);
   const limitations = asArray(meta.researchLimitations);
-  const actions = el("div", { class: "child-actions" }, [
+  const actions = el("div", { class: "child-actions", dataset: { tour: "note-lifecycle" } }, [
     button("开始学习", { kind: "primary compact", onClick: () => beginStudy(note.id) }),
     button("编辑", { kind: "quiet compact", onClick: () => renderNoteEditor(note, { returnToSourceId: source.id }) }),
     button("设为仅供查阅", { kind: "text compact", onClick: () => promoteNote(note, "reference", source.id) }),
@@ -626,6 +644,7 @@ async function refreshSourceGroup(sourceId, { refreshLibrary = true } = {}) {
 }
 
 function renderNoteDrawer(note) {
+  refs.drawerBody.dataset.tour = "note-detail";
   const meta = asObject(note.meta);
   refs.drawerTitle.textContent = note.title || "未命名";
   refs.drawerEyebrow.textContent = labels.kind(note.kind);
@@ -684,12 +703,13 @@ function renderNoteDrawer(note) {
   })));
   const url = safeExternalUrl(meta.url);
   if (url) content.append(el("a", { href: url, target: "_blank", rel: "noopener noreferrer", text: "打开原始网页 ↗" }));
-  const nextActions = el("div", { class: "form-actions" });
+  const nextActions = el("div", { class: "form-actions", dataset: { tour: "note-lifecycle" } });
   if (note.kind === "source") nextActions.append(
     processControls(note),
     button("手动整理为待选学", { onClick: () => manualExtract(note) }),
   );
   if (note.kind === "knowledge") nextActions.append(
+    button("开始学习", { kind: "primary", onClick: () => beginStudy(note.id) }),
     button("设为仅供查阅", { onClick: () => promoteNote(note, "reference") }),
     button("设为待选学", { onClick: () => promoteNote(note, "candidate") }),
     button("加入学习", { kind: "primary", onClick: () => promoteNote(note, "learning") }),
@@ -708,6 +728,7 @@ function renderNoteDrawer(note) {
 }
 
 function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
+  refs.drawerBody.dataset.tour = "note-editor";
   const meta = asObject(note.meta);
   const form = el("form", { class: "page-stack" });
   const title = el("input", { name: "title", value: note.title || "", required: true });
@@ -771,7 +792,7 @@ async function deleteNote(note, returnToSourceId = "") {
 
 function processControls(note, returnToSourceId = "") {
   const research = el("input", { type: "checkbox", name: "research" });
-  return el("div", { class: "page-stack" }, [
+  return el("div", { class: "page-stack", dataset: { tour: "note-process" } }, [
     el("label", { class: "check-field" }, [research, el("span", { text: "拆解时联网检验正确性并寻找反例（可选）" })]),
     el("div", { class: "form-actions" }, [
       button("提交 AI 拆解", { kind: "primary", onClick: () => processNote(note, returnToSourceId, { research: research.checked }) }),
@@ -793,6 +814,7 @@ async function processNote(note, returnToSourceId = "", options = {}) {
 }
 
 function manualExtract(source, returnToSourceId = "") {
+  refs.drawerBody.dataset.tour = "note-extract";
   const form = el("form", { class: "page-stack" });
   const title = el("input", { name: "title", required: true, placeholder: "这段内容在讨论什么" });
   const body = el("textarea", { name: "body", required: true, rows: 14, placeholder: "复制并整理你要保留的片段。请保留决定结论的条件和上下文。" });
@@ -842,6 +864,7 @@ async function promoteNote(note, stage, returnToSourceId = "") {
 }
 
 function confirmDirect(note, returnToSourceId = "") {
+  refs.drawerBody.dataset.tour = "note-confirm";
   const form = el("form", { class: "page-stack" });
   const body = el("textarea", { rows: 14, placeholder: "请用自己的语言写下：它解决什么问题、成立条件是什么、哪里可能失效，以及你会怎样应用。" });
   form.append(el("div", { class: "notice", text: "AI 可以帮助整理，但只有你主动提交的文字才会成为正式个人理解。" }), field("我的理解", body), el("div", { class: "form-actions" }, [button("确认写入", { kind: "primary", type: "submit" }), button("取消", { onClick: () => returnToSourceId ? refreshSourceGroup(returnToSourceId).catch(handleError) : renderNoteDrawer(note) })]));
@@ -859,6 +882,7 @@ function confirmDirect(note, returnToSourceId = "") {
 }
 
 async function renderMerge(note, relatedId = "") {
+  refs.drawerBody.dataset.tour = "note-merge";
   try {
     const data = await api.notes({ kind: "knowledge" });
     const candidates = asArray(data.notes).filter((item) => item.id !== note.id);
@@ -889,9 +913,11 @@ async function renderMerge(note, relatedId = "") {
 }
 
 async function renderHistory(note, { returnToSourceId = "" } = {}) {
+  refs.drawerBody.dataset.tour = "note-history";
   try {
     const data = await api.history(note.id);
     const versions = asArray(data.versions);
+    recordTourEvent("history-open");
     clear(refs.drawerBody).append(
       button("← 返回内容", { kind: "text", onClick: () => returnToSourceId ? refreshSourceGroup(returnToSourceId).catch(handleError) : renderNoteDrawer(note) }),
       versions.length ? el("div", { class: "list" }, versions.map((version) => el("div", { class: "list-item no-icon" }, [
@@ -932,6 +958,7 @@ async function beginStudy(noteId, planId, context = {}) {
   if (!noteId) { toast("这项任务没有关联知识，暂时无法开始", "error"); return; }
   try {
     state.currentStudy = await api.startStudy({ noteId, ...(planId ? { planId } : {}), ...(context.topicId ? { topicId: context.topicId } : {}), ...(context.mistakeId ? { mistakeId: context.mistakeId } : {}) });
+    if (context.topicId) recordTourEvent("topic-study");
     closeDrawer();
     state.studyMaterialVisible = true;
     state.studyTab = "session";
@@ -964,14 +991,14 @@ async function studyQueuePanel() {
   learning.forEach((note) => { if (!byId.has(note.id)) byId.set(note.id, { id: `note-${note.id}`, noteId: note.id, title: note.title, reason: "已加入学习", minutes: 0, state: "available" }); });
   const items = [...byId.values()];
   const sessions = asArray(sessionsData.sessions);
-  return el("section", {}, [
+  return el("section", { dataset: { tour: "study-queue" } }, [
     sectionHeading("学习队列", "今日安排和正在学习的内容彼此独立，未安排不等于被遗忘"),
     items.length ? el("div", { class: "list" }, items.map((item) => el("article", { class: "list-item" }, [
       el("div", { class: "item-symbol", text: item.inToday ? "今" : "学" }),
       el("div", { class: "item-copy" }, [el("h3", { text: item.title || "未命名知识" }), el("p", { text: item.reason || "等待学习" }), el("div", { class: "item-meta" }, [item.minutes ? badge(`${item.minutes} 分钟`) : null, item.inToday ? badge("今日", "accent") : badge("学习池")])]),
       el("div", { class: "item-actions" }, button("开始学习", { kind: "primary compact", onClick: () => beginStudy(item.noteId, item.inToday ? item.id : undefined, item) })),
     ]))) : emptyState("学习队列为空", "在知识详情中选择“加入学习”，或先处理一份原始资料。", button("浏览知识", { onClick: () => navigate("library") })),
-    sectionHeading("最近学习记录", "服务重启后仍可继续已有会话，原始回答和提示使用不会丢失"),
+    tour(sectionHeading("最近学习记录", "服务重启后仍可继续已有会话，原始回答和提示使用不会丢失"), "study-history"),
     sessions.length ? el("div", { class: "list" }, sessions.map((session) => {
       const related = asArray(state.bootstrap?.notes).find((note) => note.id === session.noteId);
       return el("article", { class: "list-item" }, [
@@ -988,6 +1015,7 @@ async function studyQueuePanel() {
 }
 
 function continueStudy(session) {
+  recordTourEvent("study-resume");
   state.currentStudy = session;
   state.studyMaterialVisible = !asArray(session.turns).length && session.status === "reading";
   state.studyTab = "session";
@@ -1017,18 +1045,18 @@ async function studySessionPanel() {
         el("h2", { text: "理解内容后，再隐藏原文主动回忆" }),
         el("p", { class: "muted", text: "隐藏后请用自己的语言解释问题、条件和边界。重新查看原文会被记录为使用提示。" }),
       ]),
-      el("section", { class: "panel" }, [sectionHeading("学习材料", "完整正文，仅在阅读阶段显示"), el("div", { class: "prose", text: session.material || "这次会话没有可显示的材料。" })]),
+      el("section", { class: "panel", dataset: { tour: "study-material" } }, [sectionHeading("学习材料", "完整正文，仅在阅读阶段显示"), el("div", { class: "prose", text: session.material || "这次会话没有可显示的材料。" })]),
       evidenceDetails(session.noteId),
-      button("隐藏材料，开始回忆", { kind: "primary", onClick: () => { state.studyMaterialVisible = false; renderStudy().catch(handleError); } }),
+      button("隐藏材料，开始回忆", { kind: "primary", onClick: () => { state.studyMaterialVisible = false; recordTourEvent("study-hide"); renderStudy().catch(handleError); } }),
     ]);
   }
   const awaiting = session.status === "awaiting_feedback" || Boolean(session.pendingJobId);
   const completed = session.status === "completed";
-  const answer = el("textarea", { placeholder: "先不看答案，用自己的语言解释。可以写出不确定处。", rows: 7, disabled: awaiting || completed });
+  const answer = el("textarea", { name: "answer", dataset: { tour: "study-answer" }, placeholder: "先不看答案，用自己的语言解释。可以写出不确定处。", rows: 7, disabled: awaiting || completed });
   const hintArea = el("div");
   const hintUsed = { value: false };
   const feedback = latest?.feedback || session.feedback;
-  const form = el("form", { class: "page-stack" }, [
+  const form = el("form", { class: "page-stack", dataset: { tour: "study-session" } }, [
     goalPanel(),
     completed ? el("div", { class: "notice info" }, [el("strong", { text: "本轮练习已结束" }), el("p", { text: "本轮原答、提示与反馈已保留。可以继续主题中的下一项，或稍后复习。" }),
       session.completion?.reason ? el("p", { text: session.completion.reason }) : null,
@@ -1044,13 +1072,13 @@ async function studySessionPanel() {
     hintArea,
     el("div", { class: "form-actions" }, [
       button("提交回答", { kind: "primary", type: "submit", disabled: awaiting || completed }),
-      button("分级提示", { onClick: async () => {
+      tour(button("分级提示", { onClick: async () => {
         try {
           const result = await api.hint(session.id);
           hintUsed.value = true;
           clear(hintArea).append(el("div", { class: "notice info", text: result.hint || "当前没有可用提示" }));
         } catch (error) { handleError(error); }
-      }, disabled: awaiting || completed }),
+      }, disabled: awaiting || completed }), "study-hint"),
       button("查看原文（记为提示）", { disabled: awaiting || completed, onClick: async () => {
         if (!session.noteId) return;
         try {
@@ -1059,10 +1087,10 @@ async function studySessionPanel() {
           openNote(session.noteId);
         } catch (error) { handleError(error); }
       } }),
-      button("结束本轮练习", { kind: "primary", disabled: completed || awaiting || session.status !== "feedback" || !latest?.feedback, onClick: async () => {
+      tour(button("结束本轮练习", { kind: "primary", disabled: completed || awaiting || session.status !== "feedback" || !latest?.feedback, onClick: async () => {
         try { state.currentStudy = await api.finishStudy(session.id); toast("本轮练习已结束，表现已保留", "success"); await refreshBootstrap(); await renderStudy(); }
         catch (error) { handleError(error); }
-      } }),
+      } }), "study-finish"),
     ]),
   ]);
   form.addEventListener("submit", async (event) => {
@@ -1081,7 +1109,7 @@ async function studySessionPanel() {
   if (turns.length) form.append(el("section", { class: "panel" }, [
     sectionHeading("确认自己的理解", "无需等待 AI 判定；你的原始回答会继续保留"),
     el("p", { class: "muted", text: feedback ? "可参考反馈修改，但最终文字必须由你确认。" : "当前没有 AI 反馈，你仍可基于自己的回答整理个人理解。" }),
-    button("整理并确认个人理解", { kind: "primary", onClick: () => confirmUnderstanding(session) }),
+    tour(button("整理并确认个人理解", { kind: "primary", onClick: () => confirmUnderstanding(session) }), "study-confirm"),
   ]));
   if (completed) form.append(evidenceDetails(session.noteId));
   if (turns.length) form.append(el("section", {}, [sectionHeading("学习记录", `${turns.length} 轮回答`), el("div", { class: "step-list" }, turns.map((turn, index) => el("div", { class: "step is-done" }, [
@@ -1114,6 +1142,7 @@ function renderFeedback(feedback, title) {
 }
 
 function confirmUnderstanding(session) {
+  refs.drawerBody.dataset.tour = "note-confirm";
   const latest = asArray(session.turns).at(-1);
   const form = el("form", { class: "page-stack" });
   const body = el("textarea", { rows: 16, textContent: latest?.answer || "", placeholder: "这是你的个人理解。你可以参考反馈，但请亲自确认最终文字。" });
@@ -1133,7 +1162,7 @@ function confirmUnderstanding(session) {
 async function mistakesPanel() {
   const data = await api.mistakes();
   const mistakes = asArray(data.mistakes);
-  return el("section", {}, [
+  return el("section", { dataset: { tour: "study-mistakes" } }, [
     sectionHeading("错题库", "记录具体误解、修正依据和纠正情况，不把错误答案当普通知识"),
     mistakes.length ? el("div", { class: "list" }, mistakes.map((mistake) => mistakeRow(mistake))) : emptyState("还没有错误记录", "学习中的具体遗漏或应用错误会在这里留下可质疑、可撤销的记录。"),
   ]);
@@ -1143,10 +1172,11 @@ function mistakeRow(mistake) {
   const meta = asObject(mistake.meta);
   const status = mistake.status || meta.correctionState || meta.status || "open";
   const actions = el("div", { class: "item-actions wrap" }, [
-    button("查看", { kind: "quiet compact", onClick: () => mistake.noteId || mistake.kind ? openNote(mistake.noteId || mistake.id) : showMistake(mistake) }),
+    button("查看", { kind: "quiet compact", onClick: () => { recordTourEvent("mistake-open"); return mistake.noteId || mistake.kind ? openNote(mistake.noteId || mistake.id) : showMistake(mistake); } }),
     status === "open" ? button("专项练习", { kind: "primary compact", disabled: !(meta.noteId || mistake.noteId), onClick: () => beginStudy(meta.noteId || mistake.noteId, undefined, { mistakeId: mistake.id }) }) : null,
-    status === "disputed" ? button("重新打开", { kind: "text compact", onClick: () => actMistake(mistake.id, "reopen") }) : button("质疑判定", { kind: "text compact", onClick: () => actMistake(mistake.id, "dispute") }),
-    status !== "resolved" ? button("手动标记已纠正", { kind: "primary compact", onClick: () => actMistake(mistake.id, "resolve") }) : badge("已标记纠正", "good"),
+    status === "disputed" ? button("重新打开", { kind: "text compact", onClick: () => actMistake(mistake.id, "reopen") }) : status !== "revoked" ? button("质疑判定", { kind: "text compact", onClick: () => actMistake(mistake.id, "dispute") }) : null,
+    status !== "resolved" && status !== "revoked" ? button("手动标记已纠正", { kind: "primary compact", onClick: () => actMistake(mistake.id, "resolve") }) : status === "resolved" ? badge("已标记纠正", "good") : null,
+    status !== "revoked" ? button("撤销记录", { kind: "text compact", onClick: () => actMistake(mistake.id, "revoke") }) : badge("已撤销"),
   ]);
   return el("article", { class: "list-item" }, [
     el("div", { class: "item-symbol", text: "错" }),
@@ -1181,7 +1211,7 @@ async function renderTopics() {
   const create = button("新建主题学习包", { kind: "primary", onClick: () => createTopicDrawer() });
   const actions = el("div", { class: "item-actions" }, [button("AI 建议学习包", { onClick: suggestTopics }), create]);
   clear(refs.main).append(el("div", { class: "page-stack" }, [
-    sectionHeading("主题学习包", "跨日期组织相关内容，也允许零散材料仅供查阅", actions),
+    tour(sectionHeading("主题学习包", "跨日期组织相关内容，也允许零散材料仅供查阅", actions), "topics-list"),
     el("div", { class: "notice info", text: "AI 建议只使用明确允许外发的材料，并以“AI 整理建议”呈现建议顺序和前置缺口；不会自动创建或确认主题学习包。你可以审阅后用“新建主题学习包”手动采用。" }),
     topics.length ? el("div", { class: "card-grid" }, topics.map(topicCard)) : emptyState("还没有主题学习包", "创建一个真实想解决的问题，再选择涉及的知识和前置内容。", create.cloneNode(true)),
   ]));
@@ -1216,10 +1246,12 @@ async function createTopicDrawer(seed = null) {
 }
 
 async function openTopic(topic) {
+  refs.drawerBody.dataset.tour = "topic-detail";
   try {
     const data = await api.topics();
     topic = asArray(data.topics).find(item => item.id === topic.id);
     if (!topic) { toast("主题学习包已删除或暂不可读", "error"); return; }
+    recordTourEvent("topic-open");
     const meta = asObject(topic.meta), progress = asObject(topic.progress);
     const prerequisites = topic.prerequisites ?? meta.prerequisites;
     const members = asArray(topic.members);
@@ -1239,7 +1271,7 @@ async function openTopic(topic) {
         el("div", { class: "item-copy" }, [el("h3", { text: member.title || "知识暂不可读" }), el("div", { class: "item-meta" }, [badge(depthLabel(member.depth || "explain")), badge(member.completed ? "已有学习记录" : member.available ? "待学习" : "暂不可学习", member.completed ? "good" : "neutral")])]),
         el("div", { class: "item-actions wrap" }, [button("查看", { kind: "text compact", onClick: () => openNote(member.id) }), button("开始", { kind: "quiet compact", disabled: paused || !member.available, onClick: () => beginStudy(member.id, undefined, { topicId: topic.id }) })]),
       ]))),
-      el("div", { class: "form-actions" }, [button("调整成员与顺序", { kind: "primary", onClick: () => editTopic(topic).catch(handleError) }), button("复制或拆分为新学习包", { onClick: () => createTopicDrawer(topic).catch(handleError) })]),
+      el("div", { class: "form-actions" }, [button("调整成员与顺序", { kind: "primary", onClick: () => editTopic(topic).catch(handleError) }), button("复制或拆分为新学习包", { onClick: () => createTopicDrawer(topic).catch(handleError) }), button(paused ? "恢复" : "暂停", { onClick: () => actTopic(topic.id, paused ? "resume" : "pause") })]),
     ]));
   } catch (error) { handleError(error); }
 }
@@ -1247,6 +1279,7 @@ async function openTopic(topic) {
 function editTopic(topic) { return topicEditor(topic, false); }
 
 async function topicEditor(topic, create) {
+  refs.drawerBody.dataset.tour = "topic-editor";
   const noteData = await api.notes({ kind: "knowledge" });
   const notes = asArray(noteData.notes).filter(note => note.kind === "knowledge" && !isExcerptOnly(note));
   const meta = asObject(topic?.meta);
@@ -1285,6 +1318,10 @@ async function topicEditor(topic, create) {
     try {
       const values = { minutes: number(minutes.value), prerequisites: nextPrerequisites, noteIds: [...selected] };
       const updated = create ? await api.createTopic({ title: title.value, body: body.value, ...values }) : await api.updateTopic(topic.id, { title: title.value, body: body.value + (topicManagedBlock(topic.body) ? "\n\n" + topicManagedBlock(topic.body) : ""), expectedHash: topic.hash, meta: values });
+      if (create && topic) {
+        recordTourEvent("topic-copy");
+        if (selected.length < asArray(topic.noteIds || topic.meta?.noteIds).length) recordTourEvent("topic-split");
+      }
       toast(create ? "主题学习包已创建" : "主题成员与顺序已保存", "success");
       await refreshBootstrap(); await renderTopics(); await openTopic(updated);
     } catch (error) { handleError(error); }
@@ -1303,7 +1340,7 @@ async function renderDiscover() {
   const sourceData = await api.notes({ kind: "source" });
   const sources = asArray(sourceData.notes);
   const wrapper = el("div", { class: "page-stack" });
-  const form = el("form", { class: "panel" });
+  const form = el("form", { class: "panel", dataset: { tour: "discover-search" } });
   const query = el("input", { name: "q", value: state.searchFilters.q, placeholder: "输入术语、问题或不同说法", required: true });
   const allowCloudQuery = el("input", { type: "checkbox", checked: state.searchFilters.privacy === "cloud" });
   const searchMode = selectControl([["keyword", "关键词"], ["semantic", "语义"], ["hybrid", "混合"]], state.searchFilters.mode, "mode");
@@ -1335,6 +1372,7 @@ async function renderDiscover() {
     event.preventDefault();
     syncSearchMode();
     state.searchFilters = { ...state.searchFilters, ...serializeForm(form), privacy: allowCloudQuery.checked ? "cloud" : "local" };
+    if (Object.values(serializeForm(form)).filter(Boolean).length > 2) recordTourEvent("search-filter");
     await runSearch(resultArea);
   });
   wrapper.append(form, resultArea);
@@ -1346,6 +1384,7 @@ async function renderDiscover() {
 }
 
 async function runSearch(container) {
+  container.dataset.tour = "discover-results";
   clear(container).append(el("div", { class: "loading-panel" }, [el("span", { class: "spinner" }), el("p", { text: "正在检索本地索引…" })]));
   try {
     const data = await api.search(state.searchFilters);
@@ -1382,7 +1421,7 @@ async function renderRelationsPanel() {
   const candidates = asArray(data.candidates);
   const reports = asArray(data.reports);
   const allowAI = el("input", { type: "checkbox", checked: false });
-  const panel = el("section", {}, [
+  const panel = el("section", { dataset: { tour: "discover-relations" } }, [
     sectionHeading("关系发现", "分别保留探索候选和有依据的联系，每次最多确认 3 条", button("运行发现检查", { kind: "primary", onClick: async () => {
       try { const job = await api.discover({ useAI: allowAI.checked }); toast(`发现任务已${labels.state(job.state)}`, "success"); await refreshBootstrap(); }
       catch (error) { handleError(error); }
@@ -1434,7 +1473,7 @@ async function actRelation(id, action) {
 
 async function renderOutput() {
   const wrapper = el("div", { class: "page-stack" });
-  const form = el("form", { class: "panel" });
+  const form = el("form", { class: "panel", dataset: { tour: "output-form" } });
   const question = el("textarea", { name: "question", rows: 5, required: true, placeholder: "例如：根据我已有的资料，解释 RAG 为什么不能保证答案一定正确。" });
   const mode = selectControl([["answer", "回答问题"], ["outline", "组织提纲"], ["draft", "生成草稿"]], "answer", "mode");
   const sourceScope = el("input", { type: "checkbox", name: "source", checked: true });
@@ -1460,6 +1499,7 @@ async function renderOutput() {
 }
 
 function renderAnswer(container, result) {
+  container.dataset.tour = "output-result";
   const citations = asArray(result.citations);
   const limitations = asArray(result.limitations);
   clear(container).append(el("section", { class: "panel" }, [
@@ -1474,7 +1514,7 @@ async function renderDraftsPanel() {
   const data = await api.drafts();
   const drafts = asArray(data.drafts);
   return el("section", {}, [
-    sectionHeading("输出工作区", "编辑素材、提纲和草稿；只有主动采集后才回到知识流程"),
+    tour(sectionHeading("输出工作区", "编辑素材、提纲和草稿；只有主动采集后才回到知识流程"), "output-drafts"),
     drafts.length ? el("div", { class: "card-grid" }, drafts.map((draft) => el("article", { class: "card" }, [
       el("div", { class: "card-head" }, [badge(draft.mode === "draft" ? "草稿" : draft.mode === "outline" ? "提纲" : "回答"), badge(formatDate(draft.updatedAt))]),
       el("h3", { text: draft.title || draft.question || "未命名输出" }),
@@ -1485,6 +1525,7 @@ async function renderDraftsPanel() {
 }
 
 function openDraft(draft) {
+  refs.drawerBody.dataset.tour = "draft-editor";
   const form = el("form", { class: "page-stack" });
   const body = el("textarea", { rows: 19, textContent: draft.body || draft.answer || "" });
   const used = new Set(asArray(draft.usedIds));
@@ -1547,7 +1588,7 @@ function appearancePanel() {
   const message = el("p",{class:"fine-print",role:"status",text:saved ? "当前使用自定义强调色。" : "当前使用默认配色：日间青绿，夜间柔和蓝紫。"});
   const preview = el("div",{class:"two-column appearance-previews"});
   const save = button("保存强调色",{kind:"primary",onClick:()=>{
-    try { appearance.saveAccent(selected); message.textContent=selected ? "强调色已保存，刷新后仍然生效。" : "已恢复默认配色。"; toast("外观设置已保存","success"); }
+    try { appearance.saveAccent(selected); recordTourEvent("appearance-accent"); message.textContent=selected ? "强调色已保存，刷新后仍然生效。" : "已恢复默认配色。"; toast("外观设置已保存","success"); }
     catch(error) { handleError(error); }
   }});
   function showPreview() {
@@ -1580,7 +1621,7 @@ function appearancePanel() {
   }});
   showPreview();
   return el("section",{class:"panel page-stack"},[
-    sectionHeading("外观与强调色","日夜模式通过左上角开关切换；强调色会同时适配两种模式。"),
+    tour(sectionHeading("外观与强调色","日夜模式通过左上角开关切换；强调色会同时适配两种模式。"), "system-appearance"),
     presets,el("div",{class:"form-grid"},[field("取色器",picker),field("颜色代码",code)]),
     preview,message,el("div",{class:"form-actions"},[save,reset]),
     el("p",{class:"fine-print",text:"保存在当前浏览器。为保证可读性，系统会按日夜模式微调颜色亮度；成功、警告和错误仍保留各自的状态色。"}),
@@ -1588,6 +1629,7 @@ function appearancePanel() {
 }
 
 async function settingsPanel() {
+  const practice = Boolean(api.getContext?.().practiceId);
   const [settings, promptData] = await Promise.all([api.settings(), api.prompts()]);
   const ai = asObject(settings.ai);
   const embedding = asObject(settings.embedding);
@@ -1597,7 +1639,7 @@ async function settingsPanel() {
   const form = el("form", { class: "page-stack" });
   const notesFolder = field("笔记存储位置", el("input", { name: "vaultDir", value: settings.vaultDir || "", placeholder: "保存笔记的本地文件夹路径" }), "原始资料和知识笔记保存在这个文件夹中，也可用 Obsidian 打开。已有资料时请保持此位置；更换知识库需先备份，再单独创建。");
   notesFolder.classList.add("span-2");
-  const general = el("section", { class: "panel" }, [
+  const general = el("section", { class: "panel", dataset: { tour: "settings-general" } }, [
     sectionHeading("学习计划与笔记存储", "设置每天学多久、何时安排学习，以及笔记保存在哪里。"),
     el("div", { class: "form-grid" }, [
       field("每天计划学习多久（分钟）", el("input", { name: "dailyMinutes", type: "number", min: 5, max: 240, value: settings.dailyMinutes ?? 25 }), "系统按这个时长安排新知识、复习和错题，未排入的内容留待以后。"),
@@ -1640,7 +1682,15 @@ async function settingsPanel() {
   const mcpEnabled = el("input", { name: "mcpEnabled", type: "checkbox", checked: Boolean(mcp.enabled) });
   const proposals = el("input", { name: "allowProposals", type: "checkbox", checked: Boolean(mcp.allowProposals) });
   const mcpPanel = el("section", { class: "panel" }, [sectionHeading("MCP 接入", "默认只读；写入只能产生待确认提案"), el("label", { class: "check-field" }, [mcpEnabled, "启用本地 MCP 服务"]), el("label", { class: "check-field" }, [proposals, "允许外部客户端提交写入提案"]), el("p", { class: "fine-print", text: "MCP 与网页共用知识服务和权限。连接状态与实测信息请在“诊断与 MCP”中查看。" })]);
-  form.append(general, modelPanel, capabilities, mcpPanel, button("保存能力设置", { kind: "primary", type: "submit" }));
+  tour(modelPanel, "settings-model"); tour(capabilities, "settings-capabilities"); tour(mcpPanel, "settings-mcp");
+  if (practice) {
+    notesFolder.querySelector("input").disabled = true;
+    form.append(el("div", { class: "notice info practice-settings-note" }, [el("strong", { text: "练习库共用正式 API 配置" }), el("p", { text: "这里仅修改练习学习偏好和提示词。API 密钥、能力开关及地址需返回正式设置修改，对两边共同生效。" }), button("前往正式 API 配置", { onClick: () => onboarding?.openSettings() })]), general, el("fieldset", { class: "practice-readonly", disabled: true }, [modelPanel, capabilities, mcpPanel]));
+  } else {
+    if (onboarding?.state?.practiceId) form.append(el("div", { class: "notice info" }, [el("strong", { text: "正在配置两边共用的 AI 能力" }), el("p", { text: "此处保存的 API 配置同时用于正式库和练习库。先保存，再点击测试连接；测试会发起真实请求并可能产生费用。密钥不会进入教程进度或练习备份。" })]));
+    form.append(general, modelPanel, capabilities, mcpPanel);
+  }
+  form.append(tour(button(practice ? "保存练习偏好" : "保存能力设置", { kind: "primary", type: "submit" }), "settings-save"));
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const data = serializeForm(form);
@@ -1652,15 +1702,18 @@ async function settingsPanel() {
       search: { enabled: searchEnabled.checked, baseUrl: data.searchBaseUrl, apiKey: data.searchKey },
       fetch: { enabled: fetchEnabled.checked }, mcp: { enabled: mcpEnabled.checked, allowProposals: proposals.checked },
     };
-    try { await api.updateSettings(payload); toast("能力设置已保存，密钥不会在页面回显", "success"); await refreshBootstrap(); }
+    if (practice) { for (const key of ["vaultDir", "ai", "embedding", "search", "fetch", "mcp"]) delete payload[key]; }
+    try { await (practice ? api.updateSettings(payload) : api.updateMainSettings ? api.updateMainSettings(payload) : api.updateSettings(payload)); toast(practice ? "练习偏好已保存" : "能力设置已保存，密钥不会在页面回显", "success"); await refreshBootstrap(); }
     catch (error) { handleError(error); }
   });
-  return el("div", { class: "page-stack" }, [form, promptSettingsPanel(promptData)]);
+  const paused = asArray(settings.pausedIds);
+  const pausedPanel = paused.length ? el("section", { class: "panel" }, [sectionHeading("已暂停的学习内容", "恢复后可重新参与每日安排，原有学习记录会保留"), ...paused.map(id => el("div", { class: "list-item no-icon" }, [el("span", { text: asArray(state.bootstrap?.notes).find(note => note.id === id)?.title || "已暂停知识" }), button("恢复安排", { kind: "quiet compact", onClick: async () => { try { await api.updateSettings({ pausedIds: paused.filter(value => value !== id) }); await refreshBootstrap(); await renderSystem(); } catch (error) { handleError(error); } } })]))]) : null;
+  return el("div", { class: "page-stack" }, [form, pausedPanel, promptSettingsPanel(promptData)]);
 }
 
 function promptSettingsPanel(data) {
   const prompts = asArray(data?.prompts);
-  const form = el("form", { class: "panel page-stack" });
+  const form = el("form", { class: "panel page-stack", dataset: { tour: "settings-prompts" } });
   form.append(
     sectionHeading("AI 与联网提示词", "查看并调整文本生成、联网搜索等任务采用的提示词"),
     el("div", { class: "notice info", text: "保存后用于后续实际请求，已保存结果不会自动重新生成。{{变量}}由系统填入资料、问题或网页正文；请保留所需变量和 JSON 输出结构。本页不会发起模型或联网测试。" }),
@@ -1671,6 +1724,7 @@ function promptSettingsPanel(data) {
   }
 
   const editors = new Map();
+  const resetKeys = new Set();
   prompts.forEach((prompt, index) => {
     const key = String(prompt.key || "");
     if (!key) return;
@@ -1695,6 +1749,7 @@ function promptSettingsPanel(data) {
       ]) : el("p", { class: "fine-print", text: "这个模板没有可插入的运行时变量。" }),
       field("提示词模板", textarea),
       el("div", { class: "form-actions" }, [button("恢复系统默认", { onClick: () => {
+        resetKeys.add(key);
         textarea.value = defaultTemplate;
         status.textContent = "待保存：系统默认";
         status.className = "badge badge-warn";
@@ -1714,6 +1769,8 @@ function promptSettingsPanel(data) {
     const values = Object.fromEntries([...editors].map(([key, editor]) => [key, editor.textarea.value]));
     try {
       await api.updatePrompts({ prompts: values });
+      if ([...resetKeys].some(key => editors.get(key)?.textarea.value === editors.get(key)?.defaultTemplate)) recordTourEvent("prompts-reset");
+      resetKeys.clear();
       editors.forEach(({ textarea, defaultTemplate, status }) => {
         const isDefault = textarea.value === defaultTemplate;
         status.textContent = isDefault ? "系统默认" : "已自定义";
@@ -1727,7 +1784,7 @@ function promptSettingsPanel(data) {
 
 async function testCapability(capability) {
   try {
-    const result = await api.testSetting(capability);
+    const result = onboarding?.state?.practiceId ? await onboarding.test(capability) : await api.testSetting(capability);
     toast(result.message || `${capability} 连接测试成功`, "success");
   } catch (error) { handleError(error); }
 }
@@ -1738,7 +1795,7 @@ async function jobsPanel() {
   const data = await api.jobs();
   const jobs = asArray(data.jobs).sort((a,b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")));
   const names = {process:"资料加工",relate:"知识关联",discover:"知识发现",grade:"学习反馈",index:"更新索引",topics:"主题学习包整理"};
-  const panel = el("section", {class:"panel call-history"});
+  const panel = el("section", {class:"panel call-history", dataset: { tour: "system-jobs" }});
   const type = selectControl([["","全部类型"],...Object.entries(names)], jobTableState.type, "jobType");
   type.setAttribute("aria-label", "筛选任务类型");
   const status = selectControl([["","全部状态"],...["queued","running","waiting","failed","done","cancelled"].map(value=>[value,labels.state(value)])], jobTableState.status, "jobStatus");
@@ -1759,7 +1816,7 @@ async function jobsPanel() {
         const progress = Math.max(0,Math.min(100,number(job.progress)));
         details.append(el("small",{text:progress+"%"}));
       }
-      if (job.error) details.append(el("details",{class:"call-error"},[el("summary",{text:"查看详情"}),el("pre",{text:jobSummary(job)})]));
+      if (job.error) details.append(el("details",{class:"call-error",on:{toggle:event=>{if(event.target.open)recordTourEvent("job-open");}}},[el("summary",{text:"查看详情"}),el("pre",{text:jobSummary(job)})]));
       const actions = el("div",{class:"item-actions"});
       if (["failed","cancelled","waiting"].includes(job.state)) actions.append(button("重试",{kind:"primary compact",onClick:()=>actJob(job.id,"retry")}));
       if (["queued","running","waiting"].includes(job.state)) actions.append(button("取消",{kind:"quiet compact",onClick:()=>actJob(job.id,"cancel")}));
@@ -1777,7 +1834,7 @@ async function jobsPanel() {
     ]));
   }
   for (const control of [type,status,size]) control.addEventListener("change",()=>{
-    Object.assign(jobTableState,{type:type.value,status:status.value,size:size.value,page:1}); render();
+    Object.assign(jobTableState,{type:type.value,status:status.value,size:size.value,page:1}); render(); recordTourEvent("jobs-filter");
   });
   panel.append(sectionHeading("后台任务","按最近更新时间排列；详情可展开，支持重试或取消"),el("div",{class:"call-filters"},[type,status,size]),content,pager);
   render();
@@ -1809,8 +1866,8 @@ function dataPanel() {
     } catch (error) { handleError(error); }
   });
   return el("div", { class: "two-column" }, [
-    el("section", { class: "panel" }, [sectionHeading("完整备份", "开放 JSON 包含知识与运行状态，不含密钥和会话令牌"), el("p", { class: "muted", text: "建议在大批量修改、合并或恢复前下载一份。" }), el("div", { class: "form-actions" }, [button("下载备份", { kind: "primary", onClick: downloadBackup }), button("导入演示资料", { onClick: importDemo })]), el("p", { class: "fine-print", text: "演示内容会明确标识，不会生成虚假的个人掌握记录。被删除内容的历史版本和备份保留策略可在导出内容中核对。" })]),
-    el("section", { class: "panel" }, [sectionHeading("恢复演练", "先预览差异，再明确确认"), field("选择备份文件", backupInput), restoreButton, previewArea]),
+    el("section", { class: "panel", dataset: { tour: "system-backup" } }, [sectionHeading("完整备份", "开放 JSON 包含知识与运行状态，不含密钥和会话令牌"), el("p", { class: "muted", text: "建议在大批量修改、合并或恢复前下载一份。" }), el("div", { class: "form-actions" }, [button("下载备份", { kind: "primary", onClick: downloadBackup }), button("导入演示资料", { onClick: importDemo })]), el("p", { class: "fine-print", text: "演示内容会明确标识，不会生成虚假的个人掌握记录。被删除内容的历史版本和备份保留策略可在导出内容中核对。" })]),
+    el("section", { class: "panel", dataset: { tour: "system-restore" } }, [sectionHeading("恢复演练", "先预览差异，再明确确认"), field("选择备份文件", backupInput), restoreButton, previewArea]),
   ]);
 }
 
@@ -1851,10 +1908,11 @@ async function diagnosticsPanel() {
   const mcp = asObject(data.mcp);
   const storage = asObject(data.storage);
   return el("div", { class: "page-stack" }, [
+    data.usageNotice ? el("p", { class: "notice info", text: data.usageNotice }) : null,
     el("section", { class: "stats" }, [statCard("今日调用", usage.callsToday ?? calls.length, "实际记录"), statCard("本月费用", usage.costMonth === null || usage.costMonth === undefined ? "未知" : usage.costMonth, "供应商价格未知时不估算"), statCard("索引条目", index.documents ?? index.count ?? 0, "可重建衍生数据"), statCard("MCP", mcp.connected ? "已连接" : mcp.enabled ? "已启用" : "未启用", "以实际状态为准")]),
-    el("section", { class: "panel soft" }, [sectionHeading("系统怎样工作", "只展示可核对的输入、工具调用与结果，不展示模型隐藏推理"), el("div", { class: "step-list" }, [step("1. 切分与索引", "本地资料被拆成检索片段；关键词索引可离线使用，向量索引按隐私许可构建。", true), step("2. 召回候选", "关键词与可选语义结果分别返回，再合并为有限候选。", true), step("3. 形成回答", "只有实际召回且可用的材料进入回答，并返回引用与限制。", true), step("4. MCP 调用", "外部客户端通过同一知识服务搜索、读取；写入只能生成待确认提案。", true)])]),
+    el("section", { class: "panel soft", dataset: { tour: "system-diagnostics" } }, [sectionHeading("系统怎样工作", "只展示可核对的输入、工具调用与结果，不展示模型隐藏推理"), el("div", { class: "step-list" }, [step("1. 切分与索引", "本地资料被拆成检索片段；关键词索引可离线使用，向量索引按隐私许可构建。", true), step("2. 召回候选", "关键词与可选语义结果分别返回，再合并为有限候选。", true), step("3. 形成回答", "只有实际召回且可用的材料进入回答，并返回引用与限制。", true), step("4. MCP 调用", "外部客户端通过同一知识服务搜索、读取；写入只能生成待确认提案。", true)])]),
     el("div", { class: "two-column" }, [
-      el("section", { class: "panel" }, [sectionHeading("存储与索引", "Vault 内容是知识权威，索引可重建"), keyValueObject(storage),
+      el("section", { class: "panel", dataset: { tour: "system-index" } }, [sectionHeading("存储与索引", "Vault 内容是知识权威，索引可重建"), keyValueObject(storage),
         el("p", { text: `检索片段 ${number(index.count)} 条，已有向量 ${number(index.vectors)} 条，待补建 ${number(index.pending)} 条。` }),
         el("p", { class: "fine-print", text: "保存知识只更新本地索引。点击补建后，仅获准外发且缺少向量的片段会发送给已配置的嵌入服务，可能产生费用。" }),
         el("div", { class: "form-actions" }, [button("只补建缺失向量", { kind: "primary", disabled: !number(index.pending), onClick: async () => { try { const result = await api.updateIndex(); toast(`补建任务已${labels.state(result.state)}`, "success"); } catch (error) { handleError(error); } } }), button("全量重建索引", { onClick: async () => { try { const result = await api.rebuildIndex(); toast(`索引任务已${labels.state(result.state)}`, "success"); } catch (error) { handleError(error); } } })]),
@@ -1866,6 +1924,7 @@ async function diagnosticsPanel() {
 }
 
 function callHistoryPanel(calls) {
+  recordTourEvent("calls-open");
   const names = {model:"文本生成",search:"联网搜索",fetch:"网页读取",embedding:"语义嵌入"};
   const panel = el("section", {class:"panel call-history"});
   const capability = selectControl([["","全部类型"],...Object.entries(names)], "", "callCapability");
@@ -1902,7 +1961,7 @@ function callHistoryPanel(calls) {
     ]));
   }
   for(const control of [capability,outcome,size]) control.addEventListener("change",()=>{page=1;render();});
-  panel.append(sectionHeading("最近外部调用",`展示最近 ${calls.length} 条记录（最多 100 条），新记录在前`),el("div",{class:"call-filters"},[capability,outcome,size]),content,pager);
+  panel.append(tour(sectionHeading("最近外部调用",`展示最近 ${calls.length} 条记录（最多 100 条），新记录在前`), "system-calls"),el("div",{class:"call-filters"},[capability,outcome,size]),content,pager);
   render();
   return panel;
 }
@@ -1917,7 +1976,7 @@ async function proposalsPanel() {
   const data = await api.proposals();
   const proposals = asArray(data.proposals);
   return el("section", {}, [
-    sectionHeading("MCP 写入提案", "外部客户端只能提交草稿；接受时仍会核对原内容哈希"),
+    tour(sectionHeading("MCP 写入提案", "外部客户端只能提交草稿；接受时仍会核对原内容哈希"), "system-proposals"),
     proposals.length ? el("div", { class: "list" }, proposals.map((proposal) => el("article", { class: "list-item" }, [
       el("div", { class: "item-symbol", text: "提" }),
       el("div", { class: "item-copy" }, [el("h3", { text: proposal.title || proposal.type || "未命名提案" }), el("p", { text: truncate(proposal.body || proposal.reason, 180) }), el("div", { class: "item-meta" }, [badge(labels.state(proposal.state || "pending"), stateTone(proposal.state || "pending")), badge(formatDate(proposal.createdAt, true))])]),
@@ -1949,9 +2008,10 @@ async function actProposal(id, action) {
 }
 
 function conflictsPanel() {
+  recordTourEvent("conflicts-open");
   const conflicts = asArray(state.bootstrap?.conflicts);
   return el("section", {}, [
-    sectionHeading("文件与同步冲突", "重复稳定 ID、解析错误和哈希变化不会被静默覆盖"),
+    tour(sectionHeading("文件与同步冲突", "重复稳定 ID、解析错误和哈希变化不会被静默覆盖"), "system-conflicts"),
     conflicts.length ? el("div", { class: "list" }, conflicts.map((conflict) => el("article", { class: "list-item" }, [
       el("div", { class: "item-symbol", text: "!" }),
       el("div", { class: "item-copy" }, [el("h3", { text: conflict.title || conflict.type || "文件冲突" }), el("p", { text: conflict.error || conflict.message || conflict.path || "等待人工处理" }), el("div", { class: "item-meta" }, [conflict.code ? badge(conflict.code, "danger") : badge("待处理", "danger"), conflict.updatedAt ? badge(formatDate(conflict.updatedAt, true)) : null])]),
@@ -1961,14 +2021,67 @@ function conflictsPanel() {
 }
 
 async function renderCurrent() {
-  if (state.view === "today") return renderToday();
-  if (state.view === "capture") return renderCapture();
-  if (state.view === "library") return renderLibrary();
-  if (state.view === "study") return renderStudy();
-  if (state.view === "topics") return renderTopics();
-  if (state.view === "discover") return renderDiscover();
-  if (state.view === "output") return renderOutput();
-  return renderSystem();
+  const renderers = { today: renderToday, capture: renderCapture, library: renderLibrary, study: renderStudy, topics: renderTopics, discover: renderDiscover, output: renderOutput, system: renderSystem };
+  await (renderers[state.view] || renderSystem)();
+  onboarding?.rendered();
+}
+
+async function navigateTutorial(step, tutorial) {
+  const requestedTab = step.view === "study" ? step.tab || (step.target === "study-queue" || step.target === "study-history" ? "queue" : step.target === "study-mistakes" ? "mistakes" : "session") : step.tab;
+  const sameView = state.view === (step.view || "today") && (step.view !== "system" || !requestedTab || state.systemTab === requestedTab) && (step.view !== "study" || state.studyTab === requestedTab);
+  if (step.tab && step.view === "system") state.systemTab = step.tab;
+  if (step.view === "study") state.studyTab = requestedTab;
+  if (!sameView) await navigate(step.view || "today");
+  else if (!step.target?.startsWith("note-") && !["topic-editor", "topic-detail", "draft-editor"].includes(step.target) && refs.drawer.classList.contains("is-open")) {
+    closeDrawer();
+    if (["library", "topics"].includes(step.view)) await renderCurrent();
+  }
+  const value = tutorial?.roles?.[step.noteRole];
+  const id = typeof value === "string" ? value : value?.id;
+  if (step.action === "create-topic") {
+    if (refs.drawer.classList.contains("is-open") && refs.drawerBody.dataset.tour === "topic-editor") return;
+    return createTopicDrawer();
+  }
+  if (step.view === "study" && state.studyTab === "session" && (!state.currentStudy || id)) {
+    const sessions = asArray((await api.studySessions()).sessions);
+    const session = sessions.find(item => item.id === id) || sessions.find(item => item.noteId === id) || (!id ? sessions[0] : null);
+    if (session) {
+      if (!sameView || state.currentStudy?.id !== session.id) {
+        state.studyMaterialVisible = !asArray(session.turns).length && session.status === "reading";
+        state.currentStudy = session; await renderStudy();
+      }
+    } else if (id) { await openNote(id); }
+    return;
+  }
+  if (!id) return;
+  if (step.action === "open-topic" || step.action === "edit-topic") {
+    const topic = asArray((await api.topics()).topics).find(item => item.id === id);
+    if (topic) return step.action === "edit-topic" ? editTopic(topic) : openTopic(topic);
+    return;
+  }
+  if (step.view === "system" || step.view === "today" || step.target === "study-mistakes" || step.target === "study-queue" || step.target === "library-recommendations") return;
+  if (!step.target?.startsWith("note-")) return;
+  const note = await api.note(id);
+  openDrawer(note.title || "练习知识", "新手练习", el("div"));
+  if (step.target === "note-editor") return renderNoteEditor(note);
+  if (step.target === "note-history") return renderHistory(note);
+  if (step.target === "note-extract") return manualExtract(note);
+  if (step.target === "note-confirm") return confirmDirect(note);
+  if (step.target === "note-merge") return renderMerge(note, tutorial.roles?.mergeOther);
+  if (step.target === "note-links") return previewNoteLinks(note.id);
+  return note.kind === "source" ? renderSourceGroupDrawer(note) : renderNoteDrawer(note);
+}
+
+async function fillTutorialSample(sample, step) {
+  const aliases = { query: "q" };
+  const allowed = new Set(["title", "body", "platform", "author", "url", "date", "locator", "topic", "reason", "claimType", "depth", "question", "q", "minutes", "prerequisites"]);
+  const root = refs.drawer.classList.contains("is-open") ? refs.drawerBody : refs.main;
+  const edits = Object.entries(sample).map(([key, value]) => ({ key: aliases[key] || key, value })).filter(item => allowed.has(item.key)).map(item => ({ ...item, control: root.querySelector(`[name="${item.key}"]`) })).filter(item => item.control && !item.control.disabled);
+  if (!edits.length) { toast("请先打开这一项对应的输入表单，再填入示例。", "error"); return; }
+  if (edits.some(item => item.control.value && item.control.value !== String(item.value)) && !await confirmAction({ title: "用示例填入当前表单？", message: "当前输入尚未提交，填入后可以继续修改。", confirmText: "填入示例" })) return;
+  edits.forEach(({ control, value }) => { control.value = String(value); control.dispatchEvent(new Event("input", { bubbles: true })); control.dispatchEvent(new Event("change", { bubbles: true })); });
+  if (step.id === "capture-save") { const local = root.querySelector('[name="localOnly"]'); if (local) local.checked = true; }
+  toast("示例已填入；请检查后亲自保存或提交。", "success");
 }
 
 refs.nav.addEventListener("click", (event) => {
@@ -1993,6 +2106,24 @@ async function init() {
   setPage(pages[hashView] ? hashView : "today");
   try {
     await startSession();
+    if (!onboarding) {
+      const { createOnboarding } = await import("./onboarding.mjs");
+      onboarding = createOnboarding({
+        navigate: navigateTutorial,
+        fillSample: fillTutorialSample,
+        refresh: async () => { await refreshBootstrap(); await renderCurrent(); },
+        contextChanged: async () => {
+          closeDrawer(); state.currentStudy = null; state.studyMaterialVisible = true; state.studyTab = "queue";
+          state.restoreBackup = null; state.restoreToken = "";
+          state.libraryFilters = { q: "", kind: "", stage: "" };
+          state.searchFilters = { q: "", mode: "keyword", kind: "", stage: "", topic: "", source: "", from: "", to: "", privacy: "local" };
+          await refreshBootstrap(); await renderCurrent();
+        },
+      });
+      await onboarding.init();
+      refs.nav.querySelectorAll("[data-view]").forEach(item => { item.dataset.tour = `nav-${item.dataset.view}`; });
+      document.querySelector("#theme-toggle")?.addEventListener("click", () => recordTourEvent("appearance-theme"));
+    }
     await refreshBootstrap();
     await renderCurrent();
   } catch (error) {

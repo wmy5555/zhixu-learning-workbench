@@ -18,7 +18,10 @@ export const defaults = {
 };
 const stages = ['reference','candidate','learning','integrated','core','retired'];
 const depths = ['aware','find','explain','apply'];
-const usable = n => n.kind === 'knowledge' && !['retired'].includes(n.meta.stage) && !n.meta.supersededBy && !(n.meta.researchLimitations?.length) && (!n.meta.reviewAfter || n.meta.reviewAfter >= now());
+const usable = (n, timestamp) => n.kind === 'knowledge' && !['retired'].includes(n.meta.stage) && !n.meta.supersededBy && !(n.meta.researchLimitations?.length) && (!n.meta.reviewAfter || n.meta.reviewAfter >= timestamp);
+const practicePurpose = 'onboarding-practice';
+const practicePreferences = ['dailyMinutes','timezone','scheduleTime','focusTopics','pausedIds','discoveryDays','prompts'];
+const externalCapabilities = ['ai','embedding','search','fetch'];
 const localDay = (date, timezone) => new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
 const tokens = text => [...new Set(String(text).toLowerCase().match(/[a-z0-9_]+|[\p{Script=Han}]/gu) || [])];
 function parseJSON(text) { try { return JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, '')); } catch { fail('模型没有返回要求的数据结构；原始资料已保存，可重试。', 'MODEL_FORMAT', 422); } }
@@ -27,18 +30,35 @@ function cosine(a, b) {
   let dot = 0, na = 0, nb = 0; for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i] ** 2; nb += b[i] ** 2; } return dot / (Math.sqrt(na * nb) || 1);
 }
 
-export function createService({ dataDir = path.resolve('.data'), vaultDir, aiOverride } = {}) {
+export function createService({ dataDir, vaultDir, aiOverride, learningClock = () => new Date(), getExternalSettings, practice = false } = {}) {
+  if (practice && (!dataDir || !vaultDir)) fail('练习空间必须使用独立的数据与资料目录。', 'PRACTICE_PATH_REQUIRED');
+  if (typeof learningClock !== 'function' || getExternalSettings !== undefined && typeof getExternalSettings !== 'function') fail('学习时间或外部能力配置无效。');
+  dataDir ||= path.resolve('.data');
+  const learningDate = () => {
+    const date = learningClock();
+    if (!(date instanceof Date) || !Number.isFinite(date.getTime())) fail('学习时间无效。', 'INVALID_LEARNING_TIME');
+    return new Date(date.getTime());
+  };
+  const learningNow = () => learningDate().toISOString();
   if (!vaultDir && fs.existsSync(path.join(dataDir, 'learning.sqlite'))) {
     const db = new DatabaseSync(path.join(dataDir, 'learning.sqlite'), { readOnly: true });
     try { vaultDir = JSON.parse(db.prepare("SELECT json FROM records WHERE namespace='settings' AND key='main'").get()?.json || '{}').vaultDir; } finally { db.close(); }
   }
   vaultDir ||= path.resolve('vault');
-  let store = new Store({ dataDir, vaultDir });
-  const secret = createSecrets(dataDir);
+  let store = new Store({ dataDir, vaultDir, backupPurpose: practice ? practicePurpose : undefined });
+  const secret = practice ? { has: () => false, get: () => '' } : createSecrets(dataDir);
   const settings = () => {
     const saved = store.get('settings', 'main', {});
     const value = { ...defaults, ...saved };
     for (const group of ['ai','embedding','search','fetch','mcp']) value[group] = { ...defaults[group], ...saved[group], hasKey: secret.has(group === 'ai' ? 'model' : group) };
+    if (practice) {
+      const external = getExternalSettings?.() || {};
+      for (const group of externalCapabilities) {
+        const allowed = [...Object.keys(defaults[group]), 'hasKey', ...(group === 'fetch' ? ['testUrl'] : [])];
+        value[group] = { ...defaults[group], hasKey: false, ...Object.fromEntries(allowed.filter(key => Object.hasOwn(external[group] || {}, key)).map(key => [key, external[group][key]])) };
+      }
+      value.mcp = { ...defaults.mcp, hasKey: false };
+    }
     return { ...value, vaultDir: store.vaultDir, dataDir: store.dataDir };
   };
   const usage = () => {
@@ -57,23 +77,31 @@ export function createService({ dataDir = path.resolve('.data'), vaultDir, aiOve
     updateSettings({prompts:{...settings().prompts,...changes}});
     return getPrompts();
   }
-  let processing = false, controller = null, currentJob = null, stopped = false;
+  let processing = false, controller = null, currentJob = null, stopped = false, pausing = false, activeOperations = 0, pausePromise = null;
+  const tracked = operation => async (...args) => {
+    if (stopped || pausing) fail('练习正在暂停，请稍后继续。', 'BUSY', 409);
+    activeOperations++;
+    try { return await operation(...args); } finally { activeOperations--; }
+  };
   const putJob = job => store.put('jobs', job.id, { ...job, updatedAt: now() });
   const getNote = id => { store.scan(); return store.read(id); };
   const privacyFor = n => store.outboundPrivacy(n);
   const materialLimitations = n => {
     const issues = [...(n.meta.researchLimitations || [])];
-    if (n.meta.reviewAfter && n.meta.reviewAfter < now()) issues.push('材料可能陈旧，需要重新研究。');
+    if (n.meta.reviewAfter && n.meta.reviewAfter < learningNow()) issues.push('材料可能陈旧，需要重新研究。');
     if (n.meta.processKey) { const [sourceId,sourceHash] = n.meta.processKey.split(':'); if (store.row(sourceId)?.hash !== sourceHash) issues.push('底层原始资料已修改或删除，需要重新加工。'); }
     return issues;
   };
-  const eligible = n => usable(n) && !materialLimitations(n).length;
+  const eligible = n => usable(n, learningNow()) && !materialLimitations(n).length;
   function queue(type, payload, dedupKey) {
+    if (pausing || stopped) fail('当前任务正在暂停，请稍后继续。', 'BUSY', 409);
     const existing = store.records('jobs').find(j => j.dedupKey === dedupKey && ['queued','running','waiting'].includes(j.state));
     if (existing && dedupKey) return existing;
     return putJob({ id: randomUUID(), type, state: 'queued', payload, dedupKey, progress: 0, error: '', createdAt: now(), attempts: 0 });
   }
   function updateSettings(input) {
+    if (practice && ['vaultDir','dataDir','ai','embedding','search','fetch','mcp','apiKey','clearKey'].some(key => Object.hasOwn(input, key))) fail('练习空间不能更改目录、连接凭据或外部能力；请返回正式设置配置。', 'PRACTICE_SETTINGS_LOCKED', 409);
+    if (practice && input.prompts !== undefined && (processing || activeOperations)) fail('请等待练习任务结束后调整提示词。', 'BUSY', 409);
     const old = settings(), allowed = ['dailyMinutes','timezone','scheduleTime','focusTopics','pausedIds','ai','embedding','search','fetch','mcp','discoveryDays','prompts'];
     const next = Object.fromEntries(allowed.map(k => [k, old[k]]));
     for (const key of allowed) if (input[key] !== undefined) next[key] = typeof defaults[key] === 'object' && !Array.isArray(defaults[key]) ? { ...old[key], ...input[key] } : input[key];
@@ -102,7 +130,10 @@ export function createService({ dataDir = path.resolve('.data'), vaultDir, aiOve
       if (newVault === path.parse(newVault).root || newVault === store.dataDir) fail('请选择专用的 Vault 文件夹。');
       store.close(); store = new Store({ dataDir, vaultDir: newVault }); next.vaultDir = newVault;
     } else next.vaultDir = store.vaultDir;
-    store.put('settings', 'main', next); return settings();
+    const researchChanged = practice && Object.keys(promptDefaults).filter(key => key.startsWith('research')).some(key => (old.prompts[key] ?? promptDefaults[key].template) !== (next.prompts[key] ?? promptDefaults[key].template));
+    store.put('settings', 'main', practice ? Object.fromEntries(practicePreferences.map(key => [key, next[key]])) : next);
+    if (researchChanged) store.db.prepare("DELETE FROM records WHERE namespace='research'").run();
+    return settings();
   }
   function processNote(id, { research = false, reuseExtracted = false } = {}) {
     const source = getNote(id);
@@ -201,14 +232,14 @@ export function createService({ dataDir = path.resolve('.data'), vaultDir, aiOve
     if (!stages.includes(stage) || !depths.includes(depth)) fail('阶段或学习目标无效。');
     if (['integrated','core'].includes(stage) && !note.meta.confirmedAt) fail('请先以自己的语言确认个人理解。');
     if (!reason.trim()) fail('请写下调整理由，便于以后回顾。');
-    return store.update(id, { expectedHash: note.hash, meta: { stage, depth, promotionReason: reason, promotedAt: now() } });
+    return store.update(id, { expectedHash: note.hash, meta: { stage, depth, promotionReason: reason, promotedAt: learningNow() } });
   }
   function confirmNote(id, { body, expectedHash }) {
     const note = getNote(id); if (note.kind !== 'knowledge') fail('请先把资料整理为知识条目。');
     if (!String(body || '').trim()) fail('请填写你自己的理解。');
     const managed = note.body.match(/<!-- zhixu-managed-links:start -->[\s\S]*?<!-- zhixu-managed-links:end -->/)?.[0] || '';
     const original = managed ? note.body.replace(managed, '').trimEnd() : note.body;
-    const result = store.update(id, { expectedHash, meta: { stage: 'integrated', personalUnderstanding: body, confirmedAt: now(), confirmedBy: 'user' }, body: `${original.split('\n## 我的理解（用户确认）')[0]}\n\n## 我的理解（用户确认）\n\n${body}${managed ? '\n\n'+managed : ''}` });
+    const result = store.update(id, { expectedHash, meta: { stage: 'integrated', personalUnderstanding: body, confirmedAt: learningNow(), confirmedBy: 'user' }, body: `${original.split('\n## 我的理解（用户确认）')[0]}\n\n## 我的理解（用户确认）\n\n${body}${managed ? '\n\n'+managed : ''}` });
     requestRelations(id); return result;
   }
   function extractNote(sourceId, { title, body, topic = '', reason = '', depth = 'explain', claimType = 'fact' }) {
@@ -229,7 +260,7 @@ export function createService({ dataDir = path.resolve('.data'), vaultDir, aiOve
   }
   async function search(query, options = {}) {
     if(options.scan!==false)store.scan(); const started = Date.now(), q = String(query || '').trim();
-    if (!q) return { results: [], diagnostics: { mode: options.mode || 'keyword', limitations: [], elapsedMs: 0 } };
+    if (!q) return { results: [], diagnostics: { mode: options.mode || 'keyword', semanticUsed: false, limitations: [], elapsedMs: 0 } };
     const browse = options.browse === true;
     const kinds = options.scope || (options.kind ? [options.kind] : (browse ? null : ['knowledge','source','topic']));
     const includeRetired = browse && options.stage === 'retired';
@@ -242,7 +273,7 @@ export function createService({ dataDir = path.resolve('.data'), vaultDir, aiOve
       if (exact || overlap >= Math.min(0.65, 2 / Math.max(1, qtokens.length))) keyword.push({ note: n, score: (exact ? 8 : 0) + overlap * 3 + (n.title.toLowerCase().includes(q.toLowerCase()) ? 3 : 0), via: ['keyword'] });
     }
     keyword.sort((a,b) => b.score - a.score);
-    let semantic = [];
+    let semantic = [], semanticUsed = false;
     if (['semantic','hybrid'].includes(options.mode)) {
       if (options.privacy !== 'cloud') limitations.push('本次查询仅留本地，使用中文关键词查找；可单独允许查询外发以使用语义服务。');
       else if (!settings().embedding.enabled) limitations.push('语义服务未配置，当前使用中文关键词查找。');
@@ -252,12 +283,19 @@ export function createService({ dataDir = path.resolve('.data'), vaultDir, aiOve
           const allowed = new Map(notes.filter(n => privacyFor(n) === 'cloud').map(n => [n.id,n]));
           const chunks = store.db.prepare('SELECT * FROM index_chunks WHERE vector IS NOT NULL AND model=?').all(settings().embedding.model);
           const best = new Map();
-          for (const c of chunks) if (allowed.has(c.noteId)) { const score = cosine(queryVec, JSON.parse(c.vector)); if (!best.has(c.noteId) || score > best.get(c.noteId).score) best.set(c.noteId, { note: allowed.get(c.noteId), score, via: ['semantic'] }); }
+          const validVector = vector => Array.isArray(vector) && vector.length > 0 && vector.every(Number.isFinite) && vector.some(n => n !== 0);
+          for (const c of chunks) if (allowed.has(c.noteId)) {
+            const vector = JSON.parse(c.vector);
+            if (!validVector(queryVec) || !validVector(vector) || queryVec.length !== vector.length) continue;
+            const score = cosine(queryVec, vector);
+            if (!best.has(c.noteId) || score > best.get(c.noteId).score) best.set(c.noteId, { note: allowed.get(c.noteId), score, via: ['semantic'] });
+          }
+          semanticUsed = best.size > 0;
           semantic = [...best.values()].filter(r => r.score > 0.2).sort((a,b) => b.score - a.score);
           const pending = store.missingEmbeddings({model:settings().embedding.model,noteIds:[...allowed.keys()]}).length;
           if (!chunks.length) limitations.push('向量索引为空；请在系统页构建索引。');
           else if (pending) limitations.push(`有 ${pending} 个片段尚待更新语义索引；本次仍结合现有关键词结果。`);
-        } catch (error) { limitations.push(error.message); }
+        } catch (error) { semanticUsed = false; limitations.push(error.message); }
       }
     }
     const fused = new Map();
@@ -266,10 +304,10 @@ export function createService({ dataDir = path.resolve('.data'), vaultDir, aiOve
       prior.score += 1 / (60 + i); prior.via.push(...r.via); fused.set(r.note.id, prior);
     });
     const results = [...fused.values()].sort((a,b) => (b.score + (['integrated','core'].includes(b.note.meta.stage) ? 0.002 : 0)) - (a.score + (['integrated','core'].includes(a.note.meta.stage) ? 0.002 : 0))).slice(0, Math.min(50, options.limit || 12)).map(r => ({ ...r.note, score: Number(r.score.toFixed(6)), via: [...new Set(r.via)], snippet: r.note.body.slice(0,600), limitations: materialLimitations(r.note) }));
-    return { results, diagnostics: { mode: options.mode || 'keyword', keywordIds: keyword.slice(0,12).map(r => r.note.id), semanticIds: semantic.slice(0,12).map(r => r.note.id), scanned: notes.length, elapsedMs: Date.now() - started, limitations } };
+    return { results, diagnostics: { mode: options.mode || 'keyword', semanticUsed, keywordIds: keyword.slice(0,12).map(r => r.note.id), semanticIds: semantic.slice(0,12).map(r => r.note.id), scanned: notes.length, elapsedMs: Date.now() - started, limitations } };
   }
   const {today,planAction,session,startStudy,answerStudy,hintStudy,confirmStudy,finishStudy,mistakeAction,topics,createTopic,updateTopic,topicAction,grade} = createLearning({
-    get store(){return store;}, settings, getNote, eligible, privacyFor, queue, ai, promptText, parseJSON, confirmNote, updateSettings
+    get store(){return store;}, settings, getNote, eligible, privacyFor, queue, ai, promptText, parseJSON, confirmNote, updateSettings, learningClock: learningDate, practice
   });
   const {recommendations,recommendationAction} = createLifecycle({get store(){return store;},settings,materialLimitations,getNote,promote,merge});
   function valuableRelation(r, left, right) {
@@ -334,7 +372,7 @@ export function createService({ dataDir = path.resolve('.data'), vaultDir, aiOve
     const usableResults = result.results.filter(n => !n.limitations.length), cloud = usableResults.filter(n => privacyFor(n) === 'cloud');
     const citations = usableResults.map(n => ({ id: n.id, title: n.title, excerpt: n.snippet, sources: (n.meta.sources || []).map(s => { const source = store.row(s.id) ? store.read(s.id) : null; return { ...s, title: source?.title, url: source?.meta.url, excerpt: source?.body.slice(0,500) }; }) }));
     const limitations = [...result.diagnostics.limitations];
-    let answer;
+    let answer, modelGenerated = false;
     if (!usableResults.length) answer = '知识库中没有找到可直接支持这个问题的当前材料。请补充来源或调整查找范围。';
     else if (privacy !== 'cloud' || !cloud.length || !settings().ai.enabled) { answer = '已找到以下材料，可在本地阅读。本次问题仅限本地、模型未启用或材料仅限本地，尚未生成答案。\n\n' + citations.map(c => `- ${c.title} [${c.id}]\n${c.excerpt}`).join('\n\n'); limitations.push('未进行 AI 生成。'); }
     else {
@@ -345,18 +383,19 @@ export function createService({ dataDir = path.resolve('.data'), vaultDir, aiOve
       if (!Array.isArray(generated.citationIds) || !generated.citationIds.length || generated.citationIds.some(id => !allowed.has(id)) || typeof generated.answer !== 'string') fail('回答引用不符合实际检索材料；已拒绝保存。', 'INVALID_CITATION', 422);
       const inline = [...generated.answer.matchAll(/\[([^\]\n]+)\]/g)].map(m=>m[1]);
       if (!inline.length || inline.some(id=>!allowed.has(id)) || generated.citationIds.some(id=>!inline.includes(id))) fail('正文中的引用与材料清单不一致；已拒绝保存。','INVALID_CITATION',422);
-      answer = generated.answer; limitations.push('AI 草稿需自行审阅，引用存在不等于每个主张都获支持。');
+      answer = generated.answer; modelGenerated = true; limitations.push('AI 草稿需自行审阅，引用存在不等于每个主张都获支持。');
       citations.splice(0,citations.length,...citations.filter(c => generated.citationIds.includes(c.id)));
     }
     const id = randomUUID(); store.put('drafts', id, { id, mode, question, body: answer, citations, limitations, usedIds: [], createdAt: now() });
-    return { answer, citations, limitations, draftId: id };
+    return { answer, citations, limitations, draftId: id, generated: modelGenerated };
   }
   function updateDraft(id, { body, usedIds = [] }) {
     const d = store.get('drafts', id); if (!d) fail('草稿不存在。', 'NOT_FOUND', 404);
     const allowed = new Set(d.citations.map(c => c.id)); if (usedIds.some(id => !allowed.has(id))) fail('采用项须来自本草稿引用。');
     for (const use of store.records('uses').filter(u => u.draftId === id && !usedIds.includes(u.noteId))) store.remove('uses', `${id}:${use.noteId}`);
-    for (const noteId of new Set(usedIds)) if (!store.get('uses', `${id}:${noteId}`)) store.put('uses', `${id}:${noteId}`, { draftId: id, noteId, actualUse: true, at: now() });
-    return store.put('drafts', id, { ...d, body: String(body ?? d.body), usedIds, updatedAt: now() });
+    for (const noteId of new Set(usedIds)) if (!store.get('uses', `${id}:${noteId}`)) store.put('uses', `${id}:${noteId}`, { draftId: id, noteId, actualUse: true, at: learningNow() });
+    const saved = store.put('drafts', id, { ...d, body: String(body ?? d.body), usedIds, updatedAt: now() });
+    return { ...saved, removedUseIds: (d.usedIds || []).filter(noteId => !usedIds.includes(noteId)) };
   }
   function propose({ noteId, body, reason, expectedHash }) {
     if (!settings().mcp.allowProposals) fail('尚未启用 MCP 写入提案。', 'MCP_PROPOSALS_DISABLED', 403);
@@ -388,7 +427,7 @@ export function createService({ dataDir = path.resolve('.data'), vaultDir, aiOve
     }
     if (pending.length && ai.researchBatch) {
       try {
-        const batch = await ai.researchBatch({claims:pending,topic:source.title,privacy:privacyFor(source),signal});
+        const batch = await ai.researchBatch({claims:pending,topic:source.title,privacy:privacyFor(source),signal,prompts:settings().prompts});
         for (const claim of pending) shared.set(claim,batch.results.find(r=>r.claim===claim) || {claim,evidence:[],limitations:['该事实尚未得到有效核验。']});
       } catch (error) {
         if (signal.aborted) throw error;
@@ -406,7 +445,7 @@ export function createService({ dataDir = path.resolve('.data'), vaultDir, aiOve
         if (!research) { limitations.push(`“${claim}”尚待核验（未执行联网检验）。`); continue; }
         const key = hash(`${claim}:${source.hash}`), cached = store.get('research', key);
         try {
-          const result = shared.get(claim) || (cached && !cached.result.limitations?.length && Date.now() - Date.parse(cached.at) < 7*86400000 ? cached.result : await ai.research({ claim, privacy: privacyFor(source), signal }));
+          const result = shared.get(claim) || (cached && !cached.result.limitations?.length && Date.now() - Date.parse(cached.at) < 7*86400000 ? cached.result : await ai.research({ claim, privacy: privacyFor(source), signal, prompts: settings().prompts }));
           shared.set(claim,result);
           store.put('research', key, { result, at: now() }); evidence.push(...result.evidence); limitations.push(...result.limitations); if(result.conclusion)conclusions.push(result.conclusion);if(result.notice)notices.push(result.notice);
           if (!result.evidence.length) limitations.push(`“${claim}”尚无可读取的外部证据。`);
@@ -421,7 +460,7 @@ export function createService({ dataDir = path.resolve('.data'), vaultDir, aiOve
       }
       const processKey = `${source.id}:${source.hash}:${i}`, existing = store.list().find(n => n.meta.processKey === processKey);
       const body = `## 原资料拆解（AI 整理）\n\n${candidate.body}\n\n## 证据与适用范围\n\n${conclusions.join('\n\n')}\n\n${evidence.map(e => `- [${e.title || e.url}](${e.url})（${e.role}，读取于 ${e.fetchedAt}）\n  ${e.excerpt}${e.rationale ? '\n  对应关系：'+e.rationale : ''}`).join('\n\n') || '此条未取得可引用的外部正文。'}${notices.length ? '\n\n### 研究范围\n'+notices.join('\n') : ''}${limitations.length ? '\n\n## 尚需补充的研究\n'+limitations.map(l=>`- ${l}`).join('\n') : ''}`;
-      const meta = { stage: 'candidate', privacy: source.meta.privacy, sources: sourceRefs, topic: candidate.topic || '', prerequisites: candidate.prerequisites || [], promotionReason: candidate.reason || '', depth: depths.includes(candidate.depth) ? candidate.depth : 'explain', claims: candidate.claims, evidence, researchConclusions: conclusions.join('\n\n'), researchLimitations: limitations, researchedAt: research ? now() : null, reviewAfter: research && candidate.claims.length ? new Date(Date.now()+(Number.isInteger(source.meta.researchIntervalDays)&&source.meta.researchIntervalDays>=1&&source.meta.researchIntervalDays<=365?source.meta.researchIntervalDays:30)*86400000).toISOString() : null, processKey, generatedBodyHash: hash(body) };
+      const meta = { stage: 'candidate', privacy: source.meta.privacy, sources: sourceRefs, topic: candidate.topic || '', prerequisites: candidate.prerequisites || [], promotionReason: candidate.reason || '', depth: depths.includes(candidate.depth) ? candidate.depth : 'explain', claims: candidate.claims, evidence, researchConclusions: conclusions.join('\n\n'), researchLimitations: limitations, researchedAt: research ? now() : null, reviewAfter: research && candidate.claims.length ? new Date(learningDate().getTime()+(Number.isInteger(source.meta.researchIntervalDays)&&source.meta.researchIntervalDays>=1&&source.meta.researchIntervalDays<=365?source.meta.researchIntervalDays:30)*86400000).toISOString() : null, processKey, generatedBodyHash: hash(body) };
       if (existing && !research) continue;
       const wasEdited = existing && (existing.meta.userEdited || existing.meta.confirmedAt || existing.meta.stage !== 'candidate' || (existing.meta.generatedBodyHash && hash(existing.body) !== existing.meta.generatedBodyHash));
       if (wasEdited) {
@@ -505,8 +544,8 @@ export function createService({ dataDir = path.resolve('.data'), vaultDir, aiOve
     body+=`\n\n本次本地比较 ${batch.length} 条；AI 细查最多2条。每次轮换覆盖，不能视为全库穷尽。`;
     const actions=recommendations().suggestions;
     body+='\n\n## 可处理的建议\n'+(actions.map(a=>`- ${a.title}：${a.reason}`).join('\n') || '暂无有记录依据的阶段调整建议。');
-    store.create({kind:'report',title:`AI 整理建议 ${localDay(new Date(),settings().timezone)}`,body,meta:{privacy:'local',generated:true,recommendationIds:actions.map(a=>a.id),relationIds:store.records('relations').filter(r=>['suggested','candidate'].includes(r.state)).map(r=>r.id)}});
-    store.put('schedule','discovery',{at:now()});for(const n of selected)store.remove('changed',n.id);
+    store.create({kind:'report',title:`AI 整理建议 ${localDay(learningDate(),settings().timezone)}`,body,meta:{privacy:'local',generated:true,recommendationIds:actions.map(a=>a.id),relationIds:store.records('relations').filter(r=>['suggested','candidate'].includes(r.state)).map(r=>r.id)}});
+    store.put('schedule','discovery',{at:learningNow()});for(const n of selected)store.remove('changed',n.id);
     if(discoveryIssue)throw discoveryIssue;
   }
   async function rebuildIndex(job, signal) {
@@ -540,15 +579,29 @@ export function createService({ dataDir = path.resolve('.data'), vaultDir, aiOve
     store.create({kind:'report',title:'AI 学习包建议',body,meta:{privacy:'local',generated:true,packages:parsed.packages}});
   }
   async function runJobs() {
-    if(processing||stopped)return;
+    if(processing||stopped||pausing)return;
     const job=store.records('jobs').reverse().find(j=>j.state==='queued');if(!job)return;
     processing=true;currentJob=job.id;controller=new AbortController();job.state='running';job.attempts++;job.error='';putJob(job);
     try{if(job.type==='process')await (ai.withBudget ? ai.withBudget({limit:settings().ai.sourceCallLimit,sourceId:job.payload.noteId},()=>processSource(job,controller.signal)) : processSource(job,controller.signal));else if(job.type==='grade')await grade(job,controller.signal);else if(job.type==='relate')await (ai.withBudget ? ai.withBudget({limit:settings().ai.sourceCallLimit,sourceId:job.payload.noteId},()=>relate(job,controller.signal)) : relate(job,controller.signal));else if(job.type==='discover')await (ai.withBudget ? ai.withBudget({limit:settings().ai.sourceCallLimit,sourceId:'discovery'},()=>discover(job,controller.signal)) : discover(job,controller.signal));else if(job.type==='index')await rebuildIndex(job,controller.signal);else if(job.type==='topics')await suggestTopics(job,controller.signal);else fail('未知任务类型。');if(store.get('jobs',job.id)?.state!=='cancelled')putJob({...job,state:'done',progress:100});}
     catch(error){if(store.get('jobs',job.id)?.state!=='cancelled')putJob({...job,state:['PRIVACY_LOCAL','DISABLED','NOT_CONFIGURED','BUDGET_EXCEEDED','SOURCE_BUDGET','BUDGET_UNKNOWN','RESEARCH_INCOMPLETE','AI_DISABLED','MISSING_KEY','CAPABILITY_DISABLED','MISSING_CREDENTIALS'].includes(error.code)?'waiting':'failed',error:String(error.message).slice(0,800),code:error.code||'TASK_FAILED'});}
     finally{processing=false;controller=null;currentJob=null;}
   }
-  function jobAction(id,{action}){const job=store.get('jobs',id);if(!job)fail('任务不存在。','NOT_FOUND',404);if(action==='cancel'){if(currentJob===id)controller?.abort();return putJob({...job,state:'cancelled',error:'用户取消；已保存的输入和回答保留。'});}if(action==='retry'){if(['running','done'].includes(job.state))fail('该任务当前不可重试。');if(job.type==='process'){const source=getNote(job.payload.noteId);if(source.hash!==job.payload.hash){job.payload={noteId:source.id,hash:source.hash,research:job.payload.research===true};job.dedupKey=`process:${source.id}:${source.hash}${job.payload.research ? ':research' : ''}`;job.progress=0;}const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}return putJob({...job,state:'queued',error:'',code:null});}fail('任务操作无效。');}
-  function tick(){store.scan();const cfg=settings(),time=new Intl.DateTimeFormat('en-GB',{timeZone:cfg.timezone,hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date());if(time>=cfg.scheduleTime)today();const last=store.get('schedule','discovery');if(store.list().some(n=>n.kind==='knowledge')&&(!last||Date.now()-Date.parse(last.at)>cfg.discoveryDays*86400000))queue('discover',{},`discovery:${localDay(new Date(),cfg.timezone)}`);return runJobs();}
+  function jobAction(id,{action}){if(pausing||stopped)fail('任务正在暂停，请稍后继续。','BUSY',409);const job=store.get('jobs',id);if(!job)fail('任务不存在。','NOT_FOUND',404);if(action==='cancel'){if(currentJob===id)controller?.abort();return putJob({...job,state:'cancelled',error:'用户取消；已保存的输入和回答保留。'});}if(action==='retry'){if(['running','done'].includes(job.state))fail('该任务当前不可重试。');if(job.type==='process'){const source=getNote(job.payload.noteId);if(source.hash!==job.payload.hash){job.payload={noteId:source.id,hash:source.hash,research:job.payload.research===true};job.dedupKey=`process:${source.id}:${source.hash}${job.payload.research ? ':research' : ''}`;job.progress=0;}const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}return putJob({...job,state:'queued',error:'',code:null});}fail('任务操作无效。');}
+  function pauseJobs() {
+    if (pausePromise) return pausePromise;
+    pausing = true;
+    const interruptedId = currentJob;
+    controller?.abort();
+    pausePromise = (async () => {
+      while (processing || activeOperations) await new Promise(resolve => setTimeout(resolve, 20));
+      for (const job of store.records('jobs')) if (['queued','running'].includes(job.state) || job.id === interruptedId && job.state === 'failed') {
+        putJob({ ...job, state: 'waiting', code: 'PRACTICE_PAUSED', error: '练习已暂停；输入与回答已保存，请确认后手动重试。' });
+      }
+      return { paused: true };
+    })().finally(() => { pausing = false; pausePromise = null; });
+    return pausePromise;
+  }
+  function tick(){if(practice)return runJobs();store.scan();const cfg=settings(),date=learningDate(),time=new Intl.DateTimeFormat('en-GB',{timeZone:cfg.timezone,hour:'2-digit',minute:'2-digit',hour12:false}).format(date);if(time>=cfg.scheduleTime)today();const last=store.get('schedule','discovery');if(store.list().some(n=>n.kind==='knowledge')&&(!last||date.getTime()-Date.parse(last.at)>cfg.discoveryDays*86400000))queue('discover',{},`discovery:${localDay(date,cfg.timezone)}`);return runJobs();}
   function demo(){const existing=store.list().filter(n=>n.meta.demo);if(existing.length)return{notes:existing};const source=store.create({kind:'source',title:'演示资料 · 小林的读书项目',body:'【虚构演示，不代表用户真实经历】小林正在整理一份读书报告。他保存了原始摘录，希望用自己的话说明观点，再找到能支持或反对它的材料。此条用于体验输入、查找和编辑。',meta:{demo:true,privacy:'local',platform:'内置演示'}});const note=store.create({kind:'knowledge',title:'演示知识 · 给读书报告保留出处',body:'【演示设定】为小林的读书报告记录：一句观点、对应原文、页码，以及哪些条件会限制该观点。\n\n练习：假设你是小林，请用自己的话说明报告中为何要保留出处。这个练习仅针对上述虚构任务，没有预先记录任何学习成绩。',meta:{demo:true,privacy:'local',stage:'candidate',topic:'读书与表达',depth:'explain',sources:[{id:source.id,role:'input'}],promotionReason:'用于试用学习流程，可自行加入学习。'}});return{notes:[source,note]};}
   function diagnostics() {
     store.scan();
@@ -558,12 +611,26 @@ export function createService({ dataDir = path.resolve('.data'), vaultDir, aiOve
     const pendingLinks=store.pendingManagedLinks().map(p=>({id:p.id,title:store.read(p.id).title,conflict:p.conflict,privacyChanged:p.privacyChanged}));
     return {usage:usage(),calls:store.records('calls').slice(0,100),index:{...chunks,pending,notes:notes.length,method:'中文关键词与可选语义检索；现有片段保留，缺失向量需手动更新，本地资料不外发'},mcp:{...settings().mcp,transport:'stdio',tools:['search_knowledge','read_note','read_source','related_knowledge','propose_change'],events:store.records('mcpCalls').slice(0,30)},storage:{vaultDir:store.vaultDir,dataDir:store.dataDir,conflicts:store.conflicts,pendingLinks,retention:'删除移除当前文件与检索缓存；历史版本和你此前导出的备份仍保留。JSON备份只包含Markdown与运行记录；附件和.obsidian请另行备份整个Vault。'},sessions:store.records('sessions').slice(0,20)};
   }
-  function backup(){return{...store.backup(),preferences:settings()};}
-  function restore({backup:input,preview=true,token}){if(processing)fail('请等待或取消正在运行的任务后恢复。','BUSY',409);const info=store.validateBackup(input),digest=hash(JSON.stringify(input));if(preview){const token=randomUUID();store.put('restore',token,{digest,at:now()});return{...info,token};}const p=store.get('restore',token);if(!p||p.digest!==digest||Date.now()-Date.parse(p.at)>600000)fail('恢复预览已过期或内容改变，请重新预览。','CONFLICT',409);const result=store.restore(input);if(input.preferences){const preferences={...input.preferences};delete preferences.vaultDir;delete preferences.dataDir;updateSettings(preferences);}recoverJobs();return result;}
-  function recoverJobs(){for(const j of store.records('jobs'))if(j.state==='running')putJob({...j,state:'waiting',error:'服务在执行期间停止；为避免重复计费，请确认后重试。'});}
+  function backup(){const config=settings();return{...store.backup(),...(practice?{purpose:practicePurpose}:{}),preferences:practice?Object.fromEntries(practicePreferences.map(key=>[key,config[key]])):config};}
+  function restore({backup:input,preview=true,token}) {
+    if (practice !== (input?.purpose === practicePurpose)) fail(practice ? '练习空间只能恢复新手练习备份。' : '新手练习备份不能恢复到正式知识库。', 'BACKUP_PURPOSE_MISMATCH', 409);
+    if (processing || activeOperations || pausing) fail('请等待或取消正在运行的任务后恢复。', 'BUSY', 409);
+    const info = store.validateBackup(input), digest = hash(JSON.stringify(input));
+    if (preview) { const token = randomUUID(); store.put('restore', token, { digest, at: now() }); return { ...info, token }; }
+    const saved = store.get('restore', token);
+    if (!saved || saved.digest !== digest || Date.now() - Date.parse(saved.at) > 600000) fail('恢复预览已过期或内容改变，请重新预览。', 'CONFLICT', 409);
+    const result = store.restore(input);
+    if (input.preferences) {
+      const preferences = practice ? Object.fromEntries(practicePreferences.filter(key => Object.hasOwn(input.preferences, key)).map(key => [key, input.preferences[key]])) : { ...input.preferences };
+      delete preferences.vaultDir; delete preferences.dataDir;
+      updateSettings(preferences);
+    }
+    recoverJobs(); return result;
+  }
+  function recoverJobs(){for(const j of store.records('jobs'))if(j.state==='running'||practice&&j.state==='queued')putJob({...j,state:'waiting',error:'服务曾停止或练习备份已恢复；为避免重复计费，请确认后手动重试。'});}
   recoverJobs();
-  return { get store(){return store;}, settings, updateSettings, getPrompts, updatePrompts, usage, ai, importItems, processNote, listNotes, publicNote, publicJob, library, readPublicNote, noteEvidence, linksPreview, syncLinks, getNote, editNote, extractNote, promote, confirmNote, merge, search, today, planAction, startStudy, session, answerStudy, hintStudy, confirmStudy, finishStudy, mistakeAction, topics, createTopic, updateTopic, topicAction, recommendations, recommendationAction, requestRelations, relationReview, relationAction, related, ask, updateDraft, propose, proposalAction, queue, runJobs, jobAction, tick, demo, diagnostics, backup, restore,
+  return { get store(){return store;}, get processing(){return processing;}, get hasPendingOperations(){return processing||activeOperations>0||pausing;}, learningNow, settings, updateSettings, getPrompts, updatePrompts, usage, ai, importItems, processNote, listNotes, publicNote, publicJob, library, readPublicNote, noteEvidence, linksPreview, syncLinks, getNote, editNote, extractNote, promote, confirmNote, merge, search:tracked(search), today, planAction, startStudy, session, answerStudy, hintStudy, confirmStudy, finishStudy, mistakeAction, topics, createTopic, updateTopic, topicAction, recommendations, recommendationAction, requestRelations, relationReview, relationAction, related, ask:tracked(ask), updateDraft, propose, proposalAction, queue, runJobs, pauseJobs, jobAction, tick, demo, diagnostics, backup, restore,
     bootstrap(){return{settings:settings(),stats:{notes:store.list().filter(n=>!n.meta.excerptOnly).length,sources:store.list().filter(n=>n.kind==='source'&&!n.meta.excerptOnly).length,knowledge:store.list().filter(n=>n.kind==='knowledge').length,pending:store.records('jobs').filter(j=>['waiting','failed'].includes(j.state)).length},today:today(),notes:listNotes().filter(n=>!n.meta.excerptOnly).map(publicNote),jobs:store.records('jobs').map(publicJob),conflicts:store.conflicts,capabilities:{offline:true,model:settings().ai.enabled,embedding:settings().embedding.enabled,search:settings().search.enabled}};},
-    async close(){stopped=true;controller?.abort();while(processing)await new Promise(resolve=>setTimeout(resolve,20));store.close();}
+    async close(){stopped=true;if(practice)await pauseJobs();else{controller?.abort();while(processing||activeOperations)await new Promise(resolve=>setTimeout(resolve,20));}store.close();}
   };
 }
