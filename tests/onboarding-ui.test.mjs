@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
-import { chapters, flatSteps } from '../public/onboarding-curriculum.mjs';
+import { chapters, flatSteps, coreChapters, coreSteps, extensionChapters } from '../public/onboarding-curriculum.mjs';
 
 const apiSource = await readFile(new URL('../public/api.mjs', import.meta.url), 'utf8');
 const uiSource = await readFile(new URL('../public/ui.mjs', import.meta.url), 'utf8');
@@ -58,7 +58,7 @@ test('switching libraries is blocked while a request is in flight and becomes po
 class Element {
   constructor(tag = 'div') {
     this.tagName = tag.toUpperCase(); this.children = []; this.events = {}; this.dataset = {}; this.attributes = {};
-    this.parentElement = null; this.hidden = false; this.value = ''; this.disabled = false; this._text = ''; this.className = '';
+    this.parentElement = null; this.hidden = false; this.open = false; this.value = ''; this.disabled = false; this._text = ''; this.className = '';
     this.classList = {
       add: name => { this.className = [...new Set([...this.className.split(' '), name])].join(' ').trim(); },
       remove: name => { this.className = this.className.split(' ').filter(value => value !== name).join(' '); },
@@ -82,13 +82,13 @@ function descend(node) { return [node, ...node.children.flatMap(descend)]; }
 function findButton(root, label) { return descend(root).find(node => node.tagName === 'BUTTON' && node.textContent === label); }
 async function click(node) { assert.ok(node, 'button exists'); assert.equal(node.disabled, false, `button ${node.textContent} is enabled`); await node.events.click({ target: node, preventDefault() {} }); }
 
-async function tutorialBrowser({ modelReady = true, exists = true, narrow = false, query = '', checkpoint } = {}) {
+async function tutorialBrowser({ modelReady = true, exists = true, narrow = false, query = '', checkpoint, currentStepId, savedStepId, progress = {} } = {}) {
   const body = new Element('body'), workspace = new Element(), main = new Element('main'), drawer = new Element(), drawerBody = new Element(), launcher = new Element('button');
   body.append(workspace, drawer, launcher); workspace.append(main); drawer.append(drawerBody);
   const roots = { '.workspace': workspace, '#main': main, '#drawer': drawer, '#drawer-body': drawerBody, '#onboarding-launcher': launcher };
   const document = { body, createElement: tag => new Element(tag), createTextNode: text => { const node = new Element('text'); node.textContent = text; return node; }, querySelector: selector => roots[selector] || null, querySelectorAll: selector => selector === '[data-tour]' ? descend(body).filter(node => node.dataset.tour) : [] };
   const requests = [], navigations = [], contexts = [], intervals = [];
-  let practiceId = '', state = { practiceId: exists ? 'practice-one' : null, status: exists ? 'paused' : 'not_started', modelReady, progress: {}, roles: {}, clock: { now: '2026-09-30T08:00:00Z' }, busy: false };
+  let practiceId = '', state = { practiceId: exists ? 'practice-one' : null, status: exists ? 'paused' : 'not_started', modelReady, currentStepId, progress, roles: {}, clock: { now: '2026-09-30T08:00:00Z' }, busy: false };
   const api = {
     getContext: () => ({ practiceId, pending: 0 }),
     setContext: id => { practiceId = id; contexts.push(id); },
@@ -104,7 +104,7 @@ async function tutorialBrowser({ modelReady = true, exists = true, narrow = fals
       return structuredClone(state);
     },
   };
-  const context = vm.createContext({ api, chapters, flatSteps, document, Node: Element, URLSearchParams, localStorage: store(), sessionStorage: store(), MutationObserver: class { observe() {} disconnect() {} },
+  const context = vm.createContext({ api, chapters, flatSteps, coreChapters, coreSteps, extensionChapters, document, Node: Element, URLSearchParams, localStorage: store(), sessionStorage: store(savedStepId ? { 'zhixu.onboarding.currentStep.v1': savedStepId } : {}), MutationObserver: class { observe() {} disconnect() {} },
     window: { location: { search: query }, matchMedia: () => ({ matches: narrow }), addEventListener() {}, setTimeout() {}, clearTimeout() {}, setInterval(handler) { intervals.push(handler); }, clearInterval() {} },
   });
   const stripped = onboardingSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '');
@@ -190,7 +190,7 @@ test('guide deep link only displays onboarding and does not create data or call 
 test('AI gate prevents chapter two navigation and check cannot manufacture completed progress', async () => {
   const ui = await tutorialBrowser({ exists: false, modelReady: false });
   await click(findButton(ui.tutorial.entryCard(), '开始新手引导'));
-  const capture = descend(ui.body).find(node => node.tagName === 'BUTTON' && node.textContent.includes(chapters[1].title.replace(/^\d+\.\s*/, '')));
+  const capture = descend(ui.body).find(node => node.tagName === 'BUTTON' && node.textContent.startsWith(coreChapters[1].title));
   await click(capture);
   assert.ok(!ui.navigations.includes('capture-save'));
   assert.match(ui.body.textContent, /第一章保存 AI 配置并测试成功/);
@@ -205,7 +205,7 @@ test('AI gate prevents chapter two navigation and check cannot manufacture compl
 test('each chapter persists the selected step before navigating, with real and demonstrated progress distinct', async () => {
   const ui = await tutorialBrowser();
   await ui.tutorial.open();
-  for (const chapter of chapters) {
+  for (const chapter of [...coreChapters, ...extensionChapters]) {
     const choice = descend(ui.body).find(node => node.tagName === 'BUTTON' && node.textContent.includes(chapter.title.replace(/^\d+\.\s*/, '')));
     await click(choice);
     assert.equal(ui.requests.at(-1).action, 'checkpoint');
@@ -215,6 +215,99 @@ test('each chapter persists the selected step before navigating, with real and d
   assert.equal(ui.progress({ progress: { a: { status: 'demonstrated' } } }, { id: 'a' }).label, '已看案例');
   assert.equal(ui.progress({ progress: { a: { status: 'needs_setup' } } }, { id: 'a' }).complete, false);
   ui.tutorial.dispose();
+});
+
+test('first-use next and reading navigation stay on the core route without completing skipped actions', async () => {
+  const ui = await tutorialBrowser({ exists: false });
+  assert.match(ui.tutorial.entryCard().textContent, /先走通核心学习流程/);
+  await click(findButton(ui.tutorial.entryCard(), '开始新手引导'));
+  assert.equal(descend(ui.body).find(node => node.classList.contains('onboarding-extensions')).open, false);
+  for (const [index, step] of coreSteps.entries()) {
+    assert.equal(ui.state.currentStepId, step.id);
+    assert.match(ui.body.textContent, new RegExp(`核心流程 · 当前第 ${index + 1}/${coreSteps.length} 步`));
+    if (index === coreSteps.length - 1) break;
+    await click(findButton(ui.body, step.kind === 'read' ? '我已阅读' : '先看下一步'));
+  }
+  assert.deepEqual(ui.navigations, coreSteps.map(step => step.id));
+  assert.ok(!ui.requests.some(call => ['case', 'test', 'advance'].includes(call.action)));
+  assert.ok(!ui.requests.some(call => flatSteps.find(step => step.id === call.data.stepId)?.priority === 'extension'));
+  assert.doesNotMatch(ui.body.textContent, /核心流程已完成/);
+  assert.equal(findButton(ui.body, '完成体验，回正式库'), undefined);
+  await click(findButton(ui.body, '继续核心流程'));
+  assert.equal(ui.state.currentStepId, 'setup-save', 'return to the first action without completion evidence');
+  assert.equal(ui.state.progress['setup-save'], undefined);
+  ui.tutorial.dispose();
+});
+
+test('an optional topic is chosen explicitly and its last reading does not enroll another topic', async () => {
+  const ui = await tutorialBrowser();
+  await ui.tutorial.open();
+  const topic = extensionChapters.find(chapter => chapter.id === 'setup');
+  await click(descend(ui.body).find(node => node.tagName === 'BUTTON' && node.textContent.includes(`${topic.title.replace(/^\d+\.\s*/, '')} · 可选`)));
+  assert.equal(ui.state.currentStepId, 'setup-preferences');
+  assert.match(ui.body.textContent, /扩展阅读（可选） · 当前第 1\/2 步/);
+  await click(findButton(ui.body, '先看下一步'));
+  assert.equal(ui.state.currentStepId, 'setup-storage');
+  await click(findButton(ui.body, '我已阅读'));
+  assert.equal(ui.state.currentStepId, 'setup-storage');
+  assert.match(ui.body.textContent, /核心完成进度：0\/28/);
+  await click(findButton(ui.body, '返回核心流程'));
+  assert.equal(ui.state.currentStepId, 'setup-welcome');
+  ui.tutorial.dispose();
+});
+
+test('selected position, completed core count and chapter count stay independent when revisiting steps', async () => {
+  const ui = await tutorialBrowser({ progress: {
+    'setup-welcome': { status: 'demonstrated' }, 'setup-model': { status: 'demonstrated' }, 'setup-save': { status: 'done' },
+    'backup-download': { status: 'done' },
+  } });
+  await ui.tutorial.open();
+  assert.match(ui.body.textContent, /核心流程 · 当前第 1\/28 步/);
+  assert.match(ui.body.textContent, /核心完成进度：3\/28 步/);
+  assert.ok(findButton(ui.body, '1. 配好 AI · 已完成 3/5 步'));
+  await click(findButton(ui.body, '3. 学习并确认理解 · 已完成 0/9 步'));
+  assert.match(ui.body.textContent, /核心流程 · 当前第 12\/28 步/);
+  assert.match(ui.body.textContent, /核心完成进度：3\/28 步/);
+  await click(findButton(ui.body, '1. 配好 AI · 已完成 3/5 步'));
+  assert.match(ui.body.textContent, /核心流程 · 当前第 1\/28 步/);
+  assert.match(ui.body.textContent, /核心完成进度：3\/28 步/);
+  assert.ok(findButton(ui.body, '维护与备份 · 可选 · 已完成 1/13 步'));
+  ui.tutorial.dispose();
+});
+
+test('core completion ignores optional setup, preserves evidence, and offers optional learning after exit', async () => {
+  const progress = Object.fromEntries(coreSteps.map(step => [step.id, { status: step.kind === 'read' ? 'demonstrated' : 'done' }]));
+  progress['search-embedding'] = { status: 'needs_setup' };
+  progress['mcp-read'] = { status: 'needs_setup' };
+  const ui = await tutorialBrowser({ progress, currentStepId: 'complete-review' });
+  await ui.tutorial.open();
+  assert.match(ui.body.textContent, /核心流程已完成/);
+  assert.match(ui.body.textContent, /核心完成进度：28\/28/);
+  assert.doesNotMatch(ui.body.textContent, /外部工具体验状态/);
+  await click(findButton(ui.body, '完成体验，回正式库'));
+  assert.equal(ui.state.status, 'paused');
+  assert.equal(ui.contexts.at(-1), '');
+  assert.deepEqual(ui.state.progress, progress);
+  const entry = ui.tutorial.entryCard();
+  assert.match(entry.textContent, /核心流程已完成/);
+  await click(findButton(entry, '查看扩展阅读'));
+  assert.equal(descend(ui.body).find(node => node.classList.contains('onboarding-extensions')).open, true);
+  assert.equal(ui.state.currentStepId, 'complete-review', 'opening the catalog must not select an optional topic');
+  ui.tutorial.dispose();
+});
+
+test('existing optional progress resumes from saved step IDs and can return to unfinished core work', async () => {
+  for (const source of ['currentStepId', 'savedStepId']) {
+    const progress = { 'setup-welcome': { status: 'demonstrated' }, 'backup-download': { status: 'done' } };
+    const ui = await tutorialBrowser({ [source]: 'backup-preview', progress });
+    await ui.tutorial.open();
+    assert.equal(ui.state.currentStepId, 'backup-preview');
+    assert.match(ui.body.textContent, /扩展阅读（可选）/);
+    await click(findButton(ui.body, '返回核心流程'));
+    assert.equal(ui.state.currentStepId, 'setup-model');
+    assert.deepEqual(ui.state.progress, progress);
+    ui.tutorial.dispose();
+  }
 });
 
 test('narrow-screen instructions move into the drawer in normal flow and return on close', async () => {

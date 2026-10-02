@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { createApp } from '../src/server.mjs';
 import { createService } from '../src/service.mjs';
-import { flatSteps, readingExample } from '../public/onboarding-curriculum.mjs';
+import { flatSteps, coreSteps, readingExample } from '../public/onboarding-curriculum.mjs';
 
 const marker = '【离线受控全流程测试，非真实供应商返回】';
 const tempRoot = path.resolve(import.meta.dirname, '..', '.tmp');
@@ -37,6 +37,77 @@ function controlledAI() {
     async researchBatch() { throw new Error('No factual claims in this controlled lesson'); },
   } };
 }
+
+test('core route completes without optional lessons, cases or search and embedding setup', { timeout: 120000 }, async t => {
+  const root = fs.mkdtempSync(path.join(tempRoot, 'onboarding-core-'));
+  const ai = controlledAI();
+  const dataDir = path.join(root, 'data');
+  const main = createService({ dataDir, vaultDir: path.join(root, 'formal-vault'), aiOverride: ai.api });
+  const app = createApp({ dataDir, service: main, scheduler: false });
+  t.after(async () => { await app.close(); assert.ok(root.startsWith(tempRoot + path.sep)); fs.rmSync(root, { recursive: true, force: true }); });
+  app.server.listen(0, '127.0.0.1'); await once(app.server, 'listening');
+  const base = `http://127.0.0.1:${app.server.address().port}`;
+  const sessionRes = await fetch(base + '/api/session');
+  const cookie = sessionRes.headers.get('set-cookie').split(';')[0];
+  const { csrf } = await sessionRes.json();
+  async function request(route, body, method = body === undefined ? 'GET' : 'POST') {
+    const response = await fetch(base + route, { method, headers: { Cookie: cookie, 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    const result = await response.json();
+    assert.equal(response.status, 200, `${route}: ${JSON.stringify(result)}`);
+    return result;
+  }
+  let current = await request('/api/onboarding/start', {});
+  const practiceId = current.practiceId, roles = current.roles;
+  const practice = (route, body, method) => request(`/api/practice/${practiceId}/${route}`, body, method);
+  const guide = (action, body = {}) => request(`/api/onboarding/${action}`, { practiceId, ...body });
+  async function pump() {
+    for (let i = 0; i < 80; i++) {
+      if (!(await practice('jobs')).jobs.some(job => ['queued', 'running'].includes(job.state))) return;
+      await app.onboarding.pump();
+    }
+    assert.fail('Core jobs did not drain');
+  }
+  async function edit(id, meta) { const note = await practice(`notes/${id}`); await practice(`notes/${id}`, { expectedHash: note.hash, meta }, 'PUT'); }
+  async function answer(id) { await practice(`study/${id}/answer`, { answer: `${marker} 我会分别记录原文、位置与自己的理解，回到原文核对。`, requestId: randomUUID() }); await pump(); }
+  let sourceId, session, draft;
+  const actions = {
+    'setup-save': () => request('/api/settings', { ai: { enabled: true, baseUrl: 'https://example.invalid/v1', model: 'offline-core' } }, 'PUT'),
+    'setup-test': () => guide('test', { capability: 'model' }),
+    'capture-save': async () => { sourceId = (await practice('import', { items: [{ ...readingExample, privacy: 'local' }] })).notes[0].id; },
+    'capture-permission': () => edit(sourceId, { privacy: 'cloud' }),
+    'process-ai': async () => { await practice(`notes/${sourceId}/process`, { research: false }); await pump(); },
+    'library-explain': async () => { await edit(roles.explain, { depth: 'explain' }); await practice(`notes/${roles.explain}/promote`, { stage: 'learning', depth: 'explain', reason: marker }); },
+    'study-source-permission': () => edit(roles.source, { privacy: 'cloud' }),
+    'study-permission': () => edit(roles.explain, { privacy: 'cloud' }),
+    'study-plan': () => practice('today/generate', {}),
+    'study-start': async () => { session = await practice('study/start', { noteId: roles.explain }); },
+    'study-hide': () => guide('event', { event: 'study-hide' }),
+    'study-answer': () => answer(session.id),
+    'study-feedback': () => practice(`study/${session.id}`),
+    'study-finish': () => practice(`study/${session.id}/finish`, {}),
+    'study-confirm': async () => { await practice(`study/${session.id}/confirm`, { body: `${marker} 我会把摘录、出处与自己的解释分开，以便核对。` }); await pump(); },
+    'review-clock-due': () => guide('advance', { action: 'next' }),
+    'review-finish': async () => { const review = await practice('study/start', { noteId: roles.explain }); await answer(review.id); await practice(`study/${review.id}/finish`, {}); },
+    'search-keyword': () => practice(`search?q=${encodeURIComponent('出处')}&mode=keyword`),
+    'output-draft': async () => { draft = await practice('ask', { question: '读书出处', mode: 'draft', privacy: 'cloud', scope: ['knowledge', 'source'] }); assert.equal(draft.generated, true); },
+    'output-edit': () => practice(`drafts/${draft.draftId}`, { body: draft.answer + `\n${marker} 我的表达。`, usedIds: [] }, 'PUT'),
+    'output-use': () => practice(`drafts/${draft.draftId}`, { body: draft.answer + `\n${marker} 我的表达。`, usedIds: [draft.citations[0].id] }, 'PUT'),
+  };
+  for (const step of coreSteps) {
+    await guide('checkpoint', { stepId: step.id, mode: 'check' });
+    if (step.kind !== 'read') { assert.equal(typeof actions[step.id], 'function', step.id); await actions[step.id](); }
+    current = await guide('checkpoint', { stepId: step.id, mode: step.kind === 'read' ? 'read' : 'check' });
+    assert.equal(current.progress[step.id].status, step.kind === 'read' ? 'demonstrated' : 'done', step.id);
+  }
+  for (const step of coreSteps) assert.ok(['done', 'demonstrated'].includes(current.progress[step.id].status), step.id);
+  assert.equal(current.progress['search-embedding'].status, 'needs_setup');
+  assert.equal(current.progress['process-search-config'].status, 'needs_setup');
+  assert.deepEqual(current.cases, {});
+  assert.ok(!ai.calls.some(call => ['embed', 'test:embedding', 'test:search', 'test:fetch'].includes(call.type)));
+  assert.deepEqual(main.store.list(), []);
+  assert.deepEqual(main.store.records('sessions'), []);
+  t.diagnostic('28 core lessons complete with only controlled model responses; no optional setup or case required.');
+});
 
 test('all twelve tutorial chapters complete through isolated HTTP actions without changing formal knowledge', { timeout: 120000 }, async t => {
   const root = fs.mkdtempSync(path.join(tempRoot, 'onboarding-workflow-'));
