@@ -53,7 +53,9 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     const saved = store.get('settings', 'main', {});
     const value = { ...defaults, ...saved };
     for (const group of ['ai','embedding','search','fetch','mcp']) value[group] = { ...defaults[group], ...saved[group], hasKey: secret.has(group === 'ai' ? 'model' : group) };
+    for (const key of ['enabled', 'allowProposals', 'chatgptEnabled', 'chatgptAllowRead']) value.mcp[key] = value.mcp[key] === true;
     if (value.mcp.chatgptEnabled !== true) value.mcp.chatgptAllowRead = false;
+    if (value.mcp.enabled !== true) value.mcp.allowProposals = false;
     if (practice) {
       const external = getExternalSettings?.() || {};
       for (const group of externalCapabilities) {
@@ -127,8 +129,9 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     const old = settings(), allowed = ['dailyMinutes','timezone','scheduleTime','focusTopics','pausedIds','ai','embedding','search','fetch','mcp','discoveryDays','prompts'];
     const next = Object.fromEntries(allowed.map(k => [k, old[k]]));
     for (const key of allowed) if (input[key] !== undefined) next[key] = typeof defaults[key] === 'object' && !Array.isArray(defaults[key]) ? { ...old[key], ...input[key] } : input[key];
-    for (const key of ['chatgptEnabled', 'chatgptAllowRead']) if (typeof next.mcp[key] !== 'boolean') fail('ChatGPT 接入与读取许可必须为开关值。');
+    for (const key of ['enabled', 'allowProposals', 'chatgptEnabled', 'chatgptAllowRead']) if (typeof next.mcp[key] !== 'boolean') fail('MCP 接入与从属许可必须为开关值。');
     if (!next.mcp.chatgptEnabled) next.mcp.chatgptAllowRead = false;
+    if (!next.mcp.enabled) next.mcp.allowProposals = false;
     next.prompts=validatePromptOverrides(next.prompts);
     if (!Number.isFinite(+next.dailyMinutes) || +next.dailyMinutes < 5 || +next.dailyMinutes > 240) fail('每日时间应为 5–240 分钟。'); next.dailyMinutes = +next.dailyMinutes;
     try { localDay(new Date(), next.timezone); } catch { fail('时区无效，请用 Asia/Shanghai 等标准时区名称。'); }

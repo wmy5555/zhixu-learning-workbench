@@ -1,5 +1,7 @@
 # ChatGPT MCP 审阅与整合记录
 
+采纳[本机提案许可也必须在关闭接入时清除](https://github.com/wmy5555/zhixu-learning-workbench/pull/22#discussion_r4167869304)：本机 MCP 与 ChatGPT 两组从属许可均在读配置和保存配置时归一化关闭，并严格要求布尔开关。HTTP 回归覆盖本机提案的关闭、部分重新开启、重启、旧配置残留及明确重新授权，原文始终不变。
+
 PR #22 采纳[回执恢复不得信任含糊的外部标记](https://github.com/wmy5555/zhixu-learning-workbench/pull/22#discussion_r4167658952)：版本 2 回执绑定由请求哈希确定的原 ID，恢复前核对唯一候选及完整输入。副本、重复 ID、已编辑原文、未来时间和改写 ID 的原路径均拒绝自动恢复；外部时间不参与服务端写入限额。15 项专项通过，覆盖正常恢复、歧义拒绝、原文件保留、真实 30 次限额及重试。
 
 PR #22 采纳[关闭接入时清除读取授权](https://github.com/wmy5555/zhixu-learning-workbench/pull/22#discussion_r4167599655)：服务端保存配置与读取旧配置时均关闭失效的读取许可。回归覆盖部分更新、重启、旧配置中遗留的勾选、矛盾输入和重新明确授权，确认直接重新开启接入不能恢复旧读取权限。

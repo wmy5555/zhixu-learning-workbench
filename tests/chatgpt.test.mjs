@@ -248,11 +248,40 @@ test('partial settings updates and restarts cannot restore an old ChatGPT read g
 
 test('practice settings cannot enable ChatGPT and malformed permission values cannot grant access', async t => {
   const f = await fixture(t);
-  assert.throws(() => f.app.service.updateSettings({ mcp: { chatgptAllowRead: 'true' } }));
+  for (const key of ['enabled', 'allowProposals', 'chatgptEnabled', 'chatgptAllowRead']) assert.throws(() => f.app.service.updateSettings({ mcp: { [key]: 'true' } }));
   const state = f.app.onboarding.start();
   const lease = f.app.onboarding.acquire(state.practiceId, { resource: 'settings', method: 'PUT', query: {} });
   try { assert.throws(() => lease.service.updateSettings({ mcp: { chatgptEnabled: true, chatgptAllowRead: true } }), error => error.code === 'PRACTICE_SETTINGS_LOCKED'); } finally { lease.release(); }
   assert.equal(f.app.service.settings().mcp.chatgptEnabled, false);
+});
+
+test('local MCP proposal grants also require a fresh selection after disable, restart, or inconsistent restore', async t => {
+  const f = await fixture(t);
+  const localToken = fs.readFileSync(path.join(f.config.dataDir, 'mcp-token'), 'utf8');
+  const note = f.app.service.importItems({ items: [{ title: '合成提案对象', body: '保留这段原文', privacy: 'local' }] }).notes[0];
+  const propose = () => f.request('/api/mcp/proposals', { credential: localToken, body: { noteId: note.id, expectedHash: note.hash, body: '待用户确认的建议', reason: '合成回归测试' } });
+  f.app.service.updateSettings({ mcp: { enabled: true, allowProposals: true } });
+  assert.equal((await propose()).status, 201);
+  f.app.service.updateSettings({ mcp: { enabled: false } });
+  assert.equal(f.app.service.store.get('settings', 'main').mcp.allowProposals, false);
+  await f.restart(); f.app.service.updateSettings({ mcp: { enabled: true } });
+  assert.equal((await propose()).body.code, 'MCP_PROPOSALS_DISABLED');
+  f.app.service.updateSettings({ mcp: { enabled: false, allowProposals: true } });
+  const saved = f.app.service.store.get('settings', 'main');
+  assert.equal(saved.mcp.allowProposals, false);
+  f.app.service.store.put('settings', 'main', { ...saved, mcp: { ...saved.mcp, allowProposals: true } });
+  await f.restart(); assert.equal(f.app.service.settings().mcp.allowProposals, false);
+  f.app.service.updateSettings({ mcp: { enabled: true } });
+  assert.equal((await propose()).body.code, 'MCP_PROPOSALS_DISABLED');
+  f.app.service.updateSettings({ mcp: { allowProposals: true } });
+  assert.equal((await propose()).status, 201);
+  for (const key of ['enabled', 'allowProposals']) {
+    const current = f.app.service.store.get('settings', 'main');
+    f.app.service.store.put('settings', 'main', { ...current, mcp: { ...current.mcp, enabled: true, allowProposals: true, [key]: 'false' } });
+    assert.equal(f.app.service.settings().mcp.allowProposals, false);
+    assert.equal((await propose()).status, 403);
+  }
+  assert.equal(f.app.service.getNote(note.id).body, note.body);
 });
 
 test('capture recovers after an audit failure without leaking internal errors or duplicating the stored source', async t => {
