@@ -29,6 +29,7 @@ export function createOnboarding(adapter) {
   let visible = false;
   let working = false;
   let errorText = "";
+  let checkErrorStepId = "";
   let highlight = null;
   let highlightPulse = null;
   let restoreTarget = null;
@@ -95,7 +96,7 @@ export function createOnboarding(adapter) {
   }
   async function run(action) {
     if (working) return;
-    working = true; errorText = ""; render();
+    working = true; errorText = ""; checkErrorStepId = ""; render();
     try { await action(); }
     catch (error) { errorText = error.message || "本次操作未完成，请稍后重试。"; compact = false; }
     finally { working = false; render(); }
@@ -103,8 +104,14 @@ export function createOnboarding(adapter) {
   async function refreshProof() {
     if (!current?.practiceId || refreshing || disposed) return;
     refreshing = true;
-    try { adopt(await api.onboarding("state", stateBody({}))); render(); }
-    catch (error) { errorText = error.message; compact = false; render(); }
+    try {
+      adopt(await api.onboarding("state", stateBody({})));
+      if (checkErrorStepId === step()?.id && getStepProgress(current, step()).complete) {
+        errorText = ""; checkErrorStepId = "";
+      }
+      render();
+    }
+    catch (error) { errorText = error.message; checkErrorStepId = ""; compact = false; render(); }
     finally { refreshing = false; }
   }
   async function switchContext(id, destination) {
@@ -114,7 +121,7 @@ export function createOnboarding(adapter) {
     if (destination) await adapter.navigate(destination, current);
   }
   async function goTo(target = step()) {
-    selected = target.id; rememberStep(selected); compact = false; errorText = "";
+    selected = target.id; rememberStep(selected); compact = false; errorText = ""; checkErrorStepId = "";
     if (current?.practiceId) adopt(await api.onboarding("checkpoint", stateBody({ stepId: target.id, mode: "check" })));
     const chapter = stepChapter(target);
     const first = chapters[0]?.id;
@@ -189,7 +196,10 @@ export function createOnboarding(adapter) {
   async function checkpoint(target) {
     adopt(await api.onboarding("checkpoint", stateBody({ stepId: target.id, mode: target.kind === "read" ? "read" : target.kind === "external" ? "external" : "check" })));
     const result = getStepProgress(current, target);
-    if (!result.complete) errorText = result.message || result.reason || "尚未找到这一步的完成记录。请按说明完成操作，再检查进度。";
+    if (!result.complete) {
+      errorText = result.message || result.reason || "尚未找到这一步的完成记录。请按说明完成操作，再检查进度。";
+      checkErrorStepId = target.id;
+    }
     else if (target.kind === "read") {
       const route = routeSteps(target);
       const next = route[route.findIndex(item => item.id === target.id) + 1];

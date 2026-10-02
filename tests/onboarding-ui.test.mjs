@@ -217,6 +217,35 @@ test('resumed and refreshed completion offers next without repeated toasts and r
   ui.tutorial.dispose();
 });
 
+test('queued completion clears a stale check error without repeated notifications or premature navigation', async () => {
+  const ui = await tutorialBrowser({ currentStepId: 'capture-save' });
+  ui.setState({ jobs: [{ id: 'synthetic-job', state: 'queued' }] });
+  await ui.tutorial.open();
+  await click(findButton(ui.body, '检查这一步'));
+  assert.match(ui.body.textContent, /尚未找到这一步的完成记录/);
+  await ui.tutorial.refresh();
+  assert.match(ui.body.textContent, /尚未找到这一步的完成记录/, 'pending evidence keeps the explanation');
+  ui.setState({ progress: { 'capture-save': { status: 'done' } }, jobs: [{ id: 'synthetic-job', state: 'done' }] });
+  ui.intervals[0]();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.doesNotMatch(ui.body.textContent, /尚未找到这一步的完成记录/);
+  assert.ok(findButton(ui.body, '进行下一步'));
+  assert.equal(ui.toasts.children.length, 0);
+  assert.equal(ui.state.currentStepId, 'capture-save');
+  assert.equal(ui.navigations.length, 1);
+  ui.tutorial.dispose();
+});
+
+test('refreshing completed evidence preserves an unrelated clock operation error', async () => {
+  const ui = await tutorialBrowser({ currentStepId: 'review-clock-due', progress: { 'review-clock-due': { status: 'done' } }, advance: async () => { throw new Error('请先结束练习'); } });
+  await ui.tutorial.open();
+  await click(findButton(ui.body, '前进 1 天'));
+  await ui.tutorial.refresh();
+  assert.match(ui.body.textContent, /请先结束练习/);
+  assert.equal(ui.toasts.children.length, 0);
+  ui.tutorial.dispose();
+});
+
 test('case and external confirmations retain truthful feedback and stay within the selected route', async () => {
   for (const [id, expected, label] of [
     ['proposal-accept', /检查已通过：已找到演示案例记录/, '检查这一步'],
