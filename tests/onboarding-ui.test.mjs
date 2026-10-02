@@ -58,7 +58,7 @@ test('switching libraries is blocked while a request is in flight and becomes po
 class Element {
   constructor(tag = 'div') {
     this.tagName = tag.toUpperCase(); this.children = []; this.events = {}; this.dataset = {}; this.attributes = {};
-    this.parentElement = null; this.hidden = false; this.open = false; this.value = ''; this.disabled = false; this._text = ''; this.className = '';
+    this.parentElement = null; this.hidden = false; this.open = false; this.value = ''; this.disabled = false; this._text = ''; this.className = ''; this.animations = []; this.scrolls = [];
     this.classList = {
       add: name => { this.className = [...new Set([...this.className.split(' '), name])].join(' ').trim(); },
       remove: name => { this.className = this.className.split(' ').filter(value => value !== name).join(' '); },
@@ -75,14 +75,15 @@ class Element {
   setAttribute(name, value) { this.attributes[name] = value; }
   contains(target) { return target === this || this.children.some(child => child.contains(target)); }
   getClientRects() { return this.hidden ? [] : [{}]; }
-  scrollIntoView() {}
+  scrollIntoView(options) { this.scrolls.push(options); }
+  animate(frames, options) { const animation = { frames, options, cancelled: false, cancel() { this.cancelled = true; } }; this.animations.push(animation); return animation; }
   querySelectorAll(selector) { return descend(this).slice(1).filter(node => selector === '[data-tour]' ? node.dataset.tour : false); }
 }
 function descend(node) { return [node, ...node.children.flatMap(descend)]; }
 function findButton(root, label) { return descend(root).find(node => node.tagName === 'BUTTON' && node.textContent === label); }
 async function click(node) { assert.ok(node, 'button exists'); assert.equal(node.disabled, false, `button ${node.textContent} is enabled`); await node.events.click({ target: node, preventDefault() {} }); }
 
-async function tutorialBrowser({ modelReady = true, exists = true, narrow = false, query = '', checkpoint, currentStepId, savedStepId, progress = {} } = {}) {
+async function tutorialBrowser({ modelReady = true, exists = true, narrow = false, reducedMotion = false, query = '', checkpoint, currentStepId, savedStepId, progress = {} } = {}) {
   const body = new Element('body'), workspace = new Element(), main = new Element('main'), drawer = new Element(), drawerBody = new Element(), launcher = new Element('button');
   body.append(workspace, drawer, launcher); workspace.append(main); drawer.append(drawerBody);
   const roots = { '.workspace': workspace, '#main': main, '#drawer': drawer, '#drawer-body': drawerBody, '#onboarding-launcher': launcher };
@@ -105,7 +106,7 @@ async function tutorialBrowser({ modelReady = true, exists = true, narrow = fals
     },
   };
   const context = vm.createContext({ api, chapters, flatSteps, coreChapters, coreSteps, extensionChapters, document, Node: Element, URLSearchParams, localStorage: store(), sessionStorage: store(savedStepId ? { 'zhixu.onboarding.currentStep.v1': savedStepId } : {}), MutationObserver: class { observe() {} disconnect() {} },
-    window: { location: { search: query }, matchMedia: () => ({ matches: narrow }), addEventListener() {}, setTimeout() {}, clearTimeout() {}, setInterval(handler) { intervals.push(handler); }, clearInterval() {} },
+    window: { location: { search: query }, matchMedia: query => ({ matches: query.includes('prefers-reduced-motion') ? reducedMotion : narrow }), addEventListener() {}, setTimeout() {}, clearTimeout() {}, setInterval(handler) { intervals.push(handler); }, clearInterval() {} },
   });
   const stripped = onboardingSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '');
   vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + stripped + '\nthis.make = createOnboarding; this.progress = getStepProgress;', context);
@@ -318,6 +319,39 @@ test('narrow-screen instructions move into the drawer in normal flow and return 
   assert.equal(panel.parentElement, ui.drawerBody);
   ui.drawer.classList.remove('is-open'); ui.tutorial.rendered();
   assert.equal(panel.parentElement, ui.workspace);
+  ui.tutorial.dispose();
+});
+
+test('locating a step restarts its finite highlight pulse and moving on cancels the old target', async () => {
+  const ui = await tutorialBrowser();
+  const target = new Element('button'); target.dataset.tour = 'nav-today'; ui.main.append(target);
+  await ui.tutorial.open();
+  assert.equal(target.animations.length, 0, 'normal navigation does not flash');
+  await click(findButton(ui.body, '定位操作位置'));
+  assert.equal(target.animations.length, 1);
+  assert.equal(target.animations[0].options.iterations, 3);
+  assert.equal(target.scrolls.at(-1).behavior, 'smooth');
+  await ui.tutorial.refresh();
+  assert.equal(target.animations.length, 1);
+  assert.equal(target.animations[0].cancelled, false, 'progress refresh must not stop the active pulse');
+  await click(findButton(ui.body, '定位操作位置'));
+  assert.equal(target.animations.length, 2);
+  assert.equal(target.animations[0].cancelled, true);
+  await click(findButton(ui.body, '我已阅读'));
+  assert.equal(target.animations[1].cancelled, true);
+  assert.equal(target.classList.contains('tour-target'), false);
+  ui.tutorial.dispose();
+});
+
+test('reduced motion keeps the highlight static and disables smooth scrolling', async () => {
+  const ui = await tutorialBrowser({ reducedMotion: true });
+  const target = new Element('button'); target.dataset.tour = 'nav-today'; ui.main.append(target);
+  await ui.tutorial.open();
+  await click(findButton(ui.body, '定位操作位置'));
+  assert.equal(target.animations.length, 0);
+  assert.equal(target.classList.contains('tour-target'), true);
+  assert.ok(target.scrolls.length > 0);
+  assert.ok(target.scrolls.every(options => options.behavior === 'auto'));
   ui.tutorial.dispose();
 });
 

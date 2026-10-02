@@ -30,6 +30,7 @@ export function createOnboarding(adapter) {
   let working = false;
   let errorText = "";
   let highlight = null;
+  let highlightPulse = null;
   let scheduled = null;
   let refreshing = false;
   let disposed = false;
@@ -51,7 +52,7 @@ export function createOnboarding(adapter) {
   const busy = () => working || Boolean(current?.busy) || api.getContext().pending > 0;
   const stateBody = extra => ({ practiceId: current?.practiceId || api.getContext().practiceId, ...extra });
   function adopt(value) { current = value?.onboarding || value; if (!selected) selected = current?.currentStepId || flatSteps[0]?.id; }
-  function clearHighlight() { highlight?.classList.remove("tour-target"); highlight = null; }
+  function clearHighlight() { highlightPulse?.cancel(); highlightPulse = null; highlight?.classList.remove("tour-target"); highlight = null; }
   function placePanel() {
     const drawer = document.querySelector("#drawer");
     const narrow = window.matchMedia("(max-width: 1100px)").matches;
@@ -59,16 +60,25 @@ export function createOnboarding(adapter) {
     if (panel.parentElement !== parent) parent.prepend(panel);
   }
   function locate(scroll = false) {
-    clearHighlight();
-    if (!visible || !step()?.target) return;
+    if (!visible || !step()?.target) { clearHighlight(); return; }
     const candidates = [...document.querySelectorAll("[data-tour]")].filter(node => node.dataset.tour === step().target);
     for (const node of candidates) for (let ancestor = node.parentElement; ancestor; ancestor = ancestor.parentElement) if (ancestor.tagName === "DETAILS") ancestor.open = true;
-    highlight = candidates.find(node => node.getClientRects().length) || null;
+    const target = candidates.find(node => node.getClientRects().length) || null;
+    if (target !== highlight) { clearHighlight(); highlight = target; }
     if (highlight) {
       for (let ancestor = highlight.parentElement; ancestor; ancestor = ancestor.parentElement) if (ancestor.tagName === "DETAILS") ancestor.open = true;
       highlight.classList.add("tour-target");
-      if (scroll) highlight.scrollIntoView({ behavior: "smooth", block: "center" });
+      if (scroll) highlight.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" });
     }
+  }
+  function flashHighlight() {
+    if (!highlight || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    highlightPulse?.cancel();
+    highlightPulse = highlight.animate?.([
+      { outlineColor: "var(--accent)" },
+      { outlineColor: "transparent" },
+      { outlineColor: "var(--accent)" },
+    ], { duration: 650, iterations: 3, delay: 250, easing: "ease-in-out" }) || null;
   }
   async function run(action) {
     if (working) return;
@@ -225,7 +235,7 @@ export function createOnboarding(adapter) {
     const actions = el("div", { class: "onboarding-actions" });
     if (!current?.practiceId) actions.append(button("创建独立练习库", { kind: "primary", onClick: () => run(start), disabled: working }));
     else {
-      actions.append(button("定位操作位置", { kind: "primary", onClick: () => run(() => goTo(active)), disabled: working }));
+      actions.append(button("定位操作位置", { kind: "primary", onClick: async () => { await run(() => goTo(active)); flashHighlight(); }, disabled: working }));
       if (active.sample) actions.append(button("填入示例（不提交）", { onClick: () => run(async () => { await goTo(active); await adapter.fillSample?.(active.sample, active, current); locate(true); }), disabled: working || !practice }));
       if (active.caseId) actions.append(button("准备演示案例", { onClick: () => run(() => loadCase(active)), disabled: working || !practice || !current.modelReady }));
       actions.append(button(active.kind === "read" ? "我已阅读" : active.kind === "external" ? "记录我已在外部体验" : "检查这一步", { onClick: () => run(() => checkpoint(active)), disabled: working }));
