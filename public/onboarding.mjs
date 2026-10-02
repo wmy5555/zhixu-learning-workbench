@@ -194,6 +194,9 @@ export function createOnboarding(adapter) {
       const route = routeSteps(target);
       const next = route[route.findIndex(item => item.id === target.id) + 1];
       if (next) await goTo(next);
+    } else {
+      const message = target.kind === "external" ? "已记录你的外部体验确认；不代表系统验证连接成功。" : result.status === "demonstrated" ? "检查已通过：已找到演示案例记录。" : "检查已通过：已找到这一步的完成记录。";
+      toast(message, "success");
     }
   }
   async function openExtensions() {
@@ -264,6 +267,10 @@ export function createOnboarding(adapter) {
     if (active.downloads?.length) content.append(el("div", { class: "onboarding-actions" }, active.downloads.filter(item => item.href?.startsWith("/tutorial-examples/")).map(item => el("a", { href: item.href, download: item.title, class: "quiet-button compact", text: `下载 ${item.title}` }))));
     if (errorText) content.append(el("p", { class: "notice danger", role: "alert", text: errorText }));
     if (progress.message || progress.reason) content.append(el("p", { class: "fine-print", text: progress.message || progress.reason }));
+    const last = index === route.length - 1;
+    const finishLabel = core ? done === coreSteps.length ? "完成体验，回正式库" : "继续核心流程" : "返回核心流程";
+    const continueRoute = () => last ? core && done === coreSteps.length ? pause() : goTo(nextCoreStep()) : goTo(route[index + 1]);
+    const canContinue = active.kind !== "read" && progress.complete;
     const actions = el("div", { class: "onboarding-actions" });
     if (!current?.practiceId) actions.append(button("创建独立练习库", { kind: "primary", onClick: () => run(start), disabled: working }));
     else {
@@ -275,13 +282,11 @@ export function createOnboarding(adapter) {
       }), disabled: working }));
       if (active.sample) actions.append(button("填入示例（不提交）", { onClick: () => run(async () => { await goTo(active); await adapter.fillSample?.(active.sample, active, current); locate(true); }), disabled: working || !practice }));
       if (active.caseId) actions.append(button("准备演示案例", { onClick: () => run(() => loadCase(active)), disabled: working || !practice || !current.modelReady }));
-      actions.append(button(active.kind === "read" ? "我已阅读" : active.kind === "external" ? "记录我已在外部体验" : "检查这一步", { onClick: () => run(() => checkpoint(active)), disabled: working }));
+      actions.append(button(canContinue ? last ? finishLabel : "进行下一步" : active.kind === "read" ? "我已阅读" : active.kind === "external" ? "记录我已在外部体验" : "检查这一步", { kind: canContinue ? "primary" : "quiet", onClick: () => run(canContinue ? continueRoute : () => checkpoint(active)), disabled: working || (canContinue && last && core && done === coreSteps.length && current?.busy) }));
     }
     content.append(actions);
-    const last = index === route.length - 1;
-    const finishLabel = core ? done === coreSteps.length ? "完成体验，回正式库" : "继续核心流程" : "返回核心流程";
     content.append(el("div", { class: "onboarding-step-nav" }, [button("上一步", { kind: "text", disabled: working || index < 1, onClick: () => run(() => goTo(route[index - 1])) }),
-      button(last ? finishLabel : progress.complete ? "下一步" : "先看下一步", { kind: "text", disabled: working || (last && core && done === coreSteps.length && current?.busy), onClick: () => run(() => last ? core && done === coreSteps.length ? pause() : goTo(nextCoreStep()) : goTo(route[index + 1])) })]));
+      button(last ? finishLabel : progress.complete ? "下一步" : "先看下一步", { kind: "text", disabled: working || (last && core && done === coreSteps.length && current?.busy), onClick: () => run(continueRoute) })]));
     content.append(el("p", { class: "fine-print", text: "先看后面的步骤不会把当前步骤记为完成；实操进度来自实际保存的记录。" }));
     const extensions = el("details", { class: "onboarding-catalog onboarding-extensions", open: showExtensions }, [el("summary", { text: `扩展阅读（可选）· ${extensionChapters.length} 个专题` }), el("p", { class: "fine-print", text: "首次使用可以先完成核心流程。需要时再选一个专题阅读或实操，不必全部学完。" })]);
     extensionChapters.forEach(item => {

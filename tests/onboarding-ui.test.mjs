@@ -85,9 +85,9 @@ function findButton(root, label) { return descend(root).find(node => node.tagNam
 async function click(node) { assert.ok(node, 'button exists'); assert.equal(node.disabled, false, `button ${node.textContent} is enabled`); await node.events.click({ target: node, preventDefault() {} }); }
 
 async function tutorialBrowser({ modelReady = true, exists = true, narrow = false, reducedMotion = false, query = '', checkpoint, advance, stateRead, currentStepId, savedStepId, progress = {} } = {}) {
-  const body = new Element('body'), workspace = new Element(), main = new Element('main'), drawer = new Element(), drawerBody = new Element(), launcher = new Element('button');
-  body.append(workspace, drawer, launcher); workspace.append(main); drawer.append(drawerBody);
-  const roots = { '.workspace': workspace, '#main': main, '#drawer': drawer, '#drawer-body': drawerBody, '#onboarding-launcher': launcher };
+  const body = new Element('body'), workspace = new Element(), main = new Element('main'), drawer = new Element(), drawerBody = new Element(), launcher = new Element('button'), toasts = new Element();
+  body.append(workspace, drawer, launcher, toasts); workspace.append(main); drawer.append(drawerBody);
+  const roots = { '.workspace': workspace, '#main': main, '#drawer': drawer, '#drawer-body': drawerBody, '#onboarding-launcher': launcher, '#toast-region': toasts };
   const document = { body, get activeElement() { return Element.activeElement; }, createElement: tag => new Element(tag), createTextNode: text => { const node = new Element('text'); node.textContent = text; return node; }, querySelector: selector => roots[selector] || null, querySelectorAll: selector => selector === '[data-tour]' ? descend(body).filter(node => node.dataset.tour) : [] };
   const requests = [], navigations = [], contexts = [], intervals = [], windowEvents = {};
   let practiceId = '', state = { practiceId: exists ? 'practice-one' : null, status: exists ? 'paused' : 'not_started', modelReady, currentStepId, progress, roles: {}, clock: { now: '2026-09-30T08:00:00Z' }, busy: false };
@@ -115,7 +115,7 @@ async function tutorialBrowser({ modelReady = true, exists = true, narrow = fals
   vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + stripped + '\nthis.make = createOnboarding; this.progress = getStepProgress;', context);
   const adapter = { navigate: async step => { navigations.push(step.id || step.view); }, contextChanged: async () => {}, refresh: async () => {}, fillSample: async () => {} };
   const tutorial = context.make(adapter); await tutorial.init();
-  return { tutorial, adapter, body, workspace, main, drawer, drawerBody, requests, navigations, contexts, intervals, document, setNarrow(value) { narrow = value; windowEvents.resize?.(); }, progress: context.progress, get state() { return state; }, setState: value => { state = { ...state, ...value }; } };
+  return { tutorial, adapter, body, workspace, main, drawer, drawerBody, toasts, requests, navigations, contexts, intervals, document, setNarrow(value) { narrow = value; windowEvents.resize?.(); }, progress: context.progress, get state() { return state; }, setState: value => { state = { ...state, ...value }; } };
 }
 
 test('reading confirmation waits for saving, then navigates exactly one step without completing the next action', async () => {
@@ -141,12 +141,111 @@ test('reading confirmation waits for saving, then navigates exactly one step wit
   assert.equal(actionStep.kind, 'action');
   assert.equal(ui.navigations.at(-1), actionStep.id);
   assert.equal(ui.state.progress[actionStep.id], undefined);
-  ui.setState({ progress: { ...ui.state.progress, [actionStep.id]: { status: 'done' } } });
-  await ui.tutorial.refresh();
   const actionNavigationCount = ui.navigations.length;
   await click(findButton(ui.body, '检查这一步'));
   assert.equal(ui.navigations.length, actionNavigationCount, 'checking an action does not auto-advance');
   assert.equal(ui.state.currentStepId, actionStep.id);
+  assert.equal(ui.state.progress[actionStep.id], undefined);
+  ui.tutorial.dispose();
+});
+
+test('successful action check waits for evidence, shows a toast, and offers explicit one-step navigation', async () => {
+  let release, checking = false;
+  const ui = await tutorialBrowser({ currentStepId: 'capture-save', checkpoint: async (data, state) => {
+    if (checking && data.stepId === 'capture-save') {
+      await new Promise(resolve => { release = resolve; });
+      state.progress[data.stepId] = { status: 'done' };
+    }
+  } });
+  await ui.tutorial.open(); checking = true;
+  const before = ui.navigations.length;
+  const pending = click(findButton(ui.body, '检查这一步'));
+  assert.equal(findButton(ui.body, '检查这一步').disabled, true);
+  assert.equal(findButton(ui.body, '进行下一步'), undefined);
+  assert.equal(ui.toasts.children.length, 0);
+  release(); await pending;
+  assert.equal(ui.state.currentStepId, 'capture-save');
+  assert.equal(ui.navigations.length, before, 'success leaves the current step visible');
+  assert.match(ui.toasts.textContent, /检查已通过：已找到这一步的完成记录/);
+  assert.equal(ui.toasts.children[0].classList.contains('toast-success'), true);
+  assert.ok(findButton(ui.body, '进行下一步').classList.contains('primary-button'));
+  assert.equal(findButton(ui.body, '检查这一步'), undefined);
+  const checks = ui.requests.length;
+  await click(findButton(ui.body, '进行下一步'));
+  assert.equal(ui.state.currentStepId, 'capture-source');
+  assert.equal(ui.navigations.length, before + 1);
+  assert.deepEqual(ui.requests.slice(checks).map(call => [call.action, call.data.stepId, call.data.mode]), [['checkpoint', 'capture-source', 'check']]);
+  assert.equal(ui.state.progress['capture-source'], undefined);
+  assert.ok(findButton(ui.body, '我已阅读'));
+  ui.tutorial.dispose();
+});
+
+test('missing evidence and failed checks keep the check button, show no success, and allow retry', async () => {
+  let outcome = 'pending';
+  const ui = await tutorialBrowser({ currentStepId: 'capture-save', checkpoint: async (data, state) => {
+    if (data.stepId !== 'capture-save') return;
+    if (outcome === 'error') throw new Error('检查请求未完成，请重试');
+    state.progress[data.stepId] = { status: outcome, message: outcome === 'pending' ? '请先保存资料' : '' };
+  } });
+  await ui.tutorial.open();
+  for (const value of ['pending', 'error']) {
+    outcome = value;
+    await click(findButton(ui.body, '检查这一步'));
+    assert.equal(ui.state.currentStepId, 'capture-save');
+    assert.equal(findButton(ui.body, '进行下一步'), undefined);
+    assert.ok(findButton(ui.body, '检查这一步'));
+    assert.equal(ui.toasts.children.length, 0);
+    assert.match(ui.body.textContent, value === 'pending' ? /请先保存资料/ : /检查请求未完成，请重试/);
+  }
+  outcome = 'done';
+  await click(findButton(ui.body, '检查这一步'));
+  assert.ok(findButton(ui.body, '进行下一步'));
+  assert.equal(ui.toasts.children.length, 1);
+  assert.doesNotMatch(ui.body.textContent, /检查请求未完成，请重试/);
+  ui.tutorial.dispose();
+});
+
+test('resumed and refreshed completion offers next without repeated toasts and reverts when evidence is missing', async () => {
+  const ui = await tutorialBrowser({ currentStepId: 'capture-save', progress: { 'capture-save': { status: 'done' } } });
+  await ui.tutorial.open();
+  assert.ok(findButton(ui.body, '进行下一步'));
+  await ui.tutorial.refresh();
+  assert.equal(ui.toasts.children.length, 0);
+  ui.setState({ progress: {} }); await ui.tutorial.refresh();
+  assert.ok(findButton(ui.body, '检查这一步'));
+  assert.equal(findButton(ui.body, '进行下一步'), undefined);
+  ui.tutorial.dispose();
+});
+
+test('case and external confirmations retain truthful feedback and stay within the selected route', async () => {
+  for (const [id, expected, label] of [
+    ['proposal-accept', /检查已通过：已找到演示案例记录/, '检查这一步'],
+    ['obsidian-open', /已记录你的外部体验确认；不代表系统验证连接成功/, '记录我已在外部体验'],
+  ]) {
+    let checking = false;
+    const target = flatSteps.find(step => step.id === id);
+    const route = extensionChapters.find(chapter => chapter.steps.some(step => step.id === id)).steps;
+    const next = route[route.findIndex(step => step.id === id) + 1];
+    const ui = await tutorialBrowser({ currentStepId: id, checkpoint: async (data, state) => {
+      if (checking && data.stepId === id) state.progress[id] = { status: 'demonstrated' };
+    } });
+    await ui.tutorial.open(); checking = true;
+    await click(findButton(ui.body, label));
+    assert.equal(ui.requests.at(-1).data.mode, target.kind === 'external' ? 'external' : 'check');
+    assert.match(ui.toasts.textContent, expected);
+    await click(findButton(ui.body, '进行下一步'));
+    assert.equal(ui.state.currentStepId, next.id);
+    assert.equal(ui.state.progress[next.id], undefined);
+    ui.tutorial.dispose();
+  }
+  const route = extensionChapters.find(chapter => chapter.id === 'external').steps;
+  const last = route.at(-1);
+  assert.notEqual(last.kind, 'read');
+  const ui = await tutorialBrowser({ currentStepId: last.id, progress: { [last.id]: { status: 'done' } } });
+  await ui.tutorial.open();
+  assert.equal(findButton(ui.body, '进行下一步'), undefined);
+  await click(findButton(ui.body, '返回核心流程'));
+  assert.equal(ui.state.currentStepId, 'setup-welcome');
   ui.tutorial.dispose();
 });
 
