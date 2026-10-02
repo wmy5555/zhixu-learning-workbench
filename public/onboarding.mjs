@@ -173,17 +173,18 @@ export function createOnboarding(adapter) {
     if (!visible) { clearHighlight(); return; }
     const active = step();
     if (!active) return;
+    const index = flatSteps.findIndex(item => item.id === active.id);
     const chapter = stepChapter(active);
     const progress = getStepProgress(current, active);
     const done = flatSteps.filter(item => completed(current?.progress?.[item.id])).length;
     const pendingSetup = flatSteps.filter(item => current?.progress?.[item.id]?.status === "needs_setup").length;
     const chapterIndex = chapters.findIndex(item => item.id === chapter?.id);
-    const title = el("div", { class: "onboarding-heading" }, [el("div", {}, [el("p", { class: "eyebrow", text: `新手全流程 · ${done}/${flatSteps.length} 步` }), el("h2", { text: chapter?.title || "开始练习" })]), button(compact ? "展开步骤" : "折叠步骤", { kind: "text compact", onClick: () => { compact = !compact; render(); } })]);
+    const title = el("div", { class: "onboarding-heading" }, [el("div", {}, [el("p", { class: "eyebrow", text: `新手全流程 · 当前第 ${index + 1}/${flatSteps.length} 步` }), el("h2", { text: chapter?.title || "开始练习" }), el("p", { class: "fine-print", text: `完成进度：${done}/${flatSteps.length} 步（含阅读和案例）` })]), button(compact ? "展开步骤" : "折叠步骤", { kind: "text compact", onClick: () => { compact = !compact; render(); } })]);
     const content = el("div", { class: "onboarding-content", hidden: compact });
     const catalog = el("details", { class: "onboarding-catalog" }, [el("summary", { text: `全部 ${chapters.length} 章${pendingSetup ? ` · ${pendingSetup} 项待配置` : ""}` })]);
     chapters.forEach((item, index) => {
       const items = chapterItems(item); const count = items.filter(row => completed(current?.progress?.[row.id])).length;
-      catalog.append(button(`${String(index + 1).padStart(2, "0")} ${item.title.replace(/^\d+\.\s*/, "")} · ${count}/${items.length}`, { kind: `text${item.id === chapter?.id ? " is-current" : ""}`, onClick: () => run(() => goTo(items[0])), disabled: working || !items.length }));
+      catalog.append(button(`${String(index + 1).padStart(2, "0")} ${item.title.replace(/^\d+\.\s*/, "")} · 已完成 ${count}/${items.length} 步`, { kind: `text${item.id === chapter?.id ? " is-current" : ""}`, onClick: () => run(() => goTo(items[0])), disabled: working || !items.length }));
     });
     const choices = el("select", { ariaLabel: "选择本章步骤", disabled: working, on: { change: event => run(() => goTo(flatSteps.find(item => item.id === event.target.value))) } });
     chapterItems(chapter || chapters[0]).forEach(item => choices.append(el("option", { value: item.id, text: `${statusLabel(current?.progress?.[item.id])} · ${item.title}`, selected: item.id === active.id })));
@@ -213,7 +214,6 @@ export function createOnboarding(adapter) {
       actions.append(button(active.kind === "read" ? "我已阅读" : active.kind === "external" ? "记录我已在外部体验" : "检查这一步", { onClick: () => run(() => checkpoint(active)), disabled: working }));
     }
     content.append(actions);
-    const index = flatSteps.findIndex(item => item.id === active.id);
     content.append(el("div", { class: "onboarding-step-nav" }, [button("上一步", { kind: "text", disabled: working || index < 1, onClick: () => run(() => goTo(flatSteps[index - 1])) }),
       button(index === flatSteps.length - 1 ? "检查全部进度" : progress.complete ? "下一步" : "先看下一步", { kind: "text", disabled: working, onClick: () => run(() => index === flatSteps.length - 1 ? refreshProof() : goTo(flatSteps[index + 1])) })]));
     content.append(el("p", { class: "fine-print", text: "先看后面的步骤不会把当前步骤记为完成；实操进度来自实际保存的记录。" }));
