@@ -55,9 +55,30 @@ function browser(api = {}) {
     window: { history: { replaceState() {} }, location: { hash: '' }, setTimeout() {}, addEventListener() {} },
   });
   const stripped = appSource.replace(/import[\s\S]*?from "\.\/api\.mjs";\s*/, '').replace(/import[\s\S]*?from "\.\/ui\.mjs";\s*/, '').replace(/^init\(\);\s*$/m, '');
-  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, todayItem, state, refs };', context);
+  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { settingsPanel, noteMeta, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, todayItem, state, refs };', context);
   return context.app;
 }
+
+test('ChatGPT capture and read controls persist independently and disclose the local-material grant', async () => {
+  const writes = [];
+  let settings = { mcp: { enabled: false, allowProposals: false, chatgptEnabled: false, chatgptAllowRead: false } };
+  const app = browser({ settings: async () => settings, prompts: async () => ({ prompts: [] }), updateSettings: async payload => { writes.push(plain(payload)); settings = plain(payload); }, bootstrap: async () => ({ settings }) });
+  let panel = await app.settingsPanel();
+  assert.equal(control(panel, 'chatgptEnabled').checked, false);
+  assert.equal(control(panel, 'chatgptAllowRead').checked, false);
+  assert.match(panel.textContent, /包含仅本地资料/); assert.match(panel.textContent, /不会自动建立网页端连接/);
+  control(panel, 'chatgptEnabled').checked = true;
+  const form = descendants(panel).find(node => node.tagName === 'form');
+  await form.events.submit({ preventDefault() {} });
+  assert.deepEqual(writes[0].mcp, { enabled: false, allowProposals: false, chatgptEnabled: true, chatgptAllowRead: false });
+  panel = await app.settingsPanel(); control(panel, 'chatgptAllowRead').checked = true;
+  await descendants(panel).find(node => node.tagName === 'form').events.submit({ preventDefault() {} });
+  assert.equal(writes[1].mcp.chatgptAllowRead, true); assert.equal(writes[1].mcp.enabled, false);
+  app.state.bootstrap = { settings: { mcp: writes[1].mcp } };
+  assert.match(app.noteMeta({ kind: 'source', meta: { privacy: 'local' } }).textContent, /另已授权 ChatGPT 读取/);
+  app.state.bootstrap.settings.mcp.chatgptAllowRead = false;
+  assert.doesNotMatch(app.noteMeta({ kind: 'source', meta: { privacy: 'local' } }).textContent, /另已授权 ChatGPT 读取/);
+});
 
 test('evidence expands on demand, retains roles and locators, and rejects executable URLs', async () => {
   let reads = 0;

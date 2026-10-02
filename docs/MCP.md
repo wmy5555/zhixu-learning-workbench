@@ -1,5 +1,7 @@
 # MCP 本地接入
 
+> ChatGPT 网页端请使用新的独立入口 `src/mcp-chatgpt.mjs`，连接、会话收集与单独的读取许可见 [ChatGPT MCP](CHATGPT_MCP.md)。下文的 `src/mcp.mjs` 仍仅供同机客户端使用，不要直接通过隧道开放它。
+
 本应用提供真正的 MCP stdio 服务。MCP 客户端与 `src/mcp.mjs` 通过标准输入/输出交换协议消息；该进程再用本地 token 调用 Web 服务的 `/api/mcp/*` 接口，因此 Web 与 MCP 共用同一份知识、索引、权限和来源关系。它不是把普通 HTTP 接口改名为 MCP。
 
 ## 默认权限
