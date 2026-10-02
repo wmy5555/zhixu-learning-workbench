@@ -8,12 +8,13 @@ import { createAI } from './ai.mjs';
 import { promptDefaults, renderPrompt, validatePromptOverrides } from './prompts.mjs';
 import { createLearning } from './learning.mjs';
 import { createLifecycle } from './knowledge-lifecycle.mjs';
+import { buildUsageReport } from './usage.mjs';
 
 export const defaults = {
   dailyMinutes: 25, timezone: 'Asia/Shanghai', scheduleTime: '08:00', focusTopics: [], pausedIds: [],
-  ai: { enabled: false, baseUrl: '', model: '', timeoutMs: 180000, dailyCallLimit: 500, sourceCallLimit: 12, monthlyBudget: 0, inputPrice: null, outputPrice: null },
+  ai: { enabled: false, baseUrl: '', model: '', timeoutMs: 180000, dailyCallLimit: 500, sourceCallLimit: 12, monthlyBudget: 0, inputPrice: null, outputPrice: null, cachedInputPrice: null },
   embedding: { enabled: false, baseUrl: '', model: '', inputPrice: null },
-  search: { enabled: false, baseUrl: 'https://api.tavily.com' }, fetch: { enabled: false },
+  search: { enabled: false, baseUrl: 'https://api.tavily.com', requestPrice: null }, fetch: { enabled: false },
   mcp: { enabled: false, allowProposals: false }, discoveryDays: 7, prompts: {},
 };
 const stages = ['reference','candidate','learning','integrated','core','retired'];
@@ -67,6 +68,25 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     return { callsToday: calls.filter(c => localDay(new Date(c.createdAt), settings().timezone) === day).length, costMonth: monthly.some(c => c.cost == null) ? null : monthly.reduce((s,c) => s + c.cost, 0), knownCostMonth: monthly.reduce((s,c) => s + (c.cost || 0), 0), unknownCostCalls: monthly.filter(c => c.cost == null).length };
   };
   const ai = aiOverride || createAI({ getSettings: settings, getSecret: capability => secret.get(capability === 'ai' ? 'model' : capability), getUsage: usage, recordCall: call => store.put('calls', randomUUID(), { ...call, createdAt: now() }) });
+  const usageReport = ({ period, capability, model } = {}) => {
+    const config = settings(), report = buildUsageReport(store.records('calls'), { period, capability, model, timezone: config.timezone });
+    // Malformed imported dates must not turn a broken budget ledger into a zero balance.
+    const budget = report.invalidDateCalls ? { unavailable: true } : usage();
+    return { ...report, budget: { ...budget, dailyCallLimit: config.ai.dailyCallLimit, monthlyBudget: config.ai.monthlyBudget } };
+  };
+  function updateUsageSettings(input) {
+    const current = settings();
+    for (const key of ['dailyCallLimit','monthlyBudget']) if (Object.hasOwn(input.ai || {}, key)) {
+      const value = input.ai[key];
+      if (!['number','string'].includes(typeof value) || String(value).trim() === '' || !Number.isFinite(+value) || +value < 0) fail('调用预算必须为非负数。');
+    }
+    for (const group of ['ai','embedding','search']) {
+      const expected = input.pricingFor?.[group];
+      if (!expected || expected.baseUrl !== current[group].baseUrl || expected.model !== (current[group].model || '')) fail('服务或模型已变化，请刷新用量页面后重新设置单价。', 'PRICING_CHANGED', 409);
+    }
+    const pick = (group, keys) => Object.fromEntries(keys.filter(key => Object.hasOwn(input[group] || {}, key)).map(key => [key, input[group][key]]));
+    return updateSettings({ ai: pick('ai', ['dailyCallLimit','monthlyBudget','inputPrice','outputPrice','cachedInputPrice']), embedding: pick('embedding', ['inputPrice']), search: pick('search', ['requestPrice']) });
+  }
   const promptText = (key, values={}) => renderPrompt(key,values,settings().prompts);
   function getPrompts() {
     const overrides=settings().prompts;
@@ -121,7 +141,18 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     next.ai.sourceCallLimit = Number(next.ai.sourceCallLimit);
     if (!Number.isInteger(next.ai.sourceCallLimit) || next.ai.sourceCallLimit < 1 || next.ai.sourceCallLimit > 30) fail('单份资料请求上限须为 1–30。');
     if (!Number.isInteger(next.ai.timeoutMs) || next.ai.timeoutMs < 1000 || next.ai.timeoutMs > 600000) fail('模型等待时间须为 1–600 秒。');
-    for (const config of [next.ai,next.embedding]) for (const key of ['inputPrice','outputPrice']) if (config[key] !== null && config[key] !== undefined) { if (!Number.isFinite(+config[key]) || +config[key] < 0) fail('价格应为空（未知）或非负数字。'); config[key]=+config[key]; }
+    for (const group of ['ai','embedding','search']) {
+      const config = next[group], keys = group === 'search' ? ['requestPrice'] : ['inputPrice','outputPrice','cachedInputPrice'];
+      const changed = config.baseUrl !== old[group].baseUrl || config.model !== old[group].model;
+      for (const key of keys) {
+        if (changed && !Object.hasOwn(input[group] || {}, key)) config[key] = null;
+        if (config[key] === '' || config[key] === undefined) config[key] = null;
+        if (config[key] !== null) {
+          if (!['number','string'].includes(typeof config[key]) || String(config[key]).trim() === '' || !Number.isFinite(+config[key]) || +config[key] < 0) fail('价格应为空（未知）或非负数字。');
+          config[key] = +config[key];
+        }
+      }
+    }
     if (!Array.isArray(next.focusTopics) || !Array.isArray(next.pausedIds)) fail('关注主题和暂停项应为列表。');
     if (input.vaultDir && path.resolve(input.vaultDir) !== store.vaultDir) {
       if (processing) fail('请等待当前处理任务结束后更换 Vault。', 'BUSY', 409);
@@ -629,7 +660,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   }
   function recoverJobs(){for(const j of store.records('jobs'))if(j.state==='running'||practice&&j.state==='queued')putJob({...j,state:'waiting',error:'服务曾停止或练习备份已恢复；为避免重复计费，请确认后手动重试。'});}
   recoverJobs();
-  return { get store(){return store;}, get processing(){return processing;}, get hasPendingOperations(){return processing||activeOperations>0||pausing;}, learningNow, settings, updateSettings, getPrompts, updatePrompts, usage, ai, importItems, processNote, listNotes, publicNote, publicJob, library, readPublicNote, noteEvidence, linksPreview, syncLinks, getNote, editNote, extractNote, promote, confirmNote, merge, search:tracked(search), today, planAction, startStudy, session, answerStudy, hintStudy, confirmStudy, finishStudy, mistakeAction, topics, createTopic, updateTopic, topicAction, recommendations, recommendationAction, requestRelations, relationReview, relationAction, related, ask:tracked(ask), updateDraft, propose, proposalAction, queue, runJobs, pauseJobs, jobAction, tick, demo, diagnostics, backup, restore,
+  return { get store(){return store;}, get processing(){return processing;}, get hasPendingOperations(){return processing||activeOperations>0||pausing;}, learningNow, settings, updateSettings, getPrompts, updatePrompts, usage, usageReport, updateUsageSettings, ai, importItems, processNote, listNotes, publicNote, publicJob, library, readPublicNote, noteEvidence, linksPreview, syncLinks, getNote, editNote, extractNote, promote, confirmNote, merge, search:tracked(search), today, planAction, startStudy, session, answerStudy, hintStudy, confirmStudy, finishStudy, mistakeAction, topics, createTopic, updateTopic, topicAction, recommendations, recommendationAction, requestRelations, relationReview, relationAction, related, ask:tracked(ask), updateDraft, propose, proposalAction, queue, runJobs, pauseJobs, jobAction, tick, demo, diagnostics, backup, restore,
     bootstrap(){return{settings:settings(),stats:{notes:store.list().filter(n=>!n.meta.excerptOnly).length,sources:store.list().filter(n=>n.kind==='source'&&!n.meta.excerptOnly).length,knowledge:store.list().filter(n=>n.kind==='knowledge').length,pending:store.records('jobs').filter(j=>['waiting','failed'].includes(j.state)).length},today:today(),notes:listNotes().filter(n=>!n.meta.excerptOnly).map(publicNote),jobs:store.records('jobs').map(publicJob),conflicts:store.conflicts,capabilities:{offline:true,model:settings().ai.enabled,embedding:settings().embedding.enabled,search:settings().search.enabled}};},
     async close(){stopped=true;if(practice)await pauseJobs();else{controller?.abort();while(processing||activeOperations)await new Promise(resolve=>setTimeout(resolve,20));}store.close();}
   };
