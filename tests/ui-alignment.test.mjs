@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
 import { initSidebar } from '../public/sidebar.mjs';
+import { coreSteps } from '../public/onboarding-curriculum.mjs';
 
 const uiSource = await readFile(new URL('../public/ui.mjs', import.meta.url), 'utf8');
 const appSource = await readFile(new URL('../public/app.mjs', import.meta.url), 'utf8');
@@ -64,7 +65,7 @@ function browser(api = {}) {
     window: { matchMedia: () => ({ matches: false, addEventListener() {} }), history: { replaceState() {} }, location: { hash: '' }, setTimeout() {}, addEventListener() {} },
   });
   const stripped = appSource.replace(/import[\s\S]*?from "\.\/api\.mjs";\s*/, '').replace(/import[\s\S]*?from "\.\/ui\.mjs";\s*/, '').replace(/^init\(\);\s*$/m, '');
-  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { renderCapture, settingsPanel, noteMeta, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, todayItem, state, refs };', context);
+  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { navigateTutorial, renderCapture, settingsPanel, noteMeta, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, todayItem, state, refs };', context);
   return context.app;
 }
 
@@ -106,6 +107,23 @@ test('MCP dependent grants clear when their parent is disabled and cannot reappe
   }
   await descendants(panel).find(node => node.tagName === 'form').events.submit({ preventDefault() {} });
   assert.deepEqual(writes[0].mcp, { enabled: false, allowProposals: false, chatgptEnabled: false, chatgptAllowRead: false });
+});
+
+test('core step seven navigates to its saved source and locates the rendered original-text expander', async () => {
+  const step = coreSteps[6];
+  assert.equal(step.id, 'capture-source');
+  const source = { id: 'synthetic-source', kind: 'source', title: '原创虚构测试资料', body: '只用于定位检查的虚构原文。', meta: {}, children: [], jobs: [] };
+  const reads = [];
+  const app = browser({ note: async id => { reads.push(id); return source; } });
+  app.state.view = 'library';
+  await app.navigateTutorial(step, { roles: { capturedSource: source.id } });
+  assert.deepEqual(reads, [source.id]);
+  const targets = descendants(app.refs.drawerBody).filter(node => node.dataset.tour === step.target);
+  assert.equal(targets.length, 1, 'the step resolves to one rendered control');
+  const target = targets[0];
+  assert.equal(target.tagName, 'details', 'locate the expander instead of the entire drawer');
+  assert.match(target.querySelector('summary').textContent, /查看原始资料全文/);
+  assert.ok(target.textContent.includes(source.body));
 });
 
 test('capture research requires AI processing and clears on deselection, clear, and successful save', async () => {
