@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
+import { initSidebar } from '../public/sidebar.mjs';
 
 const uiSource = await readFile(new URL('../public/ui.mjs', import.meta.url), 'utf8');
 const appSource = await readFile(new URL('../public/app.mjs', import.meta.url), 'utf8');
@@ -38,6 +39,7 @@ const plain = value => JSON.parse(JSON.stringify(value));
 function browser(api = {}) {
   const roots = new Map();
   const document = {
+    documentElement: new Element('html'),
     body: new Element('body'),
     createElement: tag => new Element(tag),
     createTextNode: value => new Element('text'),
@@ -46,13 +48,13 @@ function browser(api = {}) {
   };
   document.createTextNode = value => { const node = new Element('text'); node.textContent = value; return node; };
   const context = vm.createContext({
-    api, document, Node: Element, URL, Intl, Date, Map, Set, crypto: { randomUUID: () => 'request-ui' },
+    api, document, initSidebar, Node: Element, URL, Intl, Date, Map, Set, crypto: { randomUUID: () => 'request-ui' },
     FormData: class {
       constructor(form) { this.form = form; }
       entries() { return descendants(this.form).filter(node => node.name && !node.disabled && ['input', 'textarea', 'select'].includes(node.tagName)).map(node => [node.name, String(node.tagName === 'textarea' ? node.textContent : node.tagName === 'select' ? node.children.find(option => option.selected)?.value || '' : node.value)]); }
     },
     ApiError: class extends Error {}, startSession: async () => {},
-    window: { history: { replaceState() {} }, location: { hash: '' }, setTimeout() {}, addEventListener() {} },
+    window: { matchMedia: () => ({ matches: false, addEventListener() {} }), history: { replaceState() {} }, location: { hash: '' }, setTimeout() {}, addEventListener() {} },
   });
   const stripped = appSource.replace(/import[\s\S]*?from "\.\/api\.mjs";\s*/, '').replace(/import[\s\S]*?from "\.\/ui\.mjs";\s*/, '').replace(/^init\(\);\s*$/m, '');
   vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);

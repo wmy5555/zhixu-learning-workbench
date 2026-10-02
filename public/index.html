@@ -21,6 +21,7 @@
             <svg class="theme-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.8 13.1A9 9 0 0 1 10.9 3.2 9 9 0 1 0 20.8 13.1Z"/></svg>
           </button>
         </div>
+        <button class="quiet-button sidebar-collapse" id="sidebar-collapse" type="button" aria-controls="sidebar" aria-expanded="true"><span aria-hidden="true">«</span> 收起导航</button>
         <nav class="nav-list" id="nav-list">
           <button class="nav-item is-active" data-view="today"><span>◫</span>今日</button>
           <button class="nav-item" data-view="capture"><span>＋</span>收集与加工</button>
@@ -39,7 +40,7 @@
 
       <div class="workspace">
         <header class="topbar">
-          <button class="icon-button menu-button" id="menu-button" aria-label="打开导航">☰</button>
+          <button class="icon-button menu-button" id="menu-button" type="button" aria-label="展开导航" aria-controls="sidebar" aria-expanded="false" title="展开导航">☰</button>
           <div>
             <p class="eyebrow" id="page-eyebrow">今日工作台</p>
             <h1 id="page-title">把注意力留给值得学习的内容</h1>
