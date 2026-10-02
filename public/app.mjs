@@ -575,7 +575,7 @@ function renderSourceGroupDrawer(source) {
   ]);
   content.append(noteMeta(source), headActions);
 
-  const original = el("details", { class: "original-material" }, [
+  const original = el("details", { class: "original-material", dataset: { tour: "note-original" } }, [
     el("summary", {}, [el("span", { text: "查看原始资料全文" }), el("small", { text: `${String(source.body || "").length} 字` })]),
     el("div", { class: "prose original-body", text: source.body || "暂无原文" }),
   ]);

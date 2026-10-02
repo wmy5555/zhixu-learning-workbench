@@ -28,7 +28,7 @@ export const chapters = [
   ] },
   { id: 'capture', title: '2. 收集示例资料', steps: [
     action('capture-save', '粘贴并保存第一份资料', '点击“填入示例”，查看标题、原文、平台、作者和位置；保持“仅本地”，点击保存。', '先保留原始材料，后续加工也能追溯出处。', '出现“小岚的读书分享”及保存结果，原文保持完整。', 'capture', 'capture-form', 'import', { sample: readingExample, needs: ['ai'] }),
-    step('capture-source', '打开刚刚保存的原文', '打开这份原始资料，核对原文和来源。原文、之后的知识、你的回答会分别保存。', '加工结果不能替代原始资料。', '能读到完整虚构文本和来源信息。', 'library', 'note-detail', { noteRole: 'capturedSource' }),
+    step('capture-source', '打开刚刚保存的原文', '点击框选的“查看原始资料全文”展开原文，再展开“原始资料信息”核对来源。原文、之后的知识、你的回答会分别保存。', '加工结果不能替代原始资料。', '能读到完整虚构文本和来源信息。', 'library', 'note-original', { noteRole: 'capturedSource' }),
     action('capture-permission', '只为示例允许外发', '编辑刚保存的示例，把隐私改为“允许云端”，保存。稍后学习示例知识时，也要为其原文和知识分别亲自允许外发。', 'AI 需要你的外发授权，本地保存不会自动授权。', '这份示例显示允许外发，正式资料不受影响。', 'library', 'note-editor', 'privacy-cloud', { noteRole: 'capturedSource' }),
     step('capture-download', '下载两份练习文件', '下载教程提供的“读书卡片.md”和“查找线索.txt”，保存在容易找到的位置。文件只有原创虚构内容。', '接下来用真实文件体验批量导入。', '本机得到 .md 和 .txt 两个示例文件。', 'capture', 'capture-batch', { downloads: [{ title: '读书卡片.md', href: '/tutorial-examples/reading-card.md' }, { title: '查找线索.txt', href: '/tutorial-examples/finding-clues.txt' }] }),
     action('capture-batch', '一次导入两个文件', '在“批量导入”同时选择刚下载的 .md 和 .txt 文件，保持本地权限后导入。', '批量保存也应逐条保留来源。', '两份文件各自出现在收集结果中。', 'capture', 'capture-batch', 'import-batch'),
