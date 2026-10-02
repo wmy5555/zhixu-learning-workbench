@@ -38,10 +38,17 @@ export function createOnboarding(adapter) {
   let showExtensions = false;
   let observer = null;
   let poll = null;
+  const narrowScreen = () => window.matchMedia("(max-width: 1100px)").matches;
+  let narrow = narrowScreen();
   const workspace = document.querySelector(".workspace");
   const panel = el("aside", { class: "onboarding-panel", ariaLabel: "新手实操引导", hidden: true });
   const banner = el("section", { class: "practice-banner", ariaLabel: "当前知识库", hidden: true });
   workspace.prepend(banner, panel);
+  panel.addEventListener("keydown", event => {
+    if (event.key === "Escape" && narrowScreen() && !compact) {
+      event.preventDefault(); event.stopPropagation(); setCompact(true);
+    }
+  });
 
   const step = () => flatSteps.find(item => item.id === selected) || flatSteps.find(item => item.id === current?.currentStepId) || flatSteps[0];
   const coreDone = () => coreSteps.filter(item => completed(current?.progress?.[item.id])).length;
@@ -54,10 +61,12 @@ export function createOnboarding(adapter) {
   function adopt(value) { current = value?.onboarding || value; if (!selected) selected = current?.currentStepId || flatSteps[0]?.id; }
   function clearHighlight() { highlightPulse?.cancel(); highlightPulse = null; highlight?.classList.remove("tour-target"); highlight = null; }
   function placePanel() {
-    const drawer = document.querySelector("#drawer");
-    const narrow = window.matchMedia("(max-width: 1100px)").matches;
-    const parent = narrow && drawer?.classList.contains("is-open") ? document.querySelector("#drawer-body") : workspace;
-    if (panel.parentElement !== parent) parent.prepend(panel);
+    // Keep the floating window outside the drawer's transformed scroll container.
+    if (panel.parentElement !== workspace) workspace.prepend(panel);
+  }
+  function setCompact(value) {
+    compact = value; render();
+    panel.querySelectorAll("[data-onboarding-toggle]")[0]?.focus({ preventScroll: true });
   }
   function locate(scroll = false) {
     if (!visible || !step()?.target) { clearHighlight(); return; }
@@ -84,14 +93,14 @@ export function createOnboarding(adapter) {
     if (working) return;
     working = true; errorText = ""; render();
     try { await action(); }
-    catch (error) { errorText = error.message || "本次操作未完成，请稍后重试。"; }
+    catch (error) { errorText = error.message || "本次操作未完成，请稍后重试。"; compact = false; }
     finally { working = false; render(); }
   }
   async function refreshProof() {
     if (!current?.practiceId || refreshing || disposed) return;
     refreshing = true;
     try { adopt(await api.onboarding("state", stateBody({}))); render(); }
-    catch (error) { errorText = error.message; render(); }
+    catch (error) { errorText = error.message; compact = false; render(); }
     finally { refreshing = false; }
   }
   async function switchContext(id, destination) {
@@ -189,6 +198,9 @@ export function createOnboarding(adapter) {
     panel.querySelectorAll(".onboarding-extensions")[0]?.scrollIntoView({ block: "nearest" });
   }
   function render() {
+    const focusToggle = document.activeElement?.dataset?.onboardingToggle === "true";
+    const previousContent = panel.querySelectorAll(".onboarding-content")[0];
+    const scrollTop = panel.dataset.stepId === step()?.id ? previousContent?.scrollTop || 0 : 0;
     const practice = inPractice();
     banner.hidden = !current?.practiceId;
     clear(banner).append(el("div", {}, [el("strong", { text: practice ? "新手练习库" : "正式知识库" }), el("span", { text: practice ? " 示例内容与正式资料分开保存" : " API 配置保存在这里，练习库共用这些能力" }), el("span", { class: "practice-date", text: `练习时间：${practiceDate(current?.clock?.now, current?.clock?.timezone || current?.settings?.timezone)}` })]),
@@ -206,8 +218,14 @@ export function createOnboarding(adapter) {
     const progress = getStepProgress(current, active);
     const done = coreDone();
     const routeDone = route.filter(item => completed(current?.progress?.[item.id])).length;
-    const title = el("div", { class: "onboarding-heading" }, [el("div", {}, [el("p", { class: "eyebrow", text: `${core ? "核心流程" : "扩展阅读（可选）"} · 当前第 ${index + 1}/${route.length} 步` }), el("h2", { text: chapter?.title.replace(/^\d+\.\s*/, "") || "开始练习" }), el("p", { class: "fine-print", text: `核心完成进度：${done}/${coreSteps.length} 步（含阅读）` })]), button(compact ? "展开步骤" : "折叠步骤", { kind: "text compact", onClick: () => { compact = !compact; render(); } })]);
-    const content = el("div", { class: "onboarding-content", hidden: compact });
+    panel.classList.toggle("is-compact", compact);
+    panel.dataset.stepId = active.id;
+    const toggle = button(compact ? "展开步骤" : narrowScreen() ? "收成小窗" : "折叠步骤", { kind: "text compact", onClick: () => setCompact(!compact) });
+    toggle.dataset.onboardingToggle = "true";
+    toggle.setAttribute("aria-expanded", String(!compact));
+    toggle.setAttribute("aria-controls", "onboarding-content");
+    const title = el("div", { class: "onboarding-heading" }, [el("div", { class: "onboarding-heading-copy" }, [el("p", { class: "eyebrow", text: `${core ? "核心流程" : "扩展阅读（可选）"} · 当前第 ${index + 1}/${route.length} 步` }), el("h2", { text: compact && narrowScreen() ? active.title : chapter?.title.replace(/^\d+\.\s*/, "") || "开始练习" }), el("p", { class: "fine-print onboarding-heading-progress", text: `核心完成进度：${done}/${coreSteps.length} 步（含阅读）` })]), toggle]);
+    const content = el("div", { id: "onboarding-content", class: "onboarding-content", hidden: compact });
     const catalog = el("details", { class: "onboarding-catalog" }, [el("summary", { text: `核心流程 · ${coreChapters.length} 个阶段 · ${done}/${coreSteps.length} 步已完成` })]);
     coreChapters.forEach(item => {
       const count = item.steps.filter(row => completed(current?.progress?.[row.id])).length;
@@ -245,7 +263,12 @@ export function createOnboarding(adapter) {
     const actions = el("div", { class: "onboarding-actions" });
     if (!current?.practiceId) actions.append(button("创建独立练习库", { kind: "primary", onClick: () => run(start), disabled: working }));
     else {
-      actions.append(button("定位操作位置", { kind: "primary", onClick: async () => { await run(() => goTo(active)); flashHighlight(); }, disabled: working }));
+      actions.append(button("定位操作位置", { kind: "primary", onClick: () => run(async () => {
+        await goTo(active);
+        if (errorText || !highlight) return;
+        if (narrowScreen()) setCompact(true);
+        locate(true); flashHighlight();
+      }), disabled: working }));
       if (active.sample) actions.append(button("填入示例（不提交）", { onClick: () => run(async () => { await goTo(active); await adapter.fillSample?.(active.sample, active, current); locate(true); }), disabled: working || !practice }));
       if (active.caseId) actions.append(button("准备演示案例", { onClick: () => run(() => loadCase(active)), disabled: working || !practice || !current.modelReady }));
       actions.append(button(active.kind === "read" ? "我已阅读" : active.kind === "external" ? "记录我已在外部体验" : "检查这一步", { onClick: () => run(() => checkpoint(active)), disabled: working }));
@@ -272,6 +295,8 @@ export function createOnboarding(adapter) {
       if (current.busy) content.append(el("p", { class: "fine-print", text: "练习任务正在处理；完成或取消后可切换知识库、推进时间。" }));
     }
     clear(panel).append(title, content);
+    content.scrollTop = scrollTop;
+    if (focusToggle) toggle.focus({ preventScroll: true });
     placePanel(); locate();
   }
   function entryCard() {
@@ -299,7 +324,10 @@ export function createOnboarding(adapter) {
     }
     document.querySelector("#onboarding-launcher")?.addEventListener("click", () => run(current?.practiceId ? resume : start));
     document.querySelector("#onboarding-reset")?.addEventListener("click", () => current?.practiceId ? reset().catch(error => toast(error.message, "error")) : run(start));
-    window.addEventListener("resize", () => { if (visible) { placePanel(); locate(); } });
+    window.addEventListener("resize", () => {
+      if (disposed) return;
+      if (narrow !== narrowScreen()) { narrow = narrowScreen(); if (visible) render(); }
+    });
     window.addEventListener("zhixu:request", event => {
       if (!current?.practiceId || event.detail?.path?.startsWith("/api/onboarding/")) return;
       if (scheduled) window.clearTimeout(scheduled);
