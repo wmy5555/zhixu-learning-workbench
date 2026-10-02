@@ -280,7 +280,14 @@ async function renderCapture() {
   const title = el("input", { name: "title", placeholder: "例如：关于检索增强生成的一段资料", required: true });
   const body = el("textarea", { name: "body", placeholder: "粘贴原文。系统会保留这份原始快照，不用摘要替代。", required: true, rows: 12 });
   const process = el("input", { name: "process", type: "checkbox" });
-  const research = el("input", { name: "research", type: "checkbox" });
+  const research = el("input", { name: "research", type: "checkbox", disabled: true });
+  const syncResearchOption = () => {
+    research.disabled = !process.checked;
+    if (research.disabled) research.checked = false;
+  };
+  process.addEventListener("change", syncResearchOption);
+  // reset 事件在浏览器恢复默认值之前触发，等恢复完成后再同步依赖。
+  sourceForm.addEventListener("reset", () => queueMicrotask(syncResearchOption));
   const localOnly = el("input", { name: "localOnly", type: "checkbox" });
   const titleField = field("标题", title);
   titleField.classList.add("span-2");
@@ -312,7 +319,7 @@ async function renderCapture() {
     try {
       const submit = sourceForm.querySelector("button[type='submit']");
       submit.disabled = true;
-      const result = await api.import({ items: [item], process: process.checked, research: research.checked });
+      const result = await api.import({ items: [item], process: process.checked, research: process.checked && research.checked });
       sourceForm.reset();
       toast(`已保存 ${asArray(result.notes).length || 1} 条原始资料`, "success");
       await refreshBootstrap();
