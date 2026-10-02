@@ -2,9 +2,9 @@
 
 [![CI](https://github.com/wmy5555/zhixu-learning-workbench/actions/workflows/ci.yml/badge.svg)](https://github.com/wmy5555/zhixu-learning-workbench/actions/workflows/ci.yml)
 
-当前版本 **0.1.0 开发预览**。仓库保持私有，尚未选择开源许可证；暂不授予再分发授权。
+当前版本 **0.1.0 开发预览**。仓库已由所有者确认公开，尚未选择项目开源许可证或添加 LICENSE。
 
-首次公开前检查见 [Public Release Audit](docs/PUBLIC_RELEASE_AUDIT.md) 和 [第三方许可证清单](docs/DEPENDENCY_LICENSES.md)。完成审计不自动授权公开；须另行确认许可证和 Public 操作。
+历史审计与当前状态见 [Public Release Audit](docs/PUBLIC_RELEASE_AUDIT.md)，依赖及资产来源见 [第三方许可证清单](docs/DEPENDENCY_LICENSES.md)。后续变更继续增量检查；项目许可证和新的可见性变更仍由所有者明确决定。
 
 本地运行的中文 Web 应用。原始资料、知识、个人理解和错题修正保存为 Markdown；学习记录与任务保存到 SQLite。支持 Obsidian 外部编辑、来源追踪、独立配置的模型/搜索/向量服务和真实 MCP。
 

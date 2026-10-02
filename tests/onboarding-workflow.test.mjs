@@ -38,9 +38,10 @@ function controlledAI() {
   } };
 }
 
-test('core route completes without optional lessons, cases or search and embedding setup', { timeout: 120000 }, async t => {
+for (const firstAssessment of ['correct', 'ambiguous']) test(`core route completes without optional setup after ${firstAssessment} feedback`, { timeout: 120000 }, async t => {
   const root = fs.mkdtempSync(path.join(tempRoot, 'onboarding-core-'));
   const ai = controlledAI();
+  ai.controls.assessment = firstAssessment;
   const dataDir = path.join(root, 'data');
   const main = createService({ dataDir, vaultDir: path.join(root, 'formal-vault'), aiOverride: ai.api });
   const app = createApp({ dataDir, service: main, scheduler: false });
@@ -50,16 +51,16 @@ test('core route completes without optional lessons, cases or search and embeddi
   const sessionRes = await fetch(base + '/api/session');
   const cookie = sessionRes.headers.get('set-cookie').split(';')[0];
   const { csrf } = await sessionRes.json();
-  async function request(route, body, method = body === undefined ? 'GET' : 'POST') {
+  async function request(route, body, method = body === undefined ? 'GET' : 'POST', expectedStatus = 200) {
     const response = await fetch(base + route, { method, headers: { Cookie: cookie, 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     const result = await response.json();
-    assert.equal(response.status, 200, `${route}: ${JSON.stringify(result)}`);
+    assert.equal(response.status, expectedStatus, `${route}: ${JSON.stringify(result)}`);
     return result;
   }
   let current = await request('/api/onboarding/start', {});
   const practiceId = current.practiceId, roles = current.roles;
   const practice = (route, body, method) => request(`/api/practice/${practiceId}/${route}`, body, method);
-  const guide = (action, body = {}) => request(`/api/onboarding/${action}`, { practiceId, ...body });
+  const guide = (action, body = {}, expectedStatus = 200) => request(`/api/onboarding/${action}`, { practiceId, ...body }, 'POST', expectedStatus);
   async function pump() {
     for (let i = 0; i < 80; i++) {
       if (!(await practice('jobs')).jobs.some(job => ['queued', 'running'].includes(job.state))) return;
@@ -95,6 +96,22 @@ test('core route completes without optional lessons, cases or search and embeddi
   };
   for (const step of coreSteps) {
     await guide('checkpoint', { stepId: step.id, mode: 'check' });
+    if (step.id === 'review-clock-due' && firstAssessment === 'ambiguous') {
+      const disputedSessionId = session.id;
+      assert.equal((await practice(`study/${disputedSessionId}`)).completion.reviewSettled, false);
+      assert.equal((await guide('advance', { action: 'next' }, 409)).code, 'NO_REVIEW');
+      const pending = await guide('checkpoint', { stepId: step.id, mode: 'check' });
+      assert.equal(pending.progress[step.id].status, 'pending');
+      ai.controls.assessment = 'correct';
+      for (const retryStep of ['study-start', 'study-hide', 'study-answer', 'study-feedback', 'study-finish']) {
+        await guide('checkpoint', { stepId: retryStep, mode: 'check' });
+        await actions[retryStep]();
+        await guide('checkpoint', { stepId: retryStep, mode: 'check' });
+      }
+      assert.notEqual(session.id, disputedSessionId);
+      assert.equal((await practice(`study/${disputedSessionId}`)).completion.reviewSettled, false, 'the original disputed attempt stays unsettled');
+      assert.equal((await practice(`study/${session.id}`)).completion.reviewSettled, true);
+    }
     if (step.kind !== 'read') { assert.equal(typeof actions[step.id], 'function', step.id); await actions[step.id](); }
     current = await guide('checkpoint', { stepId: step.id, mode: step.kind === 'read' ? 'read' : 'check' });
     assert.equal(current.progress[step.id].status, step.kind === 'read' ? 'demonstrated' : 'done', step.id);

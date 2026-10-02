@@ -149,7 +149,13 @@ export function createOnboarding(adapter) {
     await goTo(step());
   }
   async function advance(action) {
-    adopt(await api.onboarding("advance", stateBody({ action })));
+    try { adopt(await api.onboarding("advance", stateBody({ action }))); }
+    catch (error) {
+      if (action !== "next" || error.code !== "NO_REVIEW") throw error;
+      await goTo(flatSteps.find(item => item.id === "study-start"));
+      errorText = "还没有可用的复习安排。反馈存在争议时，结束练习只会保留记录。请重新开始这条知识的练习，核对材料、提交新回答，收到明确反馈并结束后再前往复习。";
+      return;
+    }
     await adapter.refresh?.();
     toast("练习时间已前进，电脑时间和正式学习日程保持不变。", "success");
   }
@@ -219,6 +225,10 @@ export function createOnboarding(adapter) {
       el("p", { class: "onboarding-instruction", text: active.instruction || active.description || "" }));
     if (active.why) content.append(el("p", { class: "fine-print", text: active.why }));
     if (active.expected) content.append(el("div", { class: "onboarding-expected" }, [el("strong", { text: "完成后应看到" }), el("p", { text: active.expected })]));
+    if (["review-clock-due", "review-finish"].includes(active.id) && !progress.complete) content.append(el("div", { class: "onboarding-expected" }, [
+      el("p", { text: "若反馈存在争议，本轮只保留记录，不会创建或更新复习安排。可以重新练习这条知识，核对材料并提交新回答；收到明确反馈并结束后，再继续复习步骤。" }),
+      button("重新练习这条知识", { kind: "text compact", disabled: busy() || !practice || !current?.modelReady, onClick: () => run(() => goTo(flatSteps.find(item => item.id === "study-start"))) }),
+    ]));
     if (active.kind === "case" || active.caseId) content.append(el("p", { class: "notice", text: "这一步使用预设演示案例，不代表你的真实经历、成绩或外部连接结果。" }));
     if (active.kind === "external") content.append(el("p", { class: "fine-print", text: "外部应用需要你自行连接。标记体验只记录你的确认，不代表系统验证连接成功。" }));
     if (!core && chapter.id === "external") {

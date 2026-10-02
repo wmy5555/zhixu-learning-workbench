@@ -83,7 +83,7 @@ function descend(node) { return [node, ...node.children.flatMap(descend)]; }
 function findButton(root, label) { return descend(root).find(node => node.tagName === 'BUTTON' && node.textContent === label); }
 async function click(node) { assert.ok(node, 'button exists'); assert.equal(node.disabled, false, `button ${node.textContent} is enabled`); await node.events.click({ target: node, preventDefault() {} }); }
 
-async function tutorialBrowser({ modelReady = true, exists = true, narrow = false, reducedMotion = false, query = '', checkpoint, currentStepId, savedStepId, progress = {} } = {}) {
+async function tutorialBrowser({ modelReady = true, exists = true, narrow = false, reducedMotion = false, query = '', checkpoint, advance, currentStepId, savedStepId, progress = {} } = {}) {
   const body = new Element('body'), workspace = new Element(), main = new Element('main'), drawer = new Element(), drawerBody = new Element(), launcher = new Element('button');
   body.append(workspace, drawer, launcher); workspace.append(main); drawer.append(drawerBody);
   const roots = { '.workspace': workspace, '#main': main, '#drawer': drawer, '#drawer-body': drawerBody, '#onboarding-launcher': launcher };
@@ -95,6 +95,7 @@ async function tutorialBrowser({ modelReady = true, exists = true, narrow = fals
     setContext: id => { practiceId = id; contexts.push(id); },
     onboarding: async (action, data = {}) => {
       requests.push({ action, data: structuredClone(data) });
+      if (action === 'advance' && advance) await advance(data, state);
       if (action === 'start' || action === 'resume') state = { ...state, practiceId: 'practice-one', status: 'active' };
       if (action === 'checkpoint') {
         if (checkpoint) await checkpoint(data, state);
@@ -237,6 +238,33 @@ test('first-use next and reading navigation stay on the core route without compl
   await click(findButton(ui.body, '继续核心流程'));
   assert.equal(ui.state.currentStepId, 'setup-save', 'return to the first action without completion evidence');
   assert.equal(ui.state.progress['setup-save'], undefined);
+  ui.tutorial.dispose();
+});
+
+test('missing review routes back to a new attempt without creating evidence or submitting an answer', async () => {
+  const progress = { 'study-finish': { status: 'done' } };
+  const ui = await tutorialBrowser({ currentStepId: 'review-clock-due', progress, advance: async () => { throw Object.assign(new Error('暂无未来的复习安排'), { code: 'NO_REVIEW' }); } });
+  await ui.tutorial.open();
+  await click(findButton(ui.body, '跳到下次复习'));
+  assert.equal(ui.state.currentStepId, 'study-start');
+  assert.equal(ui.navigations.at(-1), 'study-start');
+  assert.match(ui.body.textContent, /反馈存在争议时/);
+  assert.deepEqual(ui.state.progress, progress);
+  assert.ok(ui.requests.every(call => ['state', 'resume', 'checkpoint', 'advance'].includes(call.action)));
+  assert.ok(ui.requests.filter(call => call.action === 'checkpoint').every(call => call.data.mode === 'check'));
+  ui.tutorial.dispose();
+});
+
+test('an unsettled review offers explicit retry while other clock errors keep their current step', async () => {
+  const ui = await tutorialBrowser({ currentStepId: 'review-finish', advance: async () => { throw Object.assign(new Error('请先结束练习'), { code: 'PRACTICE_BUSY' }); } });
+  await ui.tutorial.open();
+  assert.match(ui.body.textContent, /不会创建或更新复习安排/);
+  await click(findButton(ui.body, '跳到下次复习'));
+  assert.equal(ui.state.currentStepId, 'review-finish');
+  assert.match(ui.body.textContent, /请先结束练习/);
+  await click(findButton(ui.body, '重新练习这条知识'));
+  assert.equal(ui.state.currentStepId, 'study-start');
+  assert.deepEqual(ui.state.progress, {});
   ui.tutorial.dispose();
 });
 
