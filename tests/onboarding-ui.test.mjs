@@ -76,25 +76,27 @@ class Element {
   contains(target) { return target === this || this.children.some(child => child.contains(target)); }
   getClientRects() { return this.hidden ? [] : [{}]; }
   scrollIntoView(options) { this.scrolls.push(options); }
+  focus() { Element.activeElement = this; }
   animate(frames, options) { const animation = { frames, options, cancelled: false, cancel() { this.cancelled = true; } }; this.animations.push(animation); return animation; }
-  querySelectorAll(selector) { return descend(this).slice(1).filter(node => selector === '[data-tour]' ? node.dataset.tour : false); }
+  querySelectorAll(selector) { return descend(this).slice(1).filter(node => selector === '[data-tour]' ? node.dataset.tour : selector === '[data-onboarding-toggle]' ? node.dataset.onboardingToggle : selector.startsWith('.') ? node.classList.contains(selector.slice(1)) : false); }
 }
 function descend(node) { return [node, ...node.children.flatMap(descend)]; }
 function findButton(root, label) { return descend(root).find(node => node.tagName === 'BUTTON' && node.textContent === label); }
 async function click(node) { assert.ok(node, 'button exists'); assert.equal(node.disabled, false, `button ${node.textContent} is enabled`); await node.events.click({ target: node, preventDefault() {} }); }
 
-async function tutorialBrowser({ modelReady = true, exists = true, narrow = false, reducedMotion = false, query = '', checkpoint, advance, currentStepId, savedStepId, progress = {} } = {}) {
+async function tutorialBrowser({ modelReady = true, exists = true, narrow = false, reducedMotion = false, query = '', checkpoint, advance, stateRead, currentStepId, savedStepId, progress = {} } = {}) {
   const body = new Element('body'), workspace = new Element(), main = new Element('main'), drawer = new Element(), drawerBody = new Element(), launcher = new Element('button');
   body.append(workspace, drawer, launcher); workspace.append(main); drawer.append(drawerBody);
   const roots = { '.workspace': workspace, '#main': main, '#drawer': drawer, '#drawer-body': drawerBody, '#onboarding-launcher': launcher };
-  const document = { body, createElement: tag => new Element(tag), createTextNode: text => { const node = new Element('text'); node.textContent = text; return node; }, querySelector: selector => roots[selector] || null, querySelectorAll: selector => selector === '[data-tour]' ? descend(body).filter(node => node.dataset.tour) : [] };
-  const requests = [], navigations = [], contexts = [], intervals = [];
+  const document = { body, get activeElement() { return Element.activeElement; }, createElement: tag => new Element(tag), createTextNode: text => { const node = new Element('text'); node.textContent = text; return node; }, querySelector: selector => roots[selector] || null, querySelectorAll: selector => selector === '[data-tour]' ? descend(body).filter(node => node.dataset.tour) : [] };
+  const requests = [], navigations = [], contexts = [], intervals = [], windowEvents = {};
   let practiceId = '', state = { practiceId: exists ? 'practice-one' : null, status: exists ? 'paused' : 'not_started', modelReady, currentStepId, progress, roles: {}, clock: { now: '2026-09-30T08:00:00Z' }, busy: false };
   const api = {
     getContext: () => ({ practiceId, pending: 0 }),
     setContext: id => { practiceId = id; contexts.push(id); },
     onboarding: async (action, data = {}) => {
       requests.push({ action, data: structuredClone(data) });
+      if (action === 'state' && stateRead) await stateRead();
       if (action === 'advance' && advance) await advance(data, state);
       if (action === 'start' || action === 'resume') state = { ...state, practiceId: 'practice-one', status: 'active' };
       if (action === 'checkpoint') {
@@ -107,13 +109,13 @@ async function tutorialBrowser({ modelReady = true, exists = true, narrow = fals
     },
   };
   const context = vm.createContext({ api, chapters, flatSteps, coreChapters, coreSteps, extensionChapters, document, Node: Element, URLSearchParams, localStorage: store(), sessionStorage: store(savedStepId ? { 'zhixu.onboarding.currentStep.v1': savedStepId } : {}), MutationObserver: class { observe() {} disconnect() {} },
-    window: { location: { search: query }, matchMedia: query => ({ matches: query.includes('prefers-reduced-motion') ? reducedMotion : narrow }), addEventListener() {}, setTimeout() {}, clearTimeout() {}, setInterval(handler) { intervals.push(handler); }, clearInterval() {} },
+    window: { location: { search: query }, matchMedia: query => ({ matches: query.includes('prefers-reduced-motion') ? reducedMotion : narrow }), addEventListener(type, handler) { windowEvents[type] = handler; }, setTimeout() {}, clearTimeout() {}, setInterval(handler) { intervals.push(handler); }, clearInterval() {} },
   });
   const stripped = onboardingSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '');
   vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + stripped + '\nthis.make = createOnboarding; this.progress = getStepProgress;', context);
   const adapter = { navigate: async step => { navigations.push(step.id || step.view); }, contextChanged: async () => {}, refresh: async () => {}, fillSample: async () => {} };
   const tutorial = context.make(adapter); await tutorial.init();
-  return { tutorial, body, workspace, main, drawer, drawerBody, requests, navigations, contexts, intervals, progress: context.progress, get state() { return state; }, setState: value => { state = { ...state, ...value }; } };
+  return { tutorial, body, workspace, main, drawer, drawerBody, requests, navigations, contexts, intervals, document, setNarrow(value) { narrow = value; windowEvents.resize?.(); }, progress: context.progress, get state() { return state; }, setState: value => { state = { ...state, ...value }; } };
 }
 
 test('reading confirmation waits for saving, then navigates exactly one step without completing the next action', async () => {
@@ -339,14 +341,88 @@ test('existing optional progress resumes from saved step IDs and can return to u
   }
 });
 
-test('narrow-screen instructions move into the drawer in normal flow and return on close', async () => {
+test('floating instructions stay outside the transformed drawer when it opens or rerenders', async () => {
   const ui = await tutorialBrowser({ narrow: true });
   await ui.tutorial.open();
   const panel = descend(ui.workspace).find(node => node.classList.contains('onboarding-panel'));
   ui.drawer.classList.add('is-open'); ui.tutorial.rendered();
-  assert.equal(panel.parentElement, ui.drawerBody);
+  assert.equal(panel.parentElement, ui.workspace);
+  ui.drawerBody.replaceChildren(new Element('form')); ui.tutorial.rendered();
+  assert.equal(panel.parentElement, ui.workspace);
   ui.drawer.classList.remove('is-open'); ui.tutorial.rendered();
   assert.equal(panel.parentElement, ui.workspace);
+  ui.tutorial.dispose();
+});
+
+test('narrow locate collapses into a keyboard-accessible small window and retains progress on refresh', async () => {
+  const ui = await tutorialBrowser({ narrow: true });
+  const target = new Element('button'); target.dataset.tour = 'nav-today'; ui.main.append(target);
+  await ui.tutorial.open();
+  const panel = descend(ui.workspace).find(node => node.classList.contains('onboarding-panel'));
+  const originalProgress = structuredClone(ui.state.progress);
+  await click(findButton(ui.body, '定位操作位置'));
+  assert.equal(panel.classList.contains('is-compact'), true);
+  assert.equal(panel.querySelectorAll('.onboarding-content')[0].hidden, true);
+  assert.equal(ui.document.activeElement, findButton(panel, '展开步骤'));
+  assert.equal(findButton(panel, '展开步骤').attributes['aria-expanded'], 'false');
+  assert.equal(target.animations.length, 1);
+  await ui.tutorial.refresh();
+  assert.equal(panel.classList.contains('is-compact'), true);
+  assert.equal(ui.document.activeElement, findButton(panel, '展开步骤'));
+  await click(findButton(panel, '展开步骤'));
+  assert.equal(panel.querySelectorAll('.onboarding-content')[0].hidden, false);
+  const content = panel.querySelectorAll('.onboarding-content')[0]; content.scrollTop = 180;
+  await ui.tutorial.refresh();
+  assert.equal(panel.querySelectorAll('.onboarding-content')[0].scrollTop, 180);
+  assert.equal(findButton(panel, '收成小窗').attributes['aria-expanded'], 'true');
+  let prevented = false, stopped = false;
+  panel.events.keydown({ key: 'Escape', preventDefault() { prevented = true; }, stopPropagation() { stopped = true; } });
+  assert.ok(prevented && stopped, 'Escape collapses without closing the underlying drawer');
+  assert.equal(ui.document.activeElement, findButton(panel, '展开步骤'));
+  assert.deepEqual(ui.state.progress, originalProgress, 'window controls never complete a step');
+  ui.setNarrow(false);
+  await click(findButton(panel, '展开步骤'));
+  assert.ok(findButton(panel, '折叠步骤'));
+  await click(findButton(ui.body, '定位操作位置'));
+  assert.equal(panel.classList.contains('is-compact'), false, 'wide sidebar stays expanded');
+  ui.setNarrow(true);
+  assert.ok(findButton(panel, '收成小窗'));
+  await click(findButton(panel, '我已阅读'));
+  assert.equal(panel.querySelectorAll('.onboarding-content')[0].scrollTop, 0, 'a new step starts at its beginning');
+  ui.tutorial.dispose();
+});
+
+test('failed or unavailable narrow locate keeps instructions and errors visible', async () => {
+  const ui = await tutorialBrowser({ narrow: true });
+  await ui.tutorial.open();
+  const panel = descend(ui.workspace).find(node => node.classList.contains('onboarding-panel'));
+  await click(findButton(panel, '定位操作位置'));
+  assert.equal(panel.classList.contains('is-compact'), false, 'missing target must not hide the instructions');
+  ui.tutorial.dispose();
+  const blocked = await tutorialBrowser({ narrow: true, checkpoint: async data => { if (data.mode === 'check') throw new Error('模拟保存失败'); } });
+  await blocked.tutorial.open();
+  await click(findButton(blocked.body, '收成小窗'));
+  await blocked.tutorial.open();
+  assert.ok(findButton(blocked.body, '收成小窗'));
+  assert.match(blocked.body.textContent, /模拟保存失败/);
+  blocked.tutorial.dispose();
+});
+
+test('background refresh failure expands a located small window without changing progress', async () => {
+  let failRefresh = false;
+  const ui = await tutorialBrowser({ narrow: true, stateRead: async () => { if (failRefresh) throw new Error('模拟会话刷新失败'); } });
+  const target = new Element('button'); target.dataset.tour = 'nav-today'; ui.main.append(target);
+  await ui.tutorial.open();
+  await click(findButton(ui.body, '定位操作位置'));
+  const panel = descend(ui.workspace).find(node => node.classList.contains('onboarding-panel'));
+  assert.equal(panel.classList.contains('is-compact'), true);
+  const progress = structuredClone(ui.state.progress);
+  failRefresh = true;
+  await ui.tutorial.refresh();
+  assert.equal(panel.classList.contains('is-compact'), false);
+  assert.equal(panel.querySelectorAll('.onboarding-content')[0].hidden, false);
+  assert.ok(descend(panel).some(node => node.attributes.role === 'alert' && node.textContent === '模拟会话刷新失败'));
+  assert.deepEqual(ui.state.progress, progress);
   ui.tutorial.dispose();
 });
 

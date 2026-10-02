@@ -37,16 +37,26 @@
 .practice-readonly:disabled { opacity: .65; }
 @media (max-width: 1100px) {
   .onboarding-open .workspace { margin-right: 0; }
-  .onboarding-panel { position: static; width: auto; max-width: 100%; padding: 18px; border-left: 0; border-bottom: 1px solid var(--line); box-shadow: none; overflow: visible; }
+  .onboarding-panel { inset: auto max(14px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) auto; width: min(380px, calc(100vw - 28px)); max-height: min(580px, 65vh); max-height: min(580px, 65dvh); padding: 0; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 18px; box-shadow: 0 12px 42px rgba(0,0,0,.2); }
+  .onboarding-heading { flex-shrink: 0; padding: 14px 16px 12px; border-bottom: 1px solid var(--line); }
+  .onboarding-heading-copy { min-width: 0; }
+  .onboarding-heading h2 { margin: 5px 0 8px; font-size: 17px; }
+  .onboarding-heading .eyebrow { letter-spacing: .04em; font-size: 10px; }
+  .onboarding-heading-progress { margin: 0; }
+  .onboarding-heading button { flex-shrink: 0; padding-inline: 8px; }
+  .onboarding-content { padding: 14px 16px 18px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+  .onboarding-panel.is-compact { width: min(350px, calc(100vw - 76px)); }
+  .onboarding-panel.is-compact .onboarding-heading { align-items: center; padding: 10px 12px; border-bottom: 0; }
+  .onboarding-panel.is-compact h2 { font-size: 13px; margin: 4px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .onboarding-panel.is-compact .onboarding-heading-progress { display: none; }
+  .onboarding-open main, .onboarding-open .drawer-body { padding-bottom: 140px; }
   .onboarding-open .drawer { right: 0; width: min(760px, 96vw); }
-  .drawer-body > .onboarding-panel { margin: -6px -8px 24px; border: 1px solid var(--line); border-radius: 12px; }
   .onboarding-entry { flex-direction: column; align-items: stretch; }
   .practice-banner { padding: 10px 18px; flex-wrap: wrap; }
   .onboarding-actions button { flex: 1 1 auto; }
 }
 @media (max-width: 520px) {
   .onboarding-heading h2 { font-size: 17px; }
-  .onboarding-panel { padding: 15px; }
   .practice-banner span { display: block; margin-top: 4px; }
   .onboarding-catalog button { white-space: normal; }
 }
