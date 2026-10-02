@@ -48,7 +48,7 @@ export const chapters = [
     action('library-edit', '修改一条知识并保存', '编辑“能够解释”示例，在正文末尾补充一句你对虚构任务的观察并保存。', '人工整理的内容应被明确保留。', '详情显示你的修改，历史里保留旧版。', 'library', 'note-editor', 'note-edit', { noteRole: 'explain' }),
     action('library-aware', '设置“知道存在”目标', '打开“知道存在”示例，编辑页确认学习深度为“知道存在”并保存。回到详情点击“设为仅供查阅”，理由写“知道这张卡片的用途即可”。', '不同材料不必都深入练习。', '这条知识以仅供查阅保存，学习目标是知道存在。', 'library', 'note-lifecycle', 'depth-aware', { noteRole: 'aware' }),
     action('library-find', '设置“知道去哪找”目标', '打开“知道去哪找”示例，编辑页确认对应学习深度并保存。回到详情点击“设为仅供查阅”，填写保留查找线索的理由。', '有些知识保留查找线索就足够。', '这条知识保留来源位置和查找目标。', 'library', 'note-lifecycle', 'depth-find', { noteRole: 'find' }),
-    action('library-explain', '把解释目标加入学习', '打开“能够解释”示例，编辑页确认学习深度为“能够解释”并保存。回到详情点击“加入学习”，理由写“我要用自己的话说明出处的作用”。', '练习目标决定提问方式。', '知识进入正在学习，之后出现解释型问题。', 'library', 'note-lifecycle', 'depth-explain', { noteRole: 'explain' }),
+    action('library-explain', '把解释目标加入学习', '接下来使用练习库预先准备的“能够解释”卡片，体验稳定的学习流程；它是虚构示例，不是刚才的 AI 输出。打开编辑页，确认学习深度为“能够解释”并保存，再点击“加入学习”，理由写“我要用自己的话说明出处的作用”。', '练习目标决定提问方式。', '知识进入正在学习，之后出现解释型问题。', 'library', 'note-lifecycle', 'depth-explain', { noteRole: 'explain' }),
     action('library-apply', '把应用目标加入学习', '打开“能够迁移应用”示例，编辑页确认对应深度并保存。回到详情点击“加入学习”，理由写“想把方法用于另一种分享”。', '应用练习需要换场景并说明边界。', '另一条独立知识进入学习，保留应用目标。', 'library', 'note-lifecycle', 'depth-apply', { noteRole: 'apply' }),
     step('library-stages', '看懂六个知识阶段', '阅读知识状态：仅供查阅、待选学、正在学习、已整理个人理解、重点知识、不再使用。整理个人理解需要自己的解释；重点知识还应审阅学习和实际使用依据。', '避免把整理完成或时间流逝当成掌握。', '知道调整阶段必须写理由，建议不会自动晋级。', 'library', 'note-lifecycle', { noteRole: 'explain' }),
     preset('library-history', '查看内容历史', '加载“历史、重复与删除”案例，打开“历史恢复专用卡片”的“查看版本”，阅读旧文版本 A 与当前版本 B。', '历史帮助比较修改，防止丢失原意。', '专用卡片显示修改前版本，主线学习知识不受影响。', 'library', 'note-history', 'history-open', 'duplicates', { noteRole: 'versionNote' }),
@@ -61,22 +61,22 @@ export const chapters = [
   { id: 'study', title: '5. 完成一次学习', steps: [
     action('study-source-permission', '允许示例原文参与批改', '打开“练习原文 · 小岚的读书工作台”，隐私选择“允许云端”并保存。知识的底层原文也需要授权。', '仅允许知识外发不能绕过原文的本地限制。', '该原创虚构来源允许外发，四张知识仍需分别授权。', 'library', 'note-editor', 'privacy-cloud', { noteRole: 'source' }),
     action('study-permission', '允许解释示例用于真实批改', '打开“能够解释”示例的编辑页，选允许外发并保存。只授权这条虚构示例。', '学习问题和回答需要与材料一起交给模型。', '这条示例允许外发，后续批改可正常请求。', 'library', 'note-editor', 'privacy-cloud', { noteRole: 'explain' }),
-    action('study-plan', '生成今日清单', '回到今日，点击生成或刷新今日安排，查看解释与应用示例。', '清单按学习目标、到期时间和预算安排。', '出现今日待学项、预计分钟和安排理由。', 'today', 'today-generate', 'today-generate'),
+    action('study-plan', '生成今日清单', '回到今日，点击生成或刷新今日安排，找到刚加入学习的“能够解释”示例。', '清单按学习目标、到期时间和预算安排。', '出现今日待学项、预计分钟和安排理由。', 'today', 'today-generate', 'today-generate'),
     step('study-reason', '阅读为什么这样安排', '查看每项的理由、预计时间、超出预算的余量和被前置知识阻塞的提示。', '今日清单不是固定打卡列表。', '能说明一项是新学、到期复习还是错题练习。', 'today', 'today-plan'),
-    action('study-defer', '把应用示例延期一天', '在“能够迁移应用”安排上点击延期，按钮会顺延一天；保留解释示例供本章学习。', '忙碌时可主动调整安排。', '该项显示延期，不再占用当前待学时间。', 'today', 'today-plan', 'plan-defer', { noteRole: 'apply' }),
+    action('study-defer', '把应用示例延期一天', '在“能够迁移应用”安排上点击延期，按钮会顺延一天。若清单没有该示例，可先在“知识管理进阶”中完成“把应用目标加入学习”，再刷新今日安排。', '忙碌时可主动调整安排。', '该项显示延期，不再占用当前待学时间。', 'today', 'today-plan', 'plan-defer', { noteRole: 'apply' }),
     action('study-start', '开始解释示例', '对“能够解释”点击开始学习，阅读材料和本次目标。', '先理解原文，再独立回答。', '打开学习会话，显示原文和解释型问题。', 'study', 'study-queue', 'study-start', { noteRole: 'explain' }),
     action('study-hide', '隐藏材料后自己想一想', '点击隐藏原文，先不看提示，在输入区用自己的话思考。', '区分独立回忆与照着原文回答。', '原文已折叠，问题和回答框仍可操作。', 'study', 'study-material', 'study-hide'),
     action('study-answer', '提交你自己的回答', '在回答框解释：小岚为什么把观点、摘录和位置分别记录，以及什么情况下仍需核对。请自行组织语言，点击提交。', '学习证据来自你的真实作答。', '你的回答已保存，界面显示等待批改。', 'study', 'study-answer', 'study-answer', { needs: ['ai'] }),
     action('study-feedback', '核对真实 AI 反馈', '等待批改完成，逐项阅读判断、遗漏、修正依据和追问。AI 判定也可能需要质疑。', '收到回复后再决定如何改进。', '本轮显示实际模型反馈；失败显示原因为未完成。', 'study', 'study-session', 'study-feedback', { needs: ['ai'] }),
-    action('study-followup', '回答一次追问', '根据反馈，在下一轮输入自己的补充解释并提交，等待第二轮反馈。', '多轮练习记录理解的变化。', '同一会话保留至少两轮问题、回答和反馈。', 'study', 'study-answer', 'study-followup', { needs: ['ai'] }),
+    action('study-followup', '回答一次追问', '根据反馈，在下一轮输入自己的补充解释并提交，等待第二轮反馈。若核心练习已经结束，请先对“能够解释”开始新一轮练习并提交首轮回答。完成本专题后记得结束这轮练习。', '多轮练习记录理解的变化。', '同一会话保留至少两轮问题、回答和反馈。', 'study', 'study-answer', 'study-followup', { needs: ['ai'] }),
     action('study-resume', '从最近会话回到这里', '切到其他页面，再在学习页的最近会话中点击继续本次会话。', '学习可以中断后继续，不必重复提交。', '已有两轮回答和反馈仍然存在。', 'study', 'study-history', 'study-resume'),
-    action('study-finish', '结束本次练习', '等全部反馈完成后点击结束练习，阅读本次结算和下次复习时间。', '结束练习才会按实际表现安排复习。', '本次会话完成，并说明是否独立、是否使用提示或存在争议。', 'study', 'study-finish', 'study-finish'),
+    action('study-finish', '结束本次练习', '等全部反馈完成后点击结束练习，阅读本次结算和下次复习时间。若存在争议，本轮只保留记录；复习步骤提供重新练习入口，由你核对材料并提交新回答。', '结束练习才会按实际表现安排复习；有争议的记录不产生复习结算。', '本次会话完成，并说明是否独立、是否使用提示或存在争议。', 'study', 'study-finish', 'study-finish'),
     action('study-confirm', '亲自确认自己的理解', '在“确认我的理解”填写你自己的解释并确认。不要直接复制模型建议。', 'AI 建议与用户确认分别保存。', '知识保存个人理解和用户确认记录；这不代表已经成为核心知识。', 'study', 'study-confirm', 'study-confirm'),
   ] },
   { id: 'review', title: '6. 加速体验复习', steps: [
     action('review-same-day', '试一次同日追加练习', '保持当前演示日期，对解释示例再做一次独立作答并结束，阅读“同日追加”的说明。', '同一天多做一次不会让间隔不断翻倍。', '同日正常追加没有重复增加复习间隔。', 'study', 'study-queue', 'review-same-day', { noteRole: 'explain', needs: ['ai'] }),
     action('review-clock-day', '把练习日期推进一天', '在引导卡片点击“推进一天”，观察演示日期。电脑时间和正式库的日期不会跟着改变。', '立即体验需要隔天才能观察的行为。', '只有练习日期向后一天，尚未新增学习成绩。', 'today', 'today-plan', 'clock-day'),
-    action('review-clock-due', '前往下一次真正到期', '点击“前往下次到期”，查看今日清单中的复习项。若已经到期，直接刷新查看。', '复习要按已保存的到期时间发生。', '解释示例作为到期复习出现。', 'today', 'today-plan', 'clock-due'),
+    action('review-clock-due', '前往下一次真正到期', '在引导的练习时间区域点击“跳到下次复习”，查看今日清单中的复习项。若已经到期，直接刷新查看。只有练习学习日期改变，电脑时间、正式库和请求预算不变。', '复习要按已保存的到期时间发生。', '解释示例作为到期复习出现。', 'today', 'today-plan', 'clock-due'),
     action('review-finish', '完成一次跨日到期复习', '开始到期复习，隐藏原文，自己作答，等真实反馈后结束。回答不理想时，如实保留结果。', '间隔依据实际表现调整，时间加速不会制造正确回答。', '显示本次复习结果及下一次时间；仅满足条件的独立成功会增加间隔。', 'study', 'study-queue', 'review-finish', { noteRole: 'explain', needs: ['ai'] }),
     preset('review-hint', '查看提示会如何影响练习', '加载“提示完成”预设案例，打开已准备的预设会话，点击“分级提示”；阅读提示来自哪里。', '提示是帮助，同时需要如实记录使用。', '预设会话显示提示，并记录本次使用过提示。', 'study', 'study-hint', 'study-hint', 'hints', { noteRole: 'hintSession' }),
     preset('review-hint-finish', '观察带提示结果的近期安排', '继续“提示完成”案例中准备好的预设会话，点击结束练习并查看原因；其中的预设回答不算你的成绩。', '用明确标记的例子观察提示或错误导致的近期再练。', '预设会话显示近期复习，完成状态是“已看案例”。', 'study', 'study-finish', 'study-finish', 'hints', { noteRole: 'hintSession' }),
@@ -120,7 +120,7 @@ export const chapters = [
   ] },
   { id: 'output', title: '10. 用知识完成输出', steps: [
     action('output-answer', '根据知识回答问题', '问题填“在小岚的读书分享中，怎样让观点能回到原文核对？”，选择“回答问题”和知识取材范围，勾选允许将本次问题发给外部模型，再点击开始生成。', '输出应能回到真实收集的材料。', '出现真实 AI 回答、引用和限制；无依据时明确说明。', 'output', 'output-form', 'ask-answer', { needs: ['ai'], sample: { question: '在小岚的读书分享中，怎样让观点能回到原文核对？' } }),
-    step('output-citations', '逐一核对引用与底层来源', '点击答案中的引用，阅读对应知识，再回到它的原始资料，检查是否真的支持这一句。', '引用存在不代表每句话都被支持。', '能从输出回到知识与底层原文。', 'output', 'output-result'),
+    step('output-citations', '逐一核对引用与底层来源', '点击生成内容中的引用，阅读对应知识，再回到它的原始资料，检查是否真的支持这一句。', '引用存在不代表每句话都被支持。', '能从输出回到知识与底层原文。', 'output', 'output-result'),
     action('output-outline', '生成一次提纲', '将输出方式改为“组织提纲”，问题写“小岚的读书分享应按什么顺序展开？”，确认本次问题外发授权后点击开始生成。', '同一知识可以服务不同输出目的。', '出现真实 AI 提纲及对应引用。', 'output', 'output-form', 'ask-outline', { needs: ['ai'], sample: { question: '小岚的读书分享应按什么顺序展开？' } }),
     action('output-draft', '生成一段真实 AI 草稿', '改选草稿，提出“小岚如何用一段话解释保留出处的做法？”，允许此次问题外发，点击生成并等待。', 'AI 草稿需要你审阅和改写。', '出现实际模型生成的草稿和引用，或明确失败原因。', 'output', 'output-form', 'ask-draft', { needs: ['ai'], sample: { question: '小岚如何用一段话解释保留出处的做法？' } }),
     action('output-edit', '保存自己的编辑', '在历史草稿打开刚生成内容，改写一句使其符合你的表达，再保存。', '最终采用的内容由你决定。', '草稿保存了你的修改。', 'output', 'draft-editor', 'draft-edit'),
@@ -156,8 +156,26 @@ export const chapters = [
     preset('links-preview', '预览知识链接更新', '加载“链接与冲突”案例，打开“链接更新专用主题”的链接预览，核对将添加的成员链接以及原来的说明。', '先看系统准备修改哪部分链接。', '预览显示待添加的成员链接，保留专用主题的原文。', 'library', 'note-links', 'links-preview', 'conflicts', { noteRole: 'linkTopic' }),
     preset('links-sync', '确认同步链接', '在“链接更新专用主题”的预览中点击“确认更新链接”，再打开主题查看结果。', '保持应用与 Markdown 中的链接一致。', '专用主题的链接更新完成，原来的说明仍保留。', 'library', 'note-links', 'links-sync', 'conflicts', { noteRole: 'linkTopic' }),
     preset('conflicts-read', '认识外部编辑冲突', '加载“冲突”案例，在系统冲突页阅读旧版与新版的差别，再打开专用知识查看历史。此案例不会覆盖你手写的内容。', '冲突需要对照处理，不能静默选择某一版。', '看到明确的预设冲突报告及两个版本。', 'system', 'system-conflicts', 'conflicts-open', 'conflicts', { tab: 'conflicts', noteRole: 'conflictNote' }),
-    step('complete-review', '检查已实操与待体验项目', '打开章节清单，逐项查看“已实操、已看案例、待配置、未完成”。补做遗漏；暂停退出练习后可继续，重置会重新开始。', '完成主线不等于所有外部服务已经真实接通。', '你知道已完成哪些操作，哪些能力仍需配置或实际验收。', 'today', 'nav-today'),
+    step('complete-review', '回顾核心体验', '查看核心流程进度，回顾保存原文、加工、亲自作答、确认理解、到期复习和引用输出。完成后可以回正式库开始使用；扩展阅读按兴趣自选，不必全部学习。', '完成核心体验不代表掌握所有知识，也不代表可选外部服务已接通。', '核心步骤都有完成记录；可选教程未学习或待配置不会阻止核心流程完成。', 'today', 'nav-today'),
   ] },
 ];
 
-export const flatSteps = chapters.flatMap(chapter => chapter.steps.map(item => ({ ...item, chapterId: chapter.id })));
+// Keep existing step IDs and evidence. Routes only select and order the lessons.
+const coreRoute = [
+  { id: 'setup', title: '1. 配好 AI', stepIds: ['setup-welcome', 'setup-model', 'setup-save', 'setup-test', 'setup-budget'] },
+  { id: 'capture', title: '2. 收集与加工', stepIds: ['capture-save', 'capture-source', 'capture-permission', 'process-ai', 'process-group', 'library-explain'] },
+  { id: 'study', title: '3. 学习并确认理解', stepIds: ['study-source-permission', 'study-permission', 'study-plan', 'study-start', 'study-hide', 'study-answer', 'study-feedback', 'study-finish', 'study-confirm'] },
+  { id: 'review', title: '4. 体验到期复习', stepIds: ['review-clock-due', 'review-finish'] },
+  { id: 'output', title: '5. 检索与输出', stepIds: ['search-keyword', 'output-draft', 'output-citations', 'output-edit', 'output-use'] },
+  { id: 'complete', title: '6. 回顾核心体验', stepIds: ['complete-review'] },
+];
+const coreIds = new Set(coreRoute.flatMap(chapter => chapter.stepIds));
+export const flatSteps = chapters.flatMap(chapter => chapter.steps.map(item => ({ ...item, chapterId: chapter.id, priority: coreIds.has(item.id) ? 'core' : 'extension' })));
+export const coreChapters = coreRoute.map(chapter => ({ id: chapter.id, title: chapter.title, steps: chapter.stepIds.map(id => flatSteps.find(item => item.id === id)) }));
+export const coreSteps = coreChapters.flatMap(chapter => chapter.steps);
+const extensionTitles = {
+  setup: '学习偏好与保存位置', capture: '批量文件导入', process: '手工整理与联网核验', library: '知识管理进阶',
+  study: '学习安排与多轮练习', review: '复习进阶与提示案例', mistakes: '错题与争议', topics: '主题学习',
+  discover: '语义检索与联系发现', output: '更多输出方式与阶段建议', maintenance: '维护与备份', external: '外部工具与文件协作',
+};
+export const extensionChapters = chapters.map(chapter => ({ ...chapter, title: extensionTitles[chapter.id], steps: flatSteps.filter(item => item.chapterId === chapter.id && item.priority === 'extension') })).filter(chapter => chapter.steps.length);

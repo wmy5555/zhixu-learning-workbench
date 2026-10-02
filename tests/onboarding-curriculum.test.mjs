@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
-import { chapters, flatSteps } from '../public/onboarding-curriculum.mjs';
+import { chapters, flatSteps, coreSteps, extensionChapters } from '../public/onboarding-curriculum.mjs';
 import { caseIds, seedPractice, loadCase } from '../src/onboarding-cases.mjs';
 import { createService } from '../src/service.mjs';
 
@@ -52,6 +52,27 @@ test('downloadable practice files are real, distinct, original text files', asyn
     assert.match(body, /原创虚构/); return body;
   }));
   assert.equal(new Set(bodies).size, 2);
+});
+
+test('core and optional routes retain every lesson and include the prerequisites for one complete learning cycle', () => {
+  const optional = extensionChapters.flatMap(chapter => chapter.steps);
+  assert.equal(coreSteps.length, 28);
+  assert.equal(new Set([...coreSteps, ...optional].map(step => step.id)).size, flatSteps.length);
+  assert.equal(coreSteps.length + optional.length, flatSteps.length, 'each lesson has exactly one priority');
+  assert.ok(coreSteps.every(step => step.priority === 'core' && !step.caseId && step.kind !== 'external'));
+  assert.ok(coreSteps.every(step => !step.needs?.some(capability => capability !== 'ai')));
+  for (const [before, after] of [
+    ['setup-test', 'capture-save'], ['capture-save', 'capture-permission'], ['capture-permission', 'process-ai'],
+    ['library-explain', 'study-start'], ['study-source-permission', 'study-answer'], ['study-permission', 'study-answer'],
+    ['study-feedback', 'study-finish'], ['study-finish', 'study-confirm'], ['study-finish', 'review-clock-due'],
+    ['review-clock-due', 'review-finish'], ['output-draft', 'output-citations'], ['output-edit', 'output-use'],
+  ]) {
+    assert.ok(coreSteps.findIndex(step => step.id === before) < coreSteps.findIndex(step => step.id === after), `${before} before ${after}`);
+  }
+  assert.equal(coreSteps.at(-1).id, 'complete-review');
+  for (const id of ['capture-batch', 'process-search-config', 'process-research', 'topic-create', 'search-embedding', 'backup-restore', 'mcp-config', 'obsidian-open']) {
+    assert.ok(optional.some(step => step.id === id), `${id} remains optional and accessible`);
+  }
 });
 
 test('initial seed is idempotent, local and has no learned or confirmed evidence', async t => {

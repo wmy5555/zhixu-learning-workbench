@@ -1,6 +1,6 @@
 import { api } from "./api.mjs";
 import { el, button, badge, clear, toast, confirmAction } from "./ui.mjs";
-import { chapters, flatSteps } from "./onboarding-curriculum.mjs";
+import { chapters, flatSteps, coreChapters, coreSteps, extensionChapters } from "./onboarding-curriculum.mjs";
 
 const DISMISSED = "zhixu.onboarding.welcomeDismissed.v1";
 const STEP_KEY = "zhixu.onboarding.currentStep.v1";
@@ -35,6 +35,7 @@ export function createOnboarding(adapter) {
   let refreshing = false;
   let disposed = false;
   let compact = false;
+  let showExtensions = false;
   let observer = null;
   let poll = null;
   const workspace = document.querySelector(".workspace");
@@ -43,6 +44,10 @@ export function createOnboarding(adapter) {
   workspace.prepend(banner, panel);
 
   const step = () => flatSteps.find(item => item.id === selected) || flatSteps.find(item => item.id === current?.currentStepId) || flatSteps[0];
+  const coreDone = () => coreSteps.filter(item => completed(current?.progress?.[item.id])).length;
+  const nextCoreStep = () => coreSteps.find(item => !completed(current?.progress?.[item.id])) || coreSteps.at(-1);
+  const routeChapter = target => (target.priority === "core" ? coreChapters : extensionChapters).find(chapter => chapter.steps.some(item => item.id === target.id));
+  const routeSteps = target => target.priority === "core" ? coreSteps : routeChapter(target).steps;
   const inPractice = () => Boolean(api.getContext().practiceId);
   const busy = () => working || Boolean(current?.busy) || api.getContext().pending > 0;
   const stateBody = extra => ({ practiceId: current?.practiceId || api.getContext().practiceId, ...extra });
@@ -63,7 +68,7 @@ export function createOnboarding(adapter) {
     if (highlight) {
       for (let ancestor = highlight.parentElement; ancestor; ancestor = ancestor.parentElement) if (ancestor.tagName === "DETAILS") ancestor.open = true;
       highlight.classList.add("tour-target");
-      if (scroll) highlight.scrollIntoView({ behavior: "smooth", block: "center" });
+      if (scroll) highlight.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" });
     }
   }
   function flashHighlight() {
@@ -144,7 +149,13 @@ export function createOnboarding(adapter) {
     await goTo(step());
   }
   async function advance(action) {
-    adopt(await api.onboarding("advance", stateBody({ action })));
+    try { adopt(await api.onboarding("advance", stateBody({ action }))); }
+    catch (error) {
+      if (action !== "next" || error.code !== "NO_REVIEW") throw error;
+      await goTo(flatSteps.find(item => item.id === "study-start"));
+      errorText = "还没有可用的复习安排。反馈存在争议时，结束练习只会保留记录。请重新开始这条知识的练习，核对材料、提交新回答，收到明确反馈并结束后再前往复习。";
+      return;
+    }
     await adapter.refresh?.();
     toast("练习时间已前进，电脑时间和正式学习日程保持不变。", "success");
   }
@@ -167,11 +178,16 @@ export function createOnboarding(adapter) {
     const result = getStepProgress(current, target);
     if (!result.complete) errorText = result.message || result.reason || "尚未找到这一步的完成记录。请按说明完成操作，再检查进度。";
     else if (target.kind === "read") {
-      const next = flatSteps[flatSteps.findIndex(item => item.id === target.id) + 1];
+      const route = routeSteps(target);
+      const next = route[route.findIndex(item => item.id === target.id) + 1];
       if (next) await goTo(next);
     }
   }
-  function chapterItems(chapter) { return flatSteps.filter(item => stepChapter(item)?.id === chapter.id); }
+  async function openExtensions() {
+    showExtensions = true;
+    await resume();
+    panel.querySelectorAll(".onboarding-extensions")[0]?.scrollIntoView({ block: "nearest" });
+  }
   function render() {
     const practice = inPractice();
     banner.hidden = !current?.practiceId;
@@ -183,28 +199,39 @@ export function createOnboarding(adapter) {
     if (!visible) { clearHighlight(); return; }
     const active = step();
     if (!active) return;
-    const index = flatSteps.findIndex(item => item.id === active.id);
-    const chapter = stepChapter(active);
+    const core = active.priority === "core";
+    const route = routeSteps(active);
+    const index = route.findIndex(item => item.id === active.id);
+    const chapter = routeChapter(active);
     const progress = getStepProgress(current, active);
-    const done = flatSteps.filter(item => completed(current?.progress?.[item.id])).length;
-    const pendingSetup = flatSteps.filter(item => current?.progress?.[item.id]?.status === "needs_setup").length;
-    const chapterIndex = chapters.findIndex(item => item.id === chapter?.id);
-    const title = el("div", { class: "onboarding-heading" }, [el("div", {}, [el("p", { class: "eyebrow", text: `新手全流程 · 当前第 ${index + 1}/${flatSteps.length} 步` }), el("h2", { text: chapter?.title || "开始练习" }), el("p", { class: "fine-print", text: `完成进度：${done}/${flatSteps.length} 步（含阅读和案例）` })]), button(compact ? "展开步骤" : "折叠步骤", { kind: "text compact", onClick: () => { compact = !compact; render(); } })]);
+    const done = coreDone();
+    const routeDone = route.filter(item => completed(current?.progress?.[item.id])).length;
+    const title = el("div", { class: "onboarding-heading" }, [el("div", {}, [el("p", { class: "eyebrow", text: `${core ? "核心流程" : "扩展阅读（可选）"} · 当前第 ${index + 1}/${route.length} 步` }), el("h2", { text: chapter?.title.replace(/^\d+\.\s*/, "") || "开始练习" }), el("p", { class: "fine-print", text: `核心完成进度：${done}/${coreSteps.length} 步（含阅读）` })]), button(compact ? "展开步骤" : "折叠步骤", { kind: "text compact", onClick: () => { compact = !compact; render(); } })]);
     const content = el("div", { class: "onboarding-content", hidden: compact });
-    const catalog = el("details", { class: "onboarding-catalog" }, [el("summary", { text: `全部 ${chapters.length} 章${pendingSetup ? ` · ${pendingSetup} 项待配置` : ""}` })]);
-    chapters.forEach((item, index) => {
-      const items = chapterItems(item); const count = items.filter(row => completed(current?.progress?.[row.id])).length;
-      catalog.append(button(`${String(index + 1).padStart(2, "0")} ${item.title.replace(/^\d+\.\s*/, "")} · 已完成 ${count}/${items.length} 步`, { kind: `text${item.id === chapter?.id ? " is-current" : ""}`, onClick: () => run(() => goTo(items[0])), disabled: working || !items.length }));
+    const catalog = el("details", { class: "onboarding-catalog" }, [el("summary", { text: `核心流程 · ${coreChapters.length} 个阶段 · ${done}/${coreSteps.length} 步已完成` })]);
+    coreChapters.forEach(item => {
+      const count = item.steps.filter(row => completed(current?.progress?.[row.id])).length;
+      catalog.append(button(`${item.title} · 已完成 ${count}/${item.steps.length} 步`, { kind: `text${core && item.id === chapter?.id ? " is-current" : ""}`, onClick: () => run(() => goTo(item.steps[0])), disabled: working }));
     });
-    const choices = el("select", { ariaLabel: "选择本章步骤", disabled: working, on: { change: event => run(() => goTo(flatSteps.find(item => item.id === event.target.value))) } });
-    chapterItems(chapter || chapters[0]).forEach(item => choices.append(el("option", { value: item.id, text: `${statusLabel(current?.progress?.[item.id])} · ${item.title}`, selected: item.id === active.id })));
-    content.append(catalog, choices, el("div", { class: "onboarding-step-head" }, [el("h3", { text: active.title }), badge(progress.label, progress.complete ? "good" : "neutral")]),
+    content.append(catalog);
+    if (!core) content.append(el("p", { class: "fine-print", text: `本专题已完成 ${routeDone}/${route.length} 步，可随时返回。扩展内容不计入核心完成进度。` }), button("返回核心流程", { kind: "text compact", disabled: working, onClick: () => run(() => goTo(nextCoreStep())) }));
+    if (active.id === "complete-review") content.append(el("div", { class: "onboarding-expected", role: "status" }, [
+      el("strong", { text: done === coreSteps.length ? "核心流程已完成" : `核心流程还有 ${coreSteps.length - done} 步待完成` }),
+      el("p", { text: "扩展阅读由你自选，未学习或待配置都不影响核心体验完成。" }),
+    ]));
+    const choices = el("select", { ariaLabel: core ? "选择本阶段步骤" : "选择本专题步骤", disabled: working, on: { change: event => run(() => goTo(flatSteps.find(item => item.id === event.target.value))) } });
+    chapter.steps.forEach(item => choices.append(el("option", { value: item.id, text: `${statusLabel(current?.progress?.[item.id])} · ${item.title}`, selected: item.id === active.id })));
+    content.append(choices, el("div", { class: "onboarding-step-head" }, [el("h3", { text: active.title }), badge(progress.label, progress.complete ? "good" : "neutral")]),
       el("p", { class: "onboarding-instruction", text: active.instruction || active.description || "" }));
     if (active.why) content.append(el("p", { class: "fine-print", text: active.why }));
     if (active.expected) content.append(el("div", { class: "onboarding-expected" }, [el("strong", { text: "完成后应看到" }), el("p", { text: active.expected })]));
+    if (["review-clock-due", "review-finish"].includes(active.id) && !progress.complete) content.append(el("div", { class: "onboarding-expected" }, [
+      el("p", { text: "若反馈存在争议，本轮只保留记录，不会创建或更新复习安排。可以重新练习这条知识，核对材料并提交新回答；收到明确反馈并结束后，再继续复习步骤。" }),
+      button("重新练习这条知识", { kind: "text compact", disabled: busy() || !practice || !current?.modelReady, onClick: () => run(() => goTo(flatSteps.find(item => item.id === "study-start"))) }),
+    ]));
     if (active.kind === "case" || active.caseId) content.append(el("p", { class: "notice", text: "这一步使用预设演示案例，不代表你的真实经历、成绩或外部连接结果。" }));
     if (active.kind === "external") content.append(el("p", { class: "fine-print", text: "外部应用需要你自行连接。标记体验只记录你的确认，不代表系统验证连接成功。" }));
-    if (chapterIndex === chapters.length - 1 || active.id === "complete-review") {
+    if (!core && chapter.id === "external") {
       const connections = current?.externalConnections || {};
       const mcp = connections.mcp || {};
       const obsidian = connections.obsidian || {};
@@ -224,13 +251,22 @@ export function createOnboarding(adapter) {
       actions.append(button(active.kind === "read" ? "我已阅读" : active.kind === "external" ? "记录我已在外部体验" : "检查这一步", { onClick: () => run(() => checkpoint(active)), disabled: working }));
     }
     content.append(actions);
-    content.append(el("div", { class: "onboarding-step-nav" }, [button("上一步", { kind: "text", disabled: working || index < 1, onClick: () => run(() => goTo(flatSteps[index - 1])) }),
-      button(index === flatSteps.length - 1 ? "检查全部进度" : progress.complete ? "下一步" : "先看下一步", { kind: "text", disabled: working, onClick: () => run(() => index === flatSteps.length - 1 ? refreshProof() : goTo(flatSteps[index + 1])) })]));
+    const last = index === route.length - 1;
+    const finishLabel = core ? done === coreSteps.length ? "完成体验，回正式库" : "继续核心流程" : "返回核心流程";
+    content.append(el("div", { class: "onboarding-step-nav" }, [button("上一步", { kind: "text", disabled: working || index < 1, onClick: () => run(() => goTo(route[index - 1])) }),
+      button(last ? finishLabel : progress.complete ? "下一步" : "先看下一步", { kind: "text", disabled: working || (last && core && done === coreSteps.length && current?.busy), onClick: () => run(() => last ? core && done === coreSteps.length ? pause() : goTo(nextCoreStep()) : goTo(route[index + 1])) })]));
     content.append(el("p", { class: "fine-print", text: "先看后面的步骤不会把当前步骤记为完成；实操进度来自实际保存的记录。" }));
+    const extensions = el("details", { class: "onboarding-catalog onboarding-extensions", open: showExtensions }, [el("summary", { text: `扩展阅读（可选）· ${extensionChapters.length} 个专题` }), el("p", { class: "fine-print", text: "首次使用可以先完成核心流程。需要时再选一个专题阅读或实操，不必全部学完。" })]);
+    extensionChapters.forEach(item => {
+      const count = item.steps.filter(row => completed(current?.progress?.[row.id])).length;
+      extensions.append(button(`${item.title.replace(/^\d+\.\s*/, "")} · 可选 · 已完成 ${count}/${item.steps.length} 步`, { kind: `text${!core && item.id === chapter.id ? " is-current" : ""}`, onClick: () => run(() => goTo(item.steps[0])), disabled: working }));
+    });
+    extensions.addEventListener("toggle", () => { showExtensions = extensions.open; });
+    content.append(extensions);
     if (current?.practiceId) {
       if (!practice) content.append(button(current.modelReady ? "返回练习库" : "配置并测试 AI", { kind: "primary", onClick: () => run(current.modelReady ? async () => { await switchContext(current.practiceId); await adapter.navigate({ view: "today" }, current); } : openSettings), disabled: working }));
       const clock = el("details", { class: "onboarding-clock" }, [el("summary", { text: `练习时间：${practiceDate(current.clock?.now, current.clock?.timezone || current.settings?.timezone)}` }), el("p", { class: "fine-print", text: "按学习时区显示，只推进练习库的学习时间。收费额度和正式库使用真实时间。" }), el("div", { class: "onboarding-actions" }, [button("前进 1 天", { disabled: working || current.busy || !practice || !current.modelReady, onClick: () => run(() => advance("day")) }), button("跳到下次复习", { disabled: working || current.busy || !practice || !current.modelReady, onClick: () => run(() => advance("next")) })])]);
-      if (chapterIndex === 5) clock.open = true;
+      if (active.chapterId === "review") clock.open = true;
       if (current.unfinishedSessions?.length) clock.append(el("div", { class: "page-stack" }, [el("p", { class: "fine-print", text: "下面的练习尚未结束。可以回学习页继续；确需放弃本次时，结束后才能推进时间。" }), ...current.unfinishedSessions.map(session => el("div", {}, [el("p", { class: "fine-print", text: session.title || "未完成练习" }), button("结束未完成练习", { kind: "text compact", disabled: busy() || !practice, onClick: () => abandonSession(session) })]))]));
       content.append(clock, el("div", { class: "onboarding-controls" }, [button("配置共享 API", { kind: "text compact", disabled: working || current.busy, onClick: () => run(openSettings) }), button("暂停并回正式库", { kind: "text compact", disabled: working || current.busy, onClick: () => run(pause) }), button("重置练习", { kind: "text compact", disabled: working || current.busy, onClick: () => { if (!working) reset().catch(error => { errorText = error.message; render(); }); } })]));
       if (current.busy) content.append(el("p", { class: "fine-print", text: "练习任务正在处理；完成或取消后可切换知识库、推进时间。" }));
@@ -240,12 +276,13 @@ export function createOnboarding(adapter) {
   }
   function entryCard() {
     const welcome = !current?.practiceId && !stored(DISMISSED);
+    const finished = coreDone() === coreSteps.length;
     if (!welcome) return el("section", { class: "panel onboarding-entry onboarding-entry-compact", dataset: { tour: "onboarding-entry" } }, [
-      el("p", { class: "muted", text: current?.practiceId ? "新手实操引导已保存进度，随时继续。" : "用独立示例，亲手走通知序全流程。" }),
-      el("div", { class: "form-actions" }, [button(current?.practiceId ? "继续新手引导" : "开始新手引导", { kind: "primary", onClick: () => run(current?.practiceId ? resume : start) }), current?.practiceId ? button("重新练习", { kind: "text", onClick: () => reset().catch(error => toast(error.message, "error")) }) : null]),
+      el("p", { class: "muted", text: finished ? "核心流程已完成，可以按需选择扩展阅读。" : current?.practiceId ? `核心体验进度：${coreDone()}/${coreSteps.length} 步，随时继续；扩展阅读按需自选。` : "用独立示例走通核心学习流程，扩展阅读按需自选。" }),
+      el("div", { class: "form-actions" }, [button(finished ? "查看扩展阅读" : current?.practiceId ? "继续新手引导" : "开始新手引导", { kind: "primary", onClick: () => run(finished ? openExtensions : current?.practiceId ? resume : start) }), current?.practiceId ? button("重新练习", { kind: "text", onClick: () => reset().catch(error => toast(error.message, "error")) }) : null]),
     ]);
     return el("section", { class: `panel onboarding-entry${welcome ? " accent-panel" : ""}`, dataset: { tour: "onboarding-entry" } }, [
-      el("div", {}, [el("p", { class: "eyebrow", text: current?.practiceId ? "随时继续" : "第一次使用知序" }), el("h2", { text: "跟着示例，走通完整学习流程" }), el("p", { class: "muted", text: "先配置 AI，再到独立练习库亲手收集、整理、学习和输出；复习时间可以加速。" })]),
+      el("div", {}, [el("p", { class: "eyebrow", text: current?.practiceId ? "随时继续" : "第一次使用知序" }), el("h2", { text: "先走通核心学习流程" }), el("p", { class: "muted", text: `先配置 AI，再在独立练习库体验收集加工、学习确认、复习和输出。核心共 ${coreSteps.length} 步；次要教程放在扩展阅读，按需自选。` })]),
       el("div", { class: "form-actions" }, [button(current?.practiceId ? "继续新手引导" : "开始新手引导", { kind: "primary", onClick: () => run(current?.practiceId ? resume : start) }), welcome ? button("暂时关闭提示", { kind: "text", onClick: () => { dismissWelcome(); adapter.refresh?.(); } }) : null]),
     ]);
   }
