@@ -20,6 +20,12 @@ class Element {
   replaceChildren(...children) { this._text = ''; this.children = []; this.append(...children); }
   addEventListener(name, handler) { this.events[name] = handler; }
   setAttribute(name, value) { this.attributes[name] = value; }
+  reset() {
+    this.events.reset?.();
+    for (const node of descendants(this)) {
+      if (['input', 'textarea'].includes(node.tagName)) { node.checked = false; node.value = ''; }
+    }
+  }
   querySelectorAll(selector) { return descendants(this).slice(1).filter(node => matches(node, selector)); }
   querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
   focus() {}
@@ -28,6 +34,7 @@ class Element {
 }
 function descendants(node) { return [node, ...node.children.flatMap(child => child instanceof Element ? descendants(child) : [])]; }
 function matches(node, selector) {
+  if (selector.startsWith('.')) return String(node.className || '').split(/\s+/).includes(selector.slice(1));
   const match = selector.match(/^(\w+)(?:\[([^=]+)=['"]([^'"]+)['"]\])?$/);
   return Boolean(match && node.tagName === match[1] && (!match[2] || node[match[2]] === match[3]));
 }
@@ -48,7 +55,7 @@ function browser(api = {}) {
   };
   document.createTextNode = value => { const node = new Element('text'); node.textContent = value; return node; };
   const context = vm.createContext({
-    api, document, initSidebar, Node: Element, URL, Intl, Date, Map, Set, crypto: { randomUUID: () => 'request-ui' },
+    api, document, initSidebar, Node: Element, URL, Intl, Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => 'request-ui' },
     FormData: class {
       constructor(form) { this.form = form; }
       entries() { return descendants(this.form).filter(node => node.name && !node.disabled && ['input', 'textarea', 'select'].includes(node.tagName)).map(node => [node.name, String(node.tagName === 'textarea' ? node.textContent : node.tagName === 'select' ? node.children.find(option => option.selected)?.value || '' : node.value)]); }
@@ -57,9 +64,46 @@ function browser(api = {}) {
     window: { matchMedia: () => ({ matches: false, addEventListener() {} }), history: { replaceState() {} }, location: { hash: '' }, setTimeout() {}, addEventListener() {} },
   });
   const stripped = appSource.replace(/import[\s\S]*?from "\.\/api\.mjs";\s*/, '').replace(/import[\s\S]*?from "\.\/ui\.mjs";\s*/, '').replace(/^init\(\);\s*$/m, '');
-  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
+  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
   return context.app;
 }
+
+test('capture research requires AI processing and clears on deselection, clear, and successful save', async () => {
+  const writes = [];
+  const app = browser({ import: async payload => { writes.push(plain(payload)); return { notes: [{}] }; }, bootstrap: async () => ({}) });
+  await app.renderCapture();
+  const form = descendants(app.refs.main).find(node => node.tagName === 'form');
+  const process = control(form, 'process');
+  const research = control(form, 'research');
+  assert.equal(research.disabled, true);
+  assert.equal(research.checked, false);
+  process.checked = true; process.events.change();
+  assert.equal(research.disabled, false);
+  research.checked = true;
+  process.checked = false; process.events.change();
+  assert.equal(research.disabled, true);
+  assert.equal(research.checked, false);
+  process.checked = true; process.events.change();
+  assert.equal(research.checked, false);
+  research.checked = true;
+  click(findButton(form, '清空'));
+  await Promise.resolve();
+  assert.equal(process.checked, false);
+  assert.equal(research.disabled, true);
+  assert.equal(research.checked, false);
+  process.checked = true; process.events.change(); research.checked = true;
+  await form.events.submit({ preventDefault() {} });
+  assert.equal(writes[0].process, true);
+  assert.equal(writes[0].research, true);
+  assert.equal(process.checked, false);
+  assert.equal(research.disabled, true);
+  assert.equal(research.checked, false);
+  // 即使程序设置了不一致状态，提交也不能携带失效的联网选择。
+  research.checked = true;
+  await form.events.submit({ preventDefault() {} });
+  assert.equal(writes[1].process, false);
+  assert.equal(writes[1].research, false);
+});
 
 test('evidence expands on demand, retains roles and locators, and rejects executable URLs', async () => {
   let reads = 0;
