@@ -60,7 +60,8 @@ export function buildUsageReport(calls, { timezone = 'Asia/Shanghai', period = '
     cachedInputTokens: tokenCount(call.cachedInputTokens), cost: finiteCost(call.cost),
   }));
   return {
-    period, from, to, timezone, generatedAt: at.toISOString(), filters: { capability, model },
+    // Ledger ok/failedCalls describe transport, not later JSON/content validation.
+    resultScope: 'transport', period, from, to, timezone, generatedAt: at.toISOString(), filters: { capability, model },
     availableModels: [...availableModels].sort(), totals: finish(totals),
     daily: [...days.values()].map(finish),
     models: [...models.values()].sort((a, b) => b.totalTokens - a.totalTokens || b.calls - a.calls).map(finish),

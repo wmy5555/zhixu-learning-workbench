@@ -71,16 +71,16 @@ function recentPanel(report) {
   let page = 0;
   function render() {
     const pages = Math.max(1, Math.ceil(report.recentCalls.length / 10));
-    clear(content).append(table(['时间', '模型 / 服务', '输入 / 输出', '费用²', '结果'], report.recentCalls.slice(page * 10, page * 10 + 10).map(row => [
+    clear(content).append(table(['时间', '模型 / 服务', '输入 / 输出', '费用²', '传输状态'], report.recentCalls.slice(page * 10, page * 10 + 10).map(row => [
       new Intl.DateTimeFormat('zh-CN', { timeZone: report.timezone, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(row.createdAt)),
       row.model || names[row.capability] || '其他', ['model', 'embedding'].includes(row.capability) ? `${row.inputTokens === null ? '未知' : count(row.inputTokens)} / ${row.outputTokens === null ? '未知' : count(row.outputTokens)}` : '—',
-      amount(row.cost), row.ok === true ? '成功' : row.ok === false ? '失败' : '未知',
+      amount(row.cost), row.ok === true ? 'HTTP 响应成功' : row.ok === false ? '连接或 HTTP 失败' : '未知',
     ]), '最近请求明细'));
     clear(pager).append(el('span', { text: `第 ${page + 1} / ${pages} 页` }), el('div', { class: 'item-actions' }, [
       button('上一页', { disabled: page === 0, onClick: () => { page--; render(); } }), button('下一页', { disabled: page >= pages - 1, onClick: () => { page++; render(); } }),
     ]));
   }
-  const panel = el('details', { class: 'panel usage-details' }, [el('summary', { text: `最近请求明细 · ${report.recentCalls.length} 条` }), el('p', { class: 'fine-print', text: `明细最多展示最近 ${report.recentLimit} 条；上方统计包含所选期间的全部记录。失败请求也可能已计费。` }), content, pager]);
+  const panel = el('details', { class: 'panel usage-details' }, [el('summary', { text: `最近请求明细 · ${report.recentCalls.length} 条` }), el('p', { class: 'fine-print', text: `明细最多展示最近 ${report.recentLimit} 条；上方统计包含所选期间的全部记录。传输状态仅表示连接和 HTTP 响应情况，不代表生成、解析或校验成功；实际结果以对应操作页面或任务结果为准。失败请求也可能已计费。` }), content, pager]);
   render(); return panel;
 }
 
@@ -107,7 +107,7 @@ function settingsForm(settings, readOnly, save, refresh) {
       ]),
       el('div', { class: 'form-grid' }, [
         field(`语义嵌入输入单价 / 百万 token${embedding.model ? ` · ${embedding.model}` : ''}`, numberInput('embeddingPrice', embedding.inputPrice)),
-        field('联网搜索单价 / 次', numberInput('searchPrice', search.requestPrice), '按当前高级搜索请求填写；失败请求费用仍保持未知。'),
+        field('联网搜索单价 / 次', numberInput('searchPrice', search.requestPrice), '按当前高级搜索请求填写；连接或 HTTP 失败时费用保持未知。'),
       ]),
       el('p', { class: 'fine-print', text: `单份资料上限仍为 ${ai.sourceCallLimit ?? 12} 次；模型等待上限为 ${(ai.timeoutMs ?? 180000) / 1000} 秒。更换服务地址或模型后需重新填写单价。预算按请求前的已记录费用检查，单次请求仍可能超过余额。` }),
     ]), submit, status,
@@ -157,7 +157,7 @@ export async function createUsagePanel({ load, settings, readOnly = false, save 
         el('div', { class: 'usage-stats' }, [
           metric('总 Token', count(t.totalTokens), t.unknownTokenCalls ? `${t.unknownTokenCalls} 次用量不完整，仅汇总已知部分` : '输入 + 输出，来自供应商响应'),
           metric('已记录费用', compactAmount(t.knownCost), t.unknownCostCalls ? `另有 ${t.unknownCostCalls} 次费用未知 · 总费用待确认` : '按请求当时单价估算'),
-          metric('外部请求', count(t.calls), `${count(t.failedCalls)} 次失败 · 包含重试与连接测试`),
+          metric('外部请求', count(t.calls), `${count(t.failedCalls)} 次连接或 HTTP 失败 · 包含重试与连接测试`),
           metric('缓存输入¹', t.tokenCalls && t.unknownCacheCalls === t.tokenCalls ? '未知' : count(t.cachedInputTokens), `${count(t.inputTokens)} 输入 / ${count(t.outputTokens)} 输出${t.unknownCacheCalls ? ` · ${t.unknownCacheCalls} 次缓存未知` : ''}`),
         ]),
         budget.unavailable ? el('p', { class: 'notice warn', text: '部分调用日期无效，当前无法读取预算状态；统计只包含日期有效的记录。请检查诊断记录。' }) : el('div', { class: 'usage-budget-grid' }, [

@@ -1,5 +1,7 @@
 # PR 审阅核对与后续事项
 
+用量模块 PR #21 已采纳[不要把 HTTP 成功显示为操作成功](https://github.com/wmy5555/zhixu-learning-workbench/pull/21#discussion_r4166684236)。保留原调用记账时点与请求预算机制，将明细改为明确的「传输状态 / HTTP 响应成功」，概览改为「连接或 HTTP 失败」，补充生成与解析仍可能失败的说明；导出增加 `resultScope: "transport"`。回归通过真实记账路径注入无效 JSON、空/截断模型输出、无效嵌入/搜索结果和 HTTP 401，确认操作失败不会被显示为笼统的“成功”。
+
 核对日期：2026-10-02。用量与费用开发前读取 PR #1–#17，首次推送前再次核对 PR #1–#20 的全部普通评论、行内审阅及各 PR 审阅总结；共 7 条普通评论、13 条行内意见、5 份正式审阅，没有新增用量或费用相关意见。本分支已对齐至包含 #20 的 main（878350d）。其余历史意见保持原处置，本次不改学习资格或会话策略。
 
 早前登记的 [#18 进度文案回归覆盖](https://github.com/wmy5555/zhixu-learning-workbench/pull/18#discussion_r4166097409)、[#19 闪烁动画回归覆盖](https://github.com/wmy5555/zhixu-learning-workbench/pull/19#discussion_r4166184903)、[#19 减少动态效果时仍平滑滚动](https://github.com/wmy5555/zhixu-learning-workbench/pull/19#discussion_r4166184915)，以及 [#20 争议反馈后的复习恢复路径](https://github.com/wmy5555/zhixu-learning-workbench/pull/20#discussion_r4166388717)，已在 #20 修复并补充测试，本次对齐后保留。新手引导的预算步骤继续指向新的用量页，不改变 28 步核心路线。下文保留各项处理依据。

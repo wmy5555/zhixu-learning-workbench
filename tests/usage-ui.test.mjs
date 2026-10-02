@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
 import { buildUsageReport } from '../src/usage.mjs';
+import { createAI } from '../src/ai.mjs';
 
 const uiSource = await readFile(new URL('../public/ui.mjs', import.meta.url), 'utf8');
 const usageSource = await readFile(new URL('../public/usage.mjs', import.meta.url), 'utf8');
@@ -107,5 +108,39 @@ test('export serializes the currently displayed accounting report with no source
   const actual = JSON.parse(await exported.text());
   assert.deepEqual(actual.totals, input.totals); assert.deepEqual(actual.filters, input.filters);
   assert.equal(actual.from, input.from); assert.equal(actual.recentLimit, 100);
+  assert.equal(actual.resultScope, 'transport');
   assert.equal(Object.hasOwn(actual.recentCalls[0], 'sourceId'), false);
+});
+
+test('HTTP 200 with invalid provider content is labelled as transport success, never operation success', async () => {
+  const calls = [];
+  const cases = [
+    ['generate', '{invalid', 200, 'INVALID_RESPONSE'],
+    ['generate', { choices: [{ message: { content: '' }, finish_reason: 'stop' }] }, 200, 'INVALID_RESPONSE'],
+    ['generate', { choices: [{ message: { content: 'partial' }, finish_reason: 'length' }] }, 200, 'MODEL_TRUNCATED'],
+    ['embed', { data: [] }, 200, 'INVALID_RESPONSE'],
+    ['search', { results: null }, 200, 'INVALID_RESPONSE'],
+    ['generate', { error: { message: 'synthetic rejection' } }, 401, 'PROVIDER_ERROR'],
+  ];
+  for (const [method, payload, status, code] of cases) {
+    const config = { enabled: true, baseUrl: 'https://8.8.8.8/v1', model: 'synthetic' };
+    const ai = createAI({
+      getSettings: () => ({ ai: { ...config, dailyCallLimit: 20, monthlyBudget: 0 }, embedding: config, search: config }),
+      getSecret: () => 'synthetic-test-secret', getUsage: () => ({ callsToday: 0, costMonth: 0 }),
+      recordCall: call => calls.push({ ...call, createdAt: '2026-10-02T00:00:00Z' }),
+      fetchImpl: async () => new Response(typeof payload === 'string' ? payload : JSON.stringify(payload), { status, headers: { 'content-type': 'application/json' } }),
+    });
+    await assert.rejects(ai[method]({ prompt: 'synthetic', texts: ['synthetic'], query: 'synthetic', privacy: 'cloud' }), { code });
+  }
+  assert.equal(calls.length, cases.length);
+  assert.equal(calls.filter(call => call.ok).length, 5, 'Transport ledger deliberately precedes content validation');
+  const data = report(buildUsageReport(calls, { at: new Date('2026-10-02T12:00:00Z') }));
+  assert.equal(data.totals.failedCalls, 1);
+  const panel = await browser().createUsagePanel({ load: async () => data, settings, save: async () => {} });
+  assert.match(panel.textContent, /1 次连接或 HTTP 失败/);
+  assert.match(panel.textContent, /不代表生成、解析或校验成功/);
+  const cells = descendants(panel).filter(node => node.tagName === 'td').map(node => node.textContent);
+  assert.equal(cells.filter(text => text === 'HTTP 响应成功').length, 5);
+  assert.equal(cells.filter(text => text === '连接或 HTTP 失败').length, 1);
+  assert.equal(cells.some(text => text === '成功' || text === '失败'), false);
 });
