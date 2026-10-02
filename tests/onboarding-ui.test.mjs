@@ -82,12 +82,12 @@ function descend(node) { return [node, ...node.children.flatMap(descend)]; }
 function findButton(root, label) { return descend(root).find(node => node.tagName === 'BUTTON' && node.textContent === label); }
 async function click(node) { assert.ok(node, 'button exists'); assert.equal(node.disabled, false, `button ${node.textContent} is enabled`); await node.events.click({ target: node, preventDefault() {} }); }
 
-async function tutorialBrowser({ modelReady = true, exists = true, narrow = false, query = '' } = {}) {
+async function tutorialBrowser({ modelReady = true, exists = true, narrow = false, query = '', checkpoint } = {}) {
   const body = new Element('body'), workspace = new Element(), main = new Element('main'), drawer = new Element(), drawerBody = new Element(), launcher = new Element('button');
   body.append(workspace, drawer, launcher); workspace.append(main); drawer.append(drawerBody);
   const roots = { '.workspace': workspace, '#main': main, '#drawer': drawer, '#drawer-body': drawerBody, '#onboarding-launcher': launcher };
   const document = { body, createElement: tag => new Element(tag), createTextNode: text => { const node = new Element('text'); node.textContent = text; return node; }, querySelector: selector => roots[selector] || null, querySelectorAll: selector => selector === '[data-tour]' ? descend(body).filter(node => node.dataset.tour) : [] };
-  const requests = [], navigations = [], contexts = [];
+  const requests = [], navigations = [], contexts = [], intervals = [];
   let practiceId = '', state = { practiceId: exists ? 'practice-one' : null, status: exists ? 'paused' : 'not_started', modelReady, progress: {}, roles: {}, clock: { now: '2026-09-30T08:00:00Z' }, busy: false };
   const api = {
     getContext: () => ({ practiceId, pending: 0 }),
@@ -95,20 +95,89 @@ async function tutorialBrowser({ modelReady = true, exists = true, narrow = fals
     onboarding: async (action, data = {}) => {
       requests.push({ action, data: structuredClone(data) });
       if (action === 'start' || action === 'resume') state = { ...state, practiceId: 'practice-one', status: 'active' };
-      if (action === 'checkpoint') state.currentStepId = data.stepId;
+      if (action === 'checkpoint') {
+        if (checkpoint) await checkpoint(data, state);
+        if (data.mode === 'read') state.progress[data.stepId] = { status: 'demonstrated' };
+        state.currentStepId = data.stepId;
+      }
       if (action === 'pause') state.status = 'paused';
       return structuredClone(state);
     },
   };
   const context = vm.createContext({ api, chapters, flatSteps, document, Node: Element, URLSearchParams, localStorage: store(), sessionStorage: store(), MutationObserver: class { observe() {} disconnect() {} },
-    window: { location: { search: query }, matchMedia: () => ({ matches: narrow }), addEventListener() {}, setTimeout() {}, clearTimeout() {}, setInterval() {}, clearInterval() {} },
+    window: { location: { search: query }, matchMedia: () => ({ matches: narrow }), addEventListener() {}, setTimeout() {}, clearTimeout() {}, setInterval(handler) { intervals.push(handler); }, clearInterval() {} },
   });
   const stripped = onboardingSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '');
   vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + stripped + '\nthis.make = createOnboarding; this.progress = getStepProgress;', context);
   const adapter = { navigate: async step => { navigations.push(step.id || step.view); }, contextChanged: async () => {}, refresh: async () => {}, fillSample: async () => {} };
   const tutorial = context.make(adapter); await tutorial.init();
-  return { tutorial, body, workspace, main, drawer, drawerBody, requests, navigations, contexts, progress: context.progress, get state() { return state; }, setState: value => { state = { ...state, ...value }; } };
+  return { tutorial, body, workspace, main, drawer, drawerBody, requests, navigations, contexts, intervals, progress: context.progress, get state() { return state; }, setState: value => { state = { ...state, ...value }; } };
 }
+
+test('reading confirmation waits for saving, then navigates exactly one step without completing the next action', async () => {
+  let release;
+  const ui = await tutorialBrowser({ checkpoint: async data => {
+    if (data.mode === 'read') await new Promise(resolve => { release = resolve; });
+  } });
+  await ui.tutorial.open();
+  const first = flatSteps[0], next = flatSteps[1];
+  const pending = click(findButton(ui.body, '我已阅读'));
+  assert.equal(ui.state.currentStepId, first.id, 'stay on the current step while saving');
+  assert.equal(ui.navigations.at(-1), first.id);
+  assert.equal(findButton(ui.body, '我已阅读').disabled, true);
+  release(); await pending;
+  assert.equal(ui.state.progress[first.id].status, 'demonstrated');
+  assert.equal(ui.state.currentStepId, next.id);
+  assert.equal(ui.navigations.at(-1), next.id);
+  assert.equal(ui.state.progress[next.id], undefined, 'navigation cannot manufacture completion');
+  assert.deepEqual(ui.requests.filter(call => call.action === 'checkpoint').map(call => [call.data.stepId, call.data.mode]), [[first.id, 'check'], [first.id, 'read'], [next.id, 'check']]);
+  const secondReading = click(findButton(ui.body, '我已阅读'));
+  release(); await secondReading;
+  const actionStep = flatSteps[2];
+  assert.equal(actionStep.kind, 'action');
+  assert.equal(ui.navigations.at(-1), actionStep.id);
+  assert.equal(ui.state.progress[actionStep.id], undefined);
+  ui.setState({ progress: { ...ui.state.progress, [actionStep.id]: { status: 'done' } } });
+  await ui.tutorial.refresh();
+  const actionNavigationCount = ui.navigations.length;
+  await click(findButton(ui.body, '检查这一步'));
+  assert.equal(ui.navigations.length, actionNavigationCount, 'checking an action does not auto-advance');
+  assert.equal(ui.state.currentStepId, actionStep.id);
+  ui.tutorial.dispose();
+});
+
+test('failed reading confirmation stays on the same step and can be retried explicitly', async () => {
+  let failed = true;
+  const ui = await tutorialBrowser({ checkpoint: async data => { if (data.mode === 'read' && failed) throw new Error('阅读确认未保存，请重试'); } });
+  await ui.tutorial.open();
+  const originalNavigationCount = ui.navigations.length;
+  await click(findButton(ui.body, '我已阅读'));
+  assert.equal(ui.navigations.length, originalNavigationCount);
+  assert.equal(ui.state.currentStepId, flatSteps[0].id);
+  assert.equal(ui.state.progress[flatSteps[0].id], undefined);
+  assert.match(ui.body.textContent, /阅读确认未保存，请重试/);
+  failed = false;
+  await click(findButton(ui.body, '我已阅读'));
+  assert.equal(ui.state.currentStepId, flatSteps[1].id);
+  ui.tutorial.dispose();
+});
+
+test('queued jobs keep polling the emitted state field and refresh tutorial evidence on completion', async () => {
+  const ui = await tutorialBrowser();
+  await ui.tutorial.open();
+  ui.setState({ busy: false, jobs: [{ id: 'queued-job', state: 'queued' }] });
+  await ui.tutorial.refresh();
+  const before = ui.requests.length;
+  ui.setState({ jobs: [{ id: 'queued-job', state: 'done' }], progress: { 'capture-process': { status: 'done' } } });
+  ui.intervals[0]();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(ui.requests.length, before + 1);
+  assert.equal(ui.tutorial.state.progress['capture-process'].status, 'done');
+  ui.intervals[0]();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(ui.requests.length, before + 1, 'completed jobs do not trigger ongoing polling');
+  ui.tutorial.dispose();
+});
 
 test('guide deep link only displays onboarding and does not create data or call an AI service', async () => {
   const ui = await tutorialBrowser({ exists: false, modelReady: false, query: '?onboarding=start' });

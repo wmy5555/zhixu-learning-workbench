@@ -156,6 +156,10 @@ export function createOnboarding(adapter) {
     adopt(await api.onboarding("checkpoint", stateBody({ stepId: target.id, mode: target.kind === "read" ? "read" : target.kind === "external" ? "external" : "check" })));
     const result = getStepProgress(current, target);
     if (!result.complete) errorText = result.message || result.reason || "尚未找到这一步的完成记录。请按说明完成操作，再检查进度。";
+    else if (target.kind === "read") {
+      const next = flatSteps[flatSteps.findIndex(item => item.id === target.id) + 1];
+      if (next) await goTo(next);
+    }
   }
   function chapterItems(chapter) { return flatSteps.filter(item => stepChapter(item)?.id === chapter.id); }
   function render() {
@@ -259,7 +263,7 @@ export function createOnboarding(adapter) {
     });
     observer.observe(document.querySelector("#main"), { childList: true, subtree: true });
     observer.observe(document.querySelector("#drawer-body"), { childList: true, subtree: true });
-    poll = window.setInterval(() => { if (visible && !working && (current?.busy || current?.jobs?.some(job => ["queued", "running"].includes(job.status)))) refreshProof(); }, 3000);
+    poll = window.setInterval(() => { if (visible && !working && (current?.busy || current?.jobs?.some(job => ["queued", "running"].includes(job.state)))) refreshProof(); }, 3000);
     render();
   }
   return {
