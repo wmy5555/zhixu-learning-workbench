@@ -144,3 +144,22 @@ test('HTTP 200 with invalid provider content is labelled as transport success, n
   assert.equal(cells.filter(text => text === '连接或 HTTP 失败').length, 1);
   assert.equal(cells.some(text => text === '成功' || text === '失败'), false);
 });
+
+test('positive sub-micro costs remain distinct from free calls in tables, trends and budgets', async () => {
+  const calls = [
+    { model: 'tiny-paid', cost: .0000001 }, { model: 'explicit-free', cost: 0 },
+  ].map(call => ({ ...call, capability: 'model', inputTokens: 1, outputTokens: 0, createdAt: '2026-10-02T00:00:00Z', ok: true }));
+  const data = report({ ...buildUsageReport(calls, { at: new Date('2026-10-02T12:00:00Z') }), budget: { callsToday: 2, dailyCallLimit: 20, monthlyBudget: 5, costMonth: .0000001, knownCostMonth: .0000001, unknownCostCalls: 0 } });
+  const panel = await browser().createUsagePanel({ load: async () => data, settings, save: async () => {} });
+  const cells = descendants(panel).filter(node => node.tagName === 'td').map(node => node.textContent);
+  assert.equal(cells.filter(text => text === '< 0.000001').length, 3, 'Daily, model and recent-request costs stay visibly positive');
+  const freeRows = descendants(panel).filter(node => node.tagName === 'tr' && node.textContent.includes('explicit-free'));
+  assert.equal(freeRows.length, 2);
+  assert.equal(freeRows.find(row => row.children[0].textContent.includes('explicit-free')).children[4].textContent, '0');
+  assert.equal(freeRows.find(row => row.children[1].textContent === 'explicit-free').children[3].textContent, '0');
+  assert.match(panel.textContent, /< 0\.000001 \/ 5/);
+  await click(findButton(panel, '费用'));
+  const paidDay = descendants(panel).find(node => node.attributes.role === 'listitem' && node.attributes['aria-label']?.startsWith('2026-10-02'));
+  assert.match(paidDay.attributes['aria-label'], /< 0\.000001/);
+  assert.equal(data.totals.knownCost, .0000001, 'Formatting never rounds ledger/export amounts');
+});

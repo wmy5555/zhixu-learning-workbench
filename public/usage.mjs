@@ -2,7 +2,7 @@ import { el, clear, button, badge, field, emptyState, serializeForm } from './ui
 
 const names = { model: '文本生成', embedding: '语义嵌入', search: '联网搜索', fetch: '网页读取' };
 const count = value => new Intl.NumberFormat('zh-CN').format(value ?? 0);
-const amount = value => value === null || value === undefined ? '未知' : new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 6 }).format(value);
+const amount = value => value === null || value === undefined ? '未知' : value > 0 && value < .000001 ? '< 0.000001' : new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 6 }).format(value);
 const compactAmount = value => value > 0 && value < .0001 ? '< 0.0001' : new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 4 }).format(value);
 const costText = row => row.unknownCostCalls ? `${amount(row.knownCost)} + 未知` : amount(row.knownCost);
 const heading = (title, subtitle, action) => el('div', { class: 'section-heading' }, [el('div', {}, [el('h2', { text: title }), el('p', { text: subtitle })]), action]);
