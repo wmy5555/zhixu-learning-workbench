@@ -84,7 +84,7 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
         else if(parts[2]==='related'&&method==='GET')result=service.related(parts[3]);
         else if(parts[2]==='proposals'&&method==='POST')result={proposal:service.propose(body)};
         else fail('MCP 接口不存在。','NOT_FOUND',404);
-        service.store.put('mcpCalls',randomBytes(10).toString('hex'),{operation:parts[2],id:parts[3]||null,at:now(),resultCount:result.results?.length ?? result.notes?.length ?? 1});
+        service.store.put('mcpCalls',randomBytes(10).toString('hex'),{client:'local',operation:parts[2],id:parts[3]||null,at:now(),resultCount:result.results?.length ?? result.notes?.length ?? 1});
         return json(res,method==='POST'?201:200,result);
       }
       const cookie=(req.headers.cookie || '').split(';').map(x=>x.trim()).find(x=>x.startsWith('learning_session='))?.slice(17),session=sessions.get(cookie);

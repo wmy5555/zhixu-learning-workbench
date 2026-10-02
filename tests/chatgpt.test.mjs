@@ -56,6 +56,25 @@ test('ChatGPT capture is separately authenticated, disabled by default, and cann
   assert.equal(f.app.service.store.list().length, 0);
 });
 
+test('ChatGPT HTTP calls never prove that the separate local MCP channel is connected', async t => {
+  const f = await fixture(t); f.enable(true);
+  const state = () => f.app.onboarding.state().externalConnections.mcp;
+  assert.equal(state().status, 'pending');
+  assert.equal((await f.request('/api/chatgpt/status')).status, 200);
+  const saved = await f.request('/api/chatgpt/conversations', { body: sample() });
+  assert.equal(saved.status, 201);
+  assert.equal((await f.request('/api/chatgpt/search?q=出处')).status, 200);
+  assert.deepEqual(state(), { status: 'pending', lastSeenAt: null, operations: [] });
+  f.app.service.updateSettings({ mcp: { enabled: true } });
+  const localToken = fs.readFileSync(path.join(f.config.dataDir, 'mcp-token'), 'utf8');
+  assert.equal((await f.request('/api/mcp/search?q=出处', { credential: localToken })).status, 200);
+  const observed = state();
+  assert.equal(observed.status, 'observed'); assert.deepEqual(observed.operations, ['search']);
+  assert.equal(f.app.service.store.records('mcpCalls').filter(call => call.client === 'local').length, 1);
+  assert.equal((await f.request(`/api/chatgpt/notes/${saved.body.noteId}`)).status, 200);
+  assert.deepEqual(state(), observed);
+});
+
 test('capture preserves role text and summary in layer one without processing or advancing learning', async t => {
   const f = await fixture(t); f.enable();
   const payload = sample();
