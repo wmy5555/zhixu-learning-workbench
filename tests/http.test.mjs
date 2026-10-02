@@ -102,6 +102,27 @@ async function webSession(app) {
   };
 }
 
+test('usage routes require a session and CSRF, use complete shared ledger and protect practice writes', async t => {
+  const app = await startApp(t);
+  const denied = await request(app.baseUrl, '/api/usage'); assert.equal(denied.status, 401);
+  const session = await webSession(app);
+  for (let i = 0; i < 110; i++) app.service.store.put('calls', `synthetic-${i}`, { createdAt: new Date().toISOString(), capability: 'model', model: 'offline', inputTokens: 10, outputTokens: 5, cost: null, sourceId: 'private-source' });
+  const report = await request(app.baseUrl, '/api/usage?period=today', { headers: session.headers });
+  assert.equal(report.body.totals.calls, 110); assert.equal(report.body.recentCalls.length, 100); assert.equal(report.text.includes('private-source'), false);
+  const settings = app.service.settings();
+  const body = { pricingFor: Object.fromEntries(['ai', 'embedding', 'search'].map(group => [group, { baseUrl: settings[group].baseUrl, model: settings[group].model || '' }])), ai: { dailyCallLimit: 321, monthlyBudget: 0 } };
+  assert.equal((await request(app.baseUrl, '/api/usage/settings', { method: 'PUT', headers: { Cookie: session.cookie }, body })).status, 403);
+  assert.equal((await request(app.baseUrl, '/api/usage/settings', { method: 'PUT', headers: session.headers, body })).status, 200);
+  const practice = await request(app.baseUrl, '/api/onboarding/start', { method: 'POST', headers: session.headers, body: {} });
+  const id = practice.body.practiceId;
+  assert.ok(id);
+  const shared = await request(app.baseUrl, `/api/practice/${id}/usage`, { headers: session.headers });
+  assert.equal(shared.body.sharedUsage, true); assert.equal(shared.body.totals.calls, 110); assert.equal(shared.body.budget.dailyCallLimit, 321);
+  assert.equal((await request(app.baseUrl, `/api/practice/${id}/usage/settings`, { method: 'PUT', headers: session.headers, body })).status, 409);
+  assert.equal(app.service.settings().ai.dailyCallLimit, 321);
+  assert.equal((await request(app.baseUrl, '/api/usage?period=invalid', { headers: session.headers })).status, 400);
+});
+
 function parseToolResult(result) {
   assert.equal(result.content?.[0]?.type, 'text');
   return JSON.parse(result.content[0].text);

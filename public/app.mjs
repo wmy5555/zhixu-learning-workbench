@@ -1565,10 +1565,17 @@ function systemTabButton(value, label) {
 async function renderSystem() {
   const wrapper = el("div", { class: "page-stack" });
   wrapper.append(el("div", { class: "tabs" }, [
-    systemTabButton("settings", "能力设置"), systemTabButton("appearance", "外观"), systemTabButton("jobs", "任务"), systemTabButton("data", "备份与恢复"),
+    systemTabButton("settings", "能力设置"), systemTabButton("usage", "用量与费用"), systemTabButton("appearance", "外观"), systemTabButton("jobs", "任务"), systemTabButton("data", "备份与恢复"),
     systemTabButton("diagnostics", "诊断与 MCP"), systemTabButton("proposals", "写入提案"), systemTabButton("conflicts", "冲突"),
   ]));
   if (state.systemTab === "appearance") wrapper.append(appearancePanel());
+  else if (state.systemTab === "usage") {
+    const { createUsagePanel } = await import("./usage.mjs");
+    wrapper.append(await createUsagePanel({
+      load: filters => api.usage(filters), settings: await api.settings(), readOnly: Boolean(api.getContext?.().practiceId),
+      save: payload => api.updateUsageSettings(payload),
+    }));
+  }
   else if (state.systemTab === "jobs") wrapper.append(await jobsPanel());
   else if (state.systemTab === "data") wrapper.append(dataPanel());
   else if (state.systemTab === "diagnostics") wrapper.append(await diagnosticsPanel());
@@ -1672,7 +1679,8 @@ async function settingsPanel() {
     hint.remove();
   }
   const aiEnabled = el("input", { name: "aiEnabled", type: "checkbox", checked: Boolean(ai.enabled) });
-  const modelPanel = el("section", { class: "panel" }, [sectionHeading("文本生成", "OpenAI-compatible 接口；密钥只写入，不会回显", button("测试连接", { onClick: () => testCapability("model") })), el("label", { class: "check-field" }, [aiEnabled, "启用文本生成能力"]), el("div", { class: "form-grid" }, [field("服务地址", el("input", { name: "aiBaseUrl", value: ai.baseUrl || "", placeholder: "https://…" })), field("模型", el("input", { name: "aiModel", value: ai.model || "", placeholder: "模型名称" })), field("API 密钥", el("input", { name: "aiKey", type: "password", placeholder: ai.hasKey ? "已保存；留空保持不变" : "输入密钥" })), field("每日外部请求总上限", el("input", { name: "dailyCallLimit", type: "number", min: 0, value: ai.dailyCallLimit ?? 500 }), "统计模型生成、联网搜索和网页读取等全部外部 HTTP 请求；默认 500 次。"), field("月预算", el("input", { name: "monthlyBudget", type: "number", min: 0, step: "0.01", value: ai.monthlyBudget ?? 0 }), "0 表示未设置；价格未知时费用仍显示未知。")])]);
+  const modelPanel = el("section", { class: "panel" }, [sectionHeading("文本生成", "OpenAI-compatible 接口；密钥只写入，不会回显", button("测试连接", { onClick: () => testCapability("model") })), el("label", { class: "check-field" }, [aiEnabled, "启用文本生成能力"]), el("div", { class: "form-grid" }, [field("服务地址", el("input", { name: "aiBaseUrl", value: ai.baseUrl || "", placeholder: "https://…" })), field("模型", el("input", { name: "aiModel", value: ai.model || "", placeholder: "模型名称" })), field("API 密钥", el("input", { name: "aiKey", type: "password", placeholder: ai.hasKey ? "已保存；留空保持不变" : "输入密钥" }))])]);
+  modelPanel.append(el("div", { class: "usage-settings-link" }, [el("span", { text: "Token 统计、请求上限和月预算已集中到用量与费用。" }), button("查看用量与费用", { onClick: () => { state.systemTab = "usage"; setPage("system"); renderSystem().catch(handleError); } })]));
   modelPanel.append(el("div", { class: "notice info", text: `每份原始资料的单次拆解默认最多使用 ${number(ai.sourceCallLimit ?? 12)} 次外部请求。达到系统每日总上限时，任务会显示“已保存，待继续”，不会把等待误报为完成。` }));
   modelPanel.append(field("模型最长等待时间（秒）", el("input", {name:"modelTimeoutSeconds",type:"number",min:1,max:600,value:(ai.timeoutMs ?? 180000)/1000}), "整理长资料通常比连接测试慢。默认等待 180 秒；失败不自动重发，避免重复计费。"));
   const embeddingEnabled = el("input", { name: "embeddingEnabled", type: "checkbox", checked: Boolean(embedding.enabled) });
@@ -1701,7 +1709,7 @@ async function settingsPanel() {
     const payload = {
       dailyMinutes: number(data.dailyMinutes), timezone: data.timezone, scheduleTime: data.scheduleTime, vaultDir: data.vaultDir,
       focusTopics: String(data.focusTopics || "").split(/[,，]/).map((x) => x.trim()).filter(Boolean),
-      ai: { enabled: aiEnabled.checked, baseUrl: data.aiBaseUrl, model: data.aiModel, apiKey: data.aiKey, timeoutMs:number(data.modelTimeoutSeconds)*1000, dailyCallLimit: number(data.dailyCallLimit), sourceCallLimit: number(ai.sourceCallLimit ?? 12), monthlyBudget: number(data.monthlyBudget) },
+      ai: { enabled: aiEnabled.checked, baseUrl: data.aiBaseUrl, model: data.aiModel, apiKey: data.aiKey, timeoutMs:number(data.modelTimeoutSeconds)*1000, sourceCallLimit: number(ai.sourceCallLimit ?? 12) },
       embedding: { enabled: embeddingEnabled.checked, baseUrl: data.embeddingBaseUrl, model: data.embeddingModel, apiKey: data.embeddingKey },
       search: { enabled: searchEnabled.checked, baseUrl: data.searchBaseUrl, apiKey: data.searchKey },
       fetch: { enabled: fetchEnabled.checked }, mcp: { enabled: mcpEnabled.checked, allowProposals: proposals.checked },
@@ -2106,7 +2114,7 @@ document.addEventListener("keydown", (event) => { if (event.key === "Escape") cl
 
 async function init() {
   const [hashView, systemTab] = window.location.hash.slice(1).split("/");
-  if (hashView === "system" && ["settings", "appearance", "jobs", "data", "diagnostics", "proposals", "conflicts"].includes(systemTab)) state.systemTab = systemTab;
+  if (hashView === "system" && ["settings", "usage", "appearance", "jobs", "data", "diagnostics", "proposals", "conflicts"].includes(systemTab)) state.systemTab = systemTab;
   setPage(pages[hashView] ? hashView : "today");
   try {
     await startSession();

@@ -24,7 +24,8 @@ test('curriculum covers all workspaces and system tabs with distinct verifiable 
   assert.equal(flatSteps.length, new Set(flatSteps.map(item => item.id)).size);
   assert.ok(flatSteps.length >= 100);
   assert.deepEqual(new Set(flatSteps.map(item => item.view)), new Set(['today', 'capture', 'library', 'study', 'topics', 'discover', 'output', 'system']));
-  assert.deepEqual(new Set(flatSteps.filter(item => item.view === 'system').map(item => item.tab)), new Set(['settings', 'appearance', 'jobs', 'data', 'diagnostics', 'proposals', 'conflicts']));
+  assert.deepEqual(new Set(flatSteps.filter(item => item.view === 'system').map(item => item.tab)), new Set(['settings', 'usage', 'appearance', 'jobs', 'data', 'diagnostics', 'proposals', 'conflicts']));
+  assert.equal(flatSteps.find(item => item.id === 'setup-budget').target, 'usage-budget');
   const cases = new Set(caseIds);
   for (const item of flatSteps) {
     for (const field of ['id', 'title', 'instruction', 'why', 'expected', 'view', 'target', 'kind']) assert.equal(typeof item[field], 'string', `${item.id}.${field}`);

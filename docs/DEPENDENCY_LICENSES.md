@@ -12,6 +12,10 @@
 
 一般注意事项（以各上游原文为准）：[MIT](https://spdx.org/licenses/MIT.html) 与 [ISC](https://spdx.org/licenses/ISC.html) 涉及保留许可/版权声明；[BSD-2-Clause](https://spdx.org/licenses/BSD-2-Clause.html) 区分源码与二进制再分发声明要求；[BSD-3-Clause](https://spdx.org/licenses/BSD-3-Clause.html) 还限制未经许可使用作者名称作背书。本清单不是针对未来任意分发方式的法律结论。
 
+## 用量统计参考（2026-10-02）
+
+参考 ccusage 的报表口径，已核对其 MIT 声明与固定提交，来源和复用范围见 [USAGE](USAGE.md)。未复制其代码文件或增加运行依赖，不改变知序自身许可证状态。
+
 ## 当前运行依赖（包含间接依赖）
 
 | 包 | 版本 | 声明许可证 | 已核验的随包文件 | 官方版本元数据 |

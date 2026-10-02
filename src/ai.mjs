@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { BlockList, isIP } from 'node:net';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { renderPrompt, validatePromptOverrides } from './prompts.mjs';
+import { readTokenUsage, tokenCost, tokenCount } from './token-usage.mjs';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const PAGE_TIMEOUT_MS = 20_000;
@@ -520,8 +521,8 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     try {
       await recordCall({
         ...entry,
-        inputTokens: safeNumber(entry.inputTokens),
-        outputTokens: safeNumber(entry.outputTokens),
+        inputTokens: tokenCount(entry.inputTokens),
+        outputTokens: tokenCount(entry.outputTokens),
         cost: safeNumber(entry.cost),
         error: entry.error ? sanitizeError(entry.error, secrets) : undefined,
       });
@@ -582,9 +583,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
         await safeRecord({
           capability,
           model,
-          inputTokens: measured.inputTokens,
-          outputTokens: measured.outputTokens,
-          cost: measured.cost,
+          ...measured,
           durationMs: Date.now() - started,
           ok: !operationError,
           error: operationError,
@@ -649,14 +648,8 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
         body, signal, secrets: [secret],
         accounting: (response) => {
           const data = JSON.parse(response.body.toString('utf8'));
-          const inputTokens = safeNumber(data?.usage?.prompt_tokens);
-          const outputTokens = safeNumber(data?.usage?.completion_tokens);
-          const inputPrice = safeNumber(config.inputPrice);
-          const outputPrice = safeNumber(config.outputPrice);
-          const cost = inputTokens !== null && outputTokens !== null && inputPrice !== null && outputPrice !== null
-            ? (inputTokens * inputPrice + outputTokens * outputPrice) / 1_000_000
-            : null;
-          return { inputTokens, outputTokens, cost };
+          const counts = readTokenUsage(data?.usage);
+          return { ...counts, cost: tokenCost(counts, config) };
         },
       });
     } catch (error) {
@@ -669,19 +662,11 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     }
     if (typeof text !== 'string' || !text.trim() || !result.data?.choices?.length) throw fail('INVALID_RESPONSE', '模型响应没有可用的正文；可能已计费，不会自动重复请求。');
     const usage = {
-      inputTokens: safeNumber(result.data?.usage?.prompt_tokens),
-      outputTokens: safeNumber(result.data?.usage?.completion_tokens),
-      totalTokens: safeNumber(result.data?.usage?.total_tokens),
-      cost: null,
+      ...readTokenUsage(result.data?.usage),
       durationMs: Date.now() - started,
     };
-    const inputPrice = safeNumber(config.inputPrice);
-    const outputPrice = safeNumber(config.outputPrice);
-    if (usage.inputTokens !== null && usage.outputTokens !== null && inputPrice !== null && outputPrice !== null) {
-      usage.cost = (usage.inputTokens * inputPrice + usage.outputTokens * outputPrice) / 1_000_000;
-    }
-    // The transport record is intentionally cost-unknown; append a usage record only
-    // through the caller's persisted aggregation, which can use this returned usage.
+    usage.cost = tokenCost(usage, config);
+    // The transport and returned usage share one calculation; never append a second call.
     return { text, usage };
   }
 
@@ -702,13 +687,8 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
       body: JSON.stringify({ model: config.model, input: texts }), signal, secrets: [secret],
       accounting: (response) => {
         const responseData = JSON.parse(response.body.toString('utf8'));
-        const inputTokens = safeNumber(responseData?.usage?.prompt_tokens);
-        const inputPrice = safeNumber(config.inputPrice);
-        return {
-          inputTokens,
-          outputTokens: 0,
-          cost: inputTokens !== null && inputPrice !== null ? inputTokens * inputPrice / 1_000_000 : null,
-        };
+        const counts = readTokenUsage(responseData?.usage, { embedding: true });
+        return { ...counts, cost: tokenCost(counts, config, { embedding: true }) };
       },
     });
     if (!Array.isArray(data?.data) || data.data.length !== texts.length) throw fail('INVALID_RESPONSE', '嵌入响应数量与输入不一致。');
@@ -734,6 +714,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
       headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/json', accept: 'application/json' },
       body: JSON.stringify({ query, search_depth: 'advanced', max_results: 6, include_answer: false, include_raw_content: false }),
       signal, secrets: [secret],
+      accounting: () => ({ cost: safeNumber(config.requestPrice) }),
     });
     if (!Array.isArray(data?.results)) throw fail('INVALID_RESPONSE', '搜索服务响应缺少结果列表。');
     const results = data.results.flatMap((item) => {

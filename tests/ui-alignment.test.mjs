@@ -55,7 +55,7 @@ function browser(api = {}) {
     window: { history: { replaceState() {} }, location: { hash: '' }, setTimeout() {}, addEventListener() {} },
   });
   const stripped = appSource.replace(/import[\s\S]*?from "\.\/api\.mjs";\s*/, '').replace(/import[\s\S]*?from "\.\/ui\.mjs";\s*/, '').replace(/^init\(\);\s*$/m, '');
-  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, todayItem, state, refs };', context);
+  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
   return context.app;
 }
 
@@ -227,4 +227,15 @@ test('alignment API routes preserve explicit options and write requests use the 
     assert.ok(writes.every(call => call.csrf === 'test-session-only'));
     assert.deepEqual(writes[0].body, { useAI: false });
   } finally { globalThis.fetch = savedFetch; }
+});
+
+
+test('saving capabilities after moving budgets does not submit or reset budget values', async () => {
+  const saves=[];
+  const app=browser({ settings:async()=>({ ai:{dailyCallLimit:77,monthlyBudget:88}, embedding:{}, search:{}, fetch:{}, mcp:{}, timezone:'Asia/Shanghai' }), prompts:async()=>({prompts:[]}), updateSettings:async p=>saves.push(p), bootstrap:async()=>({}) });
+  const panel=await app.settingsPanel();
+  assert.equal(control(panel,'dailyCallLimit'),undefined); assert.equal(control(panel,'monthlyBudget'),undefined);
+  const form=descendants(panel).find(node=>node.tagName==='form');
+  await form.events.submit({preventDefault(){}});
+  assert.equal(saves.length,1); assert.equal(Object.hasOwn(saves[0].ai,'dailyCallLimit'),false); assert.equal(Object.hasOwn(saves[0].ai,'monthlyBudget'),false);
 });
