@@ -249,3 +249,14 @@ test('alignment API routes preserve explicit options and write requests use the 
     assert.deepEqual(writes[0].body, { useAI: false });
   } finally { globalThis.fetch = savedFetch; }
 });
+
+
+test('saving capabilities after moving budgets does not submit or reset budget values', async () => {
+  const saves=[];
+  const app=browser({ settings:async()=>({ ai:{dailyCallLimit:77,monthlyBudget:88}, embedding:{}, search:{}, fetch:{}, mcp:{}, timezone:'Asia/Shanghai' }), prompts:async()=>({prompts:[]}), updateSettings:async p=>saves.push(p), bootstrap:async()=>({}) });
+  const panel=await app.settingsPanel();
+  assert.equal(control(panel,'dailyCallLimit'),undefined); assert.equal(control(panel,'monthlyBudget'),undefined);
+  const form=descendants(panel).find(node=>node.tagName==='form');
+  await form.events.submit({preventDefault(){}});
+  assert.equal(saves.length,1); assert.equal(Object.hasOwn(saves[0].ai,'dailyCallLimit'),false); assert.equal(Object.hasOwn(saves[0].ai,'monthlyBudget'),false);
+});

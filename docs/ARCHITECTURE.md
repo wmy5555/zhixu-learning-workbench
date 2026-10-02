@@ -51,6 +51,7 @@ JSON 请求/响应；正常状态 200/201；错误 `{error,code}`。GET /api/boo
 - GET /api/relations → `{relations,reports}`；POST /api/relations/:id/action `{action:'accept'|'reject',reason?}`；POST /api/discover → job。
 - GET /api/jobs → `{jobs}`；POST /api/jobs/:id/action `{action:'retry'|'cancel'}`。
 - GET /api/settings → sanitized settings；PUT /api/settings 更新非空字段，apiKey 仅写入且不返回，空值保持旧密钥；POST /api/settings/test `{capability:'model'|'embedding'|'search'|'fetch'}`。
+- GET /api/usage → `{totals,daily,models,recentCalls,budget}`；按正式库时区汇总完整调用记录。PUT /api/usage/settings → 只更新预算与单价，验证当前模型标识；练习只读共用统计。详见 [用量说明](USAGE.md)。
 - GET /api/diagnostics → `{usage,calls,index,mcp,storage}`；POST /api/index/rebuild → 状态。
 - GET /api/backup → 下载开放 JSON（知识+运行状态，无密钥）；POST /api/restore `{backup,preview:true}` → 预览和 token；POST 同地址 `{backup,preview:false,token}` → 恢复。
 - GET /api/history/:id → `{versions}`；POST /api/history/:id/restore `{versionId,expectedHash}`。

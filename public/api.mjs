@@ -168,6 +168,8 @@ export const api = {
   updatePrompts: (body) => request("/api/prompts", { method: "PUT", body }),
   testSetting: (capability) => request("/api/settings/test", { method: "POST", body: { capability } }),
   diagnostics: () => request("/api/diagnostics"),
+  usage: (filters = {}) => request(`/api/usage?${new URLSearchParams(filters)}`),
+  updateUsageSettings: (body) => request("/api/usage/settings", { method: "PUT", body }),
   rebuildIndex: () => request("/api/index/rebuild", { method: "POST", body: {} }),
   updateIndex: () => request("/api/index/update", { method: "POST", body: {} }),
   backup: () => request("/api/backup", { blob: true }),

@@ -165,6 +165,8 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
       else if(resource==='settings'&&!id&&method==='GET')result=service.settings();
       else if(resource==='settings'&&!id&&method==='PUT'){if(!practiceId&&body.vaultDir)onboarding.assertVaultIsolation(body.vaultDir);result=service.updateSettings(body);if(!practiceId)onboarding.settingsChanged(body);}
       else if(resource==='settings'&&id==='test'&&method==='POST')result=(await onboarding.test(body.capability)).testResult;
+      else if(resource==='usage'&&!id&&method==='GET'){result=mainService.usageReport(query);result.sharedUsage=Boolean(practiceId);}
+      else if(resource==='usage'&&id==='settings'&&method==='PUT')result=service.updateUsageSettings(body);
       else if(resource==='diagnostics'&&method==='GET'){result=service.diagnostics();if(practiceId){result.usage=mainService.usage();result.calls=mainService.store.records('calls').slice(0,100);result.sharedUsage=true;result.usageNotice='请求上限与日常使用共用。下方调用记录来自共用 AI 服务，包含正式与练习请求；仅在此查看，不写入练习备份。';}}
       else if(resource==='index'&&id==='rebuild'&&method==='POST')result=service.queue('index',{},'index:manual');
       else if(resource==='index'&&id==='update'&&method==='POST')result=service.queue('index',{incremental:true},'index:manual');

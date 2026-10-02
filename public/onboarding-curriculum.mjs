@@ -22,7 +22,7 @@ export const chapters = [
     step('setup-model', '填写模型服务信息', '在 AI 模型区域填写供应商提供的 HTTPS 服务地址、模型名和密钥，勾选启用。已有配置可以直接使用；不要把密钥粘贴到笔记或教程中。', '拆解和批改需要真正可用的 AI 服务。', '地址、模型和启用状态已填好，密钥只在设置中保存。', 'system', 'settings-model', settings),
     action('setup-save', '保存 AI 配置', '点击“保存能力设置”。这里保存的是正式能力配置，之后正式库和练习空间共用。', '先保存才能测试正在使用的配置。', '页面显示设置已保存，密钥显示已设置。', 'system', 'settings-save', 'settings-save', settings),
     action('setup-test', '亲自测试 AI 连接', '点击模型区域的“测试连接”，等待实际返回成功。失败时检查地址、模型和供应商余额后手动重试。', '这一结果决定主线能否进行，填写完不等于连通。', '本次配置的实际连接测试成功；修改连接配置后需要重测。', 'system', 'settings-model', 'ai-test', settings),
-    step('setup-budget', '看懂请求上限和等待时间', '查看每日外部请求总上限、月预算、单份资料上限说明及模型最长等待时间。费用显示未知不等于免费。每次外部请求由你点击触发。', '理解等待和费用，避免失败时连续点击。', '你知道预算不足或超时后要查看任务，再自行决定是否重试。', 'system', 'settings-model', settings),
+    step('setup-budget', '看懂请求上限和等待时间', '在用量与费用查看 token、每日请求上限和月预算；模型等待时间仍在能力设置。费用未知不等于免费。练习与正式使用共用额度；每次外部请求由你点击触发。', '理解等待和费用，避免失败时连续点击。', '你知道预算不足或超时后要查看任务，再自行决定是否重试。', 'system', 'usage-budget', { tab: 'usage' }),
     action('setup-preferences', '设置本次练习的节奏', '把每日学习时间设为 25 分钟，确认自己的时区和清单生成时间，点击保存。', '今日安排按时区、预算和生成时间工作。', '练习偏好保存成功。', 'system', 'settings-general', 'preferences-save', settings),
     step('setup-storage', '认识两处保存位置', '打开诊断，查看练习的 Vault 和数据目录。Markdown 保存内容，数据库保存可重建索引与运行记录；后面只在此练习 Vault 体验外部编辑。', '避免把练习文件操作到正式资料。', '你能辨认当前练习 Vault 路径。', 'system', 'system-diagnostics', { tab: 'diagnostics' }),
   ] },

@@ -76,6 +76,22 @@ function jsonResponse(value, status = 200, headers = {}) {
   });
 }
 
+test('model accounting persists cached tokens once and matches returned estimated cost', async () => {
+  const h = harness({ settings: baseSettings({ ai: { inputPrice: 2, outputPrice: 5, cachedInputPrice: .5 } }), fetchImpl: async () => jsonResponse({ choices: [{ message: { content: 'synthetic' } }], usage: { prompt_tokens: 100, completion_tokens: 30, prompt_cache_hit_tokens: 40, completion_tokens_details: { reasoning_tokens: 10 } } }) });
+  const result = await h.ai.generate({ prompt: 'synthetic', privacy: 'cloud' });
+  assert.equal(h.calls.length, 1); assert.equal(h.calls[0].cachedInputTokens, 40); assert.equal(h.calls[0].totalTokens, 130);
+  assert.equal(h.calls[0].reasoningTokens, 10); assert.equal(h.calls[0].cost, .00029); assert.equal(result.usage.cost, h.calls[0].cost);
+});
+
+test('embedding total-only usage and successful search prices are recorded; local cache adds no calls', async () => {
+  const h = harness({ settings: baseSettings({ embedding: { inputPrice: 2 }, search: { requestPrice: .01 } }), fetchImpl: async url => String(url).includes('embeddings') ? jsonResponse({ data: [{ index: 0, embedding: [.1, .2] }], usage: { total_tokens: 100 } }) : jsonResponse({ results: [] }) });
+  await h.ai.embed({ texts: ['synthetic'], privacy: 'cloud' });
+  await h.ai.embed({ texts: ['synthetic'], privacy: 'cloud' });
+  await h.ai.search({ query: 'synthetic', privacy: 'cloud' });
+  await h.ai.search({ query: 'synthetic', privacy: 'cloud' });
+  assert.equal(h.calls.length, 2); assert.equal(h.calls[0].cost, .0002); assert.equal(h.calls[1].cost, .01);
+});
+
 test('privacy=local blocks every outward capability before a network call', async () => {
   const h = harness({ fetchImpl: async () => jsonResponse({}) });
   const cases = [
