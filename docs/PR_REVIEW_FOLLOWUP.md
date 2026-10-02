@@ -1,5 +1,7 @@
 # PR 审阅核对与后续事项
 
+PR #22 采纳[先分隔不可信字段再组成 Markdown](https://github.com/wmy5555/zhixu-learning-workbench/pull/22#discussion_r4167373067)：摘要、补充限制与每条角色原文各自放在文本代码块内，分隔符长度超过内容中的反引号连续长度。回归使用伪造角色标题、代码围栏、HTML 及 CRLF 原文，确认 Markdown 外层角色标题不变且原文逐字保留。
+
 PR #22 采纳[ChatGPT 调用不能证明本机 MCP 已连接](https://github.com/wmy5555/zhixu-learning-workbench/pull/22#discussion_r4167260779)：本机调用新增明确的客户端标记，新手引导只使用本机及兼容旧格式的历史记录作为证据。新增真实回环 HTTP 回归覆盖 ChatGPT 状态、收集、检索和读取均不能改变本机连接证据；真正的本机 MCP 调用仍可证明该通道已调用，旧记录的原测试继续保留。
 
 2026-10-02 ChatGPT MCP 开发前，重新读取 PR #1–#21 的普通评论、行内意见与审阅总结。#14–#20 与下文记录一致，保持原处置。创建 PR #22 后发现 #21 已合并，再次读取其全部审阅并整合 main（bb93e96），保留已修复的 HTTP 状态及极小正费用显示和相应回归。ChatGPT 功能不触发供应商请求。当前功能 PR 合并前仍需复查新增审阅。

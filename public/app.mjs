@@ -1696,11 +1696,20 @@ async function settingsPanel() {
   const proposals = el("input", { name: "allowProposals", type: "checkbox", checked: Boolean(mcp.allowProposals) });
   const chatgptEnabled = el("input", { name: "chatgptEnabled", type: "checkbox", checked: mcp.chatgptEnabled === true });
   const chatgptAllowRead = el("input", { name: "chatgptAllowRead", type: "checkbox", checked: mcp.chatgptAllowRead === true });
+  function syncMcpChoices() {
+    for (const [parent, child] of [[mcpEnabled, proposals], [chatgptEnabled, chatgptAllowRead]]) {
+      child.disabled = !parent.checked;
+      if (child.disabled) child.checked = false;
+    }
+  }
+  mcpEnabled.addEventListener("change", syncMcpChoices);
+  chatgptEnabled.addEventListener("change", syncMcpChoices);
+  syncMcpChoices();
   const mcpPanel = el("section", { class: "panel" }, [sectionHeading("MCP 接入", "本机客户端与 ChatGPT 网页端分别授权"), el("label", { class: "check-field" }, [mcpEnabled, "启用本地 MCP 服务"]), el("label", { class: "check-field" }, [proposals, "允许本机客户端提交写入提案"]),
     el("hr"), el("h3", { text: "ChatGPT 会话收集与知识库读取" }),
     el("label", { class: "check-field" }, [chatgptEnabled, "启用 ChatGPT 接入，允许新增第一层会话资料"]),
     el("label", { class: "check-field" }, [chatgptAllowRead, "允许 ChatGPT 检索和读取知识库（包含仅本地资料）"]),
-    el("p", { class: "fine-print", text: "读取许可独立授予 ChatGPT：读到的原文会进入 ChatGPT 上下文，其他模型与搜索服务仍沿用每份资料的外发许可。取消读取后仍可收集会话；关闭接入后两项能力都立即停止。保存设置不会自动建立网页端连接。" }),
+    el("p", { class: "fine-print", text: "读取许可独立授予 ChatGPT：读到的原文会进入 ChatGPT 上下文，其他模型与搜索服务仍沿用每份资料的外发许可。保存后生效：取消读取仍可收集会话；关闭接入后两项能力都停止，再开启需重新勾选读取。保存设置不会自动建立网页端连接。" }),
     el("p", { class: "fine-print", text: "连接后说“将该会话内容整理进知序”。保存角色原文与独立摘要，缺失历史会如实标注；不会自动覆盖、核验或晋级。电脑、知序和私有隧道都需保持运行。" }),
     el("a", { href: "/chatgpt-setup.html", target: "_blank", rel: "noopener", text: "打开 ChatGPT 连接指南" }),
     el("p", { class: "fine-print", text: "连接状态与实际操作记录可在“诊断与 MCP”中查看；已启用不代表网页端已接通。" })]);
@@ -1715,6 +1724,7 @@ async function settingsPanel() {
   form.append(tour(button(practice ? "保存练习偏好" : "保存能力设置", { kind: "primary", type: "submit" }), "settings-save"));
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    syncMcpChoices();
     const data = serializeForm(form);
     const payload = {
       dailyMinutes: number(data.dailyMinutes), timezone: data.timezone, scheduleTime: data.scheduleTime, vaultDir: data.vaultDir,

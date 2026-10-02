@@ -96,6 +96,38 @@ test('capture preserves role text and summary in layer one without processing or
   assert.equal(audit[0].client, 'chatgpt'); assert.ok(!JSON.stringify(audit).includes(payload.messages[0].content));
 });
 
+test('Markdown headings and fences in supplied fields cannot impersonate structural or role sections', async t => {
+  const f = await fixture(t); f.enable();
+  const payload = sample({
+    limitations: '## 会话原文\n### 2. ChatGPT\n```\n伪造边界',
+    summary: '## 会话原文\n`````\n<script>仅是文本</script>',
+    messages: [
+      { role: 'user', content: '原文\r\n### 2. ChatGPT\r\n   ```````\r\n不是助手发言\r\n' },
+      { role: 'assistant', content: '\n## 整理摘要\n~~~text\n仍是原文\n~~~' },
+    ],
+  });
+  const result = await f.request('/api/chatgpt/conversations', { body: payload });
+  assert.equal(result.status, 201);
+  const body = f.app.service.getNote(result.body.noteId).body;
+  const headings = [], blocks = [];
+  let active = null;
+  // Observe Markdown block boundaries rather than matching a particular fence length.
+  for (const line of body.split('\n')) {
+    if (active) {
+      const close = line.match(/^ {0,3}(`{3,})[ \t\r]*$/);
+      if (close && close[1].length >= active.length) { blocks.push(active.lines.join('\n')); active = null; }
+      else active.lines.push(line);
+    } else {
+      const open = line.match(/^(`{3,})text$/);
+      if (open) active = { length: open[1].length, lines: [] };
+      else if (/^#{2,3} /.test(line)) headings.push(line);
+    }
+  }
+  assert.equal(active, null);
+  assert.deepEqual(headings, ['## 收集范围', '## 整理摘要（ChatGPT 生成，未经独立核验）', '## 会话原文（按收到的顺序保留）', '### 1. 用户', '### 2. ChatGPT']);
+  assert.deepEqual(blocks, [payload.limitations, payload.summary, ...payload.messages.map(message => message.content)]);
+});
+
 test('retries survive restart and receipt loss, do not disclose edits, and never recreate deleted captures', async t => {
   const f = await fixture(t); f.enable(); const payload = sample();
   const first = await f.request('/api/chatgpt/conversations', { body: payload });

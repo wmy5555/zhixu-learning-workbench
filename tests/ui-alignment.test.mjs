@@ -80,6 +80,25 @@ test('ChatGPT capture and read controls persist independently and disclose the l
   assert.doesNotMatch(app.noteMeta({ kind: 'source', meta: { privacy: 'local' } }).textContent, /另已授权 ChatGPT 读取/);
 });
 
+test('MCP dependent grants clear when their parent is disabled and cannot reappear on re-enabling or saving', async () => {
+  const writes = [];
+  const app = browser({ settings: async () => ({ mcp: { enabled: false, allowProposals: true, chatgptEnabled: false, chatgptAllowRead: true } }), prompts: async () => ({ prompts: [] }), updateSettings: async payload => writes.push(plain(payload)), bootstrap: async () => ({}) });
+  const panel = await app.settingsPanel();
+  for (const [parentName, childName] of [['mcpEnabled', 'allowProposals'], ['chatgptEnabled', 'chatgptAllowRead']]) {
+    const parent = control(panel, parentName), child = control(panel, childName);
+    assert.equal(child.disabled, true); assert.equal(child.checked, false);
+    parent.checked = true; parent.events.change();
+    assert.equal(child.disabled, false); assert.equal(child.checked, false);
+    child.checked = true; parent.checked = false; parent.events.change();
+    assert.equal(child.disabled, true); assert.equal(child.checked, false);
+    parent.checked = true; parent.events.change();
+    assert.equal(child.checked, false);
+    parent.checked = false; child.checked = true;
+  }
+  await descendants(panel).find(node => node.tagName === 'form').events.submit({ preventDefault() {} });
+  assert.deepEqual(writes[0].mcp, { enabled: false, allowProposals: false, chatgptEnabled: false, chatgptAllowRead: false });
+});
+
 test('evidence expands on demand, retains roles and locators, and rejects executable URLs', async () => {
   let reads = 0;
   const app = browser({ evidence: async id => {

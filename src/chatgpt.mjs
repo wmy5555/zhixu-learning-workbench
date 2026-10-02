@@ -29,15 +29,22 @@ export function parseConversation(input) {
   return value;
 }
 
+function literalBlock(value) {
+  let length = 3;
+  for (const match of value.matchAll(/`+/g)) length = Math.max(length, match[0].length + 1);
+  const fence = '`'.repeat(length);
+  return `${fence}text\n${value}\n${fence}`;
+}
+
 function renderConversation(value) {
   const scope = value.coverage === 'selected_excerpt' ? '用户选定片段' : 'ChatGPT 当前可见上下文';
   return [
     '## 收集范围', scope,
     '只保存本次实际收到的消息；不保证覆盖完整历史、附件或其他会话。原文由 ChatGPT 传入，知序未独立核对网页记录。',
-    value.limitations ? `补充限制：${value.limitations}` : '',
-    '## 整理摘要（ChatGPT 生成，未经独立核验）', value.summary,
+    value.limitations ? `补充限制：\n\n${literalBlock(value.limitations)}` : '',
+    '## 整理摘要（ChatGPT 生成，未经独立核验）', literalBlock(value.summary),
     '## 会话原文（按收到的顺序保留）',
-    ...value.messages.map((message, index) => `### ${index + 1}. ${message.role === 'user' ? '用户' : 'ChatGPT'}\n\n${message.content}`),
+    ...value.messages.map((message, index) => `### ${index + 1}. ${message.role === 'user' ? '用户' : 'ChatGPT'}\n\n${literalBlock(message.content)}`),
   ].filter(Boolean).join('\n\n');
 }
 
