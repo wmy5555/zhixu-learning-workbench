@@ -220,6 +220,28 @@ test('ChatGPT bridge rejects remote credential destinations and refuses redirect
   await client.status(); assert.equal(inspected.url, 'http://127.0.0.1:4318/api/chatgpt/status'); assert.equal(inspected.options.redirect, 'error');
 });
 
+test('partial settings updates and restarts cannot restore an old ChatGPT read grant', async t => {
+  const f = await fixture(t); f.enable(true);
+  const id = (await f.request('/api/chatgpt/conversations', { body: sample() })).body.noteId;
+  const read = () => f.request(`/api/chatgpt/notes/${id}`);
+  assert.equal((await read()).status, 200);
+  f.app.service.updateSettings({ mcp: { chatgptEnabled: false } });
+  assert.equal(f.app.service.store.get('settings', 'main').mcp.chatgptAllowRead, false);
+  await f.restart();
+  f.app.service.updateSettings({ mcp: { chatgptEnabled: true } });
+  assert.equal((await read()).body.code, 'CHATGPT_READ_DISABLED');
+  f.app.service.updateSettings({ mcp: { chatgptEnabled: false, chatgptAllowRead: true } });
+  assert.equal(f.app.service.settings().mcp.chatgptAllowRead, false);
+  const saved = f.app.service.store.get('settings', 'main');
+  f.app.service.store.put('settings', 'main', { ...saved, mcp: { ...saved.mcp, chatgptAllowRead: true } });
+  await f.restart();
+  assert.equal(f.app.service.settings().mcp.chatgptAllowRead, false);
+  f.app.service.updateSettings({ mcp: { chatgptEnabled: true } });
+  assert.equal((await read()).body.code, 'CHATGPT_READ_DISABLED');
+  f.app.service.updateSettings({ mcp: { chatgptAllowRead: true } });
+  assert.equal((await read()).status, 200);
+});
+
 test('practice settings cannot enable ChatGPT and malformed permission values cannot grant access', async t => {
   const f = await fixture(t);
   assert.throws(() => f.app.service.updateSettings({ mcp: { chatgptAllowRead: 'true' } }));
