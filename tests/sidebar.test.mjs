@@ -76,3 +76,20 @@ test('blocked storage does not stop navigation controls', () => {
   b.click('#menu-button');
   assert.equal(b['#sidebar'].inert, false);
 });
+
+test('tutorial navigation reveal is temporary on desktop and mobile and retains the saved choice', () => {
+  const b = setup();
+  b.click('#sidebar-collapse');
+  for (const narrow of [false, true]) {
+    b.resize(narrow);
+    const restore = b.api.revealTarget(b['#sidebar-collapse']);
+    assert.equal(b['#sidebar'].inert, false);
+    assert.equal(b.document.documentElement.classList.contains('sidebar-collapsed'), false);
+    assert.equal(b.values.get('zhixu.sidebar.collapsed'), 'true');
+    b['#sidebar-collapse'].focus();
+    restore();
+    assert.equal(b['#sidebar'].inert, true);
+    assert.equal(b.document.activeElement, b['#menu-button']);
+  }
+  assert.equal(b.api.revealTarget(b['#menu-button']), undefined);
+});

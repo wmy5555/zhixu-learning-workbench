@@ -7,12 +7,13 @@ export function initSidebar({ document, media, storage }) {
   const key = 'zhixu.sidebar.collapsed';
   let collapsed = false;
   let mobileOpen = false;
+  let temporaryOpen = false;
   try { collapsed = storage.getItem(key) === 'true'; } catch { /* Storage may be disabled. */ }
 
   function render() {
-    const open = media.matches ? mobileOpen : !collapsed;
-    root.classList.toggle('sidebar-collapsed', collapsed);
-    sidebar.classList.toggle('is-open', media.matches && mobileOpen);
+    const open = temporaryOpen || (media.matches ? mobileOpen : !collapsed);
+    root.classList.toggle('sidebar-collapsed', collapsed && !temporaryOpen);
+    sidebar.classList.toggle('is-open', media.matches && open);
     sidebar.inert = !open;
     sidebar.setAttribute('aria-hidden', String(!open));
     for (const control of [menu, collapse]) control.setAttribute('aria-expanded', String(open));
@@ -21,25 +22,28 @@ export function initSidebar({ document, media, storage }) {
     return open;
   }
   function toggle() {
-    if (media.matches) mobileOpen = !mobileOpen;
+    const wasOpen = temporaryOpen || (media.matches ? mobileOpen : !collapsed);
+    temporaryOpen = false;
+    if (media.matches) mobileOpen = !wasOpen;
     else {
-      collapsed = !collapsed;
+      collapsed = wasOpen;
       try { storage.setItem(key, String(collapsed)); } catch { /* Keep working without persistence. */ }
     }
     const open = render();
     (open ? collapse : menu).focus();
   }
   function closeMobile() {
-    if (!media.matches || !mobileOpen) return;
+    if (!media.matches || (!mobileOpen && !temporaryOpen)) return;
     const restoreFocus = sidebar.contains(document.activeElement);
     mobileOpen = false;
+    temporaryOpen = false;
     render();
     if (restoreFocus) menu.focus();
   }
   menu.addEventListener('click', toggle);
   collapse.addEventListener('click', toggle);
   document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && media.matches && mobileOpen) {
+    if (event.key === 'Escape' && media.matches && (mobileOpen || temporaryOpen)) {
       event.preventDefault();
       closeMobile();
     }
@@ -51,5 +55,15 @@ export function initSidebar({ document, media, storage }) {
     else if (!media.matches && !collapsed && document.activeElement === menu) collapse.focus();
   });
   render();
-  return { closeMobile };
+  function revealTarget(target) {
+    if (!sidebar.contains(target)) return;
+    temporaryOpen = true;
+    render();
+    return () => {
+      temporaryOpen = false;
+      const focusedInside = sidebar.contains(document.activeElement);
+      if (!render() && focusedInside) menu.focus();
+    };
+  }
+  return { closeMobile, revealTarget };
 }

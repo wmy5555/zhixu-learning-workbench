@@ -31,6 +31,7 @@ export function createOnboarding(adapter) {
   let errorText = "";
   let highlight = null;
   let highlightPulse = null;
+  let restoreTarget = null;
   let scheduled = null;
   let refreshing = false;
   let disposed = false;
@@ -52,7 +53,7 @@ export function createOnboarding(adapter) {
   const busy = () => working || Boolean(current?.busy) || api.getContext().pending > 0;
   const stateBody = extra => ({ practiceId: current?.practiceId || api.getContext().practiceId, ...extra });
   function adopt(value) { current = value?.onboarding || value; if (!selected) selected = current?.currentStepId || flatSteps[0]?.id; }
-  function clearHighlight() { highlightPulse?.cancel(); highlightPulse = null; highlight?.classList.remove("tour-target"); highlight = null; }
+  function clearHighlight() { highlightPulse?.cancel(); highlightPulse = null; highlight?.classList.remove("tour-target"); highlight = null; restoreTarget?.(); restoreTarget = null; }
   function placePanel() {
     const drawer = document.querySelector("#drawer");
     const narrow = window.matchMedia("(max-width: 1100px)").matches;
@@ -64,7 +65,10 @@ export function createOnboarding(adapter) {
     const candidates = [...document.querySelectorAll("[data-tour]")].filter(node => node.dataset.tour === step().target);
     for (const node of candidates) for (let ancestor = node.parentElement; ancestor; ancestor = ancestor.parentElement) if (ancestor.tagName === "DETAILS") ancestor.open = true;
     const target = candidates.find(node => node.getClientRects().length) || null;
-    if (target !== highlight) { clearHighlight(); highlight = target; }
+    if (target !== highlight || scroll) {
+      clearHighlight(); highlight = target;
+      if (target) restoreTarget = adapter.revealTarget?.(target) || null;
+    }
     if (highlight) {
       for (let ancestor = highlight.parentElement; ancestor; ancestor = ancestor.parentElement) if (ancestor.tagName === "DETAILS") ancestor.open = true;
       highlight.classList.add("tour-target");

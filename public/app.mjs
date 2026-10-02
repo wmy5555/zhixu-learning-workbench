@@ -2127,6 +2127,7 @@ async function init() {
     if (!onboarding) {
       const { createOnboarding } = await import("./onboarding.mjs");
       onboarding = createOnboarding({
+        revealTarget: sidebarNavigation.revealTarget,
         navigate: navigateTutorial,
         fillSample: fillTutorialSample,
         refresh: async () => { await refreshBootstrap(); await renderCurrent(); },
