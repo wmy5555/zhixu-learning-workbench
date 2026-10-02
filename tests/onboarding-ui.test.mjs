@@ -115,7 +115,7 @@ async function tutorialBrowser({ modelReady = true, exists = true, narrow = fals
   vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + stripped + '\nthis.make = createOnboarding; this.progress = getStepProgress;', context);
   const adapter = { navigate: async step => { navigations.push(step.id || step.view); }, contextChanged: async () => {}, refresh: async () => {}, fillSample: async () => {} };
   const tutorial = context.make(adapter); await tutorial.init();
-  return { tutorial, body, workspace, main, drawer, drawerBody, requests, navigations, contexts, intervals, document, setNarrow(value) { narrow = value; windowEvents.resize?.(); }, progress: context.progress, get state() { return state; }, setState: value => { state = { ...state, ...value }; } };
+  return { tutorial, adapter, body, workspace, main, drawer, drawerBody, requests, navigations, contexts, intervals, document, setNarrow(value) { narrow = value; windowEvents.resize?.(); }, progress: context.progress, get state() { return state; }, setState: value => { state = { ...state, ...value }; } };
 }
 
 test('reading confirmation waits for saving, then navigates exactly one step without completing the next action', async () => {
@@ -445,6 +445,27 @@ test('locating a step restarts its finite highlight pulse and moving on cancels 
   assert.equal(target.animations[1].cancelled, true);
   assert.equal(target.classList.contains('tour-target'), false);
   ui.tutorial.dispose();
+});
+
+test('navigation targets are revealed on resume and restored when leaving or disposing the tutorial', async () => {
+  for (const savedStepId of ['setup-welcome', 'complete-review']) {
+    const ui = await tutorialBrowser({ savedStepId });
+    const target = new Element('button'); target.dataset.tour = 'nav-today'; target.inert = true; ui.main.append(target);
+    ui.adapter.revealTarget = node => {
+      if (node !== target) return;
+      target.inert = false;
+      return () => { target.inert = true; };
+    };
+    await ui.tutorial.open();
+    assert.equal(target.inert, false);
+    assert.equal(target.classList.contains('tour-target'), true);
+    if (savedStepId === 'setup-welcome') {
+      await click(findButton(ui.body, '我已阅读'));
+      assert.equal(target.inert, true);
+    }
+    ui.tutorial.dispose();
+    assert.equal(target.inert, true);
+  }
 });
 
 test('reduced motion keeps the highlight static and disables smooth scrolling', async () => {
