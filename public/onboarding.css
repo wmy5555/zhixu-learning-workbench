@@ -31,7 +31,9 @@
 .onboarding-clock[open] > * + * { margin-top: 10px; }
 .onboarding-controls button { font-size: 11px; }
 .onboarding-open .drawer { right: 350px; width: min(760px, calc(100vw - 366px)); }
-.tour-target { outline: 3px solid var(--accent); outline-offset: 5px; scroll-margin: 22px; }
+.tour-target { outline: 3px solid var(--accent); outline-offset: -3px; border-radius: 4px; scroll-margin: 22px; }
+/* Revealing the sidebar must not animate inherited visibility on its buttons. */
+.onboarding-open .nav-item { transition-property: background-color, color, border-color, transform; }
 .practice-settings-note { margin-bottom: 16px; }
 .practice-readonly { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 24px; }
 .practice-readonly:disabled { opacity: .65; }

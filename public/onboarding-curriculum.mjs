@@ -126,7 +126,7 @@ export const chapters = [
     action('output-edit', '保存自己的编辑', '在历史草稿打开刚生成内容，改写一句使其符合你的表达，再保存。', '最终采用的内容由你决定。', '草稿保存了你的修改。', 'output', 'draft-editor', 'draft-edit'),
     action('output-use', '标记真正采用的知识', '勾选你确实用于这次练习输出的引用，保存采用记录。仅生成或看见引用不算采用。', '实际使用记录是之后知识建议的一项依据。', '出现你明确勾选的采用记录。', 'output', 'draft-editor', 'draft-use'),
     action('output-unuse', '取消一次采用标记', '取消刚才一个引用的采用勾选并保存，检查记录随之撤回。', '误勾选可以更正，不应累积虚假使用。', '取消的引用不再计作本草稿实际采用。', 'output', 'draft-editor', 'draft-unuse'),
-    action('output-capture', '把草稿送回收集箱', '在草稿中选择送回收集箱，检查标题和正文后保存为新资料。', '输出可成为下一轮整理的输入。', '收集箱出现新资料，并保留你确认后的正文。', 'output', 'output-drafts', 'draft-capture'),
+    action('output-capture', '把草稿送回收集箱', '在草稿中选择送回收集箱，检查标题和正文后保存为新资料。', '输出可成为下一轮整理的输入。', '收集箱出现新资料，并保留你确认后的正文。', 'output', 'draft-editor', 'draft-capture'),
     preset('output-core-review', '读懂核心知识建议的依据', '加载“核心建议”案例，打开知识使用建议，核对三天独立练习和两天采用记录。所有日期和回答均为预设，不是你的掌握证明。', '单纯推进日期不能产生核心建议。', '预设记录单独标记，建议显示具体依据。', 'library', 'library-recommendations', 'recommendations-open', 'core-suggestion', { noteRole: 'coreKnowledge' }),
     preset('output-core-accept', '接受一次预设阶段建议', '只对带“预设演示案例”的核心建议点击接受，查看知识阶段变化。', '练习最后仍由用户决定阶段。', '案例知识成为核心，主线学习记录不被替代。', 'library', 'library-recommendations', 'recommendation-accept', 'core-suggestion', { noteRole: 'coreKnowledge' }),
     preset('output-suggestion-dismiss', '暂不采纳另一条建议', '在知识使用建议中找到“暂不采纳建议的专用卡片”，阅读转为查阅的理由后点击“暂不采用”。', '建议可以拒绝，不必全部接受。', '专用卡片的建议记为已处理，知识阶段仍为待选学。', 'library', 'library-recommendations', 'recommendation-dismiss', 'core-suggestion', { noteRole: 'dismissKnowledge' }),
@@ -169,8 +169,23 @@ const coreRoute = [
   { id: 'output', title: '5. 检索与输出', stepIds: ['search-keyword', 'output-draft', 'output-citations', 'output-edit', 'output-use'] },
   { id: 'complete', title: '6. 回顾核心体验', stepIds: ['complete-review'] },
 ];
+// Navigation opens the correct surface; focusTarget frames the precise control within it.
+const focusTargets = {
+  'capture-permission': 'note-privacy', 'study-source-permission': 'note-privacy', 'study-permission': 'note-privacy',
+  'process-validity': 'note-validity', 'library-edit': 'note-body', 'study-hide': 'study-hide', 'study-feedback': 'study-feedback',
+  'output-edit': 'draft-body', 'output-use': 'draft-use', 'output-unuse': 'draft-use', 'output-capture': 'draft-capture',
+  'review-clock-day': 'onboarding-clock-day', 'review-clock-due': 'onboarding-clock-due',
+};
+const fallbackTargets = {
+  'study-hide': ['study-answer', 'study-session'], 'study-answer': ['study-hide'], 'study-followup': ['study-hide'],
+  'study-confirm': ['note-confirm'], 'study-feedback': ['study-session'],
+  'topic-copy': ['topic-editor'], 'topic-split': ['topic-editor'],
+  'capture-permission': ['note-detail'], 'study-source-permission': ['note-detail'], 'study-permission': ['note-detail'],
+  'library-edit': ['note-detail'], 'process-validity': ['note-detail'],
+  'output-edit': ['output-drafts'], 'output-use': ['output-drafts'], 'output-unuse': ['output-drafts'], 'output-capture': ['output-drafts'],
+};
 const coreIds = new Set(coreRoute.flatMap(chapter => chapter.stepIds));
-export const flatSteps = chapters.flatMap(chapter => chapter.steps.map(item => ({ ...item, chapterId: chapter.id, priority: coreIds.has(item.id) ? 'core' : 'extension' })));
+export const flatSteps = chapters.flatMap(chapter => chapter.steps.map(item => ({ ...item, focusTarget: focusTargets[item.id], fallbackTargets: fallbackTargets[item.id] || [], chapterId: chapter.id, priority: coreIds.has(item.id) ? 'core' : 'extension' })));
 export const coreChapters = coreRoute.map(chapter => ({ id: chapter.id, title: chapter.title, steps: chapter.stepIds.map(id => flatSteps.find(item => item.id === id)) }));
 export const coreSteps = coreChapters.flatMap(chapter => chapter.steps);
 const extensionTitles = {

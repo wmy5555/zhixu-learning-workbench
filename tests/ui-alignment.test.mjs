@@ -3,7 +3,10 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
 import { initSidebar } from '../public/sidebar.mjs';
-import { coreSteps } from '../public/onboarding-curriculum.mjs';
+import { coreSteps, flatSteps } from '../public/onboarding-curriculum.mjs';
+
+import { tutorialFixture } from './fixtures/tutorial-ui.mjs';
+const usageSource = await readFile(new URL('../public/usage.mjs', import.meta.url), 'utf8');
 
 const uiSource = await readFile(new URL('../public/ui.mjs', import.meta.url), 'utf8');
 const appSource = await readFile(new URL('../public/app.mjs', import.meta.url), 'utf8');
@@ -12,12 +15,14 @@ class Element {
   constructor(tag = 'div') {
     this.tagName = tag; this.children = []; this.events = {}; this.attributes = {};
     this.value = ''; this.type = ''; this.name = ''; this.disabled = false; this.checked = false;
-    this.open = false; this.dataset = {}; this.style = {}; this._text = '';
-    this.classList = { add() {}, remove() {}, toggle() {} };
+    this.open = false; this.dataset = {}; this.style = { setProperty() {} }; this._text = '';
+    this.classList = { add: name => { this.className = (this.className || '') + ' ' + name; }, remove: name => { this.className = (this.className || '').split(' ').filter(item => item !== name).join(' '); }, contains: name => (this.className || '').split(' ').includes(name), toggle() {} };
   }
   set textContent(value) { this._text = String(value); this.children = []; }
   get textContent() { return this._text + this.children.map(child => child.textContent ?? String(child)).join(''); }
   append(...children) { this.children.push(...children.map(child => { if (child instanceof Element) return child; const text = new Element('text'); text.textContent = String(child); return text; })); }
+  prepend(...children) { this.children.unshift(...children); }
+  get options() { return this.children; }
   replaceChildren(...children) { this._text = ''; this.children = []; this.append(...children); }
   addEventListener(name, handler) { this.events[name] = handler; }
   setAttribute(name, value) { this.attributes[name] = value; }
@@ -29,12 +34,16 @@ class Element {
   }
   querySelectorAll(selector) { return descendants(this).slice(1).filter(node => matches(node, selector)); }
   querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
+  insertBefore(node, reference) { const at = this.children.indexOf(reference); this.children.splice(at < 0 ? this.children.length : at, 0, node); }
+  get lastChild() { return this.children.at(-1); }
   focus() {}
   remove() {}
   cloneNode() { return this; }
 }
 function descendants(node) { return [node, ...node.children.flatMap(child => child instanceof Element ? descendants(child) : [])]; }
 function matches(node, selector) {
+  const dataTour = selector.match(/^\[data-tour=["']([^"']+)["']\]$/);
+  if (dataTour) return node.dataset.tour === dataTour[1];
   if (selector.startsWith('.')) return String(node.className || '').split(/\s+/).includes(selector.slice(1));
   const match = selector.match(/^(\w+)(?:\[([^=]+)=['"]([^'"]+)['"]\])?$/);
   return Boolean(match && node.tagName === match[1] && (!match[2] || node[match[2]] === match[3]));
@@ -62,10 +71,10 @@ function browser(api = {}) {
       entries() { return descendants(this.form).filter(node => node.name && !node.disabled && ['input', 'textarea', 'select'].includes(node.tagName)).map(node => [node.name, String(node.tagName === 'textarea' ? node.textContent : node.tagName === 'select' ? node.children.find(option => option.selected)?.value || '' : node.value)]); }
     },
     ApiError: class extends Error {}, startSession: async () => {},
-    window: { matchMedia: () => ({ matches: false, addEventListener() {} }), history: { replaceState() {} }, location: { hash: '' }, setTimeout() {}, addEventListener() {} },
+    window: { zhixuAppearance: { getAccent: () => null, getTheme: () => 'light', resolvedTheme: () => 'light', previewAccent: () => ({}), getMode: () => 'light', palette: () => ({}) }, matchMedia: () => ({ matches: false, addEventListener() {} }), history: { replaceState() {} }, location: { hash: '' }, setTimeout() {}, addEventListener() {} },
   });
-  const stripped = appSource.replace(/import[\s\S]*?from "\.\/api\.mjs";\s*/, '').replace(/import[\s\S]*?from "\.\/ui\.mjs";\s*/, '').replace(/^init\(\);\s*$/m, '');
-  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
+  const stripped = appSource.replace(/import[\s\S]*?from "\.\/api\.mjs";\s*/, '').replace(/import[\s\S]*?from "\.\/ui\.mjs";\s*/, '').replace(/^init\(\);\s*$/m, '').replace('const { createUsagePanel } = await import("./usage.mjs");', '');
+  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
   return context.app;
 }
 
@@ -302,4 +311,57 @@ test('saving capabilities after moving budgets does not submit or reset budget v
   const form=descendants(panel).find(node=>node.tagName==='form');
   await form.events.submit({preventDefault(){}});
   assert.equal(saves.length,1); assert.equal(Object.hasOwn(saves[0].ai,'dailyCallLimit'),false); assert.equal(Object.hasOwn(saves[0].ai,'monthlyBudget'),false);
+});
+
+for (const step of flatSteps) test('tutorial target is rendered for ' + step.id, async () => {
+  const fixture = tutorialFixture(step);
+  const app = browser(fixture.api);
+  app.state.bootstrap = fixture.bootstrap;
+  app.state.view = 'unrendered';
+  const result = await app.navigateTutorial(step, { roles: fixture.roles });
+  if (step.target.startsWith('nav-') || step.focusTarget?.startsWith('onboarding-')) return; // Static index.html navigation is covered by sidebar tests.
+  const targets = [...descendants(app.refs.main), ...(app.refs.drawer.classList.contains('is-open') ? descendants(app.refs.drawerBody) : [])].filter(node => node.dataset.tour === (result?.target || step.focusTarget || step.target));
+  assert.ok(targets.length, step.id + ' has no rendered target: ' + (step.focusTarget || step.target) + '\n' + app.refs.main.textContent.slice(0, 180));
+});
+
+test('missing practice prerequisites point to a concrete entry without starting work', async () => {
+  for (const [stepId, expected] of [['capture-permission', 'capture-save'], ['topic-edit', 'topic-create'], ['review-hint', 'onboarding-case']]) {
+    const fixture = tutorialFixture();
+    const app = browser(fixture.api);
+    const result = await app.navigateTutorial(flatSteps.find(step => step.id === stepId), { roles: {} });
+    assert.equal(result.prerequisite || result.target, expected);
+    assert.equal(fixture.reads.length, 0);
+  }
+});
+
+test('study locating respects reading, missing sessions, and the tutorial knowledge identity', async () => {
+  const fixture = tutorialFixture({ id: 'study-hide' });
+  const app = browser(fixture.api); app.state.bootstrap = fixture.bootstrap;
+  const step = flatSteps.find(step => step.id === 'study-answer');
+  const result = await app.navigateTutorial(step, { roles: fixture.roles });
+  assert.equal(result.target, 'study-hide');
+  assert.equal(app.state.studyMaterialVisible, true, 'locating must not record hiding or submitting for the user');
+  fixture.sessions.splice(0, fixture.sessions.length, { id: 'other-session', noteId: 'unrelated-note' });
+  app.state.currentStudy = null;
+  const missing = await app.navigateTutorial(step, { roles: fixture.roles });
+  assert.equal(missing.target, 'study-queue');
+  assert.equal(app.state.currentStudy, null, 'an unrelated session must not become the tutorial target');
+  assert.ok(fixture.reads.every(read => ['studySessions', 'study', 'today', 'notes'].includes(read.name)));
+});
+
+test('output locating opens saved drafts and citations, preserves edits, and handles no drafts', async () => {
+  const fixture = tutorialFixture();
+  const app = browser(fixture.api); app.state.bootstrap = fixture.bootstrap;
+  await app.navigateTutorial(flatSteps.find(step => step.id === 'output-citations'), { roles: fixture.roles });
+  assert.match(app.refs.main.querySelector('[data-tour="output-result"]').textContent, /虚构草稿/);
+  const step = flatSteps.find(step => step.id === 'output-edit');
+  await app.navigateTutorial(step, { roles: fixture.roles });
+  const editor = app.refs.drawerBody.querySelector('[data-tour="draft-body"]');
+  editor.value = '用户尚未保存的输入';
+  await app.navigateTutorial(step, { roles: fixture.roles });
+  assert.equal(app.refs.drawerBody.querySelector('[data-tour="draft-body"]'), editor);
+  assert.equal(editor.value, '用户尚未保存的输入');
+  const empty = browser({ ...fixture.api, drafts: async () => ({ drafts: [] }) }); empty.state.bootstrap = fixture.bootstrap;
+  assert.equal((await empty.navigateTutorial(step, { roles: fixture.roles })).target, 'output-form');
+  assert.ok(fixture.reads.every(read => read.name === 'drafts'));
 });

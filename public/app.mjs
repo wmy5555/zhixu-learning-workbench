@@ -48,6 +48,7 @@ const state = {
   studyMaterialVisible: true,
   systemTab: "settings",
   studyTab: "queue",
+  lastOutput: null,
   restoreBackup: null,
   restoreToken: "",
 };
@@ -87,7 +88,7 @@ function errorMessage(error) {
 function renderFailure(error, retry) {
   const actions = el("div", { class: "form-actions" }, [button("重试", { kind: "primary", onClick: retry })]);
   if (api.getContext?.().practiceId) actions.append(button("明确返回正式知识库", { onClick: async () => {
-    try { api.setContext(""); onboarding?.dispose(); onboarding = null; state.currentStudy = null; state.bootstrap = null; await init(); }
+    try { api.setContext(""); onboarding?.dispose(); onboarding = null; state.currentStudy = null; state.lastOutput = null; state.bootstrap = null; await init(); }
     catch (nextError) { handleError(nextError); }
   } }));
   clear(refs.main).append(emptyState("暂时无法读取", errorMessage(error), actions));
@@ -743,6 +744,7 @@ function renderNoteDrawer(note) {
 
 function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
   refs.drawerBody.dataset.tour = "note-editor";
+  refs.drawerBody.dataset.tourSubject = note.id;
   const meta = asObject(note.meta);
   const form = el("form", { class: "page-stack" });
   const title = el("input", { name: "title", value: note.title || "", required: true });
@@ -755,16 +757,16 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
       field("原始地址", el("input", { name: "url", type: "url", value: meta.url || "", placeholder: "https://…" })),
       field("资料日期", el("input", { name: "date", type: "date", value: String(meta.date || "").slice(0, 10) })),
       field("原文定位", el("input", { name: "locator", value: meta.locator || "", placeholder: "页码、时间点或段落" })),
-      field("本资料下次核验有效天数", el("input", { name: "researchIntervalDays", type: "number", min: 1, max: 365, step: 1, value: meta.researchIntervalDays ?? 30, required: true }), "仅在后续成功核验时生效；默认 30 天，可设置 1–365 天。"),
+      field("本资料下次核验有效天数", el("input", { dataset: { tour: "note-validity" }, name: "researchIntervalDays", type: "number", min: 1, max: 365, step: 1, value: meta.researchIntervalDays ?? 30, required: true }), "仅在后续成功核验时生效；默认 30 天，可设置 1–365 天。"),
     ]),
   ]) : null;
   form.append(
     el("div", { class: "notice", text: "保存时会核对内容哈希；若文件已被 Obsidian 或其他窗口修改，本次保存会停下并显示冲突。" }),
-    field("标题", title), field("正文", body),
+    field("标题", title), field("正文", tour(body, "note-body")),
     ...(sourceFields ? [sourceFields] : []),
     el("div", { class: "form-grid" }, [
       field("学习状态", el("input", { value: labels.stage(meta.stage), disabled: true }), "学习状态请通过相应操作调整，以便保留理由。"),
-      field("隐私", selectControl([["local", "仅本地"], ["cloud", "允许云端"]], meta.privacy || "local", "privacy")),
+      tour(field("隐私", selectControl([["local", "仅本地"], ["cloud", "允许云端"]], meta.privacy || "local", "privacy")), "note-privacy"),
       field("知识主题", el("input", { name: "topic", value: meta.topic || "", placeholder: "可留空" })),
       field("学习深度", selectControl([["aware", "知道存在"], ["find", "知道去哪找"], ["explain", "能够解释"], ["apply", "能够迁移应用"]], meta.depth || "aware", "depth")),
     ]),
@@ -1061,7 +1063,7 @@ async function studySessionPanel() {
       ]),
       el("section", { class: "panel", dataset: { tour: "study-material" } }, [sectionHeading("学习材料", "完整正文，仅在阅读阶段显示"), el("div", { class: "prose", text: session.material || "这次会话没有可显示的材料。" })]),
       evidenceDetails(session.noteId),
-      button("隐藏材料，开始回忆", { kind: "primary", onClick: () => { state.studyMaterialVisible = false; recordTourEvent("study-hide"); renderStudy().catch(handleError); } }),
+      tour(button("隐藏材料，开始回忆", { kind: "primary", onClick: () => { state.studyMaterialVisible = false; recordTourEvent("study-hide"); renderStudy().catch(handleError); } }), "study-hide"),
     ]);
   }
   const awaiting = session.status === "awaiting_feedback" || Boolean(session.pendingJobId);
@@ -1081,7 +1083,7 @@ async function studySessionPanel() {
       el("h2", { text: session.question || "请用自己的语言解释这项知识。" }),
     ]),
     awaiting ? el("div", { class: "notice info" }, [el("strong", { text: "回答已保存，正在等待反馈" }), el("p", { text: "请勿重复提交。模型不可用时，原回答仍会保留，你也可以直接整理并确认自己的理解。" }), button("刷新反馈", { onClick: () => renderStudy().catch(handleError) })]) : null,
-    feedback ? renderFeedback(feedback, "针对上一轮的反馈") : null,
+    feedback ? tour(renderFeedback(feedback, "针对上一轮的反馈"), "study-feedback") : null,
     field("你的回答", answer, "措辞不必像标准答案；系统关注概念、条件、机制和应用。"),
     hintArea,
     el("div", { class: "form-actions" }, [
@@ -1224,8 +1226,8 @@ async function renderTopics() {
   const topics = asArray(data.topics);
   const create = button("新建主题学习包", { kind: "primary", onClick: () => createTopicDrawer() });
   const actions = el("div", { class: "item-actions" }, [button("AI 建议学习包", { onClick: suggestTopics }), create]);
-  clear(refs.main).append(el("div", { class: "page-stack" }, [
-    tour(sectionHeading("主题学习包", "跨日期组织相关内容，也允许零散材料仅供查阅", actions), "topics-list"),
+  clear(refs.main).append(el("div", { class: "page-stack", dataset: { tour: "topics-list" } }, [
+    sectionHeading("主题学习包", "跨日期组织相关内容，也允许零散材料仅供查阅", actions),
     el("div", { class: "notice info", text: "AI 建议只使用明确允许外发的材料，并以“AI 整理建议”呈现建议顺序和前置缺口；不会自动创建或确认主题学习包。你可以审阅后用“新建主题学习包”手动采用。" }),
     topics.length ? el("div", { class: "card-grid" }, topics.map(topicCard)) : emptyState("还没有主题学习包", "创建一个真实想解决的问题，再选择涉及的知识和前置内容。", create.cloneNode(true)),
   ]));
@@ -1381,7 +1383,7 @@ async function renderDiscover() {
     field("起始日期", el("input", { name: "from", type: "date", value: state.searchFilters.from })),
     field("结束日期", el("input", { name: "to", type: "date", value: state.searchFilters.to })),
   ])]));
-  const resultArea = el("section");
+  const resultArea = el("section", { dataset: { tour: "discover-results" } });
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     syncSearchMode();
@@ -1494,7 +1496,8 @@ async function renderOutput() {
   const knowledgeScope = el("input", { type: "checkbox", name: "knowledge", checked: true });
   const allowCloudQuestion = el("input", { type: "checkbox", checked: false });
   form.append(sectionHeading("有依据的问答与输出", "默认优先个人知识，并让你看见实际使用了哪些资料"), field("问题或输出目标", question), el("div", { class: "form-grid" }, [field("输出方式", mode), field("取材范围", el("div", { class: "segmented" }, [el("label", { class: "check-field" }, [knowledgeScope, "知识笔记"]), el("label", { class: "check-field" }, [sourceScope, "原始来源"])]))]), el("label", { class: "check-field" }, [allowCloudQuestion, el("span", { text: "允许将本次问题发给已配置的外部模型" })]), el("p", { class: "fine-print", text: "默认关闭：只在本机检索并列出已有材料。开启后，本次问题与标为允许云端的相关材料可发送给模型；仅本地材料不会外发。" }), el("div", { class: "notice info", text: "找不到、证据冲突或内容过期时，回答应明确说明。问答和草稿不会自动成为个人知识。" }), button("开始生成", { kind: "primary", type: "submit" }));
-  const answerArea = el("section");
+  const answerArea = el("section", { dataset: { tour: "output-result" } });
+  if (state.lastOutput) renderAnswer(answerArea, state.lastOutput);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const scope = [];
@@ -1504,6 +1507,7 @@ async function renderOutput() {
     clear(answerArea).append(el("div", { class: "loading-panel" }, [el("span", { class: "spinner" }), el("p", { text: "正在检索并组织已有资料…" })]));
     try {
       const result = await api.ask({ question: question.value, scope, mode: mode.value, privacy: allowCloudQuestion.checked ? "cloud" : "local" });
+      state.lastOutput = result;
       renderAnswer(answerArea, result);
     } catch (error) { clear(answerArea).append(emptyState("本次生成未完成", errorMessage(error), button("重试", { onClick: () => form.requestSubmit() }))); }
   });
@@ -1527,8 +1531,8 @@ function renderAnswer(container, result) {
 async function renderDraftsPanel() {
   const data = await api.drafts();
   const drafts = asArray(data.drafts);
-  return el("section", {}, [
-    tour(sectionHeading("输出工作区", "编辑素材、提纲和草稿；只有主动采集后才回到知识流程"), "output-drafts"),
+  return el("section", { dataset: { tour: "output-drafts" } }, [
+    sectionHeading("输出工作区", "编辑素材、提纲和草稿；只有主动采集后才回到知识流程"),
     drafts.length ? el("div", { class: "card-grid" }, drafts.map((draft) => el("article", { class: "card" }, [
       el("div", { class: "card-head" }, [badge(draft.mode === "draft" ? "草稿" : draft.mode === "outline" ? "提纲" : "回答"), badge(formatDate(draft.updatedAt))]),
       el("h3", { text: draft.title || draft.question || "未命名输出" }),
@@ -1548,12 +1552,13 @@ function openDraft(draft) {
     el("div", { class: "item-copy" }, [el("h3", { text: citation.title || citation.id || "引用材料" }), el("p", { text: truncate(citation.excerpt, 120) })]),
     el("input", { type: "checkbox", name: "usedId", value: citation.id, checked: used.has(citation.id) }),
   ]))) : el("div", { class: "notice danger", text: "这份草稿没有可标记的实际引用。" });
-  form.append(field("正文", body), sectionHeading("标记实际采用的知识", "这些反馈会用于知识使用建议，但不会自动证明知识正确。"), chooser, el("div", { class: "form-actions" }, [button("保存草稿", { kind: "primary", type: "submit" }), button("送回收集箱", { onClick: () => captureDraft(draft, body.value) })]));
+  form.append(field("正文", tour(body, "draft-body")), sectionHeading("标记实际采用的知识", "这些反馈会用于知识使用建议，但不会自动证明知识正确。"), tour(chooser, "draft-use"), el("div", { class: "form-actions" }, [button("保存草稿", { kind: "primary", type: "submit" }), tour(button("送回收集箱", { onClick: () => captureDraft(draft, body.value) }), "draft-capture")]));
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
       const usedIds = [...form.querySelectorAll("input[name='usedId']:checked")].map((input) => input.value);
       await api.updateDraft(draft.id, { body: body.value, usedIds });
+      state.lastOutput = null;
       toast("草稿已保存", "success");
       closeDrawer();
       await renderOutput();
@@ -1641,8 +1646,8 @@ function appearancePanel() {
     catch(error) { handleError(error); }
   }});
   showPreview();
-  return el("section",{class:"panel page-stack"},[
-    tour(sectionHeading("外观与强调色","切换整个工作台的日夜模式；强调色会同时适配两种模式。"), "system-appearance"),
+  return el("section",{class:"panel page-stack",dataset:{tour:"system-appearance"}},[
+    sectionHeading("外观与强调色","切换整个工作台的日夜模式；强调色会同时适配两种模式。"),
     el("div", { class: "form-actions" }, [["日间模式", "light"], ["夜间模式", "dark"]].map(([label, theme]) => button(label, { onClick: () => {
       if (document.documentElement.dataset.theme !== theme) document.querySelector("#theme-toggle")?.click();
       else recordTourEvent("appearance-theme");
@@ -1987,7 +1992,8 @@ function callHistoryPanel(calls) {
     ]));
   }
   for(const control of [capability,outcome,size]) control.addEventListener("change",()=>{page=1;render();});
-  panel.append(tour(sectionHeading("最近外部调用",`展示最近 ${calls.length} 条记录（最多 100 条），新记录在前`), "system-calls"),el("div",{class:"call-filters"},[capability,outcome,size]),content,pager);
+  panel.dataset.tour = "system-calls";
+  panel.append(sectionHeading("最近外部调用",`展示最近 ${calls.length} 条记录（最多 100 条），新记录在前`),el("div",{class:"call-filters"},[capability,outcome,size]),content,pager);
   render();
   return panel;
 }
@@ -2001,8 +2007,8 @@ function keyValueObject(object) {
 async function proposalsPanel() {
   const data = await api.proposals();
   const proposals = asArray(data.proposals);
-  return el("section", {}, [
-    tour(sectionHeading("MCP 写入提案", "外部客户端只能提交草稿；接受时仍会核对原内容哈希"), "system-proposals"),
+  return el("section", { dataset: { tour: "system-proposals" } }, [
+    sectionHeading("MCP 写入提案", "外部客户端只能提交草稿；接受时仍会核对原内容哈希"),
     proposals.length ? el("div", { class: "list" }, proposals.map((proposal) => el("article", { class: "list-item" }, [
       el("div", { class: "item-symbol", text: "提" }),
       el("div", { class: "item-copy" }, [el("h3", { text: proposal.title || proposal.type || "未命名提案" }), el("p", { text: truncate(proposal.body || proposal.reason, 180) }), el("div", { class: "item-meta" }, [badge(labels.state(proposal.state || "pending"), stateTone(proposal.state || "pending")), badge(formatDate(proposal.createdAt, true))])]),
@@ -2036,8 +2042,8 @@ async function actProposal(id, action) {
 function conflictsPanel() {
   recordTourEvent("conflicts-open");
   const conflicts = asArray(state.bootstrap?.conflicts);
-  return el("section", {}, [
-    tour(sectionHeading("文件与同步冲突", "重复稳定 ID、解析错误和哈希变化不会被静默覆盖"), "system-conflicts"),
+  return el("section", { dataset: { tour: "system-conflicts" } }, [
+    sectionHeading("文件与同步冲突", "重复稳定 ID、解析错误和哈希变化不会被静默覆盖"),
     conflicts.length ? el("div", { class: "list" }, conflicts.map((conflict) => el("article", { class: "list-item" }, [
       el("div", { class: "item-symbol", text: "!" }),
       el("div", { class: "item-copy" }, [el("h3", { text: conflict.title || conflict.type || "文件冲突" }), el("p", { text: conflict.error || conflict.message || conflict.path || "等待人工处理" }), el("div", { class: "item-meta" }, [conflict.code ? badge(conflict.code, "danger") : badge("待处理", "danger"), conflict.updatedAt ? badge(formatDate(conflict.updatedAt, true)) : null])]),
@@ -2053,41 +2059,69 @@ async function renderCurrent() {
 }
 
 async function navigateTutorial(step, tutorial) {
+  const prerequisite = (id, message) => ({ target: "onboarding-prerequisite", prerequisite: id, message });
+  const value = tutorial?.roles?.[step.noteRole];
+  const id = typeof value === "string" ? value : value?.id;
+  if (step.noteRole && !id) {
+    if (step.caseId) return { target: "onboarding-case", message: "请先点击框选的“准备演示案例”，再定位案例中的操作。" };
+    return prerequisite(step.noteRole === "createdTopic" ? "topic-create" : "capture-save", "尚未找到这一步对应的练习内容，请先完成前面的保存步骤。");
+  }
   const requestedTab = step.view === "study" ? step.tab || (step.target === "study-queue" || step.target === "study-history" ? "queue" : step.target === "study-mistakes" ? "mistakes" : "session") : step.tab;
   const sameView = state.view === (step.view || "today") && (step.view !== "system" || !requestedTab || state.systemTab === requestedTab) && (step.view !== "study" || state.studyTab === requestedTab);
+  // Keep unsaved input when locating an already open form.
+  if (sameView && refs.drawer.classList.contains("is-open")) {
+    if (step.id === "study-confirm" && refs.drawerBody.dataset.tour === "note-confirm") return { target: "note-confirm" };
+    if (step.target === "note-editor" && refs.drawerBody.dataset.tour === "note-editor" && refs.drawerBody.dataset.tourSubject === id) return;
+    if (["topic-copy", "topic-split"].includes(step.id) && refs.drawerBody.dataset.tour === "topic-editor") return { target: "topic-editor" };
+    if (["draft-editor", "topic-editor"].includes(step.target) && refs.drawerBody.dataset.tour === step.target) return;
+  }
   if (step.tab && step.view === "system") state.systemTab = step.tab;
   if (step.view === "study") state.studyTab = requestedTab;
   if (!sameView) await navigate(step.view || "today");
-  else if (!step.target?.startsWith("note-") && !["topic-editor", "topic-detail", "draft-editor"].includes(step.target) && refs.drawer.classList.contains("is-open")) {
+  else if (!step.target?.startsWith("note-") && !["topic-editor", "topic-detail"].includes(step.target) && refs.drawer.classList.contains("is-open")) {
     closeDrawer();
     if (["library", "topics"].includes(step.view)) await renderCurrent();
   }
-  const value = tutorial?.roles?.[step.noteRole];
-  const id = typeof value === "string" ? value : value?.id;
-  if (step.action === "create-topic") {
-    if (refs.drawer.classList.contains("is-open") && refs.drawerBody.dataset.tour === "topic-editor") return;
-    return createTopicDrawer();
-  }
-  if (step.view === "study" && state.studyTab === "session" && (!state.currentStudy || id)) {
+  if (step.action === "create-topic") return createTopicDrawer();
+  if (step.view === "study" && state.studyTab === "session") {
     const sessions = asArray((await api.studySessions()).sessions);
-    const session = sessions.find(item => item.id === id) || sessions.find(item => item.noteId === id) || (!id ? sessions[0] : null);
-    if (session) {
-      if (!sameView || state.currentStudy?.id !== session.id) {
-        state.studyMaterialVisible = !asArray(session.turns).length && session.status === "reading";
-        state.currentStudy = session; await renderStudy();
-      }
-    } else if (id) { await openNote(id); }
+    const noteId = id || tutorial?.roles?.explain;
+    const session = sessions.find(item => item.id === noteId) || sessions.find(item => item.noteId === noteId);
+    if (!session) {
+      state.studyTab = "queue"; await renderStudy();
+      return { target: "study-queue", message: "还没有对应的学习会话，请先在框选的学习队列中点击这条示例的“开始学习”。" };
+    }
+    if (!sameView || state.currentStudy?.id !== session.id) {
+      state.studyMaterialVisible = !asArray(session.turns).length && session.status === "reading";
+      state.currentStudy = session; await renderStudy();
+    }
+    if (state.studyMaterialVisible && !asArray(state.currentStudy?.turns).length && step.target !== "study-material") return { target: "study-hide", message: "请先阅读材料，再点击框选的“隐藏材料，开始回忆”，即可看到作答与练习操作。" };
+    if (step.target === "study-material" && (!state.studyMaterialVisible || asArray(state.currentStudy?.turns).length)) return { target: "study-session", message: "本轮已经进入作答阶段，材料已隐藏；可继续作答，或在新一轮练习中体验隐藏材料。" };
+    if (step.target === "study-confirm" && !asArray(state.currentStudy?.turns).length) return { target: "study-answer", message: "请先提交你自己的回答，再整理并确认个人理解。" };
+    if (step.focusTarget === "study-feedback" && !asArray(state.currentStudy?.turns).at(-1)?.feedback) return { target: "study-session", message: "本轮反馈尚未返回，请先提交回答或等待反馈完成。" };
     return;
   }
-  if (!id) return;
+  if (step.target === "draft-editor" || step.target === "output-result") {
+    if (step.target === "output-result" && state.lastOutput) return;
+    const draft = asArray((await api.drafts()).drafts)[0];
+    if (!draft) return { target: "output-form", message: "还没有已保存的输出，请先在框选区域填写目标并亲自点击“开始生成”。" };
+    if (step.target === "draft-editor") return openDraft(draft);
+    renderAnswer(refs.main.querySelector('[data-tour="output-result"]'), { ...draft, answer: draft.body || draft.answer, draftId: draft.id });
+    return;
+  }
   if (step.action === "open-topic" || step.action === "edit-topic") {
     const topic = asArray((await api.topics()).topics).find(item => item.id === id);
     if (topic) return step.action === "edit-topic" ? editTopic(topic) : openTopic(topic);
-    return;
+    return prerequisite("topic-create", "对应主题已删除或尚未创建，请先保存一个练习主题。");
   }
-  if (step.view === "system" || step.view === "today" || step.target === "study-mistakes" || step.target === "study-queue" || step.target === "library-recommendations") return;
-  if (!step.target?.startsWith("note-")) return;
-  const note = await api.note(id);
+  if (step.target === "library-content" && !refs.main.querySelector('[data-tour="library-content"]')) return { target: "library-filter", message: "当前筛选没有显示资料，请先清除筛选，或回到收集步骤保存示例。" };
+  if (!id || !step.target?.startsWith("note-")) return;
+  let note;
+  try { note = await api.note(id); }
+  catch (error) {
+    if (error.status !== 404) throw error;
+    return step.caseId ? { target: "onboarding-case", message: "案例条目已移除，请重新准备演示案例后再操作。" } : prerequisite("capture-save", "对应资料已删除，请先保存练习资料。");
+  }
   openDrawer(note.title || "练习知识", "新手练习", el("div"));
   if (step.target === "note-editor") return renderNoteEditor(note);
   if (step.target === "note-history") return renderHistory(note);
@@ -2140,6 +2174,7 @@ async function init() {
         refresh: async () => { await refreshBootstrap(); await renderCurrent(); },
         contextChanged: async () => {
           closeDrawer(); state.currentStudy = null; state.studyMaterialVisible = true; state.studyTab = "queue";
+          state.lastOutput = null;
           state.restoreBackup = null; state.restoreToken = "";
           state.libraryFilters = { q: "", kind: "", stage: "" };
           state.searchFilters = { q: "", mode: "keyword", kind: "", stage: "", topic: "", source: "", from: "", to: "", privacy: "local" };
