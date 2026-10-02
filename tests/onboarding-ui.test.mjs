@@ -84,7 +84,7 @@ function descend(node) { return [node, ...node.children.flatMap(descend)]; }
 function findButton(root, label) { return descend(root).find(node => node.tagName === 'BUTTON' && node.textContent === label); }
 async function click(node) { assert.ok(node, 'button exists'); assert.equal(node.disabled, false, `button ${node.textContent} is enabled`); await node.events.click({ target: node, preventDefault() {} }); }
 
-async function tutorialBrowser({ modelReady = true, exists = true, narrow = false, reducedMotion = false, query = '', checkpoint, advance, currentStepId, savedStepId, progress = {} } = {}) {
+async function tutorialBrowser({ modelReady = true, exists = true, narrow = false, reducedMotion = false, query = '', checkpoint, advance, stateRead, currentStepId, savedStepId, progress = {} } = {}) {
   const body = new Element('body'), workspace = new Element(), main = new Element('main'), drawer = new Element(), drawerBody = new Element(), launcher = new Element('button');
   body.append(workspace, drawer, launcher); workspace.append(main); drawer.append(drawerBody);
   const roots = { '.workspace': workspace, '#main': main, '#drawer': drawer, '#drawer-body': drawerBody, '#onboarding-launcher': launcher };
@@ -96,6 +96,7 @@ async function tutorialBrowser({ modelReady = true, exists = true, narrow = fals
     setContext: id => { practiceId = id; contexts.push(id); },
     onboarding: async (action, data = {}) => {
       requests.push({ action, data: structuredClone(data) });
+      if (action === 'state' && stateRead) await stateRead();
       if (action === 'advance' && advance) await advance(data, state);
       if (action === 'start' || action === 'resume') state = { ...state, practiceId: 'practice-one', status: 'active' };
       if (action === 'checkpoint') {
@@ -405,6 +406,24 @@ test('failed or unavailable narrow locate keeps instructions and errors visible'
   assert.ok(findButton(blocked.body, '收成小窗'));
   assert.match(blocked.body.textContent, /模拟保存失败/);
   blocked.tutorial.dispose();
+});
+
+test('background refresh failure expands a located small window without changing progress', async () => {
+  let failRefresh = false;
+  const ui = await tutorialBrowser({ narrow: true, stateRead: async () => { if (failRefresh) throw new Error('模拟会话刷新失败'); } });
+  const target = new Element('button'); target.dataset.tour = 'nav-today'; ui.main.append(target);
+  await ui.tutorial.open();
+  await click(findButton(ui.body, '定位操作位置'));
+  const panel = descend(ui.workspace).find(node => node.classList.contains('onboarding-panel'));
+  assert.equal(panel.classList.contains('is-compact'), true);
+  const progress = structuredClone(ui.state.progress);
+  failRefresh = true;
+  await ui.tutorial.refresh();
+  assert.equal(panel.classList.contains('is-compact'), false);
+  assert.equal(panel.querySelectorAll('.onboarding-content')[0].hidden, false);
+  assert.ok(descend(panel).some(node => node.attributes.role === 'alert' && node.textContent === '模拟会话刷新失败'));
+  assert.deepEqual(ui.state.progress, progress);
+  ui.tutorial.dispose();
 });
 
 test('locating a step restarts its finite highlight pulse and moving on cancels the old target', async () => {

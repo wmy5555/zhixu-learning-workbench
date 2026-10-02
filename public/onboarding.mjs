@@ -100,7 +100,7 @@ export function createOnboarding(adapter) {
     if (!current?.practiceId || refreshing || disposed) return;
     refreshing = true;
     try { adopt(await api.onboarding("state", stateBody({}))); render(); }
-    catch (error) { errorText = error.message; render(); }
+    catch (error) { errorText = error.message; compact = false; render(); }
     finally { refreshing = false; }
   }
   async function switchContext(id, destination) {
