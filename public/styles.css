@@ -216,6 +216,8 @@ textarea { min-height: 126px; resize: vertical; line-height: 1.65; }
 input:focus, textarea:focus, select:focus { border-color: var(--accent-2); outline: 3px solid var(--accent-focus); }
 input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent); }
 .check-field { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 13px; }
+.check-field:has(input:disabled) { opacity: .55; cursor: not-allowed; }
+.check-field input:disabled { cursor: not-allowed; }
 .form-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin-top: 17px; }
 .filter-bar { display: grid; grid-template-columns: minmax(190px, 1fr) repeat(3, minmax(120px, .35fr)) auto; gap: 9px; align-items: end; }
 .search-input { position: relative; }
