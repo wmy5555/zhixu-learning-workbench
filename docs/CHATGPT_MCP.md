@@ -52,3 +52,5 @@ HTTP 入口是 `/api/chatgpt/*`，仅供 stdio 桥接使用；不是 Streamable 
 `tests/chatgpt.test.mjs` 用官方 SDK 启动真实 stdio 进程，连接只监听回环地址的真实后端，在随机 `.tmp` 目录写 Markdown/SQLite。覆盖工具发现、收集、检索、分页读取、撤权、范围说明、原文保留、重启/回执恢复、冲突与删除保护、旧凭据隔离、Host/Origin、输入限额和练习库隔离。沿用旧 MCP 的测试覆盖本机客户端兼容性。
 
 本机自动测试通过不代表用户账户已建立隧道或 ChatGPT 网页端实际调用成功。真实验收需：网页对话发出指令 → 工具返回 `saved/already_saved` → 在知序打开对应第一层记录核对摘要、角色原文和覆盖范围 → 关闭读取验证拒绝 → 关闭接入验证收集拒绝。不要使用正式敏感资料做首次连通测试。
+
+本功能的具体审阅意见、处理依据与主分支整合记录见 [ChatGPT MCP 审阅记录](CHATGPT_MCP_REVIEW.md)。
