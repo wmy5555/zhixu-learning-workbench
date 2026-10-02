@@ -1,4 +1,5 @@
 import { api, ApiError, startSession } from "./api.mjs";
+import { initSidebar } from "./sidebar.mjs";
 import {
   el, clear, button, badge, emptyState, formatDate, truncate, safeExternalUrl,
   labels, stateTone, field, toast, confirmAction, promptAction, serializeForm,
@@ -20,6 +21,12 @@ const refs = {
   drawerEyebrow: document.querySelector("#drawer-eyebrow"),
   drawerClose: document.querySelector("#drawer-close"),
 };
+
+const sidebarNavigation = initSidebar({
+  document,
+  media: window.matchMedia('(max-width: 780px)'),
+  storage: { getItem: key => localStorage.getItem(key), setItem: (key, value) => localStorage.setItem(key, value) },
+});
 
 const pages = {
   today: ["今日工作台", "把注意力留给值得学习的内容"],
@@ -61,7 +68,7 @@ function setPage(view) {
   refs.eyebrow.textContent = eyebrow;
   refs.title.textContent = title;
   refs.nav.querySelectorAll(".nav-item").forEach((item) => item.classList.toggle("is-active", item.dataset.view === state.view));
-  refs.sidebar.classList.remove("is-open");
+  sidebarNavigation.closeMobile();
   window.history.replaceState(null, "", state.view === "system" ? `#system/${state.systemTab}` : `#${state.view}`);
 }
 
@@ -2127,7 +2134,6 @@ refs.nav.addEventListener("click", (event) => {
   const item = event.target.closest("[data-view]");
   if (item) navigate(item.dataset.view);
 });
-refs.menu.addEventListener("click", () => refs.sidebar.classList.toggle("is-open"));
 refs.quickCapture.addEventListener("click", () => navigate("capture"));
 refs.refresh.addEventListener("click", async () => {
   refs.refresh.disabled = true;
@@ -2148,6 +2154,7 @@ async function init() {
     if (!onboarding) {
       const { createOnboarding } = await import("./onboarding.mjs");
       onboarding = createOnboarding({
+        revealTarget: sidebarNavigation.revealTarget,
         navigate: navigateTutorial,
         fillSample: fillTutorialSample,
         refresh: async () => { await refreshBootstrap(); await renderCurrent(); },
