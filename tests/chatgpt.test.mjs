@@ -141,6 +141,10 @@ test('retries survive restart and receipt loss, do not disclose edits, and never
   const conflict = await f.request('/api/chatgpt/conversations', { body: { ...payload, summary: 'new summary' } });
   assert.equal(conflict.status, 409); assert.equal(conflict.body.code, 'CHATGPT_REQUEST_CONFLICT');
   f.app.service.store.db.exec("DELETE FROM records WHERE namespace='chatgptCaptures'");
+  assert.equal((await f.request('/api/chatgpt/conversations', { body: payload })).body.code, 'CHATGPT_CAPTURE_UNVERIFIABLE');
+  const edited = f.app.service.getNote(note.id);
+  assert.equal(edited.body, 'PRIVATE EDIT BODY');
+  f.app.service.editNote(note.id, { expectedHash: edited.hash, title: note.title, body: note.body });
   const recovered = await f.request('/api/chatgpt/conversations', { body: payload });
   assert.equal(recovered.body.noteId, note.id); assert.equal(recovered.body.duplicate, true);
   const differentId = await f.request('/api/chatgpt/conversations', { body: { ...payload, requestId: randomUUID() } });
@@ -262,17 +266,56 @@ test('capture recovers after an audit failure without leaking internal errors or
   assert.equal(retry.body.duplicate, true); assert.equal(store.list().length, 1);
 });
 
-test('capture rate limit counts new snapshots, permits retries, and starts accepting after the window expires', async t => {
+test('receipt recovery rejects copied identities, duplicate files, and unverifiable timestamps', async t => {
   const f = await fixture(t); f.enable(); const payload = sample();
-  const first = f.app.service.chatgpt.capture(payload);
-  const store = f.app.service.store;
-  const list = store.list.bind(store);
-  const captured = list()[0];
-  store.list = () => [captured, ...Array.from({ length: 29 }, (_, i) => ({ ...captured, id: `synthetic-${i}`, meta: { ...captured.meta, chatgptCapture: { ...captured.meta.chatgptCapture, requestHash: `synthetic-${i}`, payloadHash: `synthetic-${i}` } } }))];
+  const first = f.app.service.chatgpt.capture(payload), store = f.app.service.store;
+  const note = store.read(first.noteId);
+  store.create({ kind: 'source', title: note.title, body: note.body, meta: note.meta });
+  store.db.exec("DELETE FROM records WHERE namespace='chatgptCaptures'");
+  assert.throws(() => f.app.service.chatgpt.capture(payload), { code: 'CHATGPT_CAPTURE_AMBIGUOUS' });
+  store.delete(note.id, store.read(note.id).hash);
+  assert.throws(() => f.app.service.chatgpt.capture(payload), { code: 'CHATGPT_CAPTURE_UNVERIFIABLE' });
+  assert.equal(store.list().length, 1);
+  const nextPayload = sample({ summary: '另一份原文' }), next = f.app.service.chatgpt.capture(nextPayload);
+  const original = store.read(next.noteId), originalPath = path.join(f.config.vaultDir, original.path);
+  const copyPath = path.join(path.dirname(originalPath), 'synthetic-duplicate.md');
+  fs.copyFileSync(originalPath, copyPath);
+  store.db.exec("DELETE FROM records WHERE namespace='chatgptCaptures'");
+  assert.throws(() => f.app.service.chatgpt.capture(nextPayload), { code: 'CHATGPT_CAPTURE_UNAVAILABLE' });
+  fs.unlinkSync(copyPath); store.scan();
+  const current = store.read(original.id);
+  store.update(current.id, { expectedHash: current.hash, meta: { chatgptCapture: { ...current.meta.chatgptCapture, savedAt: new Date(Date.now() + 86400000).toISOString() } } });
+  assert.throws(() => f.app.service.chatgpt.capture(nextPayload), { code: 'CHATGPT_CAPTURE_UNVERIFIABLE' });
+  const future = store.read(current.id);
+  store.update(future.id, { expectedHash: future.hash, meta: { chatgptCapture: null } });
+  const editedRaw = fs.readFileSync(originalPath, 'utf8').replace(/^id: .*$/m, 'id: externally-renamed-identity');
+  fs.writeFileSync(originalPath, editedRaw);
+  assert.throws(() => f.app.service.chatgpt.capture(nextPayload), { code: 'CHATGPT_CAPTURE_UNAVAILABLE' });
+  assert.equal(fs.readFileSync(originalPath, 'utf8'), editedRaw);
+  const upperPath = path.join(path.dirname(originalPath), path.basename(originalPath).toUpperCase());
+  assert.ok(path.resolve(upperPath).startsWith(path.resolve(f.config.vaultDir) + path.sep));
+  fs.renameSync(originalPath, upperPath);
+  assert.throws(() => f.app.service.chatgpt.capture(nextPayload), { code: 'CHATGPT_CAPTURE_UNAVAILABLE' });
+  assert.equal(fs.readFileSync(upperPath, 'utf8'), editedRaw);
+});
+
+test('external capture timestamps cannot consume the service rate limit', async t => {
+  const f = await fixture(t); f.enable();
+  const store = f.app.service.store, list = store.list.bind(store);
+  store.list = () => Array.from({ length: 30 }, (_, i) => ({ id: `external-${i}`, kind: 'source', meta: { chatgptCapture: { version: 1, requestHash: 'a'.repeat(64), payloadHash: 'b'.repeat(64), savedAt: '2999-01-01T00:00:00.000Z' } } }));
+  try { assert.equal(f.app.service.chatgpt.capture(sample()).status, 'saved'); }
+  finally { store.list = list; }
+});
+
+test('capture rate limit counts new write attempts, permits retries, and expires without trusting Markdown', async t => {
+  const f = await fixture(t); f.enable(); const payload = sample();
+  const realNow = Date.now; let timestamp = realNow(); Date.now = () => timestamp;
   try {
-    assert.throws(() => f.app.service.chatgpt.capture(sample({ summary: 'new snapshot' })), error => error.code === 'CHATGPT_RATE_LIMIT');
+    const first = f.app.service.chatgpt.capture(payload);
+    for (let i = 1; i < 30; i++) f.app.service.chatgpt.capture(sample({ summary: `新快照 ${i}` }));
+    assert.throws(() => f.app.service.chatgpt.capture(sample({ summary: 'over limit' })), error => error.code === 'CHATGPT_RATE_LIMIT');
     assert.equal(f.app.service.chatgpt.capture(payload).noteId, first.noteId);
-    captured.meta.chatgptCapture.savedAt = new Date(Date.now() - 61000).toISOString();
+    timestamp += 61000;
     assert.equal(f.app.service.chatgpt.capture(sample({ summary: 'after window' })).status, 'saved');
-  } finally { store.list = list; }
+  } finally { Date.now = realNow; }
 });

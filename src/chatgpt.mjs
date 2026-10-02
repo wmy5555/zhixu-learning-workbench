@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { fail, hash, now } from './store.mjs';
 
 const text = max => z.string().max(max);
+const captureId = requestHash => `chatgpt_${requestHash}`;
 export const conversationSchema = z.object({
   requestId: z.string().trim().min(8).max(128),
   title: z.string().trim().min(1).max(200),
@@ -80,21 +81,37 @@ export function createChatgptBridge({ getStore, settings, search, getNote, relat
         if (!store.row(previous.noteId)) fail('这份已收集资料已删除或存在文件冲突，请在知序核对；不会自动重新创建。', 'CHATGPT_CAPTURE_UNAVAILABLE', 409);
         return receipt(previous, true);
       }
-      // Markdown is authoritative: recover a receipt after an interrupted index write/rebuild.
-      const ownNotes = store.list().filter(note => note.kind === 'source' && note.meta.chatgptCapture?.version === 1);
-      const sameRequest = ownNotes.find(note => note.meta.chatgptCapture.requestHash === requestHash);
-      if (sameRequest && sameRequest.meta.chatgptCapture.payloadHash !== payloadHash) fail('同一请求编号的内容发生变化。', 'CHATGPT_REQUEST_CONFLICT', 409);
-      const existing = sameRequest || ownNotes.find(note => note.meta.chatgptCapture.payloadHash === payloadHash);
+      const body = renderConversation(value);
+      const notes = store.list();
+      const matches = notes.filter(note => {
+        const marker = note.meta.chatgptCapture;
+        return marker && (marker.requestHash === requestHash || marker.payloadHash === payloadHash);
+      });
+      if (matches.length > 1) fail('发现多份相同的会话标记，请在知序核对副本；不会选择其中任意一份或重新创建。', 'CHATGPT_CAPTURE_AMBIGUOUS', 409);
+      const existing = matches[0];
       if (existing) {
-        const saved = { ...existing.meta.chatgptCapture, noteId: existing.id };
+        const marker = existing.meta.chatgptCapture, savedTime = Date.parse(marker.savedAt);
+        if (marker.requestHash === requestHash && marker.payloadHash !== payloadHash) fail('同一请求编号的内容发生变化。', 'CHATGPT_REQUEST_CONFLICT', 409);
+        // Verify the original identity and complete input, rather than trusting copied frontmatter.
+        if (existing.kind !== 'source' || marker.version !== 2 || !/^[a-f0-9]{64}$/.test(marker.requestHash) || marker.noteId !== existing.id || existing.id !== captureId(marker.requestHash) ||
+          marker.payloadHash !== payloadHash || marker.messageCount !== value.messages.length || marker.coverage !== value.coverage || !Number.isFinite(savedTime) || savedTime > Date.now() ||
+          existing.title !== value.title || existing.body !== body || existing.meta.platform !== 'ChatGPT' || existing.meta.url !== value.conversationUrl) {
+          fail('会话回执已丢失，且原记录已编辑或标记无法核对；请在知序确认，不会覆盖或重复创建。', 'CHATGPT_CAPTURE_UNVERIFIABLE', 409);
+        }
+        const saved = { version: 2, noteId: existing.id, requestHash: marker.requestHash, payloadHash, savedAt: marker.savedAt, messageCount: marker.messageCount, coverage: marker.coverage };
         store.put('chatgptCaptures', requestHash, saved);
         return receipt(saved, true);
       }
-      if (ownNotes.filter(note => Date.now() - Date.parse(note.meta.chatgptCapture.savedAt) < 60000).length >= 30) fail('一分钟内收集过于频繁，请稍后继续。', 'CHATGPT_RATE_LIMIT', 429);
-      const saved = { version: 1, requestHash, payloadHash, savedAt: now(), messageCount: value.messages.length, coverage: value.coverage };
+      const noteId = captureId(requestHash);
+      const ownsPath = file => file?.split('/').at(-1)?.toLowerCase() === `${noteId}.md`;
+      if (store.row(noteId) || notes.some(note => ownsPath(note.path)) || store.conflicts.some(conflict => conflict.id === noteId || ownsPath(conflict.path))) fail('原会话记录的标记缺失或存在文件冲突，请在知序核对。', 'CHATGPT_CAPTURE_UNAVAILABLE', 409);
+      // Rate state belongs to the service; external Markdown timestamps cannot consume it.
+      const timestamp = Date.now(), recent = store.get('chatgptCaptureRate', 'recent', []).filter(at => Number.isFinite(at) && at <= timestamp && timestamp - at < 60000);
+      if (recent.length >= 30) fail('一分钟内收集过于频繁，请稍后继续。', 'CHATGPT_RATE_LIMIT', 429);
+      store.put('chatgptCaptureRate', 'recent', [...recent, timestamp]);
+      const saved = { version: 2, noteId, requestHash, payloadHash, savedAt: now(), messageCount: value.messages.length, coverage: value.coverage };
       const origin = { platform: 'ChatGPT', author: '', url: value.conversationUrl, date: '', locator: `本次收到 ${value.messages.length} 条消息；${value.coverage === 'selected_excerpt' ? '选定片段' : '当前可见上下文'}`, acquiredAt: saved.savedAt };
-      const body = renderConversation(value);
-      const note = store.create({ kind: 'source', title: value.title, body, meta: {
+      const note = store.create({ id: noteId, kind: 'source', title: value.title, body, meta: {
         privacy: 'local', stage: 'reference', fingerprint: hash(body.trim()),
         ...origin, origins: [origin], chatgptCapture: saved,
       } });

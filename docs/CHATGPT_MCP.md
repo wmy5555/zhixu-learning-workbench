@@ -39,9 +39,9 @@ tunnel-client run --profile zhixu-chatgpt
 
 HTTP 入口是 `/api/chatgpt/*`，仅供 stdio 桥接使用；不是 Streamable HTTP MCP 地址。保留 Host/Origin 检查，所有调用都要求专用凭据；本机旧 MCP 凭据不能调用这里，反向亦然。权限在每次请求检查，异步检索返回前再检查一次。
 
-会话参数：`requestId`（8–128 字符）、`title`、`summary`、`messages:[{role:'user'|'assistant',content}]`、`coverage:'current_context'|'selected_excerpt'`；可选 `limitations` 和已知的 `conversationUrl`。只接收 user/assistant 消息，禁止隐藏指令字段与任意元数据。最多 200 条消息，摘要加原文最多 500000 字符，HTTP 请求最多 2 MiB，每分钟最多新增 30 份。缺失作者、日期、链接留空；不抓取链接、不创建公开分享链接。
+会话参数：`requestId`（8–128 字符）、`title`、`summary`、`messages:[{role:'user'|'assistant',content}]`、`coverage:'current_context'|'selected_excerpt'`；可选 `limitations` 和已知的 `conversationUrl`。只接收 user/assistant 消息，禁止隐藏指令字段与任意元数据。最多 200 条消息，摘要加原文最多 500000 字符，HTTP 请求最多 2 MiB，每分钟最多尝试 30 次新写入（已有回执的重试不占用）。限额由服务端运行记录计算，不采用外部 Markdown 时间。缺失作者、日期、链接留空；不抓取链接、不创建公开分享链接。
 
-保存的 Markdown 含范围说明、AI 摘要及编号角色原文。资料保持 `privacy:local`、`stage:reference`；不创建加工/研究/学习任务。`chatgptCapture` 元数据保存请求摘要与内容摘要，正文仍是知识权威。请求编号以哈希保存，成功回执保存在运行记录中；索引或回执丢失后可从 Markdown 恢复。相同请求编号与不同内容冲突，相同内容不会因重试再次创建。重试只返回初始回执，不回传后来人工修改的标题或正文；已删除或冲突的旧记录不会因相同请求复活。资料没有被原地覆盖。
+保存的 Markdown 含范围说明、AI 摘要及编号角色原文。资料保持 `privacy:local`、`stage:reference`；不创建加工/研究/学习任务。`chatgptCapture` 版本 2 保存原记录 ID、请求与内容摘要，ID 由请求哈希确定；正文仍是知识权威。回执丢失后，只有唯一候选的原 ID、完整标题/正文、来源、条数、范围和时间均能核对时才恢复回执；复制的标记、多个候选、未来时间、已编辑正文或旧格式均提示人工核对，不任意选择、不覆盖、不重复创建。文件标记被去除或 ID 被改写时也不覆盖原路径。正常重试只返回已存回执，不回传后来人工修改的内容。删除后保留的回执可阻止同一请求复活；若原文件与全部运行回执同时丢失，系统无法证明过去的保存或删除。
 
 审计仅记录客户端、操作、时间、条数与保存状态，不记录查询文字、会话正文、摘要、路径或令牌。读取结果不包含任意内部元数据/文件路径。工具注明读取与写入属性，写入使用 `readOnlyHint:false`；ChatGPT 的确认界面由宿主控制，服务端不把模型传入的“用户已确认”布尔值当作额外授权。
 
