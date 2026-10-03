@@ -361,7 +361,64 @@ test('output locating opens saved drafts and citations, preserves edits, and han
   await app.navigateTutorial(step, { roles: fixture.roles });
   assert.equal(app.refs.drawerBody.querySelector('[data-tour="draft-body"]'), editor);
   assert.equal(editor.value, '用户尚未保存的输入');
+  fixture.drafts.unshift({ ...fixture.drafts[0], id: 'new-draft', body: '新一份草稿' });
+  await app.navigateTutorial(step, { roles: fixture.roles });
+  assert.equal(app.refs.drawerBody.dataset.tourSubject, 'new-draft');
+  assert.match(app.refs.drawerBody.querySelector('[data-tour="draft-body"]').textContent, /新一份草稿/);
+  fixture.drafts.length = 0;
+  assert.equal((await app.navigateTutorial(step, { roles: fixture.roles })).target, 'output-form');
+  assert.equal(app.refs.drawer.classList.contains('is-open'), false);
   const empty = browser({ ...fixture.api, drafts: async () => ({ drafts: [] }) }); empty.state.bootstrap = fixture.bootstrap;
   assert.equal((await empty.navigateTutorial(step, { roles: fixture.roles })).target, 'output-form');
   assert.ok(fixture.reads.every(read => read.name === 'drafts'));
+});
+
+test('a failed new output request cannot restore a previous successful answer', async () => {
+  const fixture = tutorialFixture(); let reject = false;
+  const app = browser({ ...fixture.api, ask: async () => { if (reject) throw new Error('受控失败'); return { answer: '上一轮旧答案' }; } });
+  app.state.bootstrap = fixture.bootstrap;
+  await app.renderOutput();
+  const form = app.refs.main.querySelector('[data-tour="output-form"]');
+  await form.events.submit({ preventDefault() {} });
+  assert.equal(app.state.lastOutput.answer, '上一轮旧答案');
+  reject = true;
+  await form.events.submit({ preventDefault() {} });
+  assert.equal(app.state.lastOutput, null);
+  await app.renderOutput();
+  assert.doesNotMatch(app.refs.main.querySelector('[data-tour="output-result"]').textContent, /上一轮旧答案/);
+});
+
+test('topic locating preserves only the matching subject and create or edit mode', async () => {
+  const fixture = tutorialFixture(); const app = browser(fixture.api); app.state.bootstrap = fixture.bootstrap;
+  const locate = id => app.navigateTutorial(flatSteps.find(step => step.id === id), { roles: fixture.roles });
+  await locate('topic-edit');
+  const editForm = app.refs.drawerBody.children[0];
+  await locate('topic-edit');
+  assert.equal(app.refs.drawerBody.children[0], editForm);
+  await locate('topic-create');
+  assert.equal(app.refs.drawerBody.dataset.tourMode, 'create');
+  assert.equal(app.refs.drawerBody.dataset.tourSubject, '');
+  assert.notEqual(app.refs.drawerBody.children[0], editForm);
+  const createForm = app.refs.drawerBody.children[0];
+  await locate('topic-create');
+  assert.equal(app.refs.drawerBody.children[0], createForm);
+  await locate('topic-edit');
+  assert.equal(app.refs.drawerBody.dataset.tourMode, 'edit');
+  assert.equal(app.refs.drawerBody.dataset.tourSubject, fixture.roles.createdTopic);
+  await app.topicEditor({ id: 'unrelated-topic', title: '其他主题', meta: {} }, true);
+  assert.equal((await locate('topic-copy'))?.target, undefined);
+  assert.equal(app.refs.drawerBody.dataset.tour, 'topic-detail');
+});
+
+test('deleted seed notes point to explicit reset while captures and cases can be recreated', async () => {
+  for (const [noteRole, caseId, expected] of [['explain', null, 'onboarding-reset'], ['find', null, 'onboarding-reset'], ['source', null, 'onboarding-reset'], ['capturedSource', null, 'capture-save'], ['versionNote', 'versions', 'onboarding-case']]) {
+    const fixture = tutorialFixture();
+    const app = browser({ ...fixture.api, note: async () => { throw Object.assign(new Error('已删除'), { status: 404 }); } });
+    app.state.view = 'library';
+    const step = { id: 'missing-test', noteRole, caseId, target: 'note-editor', view: 'library' };
+    for (const roles of [fixture.roles, {}]) {
+      const result = await app.navigateTutorial(step, { roles });
+      assert.equal(result.prerequisite || result.target, expected);
+    }
+  }
 });

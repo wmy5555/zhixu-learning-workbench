@@ -647,6 +647,7 @@ test('a missing case frames preparation, and an explicit prerequisite frames its
   for (const location of [
     { target: 'onboarding-case', message: '请先准备演示案例' },
     { target: 'onboarding-prerequisite', prerequisite: 'capture-save', message: '请先保存练习资料' },
+    { target: 'onboarding-reset', message: '初始示例缺失，确认重置后重新准备' },
   ]) {
     const ui = await tutorialBrowser({ currentStepId: 'library-history', narrow: true });
     ui.adapter.navigate = async () => location;
@@ -655,6 +656,7 @@ test('a missing case frames preparation, and an explicit prerequisite frames its
     assert.equal(descend(ui.body).find(node => node.classList.contains('tour-target')).dataset.tour, location.target);
     assert.equal(ui.workspace.querySelectorAll('.onboarding-content')[0].hidden, false);
     assert.match(ui.body.textContent, new RegExp(location.message));
+    assert.equal(ui.requests.some(request => request.action === 'reset'), false, 'locating reset must not reset practice');
     ui.tutorial.dispose();
   }
 });

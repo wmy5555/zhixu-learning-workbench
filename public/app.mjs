@@ -1296,6 +1296,8 @@ function editTopic(topic) { return topicEditor(topic, false); }
 
 async function topicEditor(topic, create) {
   refs.drawerBody.dataset.tour = "topic-editor";
+  refs.drawerBody.dataset.tourSubject = topic?.id || "";
+  refs.drawerBody.dataset.tourMode = create ? "create" : "edit";
   const noteData = await api.notes({ kind: "knowledge" });
   const notes = asArray(noteData.notes).filter(note => note.kind === "knowledge" && !isExcerptOnly(note));
   const meta = asObject(topic?.meta);
@@ -1504,6 +1506,7 @@ async function renderOutput() {
     if (knowledgeScope.checked) scope.push("knowledge");
     if (sourceScope.checked) scope.push("source");
     if (!scope.length) { toast("请至少选择一个取材范围", "error"); return; }
+    state.lastOutput = null;
     clear(answerArea).append(el("div", { class: "loading-panel" }, [el("span", { class: "spinner" }), el("p", { text: "正在检索并组织已有资料…" })]));
     try {
       const result = await api.ask({ question: question.value, scope, mode: mode.value, privacy: allowCloudQuestion.checked ? "cloud" : "local" });
@@ -1544,6 +1547,7 @@ async function renderDraftsPanel() {
 
 function openDraft(draft) {
   refs.drawerBody.dataset.tour = "draft-editor";
+  refs.drawerBody.dataset.tourSubject = draft.id;
   const form = el("form", { class: "page-stack" });
   const body = el("textarea", { rows: 19, textContent: draft.body || draft.answer || "" });
   const used = new Set(asArray(draft.usedIds));
@@ -2060,25 +2064,32 @@ async function renderCurrent() {
 
 async function navigateTutorial(step, tutorial) {
   const prerequisite = (id, message) => ({ target: "onboarding-prerequisite", prerequisite: id, message });
+  const missingContent = () => {
+    if (step.caseId) return { target: "onboarding-case", message: "请先点击框选的“准备演示案例”，重新准备后再定位案例中的操作。" };
+    if (step.noteRole === "createdTopic") return prerequisite("topic-create", "尚未找到对应主题，请先创建并保存一个练习主题。");
+    if (step.noteRole === "capturedSource") return prerequisite("capture-save", "尚未找到收集的资料，请先保存练习资料。");
+    return { target: "onboarding-reset", message: "初始示例已删除或缺失。可点击框选的“重置练习”重新准备；确认后会清理当前练习进度，正式资料不受影响。" };
+  };
   const value = tutorial?.roles?.[step.noteRole];
   const id = typeof value === "string" ? value : value?.id;
-  if (step.noteRole && !id) {
-    if (step.caseId) return { target: "onboarding-case", message: "请先点击框选的“准备演示案例”，再定位案例中的操作。" };
-    return prerequisite(step.noteRole === "createdTopic" ? "topic-create" : "capture-save", "尚未找到这一步对应的练习内容，请先完成前面的保存步骤。");
-  }
+  if (step.noteRole && !id) return missingContent();
   const requestedTab = step.view === "study" ? step.tab || (step.target === "study-queue" || step.target === "study-history" ? "queue" : step.target === "study-mistakes" ? "mistakes" : "session") : step.tab;
   const sameView = state.view === (step.view || "today") && (step.view !== "system" || !requestedTab || state.systemTab === requestedTab) && (step.view !== "study" || state.studyTab === requestedTab);
   // Keep unsaved input when locating an already open form.
   if (sameView && refs.drawer.classList.contains("is-open")) {
     if (step.id === "study-confirm" && refs.drawerBody.dataset.tour === "note-confirm") return { target: "note-confirm" };
     if (step.target === "note-editor" && refs.drawerBody.dataset.tour === "note-editor" && refs.drawerBody.dataset.tourSubject === id) return;
-    if (["topic-copy", "topic-split"].includes(step.id) && refs.drawerBody.dataset.tour === "topic-editor") return { target: "topic-editor" };
-    if (["draft-editor", "topic-editor"].includes(step.target) && refs.drawerBody.dataset.tour === step.target) return;
+    if (refs.drawerBody.dataset.tour === "topic-editor") {
+      const { tourSubject, tourMode } = refs.drawerBody.dataset;
+      if (["topic-copy", "topic-split"].includes(step.id) && tourMode === "create" && tourSubject === id) return { target: "topic-editor" };
+      if (step.action === "create-topic" && tourMode === "create" && !tourSubject) return;
+      if (step.action === "edit-topic" && tourMode === "edit" && tourSubject === id) return;
+    }
   }
   if (step.tab && step.view === "system") state.systemTab = step.tab;
   if (step.view === "study") state.studyTab = requestedTab;
   if (!sameView) await navigate(step.view || "today");
-  else if (!step.target?.startsWith("note-") && !["topic-editor", "topic-detail"].includes(step.target) && refs.drawer.classList.contains("is-open")) {
+  else if (!step.target?.startsWith("note-") && !["topic-editor", "topic-detail", "draft-editor"].includes(step.target) && refs.drawer.classList.contains("is-open")) {
     closeDrawer();
     if (["library", "topics"].includes(step.view)) await renderCurrent();
   }
@@ -2104,8 +2115,14 @@ async function navigateTutorial(step, tutorial) {
   if (step.target === "draft-editor" || step.target === "output-result") {
     if (step.target === "output-result" && state.lastOutput) return;
     const draft = asArray((await api.drafts()).drafts)[0];
-    if (!draft) return { target: "output-form", message: "还没有已保存的输出，请先在框选区域填写目标并亲自点击“开始生成”。" };
-    if (step.target === "draft-editor") return openDraft(draft);
+    if (!draft) {
+      closeDrawer();
+      return { target: "output-form", message: "还没有已保存的输出，请先在框选区域填写目标并亲自点击“开始生成”。" };
+    }
+    if (step.target === "draft-editor") {
+      if (sameView && refs.drawer.classList.contains("is-open") && refs.drawerBody.dataset.tour === "draft-editor" && refs.drawerBody.dataset.tourSubject === draft.id) return;
+      return openDraft(draft);
+    }
     renderAnswer(refs.main.querySelector('[data-tour="output-result"]'), { ...draft, answer: draft.body || draft.answer, draftId: draft.id });
     return;
   }
@@ -2120,7 +2137,7 @@ async function navigateTutorial(step, tutorial) {
   try { note = await api.note(id); }
   catch (error) {
     if (error.status !== 404) throw error;
-    return step.caseId ? { target: "onboarding-case", message: "案例条目已移除，请重新准备演示案例后再操作。" } : prerequisite("capture-save", "对应资料已删除，请先保存练习资料。");
+    return missingContent();
   }
   openDrawer(note.title || "练习知识", "新手练习", el("div"));
   if (step.target === "note-editor") return renderNoteEditor(note);
