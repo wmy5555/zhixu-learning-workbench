@@ -1,3 +1,4 @@
+const observedTypes = new Set(['process', 'structure']);
 const activeStates = new Set(['queued', 'running']);
 const list = value => Array.isArray(value) ? value : [];
 
@@ -10,7 +11,7 @@ export function createProcessFeedback({ getContext, readJobs, notify, onChange =
   const key = () => getContext().practiceId || '';
   function current() {
     const id = key();
-    if (!contexts.has(id)) contexts.set(id, { initialized: false, revision: '', snapshot: 0, oldRevisions: new Set(), jobs: new Map(), notes: new Map(), submitting: new Set() });
+    if (!contexts.has(id)) contexts.set(id, { initialized: false, revision: '', snapshot: 0, oldRevisions: new Set(), jobs: new Map(), notes: new Map(), submitting: new Map() });
     return contexts.get(id);
   }
   function observe(snapshot) {
@@ -27,18 +28,18 @@ export function createProcessFeedback({ getContext, readJobs, notify, onChange =
     }
     for (const note of list(snapshot.notes)) state.notes.set(note.id, { title: note.title });
     if (Array.isArray(snapshot.jobs) && snapshot.partial !== true) {
-      const ids = new Set(snapshot.jobs.filter(job => job.type === 'process').map(job => job.id));
+      const ids = new Set(snapshot.jobs.filter(job => observedTypes.has(job.type)).map(job => job.id));
       for (const [id, record] of state.jobs) if (!ids.has(id)) { state.jobs.delete(id); changed.push({ ...record, state: 'removed' }); }
     }
     for (const job of list(snapshot.jobs)) {
-      if (job.type !== 'process' || !job.id) continue;
+      if (!observedTypes.has(job.type) || !job.id) continue;
       const previous = state.jobs.get(job.id);
       // A slower bootstrap read must not undo completion observed by the poller.
       if (previous?.state === 'done' && activeStates.has(job.state)
         || previous?.updatedAt && job.updatedAt && job.updatedAt < previous.updatedAt) continue;
       const noteId = job.noteId || job.payload?.noteId;
       const note = state.notes.get(noteId);
-      const record = { id: job.id, state: job.state, code: job.code, noteId, research: job.research === true || job.payload?.research === true,
+      const record = { id: job.id, type: job.type, state: job.state, code: job.code, noteId, research: job.research === true || job.payload?.research === true,
         presetCase: job.presetCase || job.payload?.presetCase,
         createdAt: job.createdAt || '', updatedAt: job.updatedAt || '' };
       state.jobs.set(job.id, record);
@@ -46,9 +47,10 @@ export function createProcessFeedback({ getContext, readJobs, notify, onChange =
       changed.push(record);
       if (!state.initialized || record.presetCase || previous?.state === record.state) continue;
       const title = String(job.title || note?.title || '资料').slice(0, 70);
-      if (record.state === 'done') notify(`《${title}》的 AI 拆解已完成${record.research ? '（含联网核验）' : ''}`, 'success');
+      const task = record.type === 'structure' ? '逻辑关系分析' : 'AI 拆解';
+      if (record.state === 'done') notify(`《${title}》的 ${task}已完成${record.research ? '（含联网核验）' : ''}`, 'success');
       else if (record.state === 'waiting' && record.code === 'RESEARCH_INCOMPLETE') notify(`《${title}》的 AI 拆解已保存，部分事实尚待核验。`, 'success');
-      else if (record.state === 'failed') notify(`《${title}》的 AI 拆解未完成，原文已保留。请到「系统 → 任务」查看原因。`, 'error');
+      else if (record.state === 'failed') notify(`《${title}》的 ${task}未完成，原文已保留。请到「系统 → 任务」查看原因。`, 'error');
     }
     state.initialized = true;
     if (changed.length) {
@@ -59,7 +61,7 @@ export function createProcessFeedback({ getContext, readJobs, notify, onChange =
   }
   function status(noteId) {
     const state = current();
-    if (state.submitting.has(noteId)) return { active: true, state: 'submitting', message: '正在提交 AI 拆解…' };
+    if (state.submitting.has(noteId)) return { active: true, state: 'submitting', type: state.submitting.get(noteId), message: state.submitting.get(noteId) === 'structure' ? '正在提交逻辑关系分析…' : '正在提交 AI 拆解…' };
     const jobs = [...state.jobs.values()].reverse().filter(job => job.noteId === noteId && !job.presetCase)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     const job = jobs.find(job => activeStates.has(job.state)) || jobs[0];
@@ -68,11 +70,12 @@ export function createProcessFeedback({ getContext, readJobs, notify, onChange =
       waiting: '拆解需等待条件满足，请到「系统 → 任务」查看原因并重试。',
       failed: 'AI 拆解未完成，请到「系统 → 任务」查看原因并重试。',
       cancelled: '拆解任务已取消，原文已保留。', done: 'AI 拆解已完成。' };
-    return { ...job, active: activeStates.has(job.state), message: messages[job.state] || '' };
+    const message = messages[job.state] || '';
+    return { ...job, active: activeStates.has(job.state), message: job.type === 'structure' ? message.replaceAll('AI 拆解', '逻辑关系分析').replaceAll('拆解', '关系分析') : message };
   }
-  function begin(noteId) {
+  function begin(noteId, type = 'process') {
     if (status(noteId)?.active) return false;
-    current().submitting.add(noteId); onChange([]); return true;
+    current().submitting.set(noteId, type); onChange([]); return true;
   }
   function end(noteId) { current().submitting.delete(noteId); onChange([]); }
   async function poll() {

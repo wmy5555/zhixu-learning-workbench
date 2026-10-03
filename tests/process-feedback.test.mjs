@@ -3,6 +3,23 @@ import test from 'node:test';
 import { createProcessFeedback } from '../public/process-feedback.mjs';
 
 const job = (id, state, extra = {}) => ({ id, type: 'process', state, createdAt: '2026-10-03T00:00:00Z', payload: { noteId: 'source' }, ...extra });
+
+test('structure submissions block duplicate extraction and survive failed reads only in their own library', async () => {
+  const ui = monitor(async () => { throw new Error('合成读取失败'); });
+  ui.feedback.observe({ jobs: [], jobRevision: 'r', jobSnapshot: 1 });
+  assert.equal(ui.feedback.begin('source', 'structure'), true);
+  assert.match(ui.feedback.status('source').message, /逻辑关系分析/);
+  ui.feedback.observe({ jobs: [job('structure', 'queued', { type: 'structure' })], partial: true, jobRevision: 'r', jobSnapshot: 3 });
+  ui.feedback.end('source'); await ui.feedback.poll();
+  assert.equal(ui.feedback.begin('source'), false);
+  ui.feedback.observe({ jobs: [], jobRevision: 'r', jobSnapshot: 2 });
+  assert.equal(ui.feedback.status('source').active, true);
+  ui.switchTo('practice'); assert.equal(ui.feedback.status('source'), null);
+  ui.switchTo('');
+  ui.feedback.observe({ jobs: [job('structure', 'done', { type: 'structure' })], jobRevision: 'r', jobSnapshot: 4 });
+  assert.match(ui.messages[0].text, /逻辑关系分析已完成/);
+  assert.equal(ui.feedback.status('source').active, false);
+});
 function monitor(readJobs = async () => ({ jobs: [] })) {
   let context = { practiceId: '', version: 0 };
   const messages = [], timers = new Map(), changes = [];

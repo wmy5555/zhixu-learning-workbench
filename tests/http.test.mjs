@@ -57,6 +57,29 @@ async function startApp(t) {
   };
 }
 
+test('source structure endpoint preserves session/CSRF and practice isolation, and status omits content', async t => {
+  const app = await startApp(t), session = await webSession(app);
+  const source = app.service.store.create({ kind: 'source', title: '合成关系原文', body: '不可随状态回传的原文', meta: { privacy: 'local' } });
+  app.service.store.create({ kind: 'knowledge', title: '关系条目', body: '不可随状态回传的拆解', meta: { sources: [{ id: source.id, role: 'input' }] } });
+  const endpoint = `/api/notes/${source.id}/structure`;
+  assert.equal((await request(app.baseUrl, endpoint, { method: 'POST', body: {} })).status, 401);
+  const noCsrf = { ...session.headers }; delete noCsrf['X-CSRF-Token']; delete noCsrf['x-csrf-token'];
+  assert.equal((await request(app.baseUrl, endpoint, { method: 'POST', headers: noCsrf, body: {} })).status, 403);
+  const queued = await request(app.baseUrl, endpoint, { method: 'POST', headers: session.headers, body: {} });
+  assert.equal(queued.status, 200); assert.equal(queued.body.type, 'structure');
+  assert.equal((await request(app.baseUrl, endpoint, { method: 'POST', headers: session.headers, body: {} })).body.id, queued.body.id);
+  const status = await request(app.baseUrl, '/api/jobs?view=status', { headers: session.headers });
+  assert.equal(status.body.jobs.find(j => j.id === queued.body.id).type, 'structure');
+  assert.doesNotMatch(status.text, /不可随状态|basis|payload/);
+  const practice = await request(app.baseUrl, '/api/onboarding/start', { method: 'POST', headers: session.headers, body: {} });
+  assert.equal(practice.status, 200);
+  app.service.updateSettings({ ai: { enabled: true } });
+  app.onboarding.tested('model'); // Synthetic readiness receipt; no supplier request.
+  const foreign = await request(app.baseUrl, `/api/practice/${practice.body.practiceId}/notes/${source.id}/structure`, { method: 'POST', headers: session.headers, body: {} });
+  assert.equal(foreign.status, 404);
+  assert.equal(app.service.getNote(source.id).hash, source.hash);
+});
+
 async function request(baseUrl, pathname, { method = 'GET', headers = {}, body } = {}) {
   const response = await fetch(`${baseUrl}${pathname}`, {
     method,

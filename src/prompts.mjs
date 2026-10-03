@@ -15,8 +15,14 @@ export const promptDefaults = Object.freeze({
   sourceExtract: metadata(
     '资料拆解',
     '把一份原始资料拆成候选知识单元，并标出需要联网核验的事实。',
-    '拆解以下资料，区分原作者观点、可检验事实与AI推断，保留问题/结论/机制/条件/案例/反例/未知。不要编造前置知识。仅拆解原文实际包含的内容，不补充无关背景或额外主题。合并重复观点，最多8个有上下文的知识单元。只把影响核心结论且确实可核查的事实列入claims，不把翻译习惯、类比措辞或价值判断拆成核验任务；每个单元最多3条。每项给title,body,topic,claims（须联网核查的事实字符串数组；纯价值判断为空）,prerequisites（缺口名称）,reason（是否值得查找、学习、关联分别说明）,depth。JSON {"candidates":[...]}。原始材料：{{source}}',
+    '拆解以下资料，区分原作者观点、可检验事实与AI推断，保留问题/结论/机制/条件/案例/反例/未知。不要编造前置知识。仅拆解原文实际包含的内容，不补充无关背景或额外主题。合并重复观点，最多8个有上下文的知识单元。只把影响核心结论且确实可核查的事实列入claims，不把翻译习惯、类比措辞或价值判断拆成核验任务；每个单元最多3条。每项给title,body,topic,claims（须联网核查的事实字符串数组；纯价值判断为空）,prerequisites（缺口名称）,reason（是否值得查找、学习、关联分别说明）,depth。JSON {"candidates":[...],"structure":{"hierarchy":[],"edges":[]}}。结构中用 candidates 的从0开始的序号字符串作为节点引用。structure 包含 hierarchy 与 edges。hierarchy 是包含层级数组 {child,parent}，parent 为 null 表示直属原始资料；只描述原文内的层次，无依据时直属原文，不把支持关系当包含。edges 是逻辑关系数组 {from,to,type,explanation,sourceExcerpt,targetExcerpt}。type 只用 support（支持）,explain（解释）,prerequisite（前提）,example（实例）,counterexample（反例）,limit（限定）,application（应用）,sequence（先后），方向始终为 from 对 to 的作用；两个 excerpt 必须分别逐字摘自对应知识正文，explanation 说明关系依据。可返回空数组，不因同来源强行连线，不宣称用户掌握。 原始材料：{{source}}',
     ['source'],
+  ),
+  sourceStructure: metadata(
+    '资料内部结构',
+    '仅分析已经保存的拆解，不修改条目。',
+    '分析以下原文及现有条目内部的层级与逻辑关系。节点引用只使用所给条目的 id。structure 包含 hierarchy 与 edges。hierarchy 是包含层级数组 {child,parent}，parent 为 null 表示直属原始资料；只描述原文内的层次，无依据时直属原文，不把支持关系当包含。edges 是逻辑关系数组 {from,to,type,explanation,sourceExcerpt,targetExcerpt}。type 只用 support（支持）,explain（解释）,prerequisite（前提）,example（实例）,counterexample（反例）,limit（限定）,application（应用）,sequence（先后），方向始终为 from 对 to 的作用；两个 excerpt 必须分别逐字摘自对应知识正文，explanation 说明关系依据。可返回空数组，不因同来源强行连线，不宣称用户掌握。 只返回 JSON {"structure":{"hierarchy":[],"edges":[]}}。原文：{{source}}\n条目：{{notes}}',
+    ['source', 'notes'],
   ),
   grade: metadata(
     '学习反馈',
