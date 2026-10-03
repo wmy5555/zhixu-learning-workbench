@@ -30,6 +30,8 @@ export function createOnboarding(adapter) {
   let working = false;
   let errorText = "";
   let checkErrorStepId = "";
+  let location = null;
+  let locationNotice = null;
   let highlight = null;
   let highlightPulse = null;
   let restoreTarget = null;
@@ -72,18 +74,43 @@ export function createOnboarding(adapter) {
   }
   function locate(scroll = false) {
     if (!visible || !step()?.target) { clearHighlight(); return; }
-    const candidates = [...document.querySelectorAll("[data-tour]")].filter(node => node.dataset.tour === step().target);
-    for (const node of candidates) for (let ancestor = node.parentElement; ancestor; ancestor = ancestor.parentElement) if (ancestor.tagName === "DETAILS") ancestor.open = true;
-    const target = candidates.find(node => node.getClientRects().length) || null;
-    if (target !== highlight || scroll) {
-      clearHighlight(); highlight = target;
-      if (target) restoreTarget = adapter.revealTarget?.(target) || null;
+    const primary = step().focusTarget || step().target;
+    const ids = location?.target?.startsWith("onboarding-") ? [location.target] : [primary, location?.target, ...(step().fallbackTargets || [])].filter(Boolean);
+    const nodes = [...document.querySelectorAll("[data-tour]")];
+    const drawer = document.querySelector("#drawer");
+    const isVisible = node => {
+      if (drawer?.classList.contains("is-open") && !drawer.contains(node) && !panel.contains(node)) return false;
+      if (!node.getClientRects().length) return false;
+      for (let parent = node; parent; parent = parent.parentElement) {
+        if (parent.hidden || parent.inert || parent.getAttribute?.("aria-hidden") === "true") return false;
+        const style = window.getComputedStyle?.(parent);
+        if (style?.display === "none" || style?.visibility === "hidden") return false;
+      }
+      return true;
+    };
+    let target = null, reveal = null;
+    for (const id of ids) {
+      const candidates = nodes.filter(node => node.dataset.tour === id);
+      for (const node of candidates) {
+        for (let parent = node.parentElement; parent; parent = parent.parentElement) if (parent.tagName === "DETAILS") parent.open = true;
+        const restore = node === highlight ? null : adapter.revealTarget?.(node);
+        if (isVisible(node)) { target = node; reveal = restore; break; }
+        restore?.();
+      }
+      if (target) break;
+    }
+    if (target !== highlight) {
+      clearHighlight(); highlight = target; restoreTarget = reveal || null;
+    }
+    if (locationNotice) {
+      locationNotice.textContent = target?.dataset.tour === primary ? "" : location?.message || (target ? "已框选本步相关入口；完成当前操作后会继续定位下一处控件。" : "当前操作尚未出现。请先完成本步说明中的前置操作，再点击定位；已保存的进度不会受影响。");
+      locationNotice.hidden = !locationNotice.textContent;
     }
     if (highlight) {
-      for (let ancestor = highlight.parentElement; ancestor; ancestor = ancestor.parentElement) if (ancestor.tagName === "DETAILS") ancestor.open = true;
       highlight.classList.add("tour-target");
       if (scroll) highlight.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" });
     }
+    return Boolean(highlight);
   }
   function flashHighlight() {
     if (!highlight || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
@@ -94,12 +121,12 @@ export function createOnboarding(adapter) {
       { outlineColor: "var(--accent)" },
     ], { duration: 650, iterations: 3, delay: 250, easing: "ease-in-out" }) || null;
   }
-  async function run(action) {
+  async function run(action, { flash = false } = {}) {
     if (working) return;
     working = true; errorText = ""; checkErrorStepId = ""; render();
     try { await action(); }
     catch (error) { errorText = error.message || "本次操作未完成，请稍后重试。"; compact = false; }
-    finally { working = false; render(); }
+    finally { working = false; render(); if (flash && !errorText) { locate(true); flashHighlight(); } }
   }
   async function refreshProof() {
     if (!current?.practiceId || refreshing || disposed) return;
@@ -121,19 +148,19 @@ export function createOnboarding(adapter) {
     if (destination) await adapter.navigate(destination, current);
   }
   async function goTo(target = step()) {
-    selected = target.id; rememberStep(selected); compact = false; errorText = ""; checkErrorStepId = "";
+    selected = target.id; rememberStep(selected); compact = false; errorText = ""; checkErrorStepId = ""; location = null;
     if (current?.practiceId) adopt(await api.onboarding("checkpoint", stateBody({ stepId: target.id, mode: "check" })));
     const chapter = stepChapter(target);
     const first = chapters[0]?.id;
     if (chapter?.id !== first && !current?.modelReady) {
+      location = { target: "onboarding-prerequisite", prerequisite: "setup-model", message: "请先在第一章保存 AI 配置并测试成功，再进入实操。" };
       render();
-      errorText = "请先在第一章保存 AI 配置并测试成功，再进入实操。你可以先阅读各章说明。";
       return;
     }
-    const id = chapter?.id === first && ["settings-model", "settings-capabilities", "settings-mcp", "settings-save"].includes(target.target) ? "" : current?.practiceId;
+    const id = ["settings-model", "settings-capabilities", "settings-mcp", "settings-save"].includes(target.target) ? "" : current?.practiceId;
     if (!current?.practiceId) return;
     if (api.getContext().practiceId !== (id || "")) await switchContext(id || "");
-    await adapter.navigate(target, current);
+    location = await adapter.navigate(target, current);
     render(); locate(true);
   }
   async function start() {
@@ -190,11 +217,12 @@ export function createOnboarding(adapter) {
   async function loadCase(target) {
     adopt(await api.onboarding("case", stateBody({ caseId: target.caseId })));
     await adapter.refresh?.();
-    await adapter.navigate(target, current);
+    location = await adapter.navigate(target, current);
     toast("演示案例已准备；后续记录会标为演练。", "success");
   }
   async function checkpoint(target) {
-    adopt(await api.onboarding("checkpoint", stateBody({ stepId: target.id, mode: target.kind === "read" ? "read" : target.kind === "external" ? "external" : "check" })));
+    try { adopt(await api.onboarding("checkpoint", stateBody({ stepId: target.id, mode: target.kind === "read" ? "read" : target.kind === "external" ? "external" : "check" }))); }
+    catch (error) { checkErrorStepId = target.id; throw error; }
     const result = getStepProgress(current, target);
     if (!result.complete) {
       errorText = result.message || result.reason || "尚未找到这一步的完成记录。请按说明完成操作，再检查进度。";
@@ -275,6 +303,13 @@ export function createOnboarding(adapter) {
       content.append(el("div", { class: "onboarding-expected" }, [el("strong", { text: "外部工具体验状态" }), el("p", { text: `MCP：${mcpText}` }), el("p", { text: `Obsidian：${obsidianText}` })]));
     }
     if (active.downloads?.length) content.append(el("div", { class: "onboarding-actions" }, active.downloads.filter(item => item.href?.startsWith("/tutorial-examples/")).map(item => el("a", { href: item.href, download: item.title, class: "quiet-button compact", text: `下载 ${item.title}` }))));
+    locationNotice = el("p", { class: "notice info", role: "status", hidden: true });
+    content.append(locationNotice);
+    if (location?.prerequisite) {
+      const prerequisiteId = location.prerequisite;
+      const prerequisite = button("先去完成前置步骤", { onClick: () => run(() => goTo(flatSteps.find(item => item.id === prerequisiteId))), disabled: working });
+      prerequisite.dataset.tour = "onboarding-prerequisite"; content.append(prerequisite);
+    }
     if (errorText) content.append(el("p", { class: "notice danger", role: "alert", text: errorText }));
     if (progress.message || progress.reason) content.append(el("p", { class: "fine-print", text: progress.message || progress.reason }));
     const last = index === route.length - 1;
@@ -287,11 +322,14 @@ export function createOnboarding(adapter) {
       actions.append(button("定位操作位置", { kind: "primary", onClick: () => run(async () => {
         await goTo(active);
         if (errorText || !highlight) return;
-        if (narrowScreen()) setCompact(true);
-        locate(true); flashHighlight();
-      }), disabled: working }));
-      if (active.sample) actions.append(button("填入示例（不提交）", { onClick: () => run(async () => { await goTo(active); await adapter.fillSample?.(active.sample, active, current); locate(true); }), disabled: working || !practice }));
-      if (active.caseId) actions.append(button("准备演示案例", { onClick: () => run(() => loadCase(active)), disabled: working || !practice || !current.modelReady }));
+        if (narrowScreen() && !panel.contains(highlight)) setCompact(true);
+        locate(true);
+      }, { flash: true }), disabled: working }));
+      if (active.sample) actions.append(button("填入示例（不提交）", { onClick: () => run(async () => { await goTo(active); if (location?.prerequisite || ["onboarding-case", "onboarding-reset"].includes(location?.target)) return; await adapter.fillSample?.(active.sample, active, current); locate(true); }), disabled: working || !practice }));
+      if (active.caseId) {
+        const prepare = button("准备演示案例", { onClick: () => run(() => loadCase(active)), disabled: working || !practice || !current.modelReady });
+        prepare.dataset.tour = "onboarding-case"; actions.append(prepare);
+      }
       actions.append(button(canContinue ? last ? finishLabel : "进行下一步" : active.kind === "read" ? "我已阅读" : active.kind === "external" ? "记录我已在外部体验" : "检查这一步", { kind: canContinue ? "primary" : "quiet", onClick: () => run(canContinue ? continueRoute : () => checkpoint(active)), disabled: working || (canContinue && last && core && done === coreSteps.length && current?.busy) }));
     }
     content.append(actions);
@@ -307,10 +345,10 @@ export function createOnboarding(adapter) {
     content.append(extensions);
     if (current?.practiceId) {
       if (!practice) content.append(button(current.modelReady ? "返回练习库" : "配置并测试 AI", { kind: "primary", onClick: () => run(current.modelReady ? async () => { await switchContext(current.practiceId); await adapter.navigate({ view: "today" }, current); } : openSettings), disabled: working }));
-      const clock = el("details", { class: "onboarding-clock" }, [el("summary", { text: `练习时间：${practiceDate(current.clock?.now, current.clock?.timezone || current.settings?.timezone)}` }), el("p", { class: "fine-print", text: "按学习时区显示，只推进练习库的学习时间。收费额度和正式库使用真实时间。" }), el("div", { class: "onboarding-actions" }, [button("前进 1 天", { disabled: working || current.busy || !practice || !current.modelReady, onClick: () => run(() => advance("day")) }), button("跳到下次复习", { disabled: working || current.busy || !practice || !current.modelReady, onClick: () => run(() => advance("next")) })])]);
+      const clock = el("details", { class: "onboarding-clock" }, [el("summary", { text: `练习时间：${practiceDate(current.clock?.now, current.clock?.timezone || current.settings?.timezone)}` }), el("p", { class: "fine-print", text: "按学习时区显示，只推进练习库的学习时间。收费额度和正式库使用真实时间。" }), el("div", { class: "onboarding-actions" }, [el("div", { dataset: { tour: "onboarding-clock-day" } }, button("前进 1 天", { disabled: working || current.busy || !practice || !current.modelReady, onClick: () => run(() => advance("day")) })), el("div", { dataset: { tour: "onboarding-clock-due" } }, button("跳到下次复习", { disabled: working || current.busy || !practice || !current.modelReady, onClick: () => run(() => advance("next")) }))])]);
       if (active.chapterId === "review") clock.open = true;
       if (current.unfinishedSessions?.length) clock.append(el("div", { class: "page-stack" }, [el("p", { class: "fine-print", text: "下面的练习尚未结束。可以回学习页继续；确需放弃本次时，结束后才能推进时间。" }), ...current.unfinishedSessions.map(session => el("div", {}, [el("p", { class: "fine-print", text: session.title || "未完成练习" }), button("结束未完成练习", { kind: "text compact", disabled: busy() || !practice, onClick: () => abandonSession(session) })]))]));
-      content.append(clock, el("div", { class: "onboarding-controls" }, [button("配置共享 API", { kind: "text compact", disabled: working || current.busy, onClick: () => run(openSettings) }), button("暂停并回正式库", { kind: "text compact", disabled: working || current.busy, onClick: () => run(pause) }), button("重置练习", { kind: "text compact", disabled: working || current.busy, onClick: () => { if (!working) reset().catch(error => { errorText = error.message; render(); }); } })]));
+      content.append(clock, el("div", { class: "onboarding-controls" }, [button("配置共享 API", { kind: "text compact", disabled: working || current.busy, onClick: () => run(openSettings) }), button("暂停并回正式库", { kind: "text compact", disabled: working || current.busy, onClick: () => run(pause) }), el("span", { dataset: { tour: "onboarding-reset" } }, [button("重置练习", { kind: "text compact", disabled: working || current.busy, onClick: () => { if (!working) reset().catch(error => { errorText = error.message; checkErrorStepId = ""; compact = false; render(); }); } })])]));
       if (current.busy) content.append(el("p", { class: "fine-print", text: "练习任务正在处理；完成或取消后可切换知识库、推进时间。" }));
     }
     clear(panel).append(title, content);

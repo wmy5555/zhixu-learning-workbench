@@ -70,21 +70,24 @@ class Element {
   get textContent() { return this._text + this.children.map(child => child.textContent).join(''); }
   append(...children) { for (const child of children) { if (child.parentElement) child.parentElement.children = child.parentElement.children.filter(item => item !== child); child.parentElement = this; this.children.push(child); } }
   prepend(...children) { this.append(...children); this.children = [...children, ...this.children.filter(child => !children.includes(child))]; }
+  remove() { if (this.parentElement) this.parentElement.children = this.parentElement.children.filter(child => child !== this); this.parentElement = null; }
   replaceChildren(...children) { this.children.forEach(child => { child.parentElement = null; }); this.children = []; this.append(...children); }
   addEventListener(type, handler) { this.events[type] = handler; }
   setAttribute(name, value) { this.attributes[name] = value; }
+  getAttribute(name) { return this.attributes[name] ?? null; }
   contains(target) { return target === this || this.children.some(child => child.contains(target)); }
   getClientRects() { return this.hidden ? [] : [{}]; }
   scrollIntoView(options) { this.scrolls.push(options); }
   focus() { Element.activeElement = this; }
   animate(frames, options) { const animation = { frames, options, cancelled: false, cancel() { this.cancelled = true; } }; this.animations.push(animation); return animation; }
   querySelectorAll(selector) { return descend(this).slice(1).filter(node => selector === '[data-tour]' ? node.dataset.tour : selector === '[data-onboarding-toggle]' ? node.dataset.onboardingToggle : selector.startsWith('.') ? node.classList.contains(selector.slice(1)) : false); }
+  querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
 }
 function descend(node) { return [node, ...node.children.flatMap(descend)]; }
 function findButton(root, label) { return descend(root).find(node => node.tagName === 'BUTTON' && node.textContent === label); }
 async function click(node) { assert.ok(node, 'button exists'); assert.equal(node.disabled, false, `button ${node.textContent} is enabled`); await node.events.click({ target: node, preventDefault() {} }); }
 
-async function tutorialBrowser({ modelReady = true, exists = true, narrow = false, reducedMotion = false, query = '', checkpoint, advance, stateRead, currentStepId, savedStepId, progress = {} } = {}) {
+async function tutorialBrowser({ modelReady = true, exists = true, narrow = false, reducedMotion = false, query = '', checkpoint, advance, resetRequest, stateRead, currentStepId, savedStepId, progress = {} } = {}) {
   const body = new Element('body'), workspace = new Element(), main = new Element('main'), drawer = new Element(), drawerBody = new Element(), launcher = new Element('button'), toasts = new Element();
   body.append(workspace, drawer, launcher, toasts); workspace.append(main); drawer.append(drawerBody);
   const roots = { '.workspace': workspace, '#main': main, '#drawer': drawer, '#drawer-body': drawerBody, '#onboarding-launcher': launcher, '#toast-region': toasts };
@@ -98,6 +101,7 @@ async function tutorialBrowser({ modelReady = true, exists = true, narrow = fals
       requests.push({ action, data: structuredClone(data) });
       if (action === 'state' && stateRead) await stateRead();
       if (action === 'advance' && advance) await advance(data, state);
+      if (action === 'reset' && resetRequest) await resetRequest();
       if (action === 'start' || action === 'resume') state = { ...state, practiceId: 'practice-one', status: 'active' };
       if (action === 'checkpoint') {
         if (checkpoint) await checkpoint(data, state);
@@ -605,6 +609,104 @@ test('reduced motion keeps the highlight static and disables smooth scrolling', 
   assert.equal(target.classList.contains('tour-target'), true);
   assert.ok(target.scrolls.length > 0);
   assert.ok(target.scrolls.every(options => options.behavior === 'auto'));
+  ui.tutorial.dispose();
+});
+
+test('locating ignores closed drawers and opens folded ancestors before highlighting', async () => {
+  const ui = await tutorialBrowser({ currentStepId: 'process-ai' });
+  const hidden = new Element(); hidden.dataset.tour = 'note-process'; ui.drawerBody.append(hidden);
+  ui.drawer.setAttribute('aria-hidden', 'true');
+  await ui.tutorial.open();
+  assert.equal(hidden.classList.contains('tour-target'), false);
+  await click(findButton(ui.body, '定位操作位置'));
+  assert.match(ui.body.textContent, /当前操作尚未出现/);
+  const details = new Element('details'), target = new Element('button');
+  target.dataset.tour = 'note-process'; details.append(target); ui.main.append(details);
+  await click(findButton(ui.body, '定位操作位置'));
+  assert.equal(details.open, true);
+  assert.equal(target.classList.contains('tour-target'), true);
+  assert.equal(hidden.classList.contains('tour-target'), false);
+  ui.tutorial.dispose();
+});
+
+test('clock steps frame the actual time controls and keep them visible in a narrow panel', async () => {
+  for (const id of ['review-clock-day', 'review-clock-due']) {
+    const ui = await tutorialBrowser({ currentStepId: id, narrow: true });
+    await ui.tutorial.open();
+    await click(findButton(ui.body, '定位操作位置'));
+    const target = descend(ui.body).find(node => node.classList.contains('tour-target'));
+    assert.equal(target.dataset.tour, flatSteps.find(step => step.id === id).focusTarget);
+    assert.equal(target.animations.length, 1, 'the pulse belongs to the final rendered control');
+    assert.equal(ui.workspace.querySelectorAll('.onboarding-content')[0].hidden, false);
+    assert.equal(ui.requests.some(request => request.action === 'advance'), false, 'locating does not advance time');
+    ui.tutorial.dispose();
+  }
+});
+
+test('a missing case frames preparation, and an explicit prerequisite frames its navigation button', async () => {
+  for (const location of [
+    { target: 'onboarding-case', message: '请先准备演示案例' },
+    { target: 'onboarding-prerequisite', prerequisite: 'capture-save', message: '请先保存练习资料' },
+    { target: 'onboarding-reset', message: '初始示例缺失，确认重置后重新准备' },
+  ]) {
+    const ui = await tutorialBrowser({ currentStepId: 'library-history', narrow: true });
+    ui.adapter.navigate = async () => location;
+    await ui.tutorial.open();
+    await click(findButton(ui.body, '定位操作位置'));
+    assert.equal(descend(ui.body).find(node => node.classList.contains('tour-target')).dataset.tour, location.target);
+    assert.equal(ui.workspace.querySelectorAll('.onboarding-content')[0].hidden, false);
+    assert.match(ui.body.textContent, new RegExp(location.message));
+    assert.equal(ui.requests.some(request => request.action === 'reset'), false, 'locating reset must not reset practice');
+    ui.tutorial.dispose();
+  }
+});
+
+test('extension capability configuration opens the shared editable settings explicitly', async () => {
+  for (const currentStepId of ['process-search-config', 'search-embedding', 'mcp-config']) {
+    const ui = await tutorialBrowser({ currentStepId });
+    await ui.tutorial.open();
+    assert.equal(ui.contexts.at(-1), '');
+    assert.match(ui.body.textContent, /正式知识库/);
+    assert.match(ui.body.textContent, /API 配置保存在这里/);
+    ui.tutorial.dispose();
+  }
+});
+
+test('an open confirmation drawer takes precedence over the covered page button', async () => {
+  const ui = await tutorialBrowser({ currentStepId: 'study-confirm' });
+  const covered = new Element('button'); covered.dataset.tour = 'study-confirm'; ui.main.append(covered);
+  const form = new Element('form'); form.dataset.tour = 'note-confirm'; ui.drawerBody.append(form);
+  ui.drawer.classList.add('is-open'); ui.drawer.setAttribute('aria-hidden', 'false');
+  await ui.tutorial.open();
+  assert.equal(form.classList.contains('tour-target'), true);
+  assert.equal(covered.classList.contains('tour-target'), false);
+  ui.tutorial.dispose();
+});
+
+test('a rejected checkpoint can clear its own error when saved evidence arrives', async () => {
+  let reject = false;
+  const ui = await tutorialBrowser({ currentStepId: 'process-ai', checkpoint: async () => { if (reject) throw new Error('模拟检查请求失败'); } });
+  await ui.tutorial.open(); reject = true;
+  await click(findButton(ui.body, '检查这一步'));
+  assert.match(ui.body.textContent, /模拟检查请求失败/);
+  ui.setState({ progress: { 'process-ai': { status: 'done' } } });
+  await ui.tutorial.refresh();
+  assert.doesNotMatch(ui.body.textContent, /模拟检查请求失败/);
+  assert.ok(findButton(ui.body, '进行下一步'));
+  ui.tutorial.dispose();
+});
+
+test('a reset failure replaces check provenance and survives later completion', async () => {
+  const ui = await tutorialBrowser({ currentStepId: 'process-ai', resetRequest: async () => { throw new Error('模拟重置失败'); } });
+  await ui.tutorial.open(); await click(findButton(ui.body, '检查这一步'));
+  await click(findButton(ui.body, '重置练习'));
+  const confirm = descend(ui.body).find(node => node.tagName === 'BUTTON' && node.textContent === '重置练习' && node.classList.contains('danger-button'));
+  await click(confirm);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(ui.body.textContent, /模拟重置失败/);
+  ui.setState({ progress: { 'process-ai': { status: 'done' } } });
+  await ui.tutorial.refresh();
+  assert.match(ui.body.textContent, /模拟重置失败/);
   ui.tutorial.dispose();
 });
 
