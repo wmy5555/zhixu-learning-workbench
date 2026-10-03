@@ -74,6 +74,24 @@ test('background job status reads allow a library switch and discard old results
   assert.equal(client.api.getContext().pending, 0);
 });
 
+test('background source reads allow a library switch and cannot exempt foreground reads or writes', async () => {
+  let finish;
+  const client = apiBrowser(() => new Promise(resolve => { finish = resolve; }));
+  client.api.setContext('practice-one');
+  const background = client.api.note('synthetic-source', { background: true });
+  assert.equal(client.api.getContext().pending, 0);
+  client.api.setContext('');
+  finish(response({ id: 'old-source' }));
+  await assert.rejects(background, error => error.code === 'STALE_CONTEXT');
+  const foreground = client.api.note('synthetic-source');
+  assert.throws(() => client.api.setContext('practice-one'), error => error.code === 'CONTEXT_BUSY');
+  finish(response({})); await foreground;
+  const session = client.startSession(); finish(response({ csrf: 'synthetic-csrf' })); await session;
+  const write = client.request('/api/notes/synthetic-source', { method: 'PUT', background: true, body: {} });
+  assert.throws(() => client.api.setContext('practice-one'), error => error.code === 'CONTEXT_BUSY');
+  finish(response({})); await write;
+});
+
 test('background onboarding proof reads do not block switching and cannot exempt writes or foreground reads', async () => {
   let finish;
   const client = apiBrowser(() => new Promise(resolve => { finish = resolve; }));

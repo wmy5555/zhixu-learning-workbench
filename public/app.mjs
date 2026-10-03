@@ -60,7 +60,7 @@ const processFeedback = createProcessFeedback({
     refs.drawerBody.querySelectorAll(".process-controls").forEach(updateProcessControls);
     if (changed.length) onboarding?.refresh();
     const sourceId = refs.drawerBody.querySelector(".source-group-drawer")?.dataset.sourceId;
-    if (sourceId && changed.some(job => job.noteId === sourceId && job.state === "done")) refreshCompletedSource(sourceId).catch(handleError);
+    if (sourceId && changed.some(job => job.noteId === sourceId && ["done", "waiting", "failed", "cancelled"].includes(job.state))) refreshCompletedSource(sourceId).catch(handleError);
   },
 });
 function tour(node, id) { node.dataset.tour = id; return node; }
@@ -155,7 +155,9 @@ async function refreshBootstrap() {
 
 async function refreshCompletedSource(sourceId) {
   const context = api.getContext(), scrollTop = refs.drawerBody.scrollTop;
-  const source = await api.note(sourceId);
+  let source;
+  try { source = await api.note(sourceId, { background: true }); }
+  catch (error) { if (api.getContext().version === context.version && error.code !== "STALE_CONTEXT") throw error; return; }
   if (api.getContext().version !== context.version || !refs.drawer.classList.contains("is-open")
     || refs.drawerBody.querySelector(".source-group-drawer")?.dataset.sourceId !== sourceId) return;
   renderSourceGroupDrawer(source);

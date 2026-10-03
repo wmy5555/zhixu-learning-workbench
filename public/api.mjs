@@ -66,9 +66,9 @@ export async function request(path, options = {}) {
   const id = options.scope === "main" ? "" : practiceId;
   const target = id && path.startsWith("/api/") && !path.startsWith("/api/onboarding/")
     ? `/api/practice/${encodeURIComponent(id)}${path.slice(4)}` : path;
-  // Only status polls and explicitly background onboarding reads may outlive a library switch.
+  // Only status polls and explicitly background proof/source reads may outlive a library switch.
   const backgroundRead = (options.method || "GET") === "GET" && (path === "/api/jobs?view=status"
-    || options.background === true && path.split("?")[0] === "/api/onboarding/state");
+    || options.background === true && (path.split("?")[0] === "/api/onboarding/state" || /^\/api\/notes\/[^/?]+$/.test(path)));
   const blocking = !backgroundRead;
   if (blocking) inFlight++;
   try {
@@ -124,7 +124,7 @@ export const api = {
   bootstrap: () => request("/api/bootstrap"),
   library: (filters) => request(`/api/library${toQuery(filters)}`),
   notes: (filters) => request(`/api/notes${toQuery(filters)}`),
-  note: (id) => request(`/api/notes/${encodeURIComponent(id)}`),
+  note: (id, options = {}) => request(`/api/notes/${encodeURIComponent(id)}`, { background: options.background === true }),
   evidence: (id) => request(`/api/notes/${encodeURIComponent(id)}/evidence`),
   linksPreview: (id) => request(`/api/notes/${encodeURIComponent(id)}/links-preview`),
   syncLinks: (id, body) => request(`/api/notes/${encodeURIComponent(id)}/links-sync`, { method: "POST", body }),

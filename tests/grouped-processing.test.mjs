@@ -94,6 +94,26 @@ test('failed submissions require an explicit retry and preset jobs cannot suppre
   assert.equal(service.readPublicNote(source.id).children[0].title, '真实调用桩结果');
 });
 
+test('failed or cancelled processing cannot be resubmitted through the separate research entry', async t => {
+  for (const research of [false, true]) {
+    let calls = 0;
+    const { service } = await harness(t, { generate: async () => { calls++; throw new Error('合成外部失败'); } });
+    const source = createSource(service, { title: '明确重试保护', body: '纯合成失败资料。' });
+    const original = service.processNote(source.id, { research });
+    await service.runJobs();
+    for (const state of ['failed', 'cancelled']) {
+      if (state === 'cancelled') service.jobAction(original.id, { action: 'cancel' });
+      for (const options of [{}, { research: true }, { research: true, reuseExtracted: true }]) {
+        const repeated = service.processNote(source.id, options);
+        assert.equal(repeated.id, original.id); assert.equal(repeated.state, state); assert.equal(repeated.reused, true);
+      }
+      await service.runJobs();
+      assert.equal(calls, 1, 'changing the entry cannot retry a paid call');
+      assert.equal(service.store.records('jobs').filter(job => job.type === 'process').length, 1);
+    }
+  }
+});
+
 function createGeneratedKnowledge(service, {
   source,
   evidenceSource,

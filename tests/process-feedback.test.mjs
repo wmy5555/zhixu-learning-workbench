@@ -35,6 +35,17 @@ test('existing completed jobs stay quiet; each newly completed real process noti
   assert.equal(ui.messages.length, 2, 'returning to a library does not replay completion');
 });
 
+test('saved partial decomposition notifies once without claiming that research is complete', () => {
+  const ui = monitor();
+  ui.feedback.observe({ jobs: [job('partial', 'running')] });
+  const waiting = job('partial', 'waiting', { code: 'RESEARCH_INCOMPLETE' });
+  ui.feedback.observe({ jobs: [waiting] }); ui.feedback.observe({ jobs: [waiting] });
+  assert.equal(ui.messages.length, 1); assert.match(ui.messages[0].text, /已保存.*尚待核验/);
+  assert.equal(ui.feedback.status('source').active, false);
+  ui.feedback.observe({ jobs: [job('conditions', 'waiting', { code: 'MODEL_DISABLED' })] });
+  assert.equal(ui.messages.length, 1, 'unprocessed waiting tasks do not count as saved decomposition');
+});
+
 test('fast and real processing of preset sources notify; simulated jobs and unrelated task types stay quiet', () => {
   const ui = monitor(); ui.feedback.observe({ jobs: [] });
   const jobs = [job('fast', 'done'), job('preset', 'done', { presetCase: 'synthetic-case' }),

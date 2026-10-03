@@ -38,7 +38,7 @@ export function createProcessFeedback({ getContext, readJobs, notify, onChange =
         || previous?.updatedAt && job.updatedAt && job.updatedAt < previous.updatedAt) continue;
       const noteId = job.noteId || job.payload?.noteId;
       const note = state.notes.get(noteId);
-      const record = { id: job.id, state: job.state, noteId, research: job.research === true || job.payload?.research === true,
+      const record = { id: job.id, state: job.state, code: job.code, noteId, research: job.research === true || job.payload?.research === true,
         presetCase: job.presetCase || job.payload?.presetCase,
         createdAt: job.createdAt || '', updatedAt: job.updatedAt || '' };
       state.jobs.set(job.id, record);
@@ -47,6 +47,7 @@ export function createProcessFeedback({ getContext, readJobs, notify, onChange =
       if (!state.initialized || record.presetCase || previous?.state === record.state) continue;
       const title = String(job.title || note?.title || '资料').slice(0, 70);
       if (record.state === 'done') notify(`《${title}》的 AI 拆解已完成${record.research ? '（含联网核验）' : ''}`, 'success');
+      else if (record.state === 'waiting' && record.code === 'RESEARCH_INCOMPLETE') notify(`《${title}》的 AI 拆解已保存，部分事实尚待核验。`, 'success');
       else if (record.state === 'failed') notify(`《${title}》的 AI 拆解未完成，原文已保留。请到「系统 → 任务」查看原因。`, 'error');
     }
     state.initialized = true;

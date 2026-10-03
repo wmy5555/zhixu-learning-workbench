@@ -124,6 +124,9 @@ test('process status polling requires a session, omits task bodies and changes r
   assert.equal(bootstrap.jobRevision, first.body.jobRevision);
   assert.ok(bootstrap.jobSnapshot > first.body.jobSnapshot);
   app.service.store.put('jobs', job.id, { ...job, state: 'done' });
+  app.service.store.put('jobs', simulated.id, { ...simulated, state: 'waiting', code: 'RESEARCH_INCOMPLETE' });
+  const partial = await request(app.baseUrl, '/api/jobs?view=status', { headers: session.headers });
+  assert.equal(partial.body.jobs.find(value => value.id === simulated.id).code, 'RESEARCH_INCOMPLETE');
   const preview = app.service.restore({ backup });
   app.service.restore({ backup, preview: false, token: preview.token });
   const restored = app.service.jobStatuses();

@@ -188,11 +188,12 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     const previous = processJobs(id, source.hash);
     const pending = previous.find(job => ['queued','running','waiting'].includes(job.state));
     if (pending) return processReply(pending, true);
+    if (['failed','cancelled'].includes(previous[0]?.state)) return processReply(previous[0], true);
     // Repeated decomposition reuses its record, including errors that require an explicit task retry.
     // The separate research action may refresh evidence, but still reuses the extracted candidates.
     const matching = previous.filter(job => !payload.research || job.payload.research === true);
-    const existing = matching.find(job => job.state === 'done') || matching[0];
-    if (existing && (!payload.research || reuseExtracted !== true)) return processReply(existing, true);
+    const existing = matching[0];
+    if (existing && (existing.state !== 'done' || !payload.research || reuseExtracted !== true)) return processReply(existing, true);
     const extracted = previous.find(job => validExtraction(job.payload.extracted))?.payload.extracted;
     if (extracted) payload.extracted = structuredClone(extracted);
     return processReply(queue('process', payload, `process:${id}:${source.hash}${payload.research ? ':research' : ''}`));
@@ -270,7 +271,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   function jobStatuses() {
     // Project small fields directly in SQLite; never return or parse stored model output here.
     const jobs = store.db.prepare(`SELECT j.key AS id,
-      json_extract(j.json,'$.type') AS type, json_extract(j.json,'$.state') AS state,
+      json_extract(j.json,'$.type') AS type, json_extract(j.json,'$.state') AS state, json_extract(j.json,'$.code') AS code,
       json_extract(j.json,'$.payload.noteId') AS noteId, json_extract(j.json,'$.payload.research') AS research,
       coalesce(json_extract(j.json,'$.presetCase'), json_extract(j.json,'$.payload.presetCase')) AS presetCase,
       json_extract(j.json,'$.createdAt') AS createdAt, json_extract(j.json,'$.updatedAt') AS updatedAt,

@@ -81,6 +81,8 @@ function browser(api = {}) {
   context.app.serializeForm = vm.runInContext('serializeForm', context);
   context.app.processControls = vm.runInContext('processControls', context);
   context.app.refreshBootstrap = vm.runInContext('refreshBootstrap', context);
+  context.app.processFeedback = vm.runInContext('processFeedback', context);
+  context.app.renderSourceGroupDrawer = vm.runInContext('renderSourceGroupDrawer', context);
   context.app.toasts = document.querySelector('#toast-region');
   return context.app;
 }
@@ -128,6 +130,45 @@ test('a successful process submit remains locked when the following bootstrap re
   assert.ok(controls.querySelector('.process-spinner'));
   await click(findButton(controls, '联网检验并找反例'));
   assert.equal(calls, 1, 'even direct invocation cannot submit a second variant after refresh failure');
+});
+
+test('process terminal transitions refresh saved source results using a background read', async () => {
+  const source = { id: 'synthetic-source', kind: 'source', title: '合成原文', body: '合成原文正文', meta: {}, children: [], jobs: [] };
+  const reads = [];
+  let result = source;
+  const app = browser({ note: async (id, options) => { reads.push({ id, options: plain(options) }); return result; } });
+  app.renderSourceGroupDrawer(source); app.refs.drawer.classList.add('is-open');
+  const job = { id: 'process', type: 'process', state: 'queued', payload: { noteId: source.id } };
+  app.processFeedback.observe({ jobs: [job] });
+  for (const state of ['waiting', 'done', 'failed', 'cancelled']) {
+    const child = { id: 'child', kind: 'knowledge', title: '已保存结果-' + state, body: '已保存的合成正文', meta: { stage: 'candidate' } };
+    result = { ...source, children: [child], jobs: [{ ...job, state }] };
+    app.processFeedback.observe({ jobs: [{ ...job, state }] });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.match(app.refs.drawerBody.textContent, new RegExp(child.title));
+    assert.doesNotMatch(app.refs.drawerBody.textContent, /尚未形成拆解/);
+    assert.deepEqual(reads.at(-1), { id: source.id, options: { background: true } });
+  }
+  assert.equal(reads.length, 4);
+});
+
+test('completion refresh ignores its old result or error after a library switch', async () => {
+  for (const fail of [false, true]) {
+    let release, reject, version = 0;
+    const source = { id: 'synthetic-source', kind: 'source', title: '合成原文', body: '合成正文', meta: {}, children: [] };
+    const app = browser({ getContext: () => ({ practiceId: version ? 'other-library' : '', version }),
+      note: () => new Promise((resolve, fail) => { release = resolve; reject = fail; }) });
+    app.renderSourceGroupDrawer(source); app.refs.drawer.classList.add('is-open');
+    const job = { id: 'process', type: 'process', state: 'queued', payload: { noteId: source.id } };
+    app.processFeedback.observe({ jobs: [job] });
+    app.processFeedback.observe({ jobs: [{ ...job, state: 'done' }] });
+    version++;
+    if (fail) reject(new Error('过期返回错误'));
+    else release({ ...source, title: '旧知识库返回的标题' });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(app.refs.drawerTitle.textContent, source.title);
+    assert.doesNotMatch(app.toasts.textContent, /过期返回错误/);
+  }
 });
 
 test('learning goals preserve saved depth values and update the concrete requirement when selected', () => {
