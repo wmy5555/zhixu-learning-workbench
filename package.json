@@ -11,6 +11,7 @@
     "start": "node src/server.mjs",
     "test": "node --test --test-concurrency=1 tests/*.test.mjs",
     "mcp": "node src/mcp.mjs",
+    "mcp:chatgpt": "node src/mcp-chatgpt.mjs",
     "check": "node scripts/check-project.mjs",
     "quality": "node scripts/quality-check.mjs",
     "verify": "pnpm check && pnpm test && pnpm quality"

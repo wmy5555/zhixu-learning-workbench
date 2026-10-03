@@ -65,9 +65,49 @@ function browser(api = {}) {
     window: { matchMedia: () => ({ matches: false, addEventListener() {} }), history: { replaceState() {} }, location: { hash: '' }, setTimeout() {}, addEventListener() {} },
   });
   const stripped = appSource.replace(/import[\s\S]*?from "\.\/api\.mjs";\s*/, '').replace(/import[\s\S]*?from "\.\/ui\.mjs";\s*/, '').replace(/^init\(\);\s*$/m, '');
-  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
+  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { navigateTutorial, renderCapture, settingsPanel, noteMeta, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, todayItem, state, refs };', context);
   return context.app;
 }
+
+test('ChatGPT capture and read controls persist independently and disclose the local-material grant', async () => {
+  const writes = [];
+  let settings = { mcp: { enabled: false, allowProposals: false, chatgptEnabled: false, chatgptAllowRead: false } };
+  const app = browser({ settings: async () => settings, prompts: async () => ({ prompts: [] }), updateSettings: async payload => { writes.push(plain(payload)); settings = plain(payload); }, bootstrap: async () => ({ settings }) });
+  let panel = await app.settingsPanel();
+  assert.equal(control(panel, 'chatgptEnabled').checked, false);
+  assert.equal(control(panel, 'chatgptAllowRead').checked, false);
+  assert.match(panel.textContent, /包含仅本地资料/); assert.match(panel.textContent, /不会自动建立网页端连接/);
+  control(panel, 'chatgptEnabled').checked = true;
+  const form = descendants(panel).find(node => node.tagName === 'form');
+  await form.events.submit({ preventDefault() {} });
+  assert.deepEqual(writes[0].mcp, { enabled: false, allowProposals: false, chatgptEnabled: true, chatgptAllowRead: false });
+  panel = await app.settingsPanel(); control(panel, 'chatgptAllowRead').checked = true;
+  await descendants(panel).find(node => node.tagName === 'form').events.submit({ preventDefault() {} });
+  assert.equal(writes[1].mcp.chatgptAllowRead, true); assert.equal(writes[1].mcp.enabled, false);
+  app.state.bootstrap = { settings: { mcp: writes[1].mcp } };
+  assert.match(app.noteMeta({ kind: 'source', meta: { privacy: 'local' } }).textContent, /另已授权 ChatGPT 读取/);
+  app.state.bootstrap.settings.mcp.chatgptAllowRead = false;
+  assert.doesNotMatch(app.noteMeta({ kind: 'source', meta: { privacy: 'local' } }).textContent, /另已授权 ChatGPT 读取/);
+});
+
+test('MCP dependent grants clear when their parent is disabled and cannot reappear on re-enabling or saving', async () => {
+  const writes = [];
+  const app = browser({ settings: async () => ({ mcp: { enabled: false, allowProposals: true, chatgptEnabled: false, chatgptAllowRead: true } }), prompts: async () => ({ prompts: [] }), updateSettings: async payload => writes.push(plain(payload)), bootstrap: async () => ({}) });
+  const panel = await app.settingsPanel();
+  for (const [parentName, childName] of [['mcpEnabled', 'allowProposals'], ['chatgptEnabled', 'chatgptAllowRead']]) {
+    const parent = control(panel, parentName), child = control(panel, childName);
+    assert.equal(child.disabled, true); assert.equal(child.checked, false);
+    parent.checked = true; parent.events.change();
+    assert.equal(child.disabled, false); assert.equal(child.checked, false);
+    child.checked = true; parent.checked = false; parent.events.change();
+    assert.equal(child.disabled, true); assert.equal(child.checked, false);
+    parent.checked = true; parent.events.change();
+    assert.equal(child.checked, false);
+    parent.checked = false; child.checked = true;
+  }
+  await descendants(panel).find(node => node.tagName === 'form').events.submit({ preventDefault() {} });
+  assert.deepEqual(writes[0].mcp, { enabled: false, allowProposals: false, chatgptEnabled: false, chatgptAllowRead: false });
+});
 
 test('core step seven navigates to its saved source and locates the rendered original-text expander', async () => {
   const step = coreSteps[6];

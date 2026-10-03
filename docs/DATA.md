@@ -9,6 +9,9 @@
 - `.data/learning.sqlite`：回答、任务、调度、关系、草稿、提案、调用记录、历史版本和可重建索引。
 - `.data/secrets.enc.json`：Windows 当前账号 DPAPI 密文；不放在 Vault 或备份里。其他系统需环境变量 `LEARNING_MASTER_KEY`。
 - `.data/mcp-token`：仅本地 MCP 访问令牌。不要分享，备份不导出。
+- `.data/chatgpt-mcp-token`：ChatGPT 专用桥接凭据，与上面的令牌隔离，不进入备份或回执。
+
+ChatGPT 会话作为第一层原始资料保存，正文分开标注模型整理摘要、角色原文和实际收到的范围。设置中的 ChatGPT 读取许可属于独立的接收方授权：开启后可读取“仅本地”资料，内容会进入 ChatGPT 上下文；每份资料的隐私字段仍继续限制其他模型/搜索/向量服务。关闭该许可立即停止后续读取，不会收回此前已经发送到 ChatGPT 的内容。
 
 Vault 文件是知识内容权威。Web 修改前检查最新文件哈希；外部改名通过 frontmatter 的稳定 id 关联。没有 id 的旧文件暂用路径/内容匹配，首次经 Web 保存时写入 id；如在该步骤前同时重命名并改正文，身份无法可靠自动保持。未知 YAML 属性和 `.obsidian` 保留，程序不跟随目录链接。
 
