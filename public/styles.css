@@ -248,6 +248,9 @@ input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent);
 .empty-symbol { display: grid; place-items: center; width: 45px; height: 45px; color: var(--accent); border: 1px solid var(--accent); border-radius: 50%; font-size: 22px; }
 .loading-panel { min-height: 55vh; display: grid; place-content: center; justify-items: center; color: var(--muted); }
 .spinner { display: block; width: 26px; height: 26px; border-radius: 50%; border: 3px solid #dce3df; border-top-color: var(--accent); animation: spin .8s linear infinite; }
+.process-status { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; }
+.process-status[hidden] { display: none; }
+.process-spinner { flex: 0 0 18px; width: 18px; height: 18px; border-width: 2px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .prose { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.72; color: #36464b; font-family: ui-serif, "Songti SC", serif; }

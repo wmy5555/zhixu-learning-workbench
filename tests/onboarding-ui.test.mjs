@@ -117,10 +117,28 @@ async function tutorialBrowser({ modelReady = true, exists = true, narrow = fals
   });
   const stripped = onboardingSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '');
   vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + stripped + '\nthis.make = createOnboarding; this.progress = getStepProgress;', context);
-  const adapter = { navigate: async step => { navigations.push(step.id || step.view); }, contextChanged: async () => {}, refresh: async () => {}, fillSample: async () => {} };
+  const adapter = { navigate: async step => { navigations.push(step.id || step.view); }, contextChanged: async () => {}, refresh: async () => {}, fillSample: async () => {}, processStatus: () => null };
   const tutorial = context.make(adapter); await tutorial.init();
   return { tutorial, adapter, body, workspace, main, drawer, drawerBody, toasts, requests, navigations, contexts, intervals, document, setNarrow(value) { narrow = value; windowEvents.resize?.(); }, progress: context.progress, get state() { return state; }, setState: value => { state = { ...state, ...value }; } };
 }
+
+test('the AI decomposition step shows waiting progress without changing evidence or notifying preset completion', async () => {
+  const ui = await tutorialBrowser({ currentStepId: 'process-ai' });
+  ui.setState({ roles: { capturedSource: 'synthetic-source' } });
+  let status = { state: 'queued', active: true, message: 'AI 拆解已排队，请等待…' };
+  ui.adapter.processStatus = noteId => { assert.equal(noteId, 'synthetic-source'); return status; };
+  await ui.tutorial.open();
+  assert.ok(descend(ui.body).some(node => node.classList.contains('process-spinner')));
+  assert.match(ui.body.textContent, /已排队/);
+  assert.equal(ui.state.progress['process-ai'], undefined);
+  for (const state of ['waiting', 'failed', 'cancelled', 'done']) {
+    status = { state, active: false, message: '合成任务状态：' + state }; await ui.tutorial.refresh();
+    assert.ok(!descend(ui.body).some(node => node.classList.contains('process-spinner')));
+    assert.equal(ui.state.progress['process-ai'], undefined);
+  }
+  assert.equal(ui.toasts.children.length, 0, 'the global task monitor owns completion notifications');
+  ui.tutorial.dispose();
+});
 
 test('reading confirmation waits for saving, then navigates exactly one step without completing the next action', async () => {
   let release;

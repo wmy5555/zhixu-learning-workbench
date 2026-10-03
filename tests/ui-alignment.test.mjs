@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
+import { createProcessFeedback } from '../public/process-feedback.mjs';
 import { initSidebar } from '../public/sidebar.mjs';
 import { coreSteps, flatSteps } from '../public/onboarding-curriculum.mjs';
 
@@ -54,6 +55,7 @@ const click = node => node.events.click({ target: node, preventDefault() {} });
 const plain = value => JSON.parse(JSON.stringify(value));
 
 function browser(api = {}) {
+  api = { getContext: () => ({ practiceId: '', version: 0 }), ...api };
   const roots = new Map();
   const document = {
     documentElement: new Element('html'),
@@ -65,7 +67,7 @@ function browser(api = {}) {
   };
   document.createTextNode = value => { const node = new Element('text'); node.textContent = value; return node; };
   const context = vm.createContext({
-    api, document, initSidebar, Node: Element, URL, Intl, Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => 'request-ui' },
+    api, document, initSidebar, createProcessFeedback, Node: Element, URL, Intl, Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => 'request-ui' },
     FormData: class {
       constructor(form) { this.form = form; }
       entries() { return descendants(this.form).filter(node => node.name && !node.disabled && ['input', 'textarea', 'select'].includes(node.tagName)).map(node => [node.name, String(node.tagName === 'textarea' ? node.textContent : node.tagName === 'select' ? node.children.find(option => option.selected)?.value || '' : node.value)]); }
@@ -75,8 +77,42 @@ function browser(api = {}) {
   });
   const stripped = appSource.replace(/import[\s\S]*?from "\.\/api\.mjs";\s*/, '').replace(/import[\s\S]*?from "\.\/ui\.mjs";\s*/, '').replace(/^init\(\);\s*$/m, '').replace('const { createUsagePanel } = await import("./usage.mjs");', '');
   vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
+  context.app.processControls = vm.runInContext('processControls', context);
+  context.app.refreshBootstrap = vm.runInContext('refreshBootstrap', context);
+  context.app.toasts = document.querySelector('#toast-region');
   return context.app;
 }
+
+test('AI decomposition shows pending progress, prevents repeat submission, and releases controls after completion or failure', async () => {
+  let release, requests = 0, jobs = [], fail = false;
+  const source = { id: 'synthetic-source', kind: 'source', title: '合成资料', meta: {}, children: [] };
+  const app = browser({ getContext: () => ({ practiceId: '', version: 0 }),
+    processNote: async () => { requests++; if (fail) throw new Error('合成提交失败'); return new Promise(resolve => { release = () => { jobs = [{ id: 'synthetic-job', type: 'process', state: 'queued', payload: { noteId: source.id } }]; resolve(jobs[0]); }; }); },
+    bootstrap: async () => ({ jobs, notes: [source] }), note: async () => source,
+    library: async () => ({ groups: [], standalone: [] }),
+  });
+  // Exercise the actual source controls through their renderer, rather than a copy of the update logic.
+  const controls = app.processControls(source);
+  app.refs.drawerBody.replaceChildren(controls);
+  const pending = click(findButton(controls, '提交 AI 拆解'));
+  assert.equal(findButton(controls, 'AI 拆解处理中…').disabled, true);
+  assert.ok(descendants(controls).some(node => String(node.className).includes('process-spinner')));
+  await click(findButton(controls, 'AI 拆解处理中…'));
+  assert.equal(requests, 1, 'even a second direct handler invocation cannot queue another job');
+  release(); await pending;
+  const currentControls = app.refs.drawerBody.querySelector('.process-controls');
+  assert.equal(findButton(currentControls, 'AI 拆解处理中…').disabled, true);
+  jobs[0].state = 'waiting'; await app.refreshBootstrap();
+  assert.equal(findButton(currentControls, '提交 AI 拆解').disabled, false);
+  assert.doesNotMatch(currentControls.querySelector('.process-status').textContent, /正在|请等待/);
+  assert.equal(currentControls.querySelector('.process-spinner'), null);
+  jobs[0].state = 'done'; await app.refreshBootstrap(); await app.refreshBootstrap();
+  assert.match(currentControls.querySelector('.process-status').textContent, /已完成/);
+  assert.equal(app.toasts.children.filter(node => node.textContent.includes('的 AI 拆解已完成')).length, 1);
+  fail = true;
+  await click(findButton(currentControls, '提交 AI 拆解'));
+  assert.equal(findButton(currentControls, '提交 AI 拆解').disabled, false);
+});
 
 test('ChatGPT capture and read controls persist independently and disclose the local-material grant', async () => {
   const writes = [];

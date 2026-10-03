@@ -287,6 +287,13 @@ export function createOnboarding(adapter) {
     content.append(choices, el("div", { class: "onboarding-step-head" }, [el("h3", { text: active.title }), badge(progress.label, progress.complete ? "good" : "neutral")]),
       el("p", { class: "onboarding-instruction", text: active.instruction || active.description || "" }));
     if (active.why) content.append(el("p", { class: "fine-print", text: active.why }));
+    if (["process-done", "research-done"].includes(active.check)) {
+      const processing = adapter.processStatus?.(current?.roles?.[active.noteRole]);
+      if (processing?.active) content.append(el("div", { class: "process-status onboarding-process-status", role: "status", ariaLive: "polite" }, [
+        el("span", { class: "spinner process-spinner", ariaHidden: "true" }), el("span", { text: processing.message }),
+      ]));
+      else if (processing && ["waiting", "failed", "cancelled"].includes(processing.state)) content.append(el("p", { class: "notice", role: "status", text: processing.message }));
+    }
     if (active.expected) content.append(el("div", { class: "onboarding-expected" }, [el("strong", { text: "完成后应看到" }), el("p", { text: active.expected })]));
     if (["review-clock-due", "review-finish"].includes(active.id) && !progress.complete) content.append(el("div", { class: "onboarding-expected" }, [
       el("p", { text: "若反馈存在争议，本轮只保留记录，不会创建或更新复习安排。可以重新练习这条知识，核对材料并提交新回答；收到明确反馈并结束后，再继续复习步骤。" }),
