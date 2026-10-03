@@ -1,5 +1,6 @@
 import { api, ApiError, startSession } from "./api.mjs";
 import { createProcessFeedback } from "./process-feedback.mjs";
+import { createSourceMap } from "./source-map.mjs";
 import { initSidebar } from "./sidebar.mjs";
 import {
   el, clear, button, badge, emptyState, formatDate, truncate, safeExternalUrl,
@@ -52,12 +53,15 @@ const state = {
   lastOutput: null,
   restoreBackup: null,
   restoreToken: "",
+  sourceMaps: new Map(),
 };
 let onboarding = null;
 const processFeedback = createProcessFeedback({
   getContext: () => api.getContext(), readJobs: () => api.jobStatuses(), notify: toast,
   onChange: changed => {
     refs.drawerBody.querySelectorAll(".process-controls").forEach(updateProcessControls);
+    refs.drawerBody.querySelectorAll("[data-structure-submit]").forEach(updateStructureButton);
+    refs.drawerBody.querySelectorAll('.structure-job-status').forEach(updateStructureStatus);
     if (changed.length) onboarding?.refresh();
     const sourceId = refs.drawerBody.querySelector(".source-group-drawer")?.dataset.sourceId;
     if (sourceId && changed.some(job => job.noteId === sourceId && ["done", "waiting", "failed", "cancelled"].includes(job.state))) refreshCompletedSource(sourceId).catch(handleError);
@@ -141,6 +145,7 @@ function openDrawer(title, eyebrow, content) {
 }
 
 function closeDrawer() {
+  refs.drawer.classList.remove("map-expanded");
   refs.drawer.classList.remove("is-open");
   refs.drawer.setAttribute("aria-hidden", "true");
   refs.drawerBackdrop.hidden = true;
@@ -281,7 +286,7 @@ function jobRow(job) {
   progressBar.firstChild.style.width = `${Math.max(0, Math.min(100, progress))}%`;
   return el("div", { class: "list-item no-icon" }, [
     el("div", { class: "item-copy" }, [
-      el("h3", { text: ({process:"资料加工",relate:"知识关联",discover:"知识发现",grade:"学习反馈",index:"更新索引",topics:"主题整理"})[job.type] || "后台任务" }),
+      el("h3", { text: ({process:"资料加工",structure:"逻辑关系分析",relate:"知识关联",discover:"知识发现",grade:"学习反馈",index:"更新索引",topics:"主题整理"})[job.type] || "后台任务" }),
       el("p", { text: jobSummary(job) }),
       progress > 0 ? progressBar : null,
       el("div", { class: "item-meta" }, [badge(labels.state(displayState), stateTone(displayState))]),
@@ -599,6 +604,16 @@ function renderSourceGroupDrawer(source) {
   ]);
   content.append(noteMeta(source), headActions);
 
+  if (children.length) {
+    const key = `${api.getContext().practiceId || ''}:${source.id}`;
+    if (!state.sourceMaps.has(key)) state.sourceMaps.set(key, {});
+    content.append(createSourceMap({ source, children, view: state.sourceMaps.get(key),
+      renderDetail: (note, index) => childSection(note, source, index),
+      analyze: () => analyzeStructure(source),
+      onExpand: value => refs.drawer.classList.toggle('map-expanded', value),
+    }));
+  }
+
   const original = el("details", { class: "original-material", dataset: { tour: "note-original" } }, [
     el("summary", {}, [el("span", { text: "查看原始资料全文" }), el("small", { text: `${String(source.body || "").length} 字` })]),
     el("div", { class: "prose original-body", text: source.body || "暂无原文" }),
@@ -629,10 +644,34 @@ function renderSourceGroupDrawer(source) {
     ]))) : null,
   ]));
 
-  content.append(sectionHeading("资料拆解", children.length ? `共 ${children.length} 条，按独立学习单元保留` : "这份资料还没有拆解"));
-  if (children.length) content.append(el("div", { class: "source-children" }, children.map((child, index) => childSection(child, source, index))));
-  else content.append(emptyState("尚未形成拆解", "可以提交 AI 拆解，按需勾选联网核验，或手动整理一条待选学知识。"));
+  if (!children.length) content.append(emptyState("尚未形成拆解", "可以提交 AI 拆解，按需勾选联网核验，或手动整理一条待选学知识。"));
   clear(refs.drawerBody).append(content);
+  refs.drawerBody.querySelectorAll('[data-structure-submit]').forEach(updateStructureButton);
+  refs.drawerBody.querySelectorAll('.structure-job-status').forEach(updateStructureStatus);
+}
+
+function updateStructureStatus(control) {
+  const status = processFeedback.status(control.dataset.sourceId);
+  control.textContent = status?.message || '';
+  control.hidden = !status || status.type !== 'structure';
+}
+
+function updateStructureButton(control) {
+  const status = processFeedback.status(control.dataset.structureSubmit);
+  control.disabled = Boolean(status?.active);
+  if (!control.dataset.idleLabel) control.dataset.idleLabel = control.textContent;
+  control.textContent = status?.active ? '正在处理，请等待…' : control.dataset.idleLabel;
+  control.title = status?.message || '仅分析现有条目的关系，保留正文';
+}
+
+async function analyzeStructure(source) {
+  if (!processFeedback.begin(source.id, 'structure')) return;
+  try {
+    const job = await api.sourceStructure(source.id);
+    processFeedback.observe({ jobs: [job], notes: [source], partial: true, jobRevision: job.jobRevision, jobSnapshot: job.jobSnapshot });
+    toast(['queued', 'running'].includes(job.state) ? '逻辑关系分析已排队，原文和拆解内容保留' : '该任务正在等待条件，请到「系统 → 任务」查看原因并重试', ['queued', 'running'].includes(job.state) ? 'success' : 'info');
+  } catch (error) { handleError(error); }
+  finally { processFeedback.end(source.id); }
 }
 
 function childSection(note, source, index) {
@@ -848,7 +887,7 @@ function updateProcessControls(controls) {
   const status = processFeedback.status(controls.dataset.processNoteId);
   const pending = Boolean(status?.active);
   controls.querySelector(".process-submit").disabled = pending;
-  controls.querySelector(".process-submit").textContent = pending ? "AI 拆解处理中…" : "提交 AI 拆解";
+  controls.querySelector(".process-submit").textContent = pending ? (status.type === 'structure' ? '逻辑关系分析中…' : "AI 拆解处理中…") : "提交 AI 拆解";
   controls.querySelector(".process-research").disabled = pending;
   controls.querySelector("input").disabled = pending;
   const indicator = controls.querySelector(".process-status");
@@ -1914,7 +1953,7 @@ const jobTableState = { type: "", status: "", size: "10", page: 1 };
 async function jobsPanel() {
   const data = await api.jobs();
   const jobs = asArray(data.jobs).sort((a,b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")));
-  const names = {process:"资料加工",relate:"知识关联",discover:"知识发现",grade:"学习反馈",index:"更新索引",topics:"主题学习包整理"};
+  const names = {process:"资料加工",structure:"逻辑关系分析",relate:"知识关联",discover:"知识发现",grade:"学习反馈",index:"更新索引",topics:"主题学习包整理"};
   const panel = el("section", {class:"panel call-history", dataset: { tour: "system-jobs" }});
   const type = selectControl([["","全部类型"],...Object.entries(names)], jobTableState.type, "jobType");
   type.setAttribute("aria-label", "筛选任务类型");

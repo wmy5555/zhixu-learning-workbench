@@ -11,6 +11,7 @@ const usageSource = await readFile(new URL('../public/usage.mjs', import.meta.ur
 
 const uiSource = await readFile(new URL('../public/ui.mjs', import.meta.url), 'utf8');
 const appSource = await readFile(new URL('../public/app.mjs', import.meta.url), 'utf8');
+const sourceMapSource = (await readFile(new URL('../public/source-map.mjs', import.meta.url), 'utf8')).replace(/^import.*;$/m, '').replaceAll('export ', '');
 
 class Element {
   constructor(tag = 'div') {
@@ -43,6 +44,8 @@ class Element {
 }
 function descendants(node) { return [node, ...node.children.flatMap(child => child instanceof Element ? descendants(child) : [])]; }
 function matches(node, selector) {
+  const dataPresent = selector.match(/^\[data-([\w-]+)\]$/);
+  if (dataPresent) return Object.hasOwn(node.dataset, dataPresent[1].replace(/-([a-z])/g, (_, c) => c.toUpperCase()));
   const dataTour = selector.match(/^\[data-tour=["']([^"']+)["']\]$/);
   if (dataTour) return node.dataset.tour === dataTour[1];
   if (selector.startsWith('.')) return String(node.className || '').split(/\s+/).includes(selector.slice(1));
@@ -61,6 +64,7 @@ function browser(api = {}) {
     documentElement: new Element('html'),
     body: new Element('body'),
     createElement: tag => new Element(tag),
+    createElementNS: (_, tag) => new Element(tag),
     createTextNode: value => new Element('text'),
     querySelector(selector) { if (!roots.has(selector)) roots.set(selector, new Element()); return roots.get(selector); },
     addEventListener() {},
@@ -76,7 +80,7 @@ function browser(api = {}) {
     window: { zhixuAppearance: { getAccent: () => null, getTheme: () => 'light', resolvedTheme: () => 'light', previewAccent: () => ({}), getMode: () => 'light', palette: () => ({}) }, matchMedia: () => ({ matches: false, addEventListener() {} }), history: { replaceState() {} }, location: { hash: '' }, setTimeout() {}, addEventListener() {} },
   });
   const stripped = appSource.replace(/import[\s\S]*?from "\.\/api\.mjs";\s*/, '').replace(/import[\s\S]*?from "\.\/ui\.mjs";\s*/, '').replace(/^init\(\);\s*$/m, '').replace('const { createUsagePanel } = await import("./usage.mjs");', '');
-  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
+  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + sourceMapSource + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { renderSourceGroupDrawer, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
   context.app.manualExtract = vm.runInContext('manualExtract', context);
   context.app.serializeForm = vm.runInContext('serializeForm', context);
   context.app.processControls = vm.runInContext('processControls', context);
@@ -86,6 +90,34 @@ function browser(api = {}) {
   context.app.toasts = document.querySelector('#toast-region');
   return context.app;
 }
+
+test('source maps switch layouts and selection locally, collapse branches, keep all reading actions and separate library state', async () => {
+  let external = 0, practiceId = '';
+  const app = browser({ getContext: () => ({ practiceId, version: 0 }), sourceStructure: async () => { external++; } });
+  const children = ['a', 'b', 'c'].map(id => ({ id, title: `合成条目${id}`, kind: 'knowledge', body: `正文${id}`, meta: { stage: 'candidate' } }));
+  const source = { id: 'synthetic-source', kind: 'source', title: '合成来源', body: '原文', meta: {}, children,
+    structure: { state: 'ready', hierarchy: [{ child: 'b', parent: 'a' }, { child: 'c', parent: 'b' }],
+      edges: [{ id: 'ab', from: 'a', to: 'b', type: 'support', explanation: '依据说明', sourceExcerpt: '正文a', targetExcerpt: '正文b' }] } };
+  app.renderSourceGroupDrawer(source);
+  let panel = app.refs.drawerBody;
+  const node = id => descendants(panel).find(n => n.dataset.noteId === id);
+  await click(node('b'));
+  assert.equal(node('b').attributes['aria-pressed'], 'true');
+  assert.match(panel.querySelector('.map-detail').textContent, /正文b/);
+  assert.match(panel.querySelector('.map-relations').textContent, /支持.*正文a.*正文b/);
+  await click(findButton(panel, '思维导图'));
+  assert.equal(node('b').attributes['aria-pressed'], 'true');
+  await click(descendants(panel).find(n => n.attributes['aria-label'] === '折叠 合成条目a'));
+  assert.equal(node('b'), undefined);
+  await click(findButton(panel, '逻辑图')); assert.ok(node('b'));
+  await click(findButton(panel, '阅读全部条目'));
+  assert.equal(panel.querySelectorAll('.child-note').length, 4, 'all three reading cards plus hidden selected detail preserve existing operations');
+  assert.equal(external, 0, 'layout and reading interactions never submit model requests');
+  await click(findButton(panel, '逻辑图')); await click(node('c'));
+  app.renderSourceGroupDrawer(source); assert.equal(node('c').attributes['aria-pressed'], 'true');
+  practiceId = 'practice-only'; app.renderSourceGroupDrawer(source);
+  assert.equal(node('a').attributes['aria-pressed'], 'true');
+});
 
 test('AI decomposition shows pending progress, prevents repeat submission, and releases controls after completion or failure', async () => {
   let release, requests = 0, jobs = [], fail = false;
@@ -116,6 +148,28 @@ test('AI decomposition shows pending progress, prevents repeat submission, and r
   fail = true;
   await click(findButton(currentControls, '提交 AI 拆解'));
   assert.equal(findButton(currentControls, '提交 AI 拆解').disabled, false);
+});
+
+test('structure submission retains its lock after read failure and completion refresh preserves the selected item', async () => {
+  const children = ['a', 'b'].map(id => ({ id, kind: 'knowledge', title: id, body: `合成正文${id}`, meta: {} }));
+  const source = { id: 'source', kind: 'source', title: '合成原文', body: '合成原文', meta: {}, children };
+  const job = { id: 'structure', type: 'structure', state: 'queued', payload: { noteId: source.id }, jobRevision: 'r', jobSnapshot: 2 };
+  let calls = 0;
+  const app = browser({ sourceStructure: async () => { calls++; return job; },
+    jobStatuses: async () => { throw new Error('合成状态读取失败'); },
+    note: async () => ({ ...source, structure: { state: 'ready', message: '新结构已保存', edges: [], hierarchy: [] } }),
+  });
+  app.renderSourceGroupDrawer(source); app.refs.drawer.classList.add('is-open');
+  await click(descendants(app.refs.drawerBody).find(n => n.dataset.noteId === 'b'));
+  const submit = findButton(app.refs.drawerBody, '补充逻辑关系');
+  await click(submit); await app.processFeedback.poll();
+  assert.equal(submit.disabled, true);
+  await click(submit); assert.equal(calls, 1);
+  app.processFeedback.observe({ jobs: [{ ...job, state: 'done' }], jobRevision: 'r', jobSnapshot: 3 });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(app.refs.drawerBody.textContent, /新结构已保存/);
+  assert.equal(descendants(app.refs.drawerBody).find(n => n.dataset.noteId === 'b').attributes['aria-pressed'], 'true');
+  assert.equal(findButton(app.refs.drawerBody, '重新分析结构').disabled, false);
 });
 
 test('a successful process submit remains locked when the following bootstrap refresh fails', async () => {
