@@ -3,6 +3,7 @@ import { hash, now } from './store.mjs';
 const types = new Set(['support', 'explain', 'prerequisite', 'example', 'counterexample', 'limit', 'application', 'sequence']);
 const text = (value, max) => typeof value === 'string' ? value.trim().slice(0, max) : '';
 const array = value => Array.isArray(value) ? value : [];
+const missingMessage = '本次拆解未提供可用结构，可点击「重新分析结构」重试；已保存的条目保留。';
 export const structureBasis = (source, notes) => ({
   sourceHash: source.hash,
   notes: notes.map(n => [n.id, hash(JSON.stringify([n.title, n.body]))]).sort(([a], [b]) => a.localeCompare(b)),
@@ -41,7 +42,7 @@ export function structureRecord(source, notes, raw, keys) {
   if (missing) { valid.edges = []; valid.hierarchy = []; }
   return { version: 1, sourceId: source.id, basis: structureBasis(source, notes), generatedAt: now(),
     ...valid, state: missing ? 'missing' : valid.discarded ? 'partial' : 'ready',
-    message: missing ? '本次拆解未提供可用结构。可单独补充逻辑关系。' : valid.discarded ? '部分关系缺少有效依据或层级不完整，已保留可用部分。' : '' };
+    message: missing ? missingMessage : valid.discarded ? '部分关系缺少有效依据或层级不完整，已保留可用部分。' : '' };
 }
 
 export function structureView(source, notes, stored) {
@@ -52,5 +53,5 @@ export function structureView(source, notes, stored) {
   }
   const valid = normalizeStructure(stored, notes);
   return { state: valid.discarded ? 'partial' : stored.state, nodes, hierarchy: valid.hierarchy, edges: valid.edges,
-    generatedAt: stored.generatedAt, message: stored.message || (valid.discarded ? '部分关系已失效，请重新分析。' : '') };
+    generatedAt: stored.generatedAt, message: stored.state === 'missing' ? missingMessage : stored.message || (valid.discarded ? '部分关系已失效，请重新分析。' : '') };
 }

@@ -2,6 +2,9 @@ const MAX_TEMPLATE_LENGTH = 30_000;
 const PLACEHOLDER = /{{\s*([^{}]+?)\s*}}/g;
 const VARIABLE_NAME = /^[A-Za-z][A-Za-z0-9_]*$/;
 
+// This response contract also accompanies older saved extraction templates.
+export const sourceExtractionStructure = '资料拆解输出约定：在同一次回答中完成条目拆解、分支层级和逻辑关系分析，返回 JSON {"candidates":[...],"structure":{"hierarchy":[],"edges":[]}}，不要留待第二次调用。structure 中所有节点引用均为 candidates 从 0 开始的序号字符串。hierarchy 每项为 {child,parent}，parent 为 null 表示直属原文；层级仅表达包含，不把支持当作包含。edges 每项为 {from,to,type,explanation,sourceExcerpt,targetExcerpt}，type 为 support（支持）、explain（解释）、prerequisite（前提）、example（实例）、counterexample（反例）、limit（限定）、application（应用）或 sequence（先后）；from 表示对 to 的作用。两端 excerpt 分别逐字取自对应 candidate.body，explanation 说明依据。先确定正文再引用其中原句；不要改写摘录。仅分析当前给定材料，不套用示例标题、固定数量或预设关系。没有可靠关系时返回空数组，不强行连线；不得宣称用户已掌握。';
+
 function metadata(title, description, template, variables = []) {
   return Object.freeze({ title, description, template, variables: Object.freeze([...variables]) });
 }
@@ -14,7 +17,7 @@ export const promptDefaults = Object.freeze({
   ),
   sourceExtract: metadata(
     '资料拆解',
-    '把一份原始资料拆成候选知识单元，并标出需要联网核验的事实。',
+    '一次生成候选知识单元、带依据的逻辑关系和分支层级，并标出需要联网核验的事实。',
     '拆解以下资料，区分原作者观点、可检验事实与AI推断，保留问题/结论/机制/条件/案例/反例/未知。不要编造前置知识。仅拆解原文实际包含的内容，不补充无关背景或额外主题。合并重复观点，最多8个有上下文的知识单元。只把影响核心结论且确实可核查的事实列入claims，不把翻译习惯、类比措辞或价值判断拆成核验任务；每个单元最多3条。每项给title,body,topic,claims（须联网核查的事实字符串数组；纯价值判断为空）,prerequisites（缺口名称）,reason（是否值得查找、学习、关联分别说明）,depth。JSON {"candidates":[...],"structure":{"hierarchy":[],"edges":[]}}。结构中用 candidates 的从0开始的序号字符串作为节点引用。structure 包含 hierarchy 与 edges。hierarchy 是包含层级数组 {child,parent}，parent 为 null 表示直属原始资料；只描述原文内的层次，无依据时直属原文，不把支持关系当包含。edges 是逻辑关系数组 {from,to,type,explanation,sourceExcerpt,targetExcerpt}。type 只用 support（支持）,explain（解释）,prerequisite（前提）,example（实例）,counterexample（反例）,limit（限定）,application（应用）,sequence（先后），方向始终为 from 对 to 的作用；两个 excerpt 必须分别逐字摘自对应知识正文，explanation 说明关系依据。可返回空数组，不因同来源强行连线，不宣称用户掌握。 原始材料：{{source}}',
     ['source'],
   ),

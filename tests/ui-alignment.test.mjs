@@ -161,7 +161,7 @@ test('structure submission retains its lock after read failure and completion re
   });
   app.renderSourceGroupDrawer(source); app.refs.drawer.classList.add('is-open');
   await click(descendants(app.refs.drawerBody).find(n => n.dataset.noteId === 'b'));
-  const submit = findButton(app.refs.drawerBody, '补充逻辑关系');
+  const submit = findButton(app.refs.drawerBody, '重新分析结构');
   await click(submit); await app.processFeedback.poll();
   assert.equal(submit.disabled, true);
   await click(submit); assert.equal(calls, 1);
@@ -170,6 +170,39 @@ test('structure submission retains its lock after read failure and completion re
   assert.match(app.refs.drawerBody.textContent, /新结构已保存/);
   assert.equal(descendants(app.refs.drawerBody).find(n => n.dataset.noteId === 'b').attributes['aria-pressed'], 'true');
   assert.equal(findButton(app.refs.drawerBody, '重新分析结构').disabled, false);
+});
+
+test('source-map expansion preserves zoom, fit uses the visible canvas, and replacement material drops obsolete selection', async () => {
+  let requests = 0;
+  const app = browser({ sourceStructure: async () => { requests++; } });
+  const children = Array.from({ length: 8 }, (_, i) => ({ id: `fresh-${i}`, title: `不同主题 ${i}：很长的合成条目标题，保留适用条件和具体例子`, body: `合成正文 ${i}`, kind: 'knowledge', meta: {} }));
+  const source = { id: 'changing-sample', kind: 'source', title: '重新编写的任意示例', body: '合成原文', meta: {}, children };
+  app.renderSourceGroupDrawer(source);
+  let panel = app.refs.drawerBody;
+  const view = app.state.sourceMaps.get(':changing-sample');
+  assert.equal(findButton(panel, '补充逻辑关系'), undefined);
+  assert.ok(findButton(panel, '重新分析结构'));
+  assert.equal(view.zoom, 1, 'opening preserves readable original scale');
+  await click(findButton(panel, '+'));
+  const zoom = view.zoom, viewport = panel.querySelector('.map-viewport');
+  viewport.clientWidth = 630; viewport.clientHeight = 340; viewport.scrollLeft = 55;
+  await click(findButton(panel, '展开窗口'));
+  assert.equal(view.expanded, true); assert.equal(view.zoom, zoom); assert.equal(viewport.scrollLeft, 55);
+  await click(findButton(panel, '恢复窗口'));
+  assert.equal(view.expanded, false); assert.equal(view.zoom, zoom);
+  await click(findButton(panel, '思维导图')); assert.equal(view.zoom, zoom);
+  await click(findButton(panel, '适应窗口')); assert.ok(view.zoom < zoom);
+  const frame = viewport.querySelector('.map-frame');
+  assert.ok(parseFloat(frame.style.width) <= 630); assert.ok(parseFloat(frame.style.height) <= 340);
+  await click(descendants(panel).find(n => n.attributes['aria-label'] === '恢复原始比例'));
+  assert.equal(view.zoom, 1);
+  await click(descendants(panel).find(n => n.dataset.noteId === 'fresh-7'));
+  view.collapsed.add('fresh-0');
+  const replacement = { ...source, title: '新的材料标题', children: [{ ...children[0], id: 'another-id', title: '完全不同的内容' }] };
+  app.renderSourceGroupDrawer(replacement); panel = app.refs.drawerBody;
+  assert.equal(view.selected, 'another-id'); assert.equal(view.collapsed.size, 0);
+  assert.match(panel.querySelector('.map-detail').textContent, /完全不同的内容/);
+  assert.equal(requests, 0, 'viewing new example content never initiates AI work');
 });
 
 test('a successful process submit remains locked when the following bootstrap refresh fails', async () => {
