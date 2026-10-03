@@ -882,6 +882,8 @@ async function promoteNote(note, stage, returnToSourceId = "") {
 
 function confirmDirect(note, returnToSourceId = "") {
   refs.drawerBody.dataset.tour = "note-confirm";
+  refs.drawerBody.dataset.tourSubject = note.id;
+  refs.drawerBody.dataset.tourMode = "direct";
   const form = el("form", { class: "page-stack" });
   const body = el("textarea", { rows: 14, placeholder: "请用自己的语言写下：它解决什么问题、成立条件是什么、哪里可能失效，以及你会怎样应用。" });
   form.append(el("div", { class: "notice", text: "AI 可以帮助整理，但只有你主动提交的文字才会成为正式个人理解。" }), field("我的理解", body), el("div", { class: "form-actions" }, [button("确认写入", { kind: "primary", type: "submit" }), button("取消", { onClick: () => returnToSourceId ? refreshSourceGroup(returnToSourceId).catch(handleError) : renderNoteDrawer(note) })]));
@@ -1160,6 +1162,8 @@ function renderFeedback(feedback, title) {
 
 function confirmUnderstanding(session) {
   refs.drawerBody.dataset.tour = "note-confirm";
+  refs.drawerBody.dataset.tourSubject = session.id;
+  refs.drawerBody.dataset.tourMode = "study";
   const latest = asArray(session.turns).at(-1);
   const form = el("form", { class: "page-stack" });
   const body = el("textarea", { rows: 16, textContent: latest?.answer || "", placeholder: "这是你的个人理解。你可以参考反馈，但请亲自确认最终文字。" });
@@ -1296,9 +1300,6 @@ async function openTopic(topic) {
 function editTopic(topic) { return topicEditor(topic, false); }
 
 async function topicEditor(topic, create) {
-  refs.drawerBody.dataset.tour = "topic-editor";
-  refs.drawerBody.dataset.tourSubject = topic?.id || "";
-  refs.drawerBody.dataset.tourMode = create ? "create" : "edit";
   const noteData = await api.notes({ kind: "knowledge" });
   const notes = asArray(noteData.notes).filter(note => note.kind === "knowledge" && !isExcerptOnly(note));
   const meta = asObject(topic?.meta);
@@ -1347,6 +1348,9 @@ async function topicEditor(topic, create) {
     finally { submit.disabled = false; }
   });
   renderMembers();
+  refs.drawerBody.dataset.tour = "topic-editor";
+  refs.drawerBody.dataset.tourSubject = topic?.id || "";
+  refs.drawerBody.dataset.tourMode = create ? "create" : "edit";
   openDrawer(create ? "新建主题学习包" : "调整主题学习包", "主题学习包", form);
 }
 
@@ -2093,11 +2097,16 @@ async function navigateTutorial(step, tutorial) {
   const value = tutorial?.roles?.[step.noteRole];
   const id = typeof value === "string" ? value : value?.id;
   if (step.noteRole && !id) return missingContent();
+  let topic;
+  if (step.noteRole === "createdTopic") {
+    topic = asArray((await api.topics()).topics).find(item => item.id === id);
+    if (!topic) return missingContent();
+  }
   const requestedTab = step.view === "study" ? step.tab || (step.target === "study-queue" || step.target === "study-history" ? "queue" : step.target === "study-mistakes" ? "mistakes" : "session") : step.tab;
   const sameView = state.view === (step.view || "today") && (step.view !== "system" || !requestedTab || state.systemTab === requestedTab) && (step.view !== "study" || state.studyTab === requestedTab);
+  const openStudyConfirmation = sameView && step.id === "study-confirm" && refs.drawer.classList.contains("is-open") && refs.drawerBody.dataset.tour === "note-confirm";
   // Keep unsaved input when locating an already open form.
   if (sameView && refs.drawer.classList.contains("is-open")) {
-    if (step.id === "study-confirm" && refs.drawerBody.dataset.tour === "note-confirm") return { target: "note-confirm" };
     if (step.target === "note-editor" && refs.drawerBody.dataset.tour === "note-editor" && refs.drawerBody.dataset.tourSubject === id) return;
     if (refs.drawerBody.dataset.tour === "topic-editor") {
       const { tourSubject, tourMode } = refs.drawerBody.dataset;
@@ -2109,7 +2118,7 @@ async function navigateTutorial(step, tutorial) {
   if (step.tab && step.view === "system") state.systemTab = step.tab;
   if (step.view === "study") state.studyTab = requestedTab;
   if (!sameView) await navigate(step.view || "today");
-  else if (!step.target?.startsWith("note-") && !["topic-editor", "topic-detail", "draft-editor"].includes(step.target) && refs.drawer.classList.contains("is-open")) {
+  else if (!openStudyConfirmation && !step.target?.startsWith("note-") && !["topic-editor", "topic-detail", "draft-editor"].includes(step.target) && refs.drawer.classList.contains("is-open")) {
     closeDrawer();
     if (["library", "topics"].includes(step.view)) await renderCurrent();
   }
@@ -2118,13 +2127,22 @@ async function navigateTutorial(step, tutorial) {
     const sessions = asArray((await api.studySessions()).sessions);
     const noteId = id || tutorial?.roles?.explain;
     const session = sessions.find(item => item.id === noteId) || sessions.find(item => item.noteId === noteId);
+    if (openStudyConfirmation) {
+      if (session && refs.drawerBody.dataset.tourMode === "study" && refs.drawerBody.dataset.tourSubject === session.id) return { target: "note-confirm" };
+      closeDrawer();
+    }
     if (!session) {
       state.studyTab = "queue"; await renderStudy();
       return { target: "study-queue", message: "还没有对应的学习会话，请先在框选的学习队列中点击这条示例的“开始学习”。" };
     }
-    if (!sameView || state.currentStudy?.id !== session.id) {
-      state.studyMaterialVisible = !asArray(session.turns).length && session.status === "reading";
+    const sameSession = sameView && state.currentStudy?.id === session.id;
+    const changed = JSON.stringify(state.currentStudy) !== JSON.stringify(session);
+    if (!sameSession || changed) {
+      const answer = sameSession ? refs.main.querySelector('[data-tour="study-answer"]')?.value : null;
+      if (!sameSession) state.studyMaterialVisible = !asArray(session.turns).length && session.status === "reading";
       state.currentStudy = session; await renderStudy();
+      const editor = refs.main.querySelector('[data-tour="study-answer"]');
+      if (editor && answer != null) editor.value = answer;
     }
     if (state.studyMaterialVisible && !asArray(state.currentStudy?.turns).length && step.target !== "study-material") return { target: "study-hide", message: "请先阅读材料，再点击框选的“隐藏材料，开始回忆”，即可看到作答与练习操作。" };
     if (step.target === "study-material" && (!state.studyMaterialVisible || asArray(state.currentStudy?.turns).length)) return { target: "study-session", message: "本轮已经进入作答阶段，材料已隐藏；可继续作答，或在新一轮练习中体验隐藏材料。" };
@@ -2147,7 +2165,7 @@ async function navigateTutorial(step, tutorial) {
     return;
   }
   if (step.action === "open-topic" || step.action === "edit-topic") {
-    const topic = asArray((await api.topics()).topics).find(item => item.id === id);
+    topic ||= asArray((await api.topics()).topics).find(item => item.id === id);
     if (topic) return step.action === "edit-topic" ? editTopic(topic) : openTopic(topic);
     return prerequisite("topic-create", "对应主题已删除或尚未创建，请先保存一个练习主题。");
   }

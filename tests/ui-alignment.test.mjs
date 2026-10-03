@@ -74,7 +74,7 @@ function browser(api = {}) {
     window: { zhixuAppearance: { getAccent: () => null, getTheme: () => 'light', resolvedTheme: () => 'light', previewAccent: () => ({}), getMode: () => 'light', palette: () => ({}) }, matchMedia: () => ({ matches: false, addEventListener() {} }), history: { replaceState() {} }, location: { hash: '' }, setTimeout() {}, addEventListener() {} },
   });
   const stripped = appSource.replace(/import[\s\S]*?from "\.\/api\.mjs";\s*/, '').replace(/import[\s\S]*?from "\.\/ui\.mjs";\s*/, '').replace(/^init\(\);\s*$/m, '').replace('const { createUsagePanel } = await import("./usage.mjs");', '');
-  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
+  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
   return context.app;
 }
 
@@ -461,4 +461,60 @@ test('deleted seed notes point to explicit reset while captures and cases can be
       assert.equal(result.prerequisite || result.target, expected);
     }
   }
+});
+
+test('feedback locating refreshes the same session and preserves an unsaved answer', async () => {
+  const fixture = tutorialFixture(); const session = fixture.sessions[0];
+  session.status = 'awaiting_feedback'; session.turns[0].feedback = null;
+  const app = browser(fixture.api); app.state.bootstrap = fixture.bootstrap;
+  const step = flatSteps.find(step => step.id === 'study-feedback');
+  assert.equal((await app.navigateTutorial(step, { roles: fixture.roles })).target, 'study-session');
+  app.refs.main.querySelector('[data-tour="study-answer"]').value = '尚未提交的补充';
+  session.status = 'feedback'; session.turns[0].feedback = { assessment: 'partial', feedback: '刚刚返回的反馈' };
+  assert.equal(await app.navigateTutorial(step, { roles: fixture.roles }), undefined);
+  assert.match(app.refs.main.querySelector('[data-tour="study-feedback"]').textContent, /刚刚返回的反馈/);
+  assert.equal(app.refs.main.querySelector('[data-tour="study-answer"]').value, '尚未提交的补充');
+});
+
+test('deleted topic list actions return to creation instead of framing an empty list', async () => {
+  const fixture = tutorialFixture(); const app = browser({ ...fixture.api, topics: async () => ({ topics: [] }) });
+  for (const id of ['topic-pause', 'topic-resume']) {
+    const result = await app.navigateTutorial(flatSteps.find(step => step.id === id), { roles: fixture.roles });
+    assert.equal(result.prerequisite, 'topic-create');
+  }
+});
+
+test('failed topic loading keeps the previous editor identity and retry loads the requested form', async () => {
+  const fixture = tutorialFixture(); let fail = false;
+  const app = browser({ ...fixture.api, notes: async (...args) => { if (fail) throw new Error('受控读取失败'); return fixture.api.notes(...args); } });
+  app.state.bootstrap = fixture.bootstrap;
+  await app.navigateTutorial(flatSteps.find(step => step.id === 'topic-edit'), { roles: fixture.roles });
+  const original = app.refs.drawerBody.children[0];
+  fail = true;
+  const step = flatSteps.find(step => step.id === 'topic-create');
+  await assert.rejects(app.navigateTutorial(step, { roles: fixture.roles }), /受控读取失败/);
+  assert.equal(app.refs.drawerBody.dataset.tourMode, 'edit');
+  assert.equal(app.refs.drawerBody.dataset.tourSubject, fixture.roles.createdTopic);
+  assert.equal(app.refs.drawerBody.children[0], original);
+  fail = false;
+  await app.navigateTutorial(step, { roles: fixture.roles });
+  assert.equal(app.refs.drawerBody.dataset.tourMode, 'create');
+  assert.equal(app.refs.drawerBody.dataset.tourSubject, '');
+  assert.notEqual(app.refs.drawerBody.children[0], original);
+});
+
+test('study confirmation reuses only the matching session form', async () => {
+  const fixture = tutorialFixture(); const app = browser(fixture.api); app.state.bootstrap = fixture.bootstrap;
+  const step = flatSteps.find(step => step.id === 'study-confirm');
+  await app.navigateTutorial(step, { roles: fixture.roles });
+  app.confirmUnderstanding(fixture.sessions[0]);
+  const form = app.refs.drawerBody.children[0];
+  assert.equal((await app.navigateTutorial(step, { roles: fixture.roles })).target, 'note-confirm');
+  assert.equal(app.refs.drawerBody.children[0], form);
+  app.confirmUnderstanding({ ...fixture.sessions[0], id: 'unrelated-session' });
+  await app.navigateTutorial(step, { roles: fixture.roles });
+  assert.equal(app.refs.drawer.classList.contains('is-open'), false);
+  app.confirmDirect(fixture.notes.find(note => note.id === fixture.roles.explain));
+  await app.navigateTutorial(step, { roles: fixture.roles });
+  assert.equal(app.refs.drawer.classList.contains('is-open'), false, 'direct confirmation is not session confirmation');
 });
