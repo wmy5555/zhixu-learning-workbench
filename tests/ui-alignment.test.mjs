@@ -15,7 +15,7 @@ const appSource = await readFile(new URL('../public/app.mjs', import.meta.url), 
 class Element {
   constructor(tag = 'div') {
     this.tagName = tag; this.children = []; this.events = {}; this.attributes = {};
-    this.value = ''; this.type = ''; this.name = ''; this.disabled = false; this.checked = false;
+    this.value = ''; this.type = ''; this.name = ''; this.disabled = false; this.checked = false; this.selected = false;
     this.open = false; this.dataset = {}; this.style = { setProperty() {} }; this._text = '';
     this.classList = { add: name => { this.className = (this.className || '') + ' ' + name; }, remove: name => { this.className = (this.className || '').split(' ').filter(item => item !== name).join(' '); }, contains: name => (this.className || '').split(' ').includes(name), toggle() {} };
   }
@@ -77,6 +77,8 @@ function browser(api = {}) {
   });
   const stripped = appSource.replace(/import[\s\S]*?from "\.\/api\.mjs";\s*/, '').replace(/import[\s\S]*?from "\.\/ui\.mjs";\s*/, '').replace(/^init\(\);\s*$/m, '').replace('const { createUsagePanel } = await import("./usage.mjs");', '');
   vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
+  context.app.manualExtract = vm.runInContext('manualExtract', context);
+  context.app.serializeForm = vm.runInContext('serializeForm', context);
   context.app.processControls = vm.runInContext('processControls', context);
   context.app.refreshBootstrap = vm.runInContext('refreshBootstrap', context);
   context.app.toasts = document.querySelector('#toast-region');
@@ -112,6 +114,60 @@ test('AI decomposition shows pending progress, prevents repeat submission, and r
   fail = true;
   await click(findButton(currentControls, '提交 AI 拆解'));
   assert.equal(findButton(currentControls, '提交 AI 拆解').disabled, false);
+});
+
+test('learning goals preserve saved depth values and update the concrete requirement when selected', () => {
+  const app = browser();
+  const goals = [
+    ['aware', '了解用途', /有什么用/],
+    ['find', '会查资料', /关键词或出处/],
+    ['explain', '讲清原理', /不看原文/],
+    ['apply', '换场景应用', /不同于原文例子/],
+  ];
+  for (const [saved, label, requirement] of goals) {
+    app.renderNoteEditor({ id: 'synthetic-note', kind: 'knowledge', title: '合成知识', body: '合成正文', meta: { depth: saved } });
+    const panel = app.refs.drawerBody;
+    const select = control(panel, 'depth');
+    const hint = descendants(panel).find(node => node.attributes.id === 'learning-goal-hint');
+    assert.match(panel.textContent, /学习目标/);
+    assert.match(panel.textContent, /不代表已经掌握/);
+    assert.match(hint.textContent, requirement);
+    assert.equal(select.attributes['aria-describedby'], hint.attributes.id);
+    assert.equal(select.children.find(option => option.selected).value, saved);
+    assert.match(select.children.find(option => option.selected).textContent, new RegExp(label));
+    assert.deepEqual(select.children.map(option => option.value), goals.map(goal => goal[0]));
+    for (const [next, , nextRequirement] of goals) {
+      select.value = next;
+      select.children.forEach(option => { option.selected = option.value === next; });
+      select.events.change();
+      assert.match(hint.textContent, nextRequirement);
+      assert.equal(app.serializeForm(descendants(panel).find(node => node.tagName === 'form')).depth, next);
+    }
+  }
+});
+
+test('manual extraction and saved study sessions show the same goal requirements', async () => {
+  const app = browser();
+  app.manualExtract({ id: 'synthetic-source' });
+  const select = control(app.refs.drawerBody, 'depth');
+  assert.equal(select.children.find(option => option.selected).value, 'explain');
+  assert.match(app.refs.drawerBody.textContent, /学习目标/);
+  select.value = 'apply';
+  select.events.change();
+  assert.match(descendants(app.refs.drawerBody).find(node => node.attributes.id === 'learning-goal-hint').textContent, /不同于原文例子/);
+  for (const [depth, oldGoal, label] of [
+    ['aware', '知道存在', '了解用途'],
+    ['find', '知道去哪找', '会查资料'],
+    ['explain', '能够解释', '讲清原理'],
+    ['apply', '能够迁移应用', '换场景应用'],
+  ]) {
+    const session = { id: 'synthetic-session', depth, goal: oldGoal, status: 'reading', material: '合成材料', question: '合成问题', turns: [] };
+    const study = browser({ study: async () => session });
+    study.state.currentStudy = session;
+    assert.match((await study.studySessionPanel()).textContent, new RegExp('本次目标：' + label));
+    session.presetCase = 'synthetic-case';
+    assert.match((await study.studySessionPanel()).textContent, /预设演示案例/);
+  }
 });
 
 test('ChatGPT capture and read controls persist independently and disclose the local-material grant', async () => {

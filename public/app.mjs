@@ -697,7 +697,7 @@ function renderNoteDrawer(note) {
   const values = el("dl", { class: "key-values" });
   [
     ["稳定 ID", note.id], ["文件路径", note.path], ["内容哈希", note.hash],
-    ["更新时间", formatDate(note.updatedAt, true)], ["学习深度", meta.depth ? depthLabel(meta.depth) : "未设置"],
+    ["更新时间", formatDate(note.updatedAt, true)], ["学习目标", meta.depth ? depthLabel(meta.depth) : "未设置"],
     ["知识主题", meta.topic || "未归入主题"],
   ].forEach(([key, value]) => values.append(el("div", { class: "key-value" }, [el("dt", { text: key }), el("dd", { text: value || "未记录" })])));
   content.append(values);
@@ -789,7 +789,7 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
       field("学习状态", el("input", { value: labels.stage(meta.stage), disabled: true }), "学习状态请通过相应操作调整，以便保留理由。"),
       tour(field("隐私", selectControl([["local", "仅本地"], ["cloud", "允许云端"]], meta.privacy || "local", "privacy"), "此项控制模型、搜索与向量服务；系统中授予 ChatGPT 的独立读取权限仍有效。"), "note-privacy"),
       field("知识主题", el("input", { name: "topic", value: meta.topic || "", placeholder: "可留空" })),
-      field("学习深度", selectControl([["aware", "知道存在"], ["find", "知道去哪找"], ["explain", "能够解释"], ["apply", "能够迁移应用"]], meta.depth || "aware", "depth")),
+      learningGoalField(meta.depth || "aware"),
     ]),
     el("div", { class: "form-actions" }, [button("保存修改", { kind: "primary", type: "submit" }), button("取消", { onClick: () => returnToSourceId ? refreshSourceGroup(returnToSourceId).catch(handleError) : renderNoteDrawer(note) })]),
   );
@@ -875,12 +875,12 @@ function manualExtract(source, returnToSourceId = "") {
   const body = el("textarea", { name: "body", required: true, rows: 14, placeholder: "复制并整理你要保留的片段。请保留决定结论的条件和上下文。" });
   const topic = el("input", { name: "topic", placeholder: "可选，例如：检索与证据" });
   const reason = el("textarea", { name: "reason", required: true, rows: 4, placeholder: "它为什么值得查找、学习或建立联系？" });
-  const depth = selectControl([["aware", "知道存在"], ["find", "知道去哪找"], ["explain", "能够解释"], ["apply", "能够迁移应用"]], "explain", "depth");
+  const depth = learningGoalField("explain");
   const claimType = selectControl([["fact", "含需查证事实（默认）"], ["opinion", "仅个人观点或虚构练习"]], "fact", "claimType");
   form.append(
     el("div", { class: "notice info", text: "此操作不需要 AI。新条目会自动关联这份原始资料，并标记为用户手动整理；它不会因此被宣称已经外部核验或已经掌握。" }),
     field("待选学知识标题", title), field("整理后的正文", body),
-    el("div", { class: "form-grid" }, [field("内容性质", claimType, "含事实的内容会保留待研究限制，不默认进入学习；纯观点或虚构练习可由你主动加入学习。"), field("目标深度", depth), field("知识主题", topic)]),
+    el("div", { class: "form-grid" }, [field("内容性质", claimType, "含事实的内容会保留待研究限制，不默认进入学习；纯观点或虚构练习可由你主动加入学习。"), depth, field("知识主题", topic)]),
     field("保留与学习理由", reason),
     el("div", { class: "form-actions" }, [button("创建待选学知识", { kind: "primary", type: "submit" }), button("取消", { onClick: () => returnToSourceId ? refreshSourceGroup(returnToSourceId).catch(handleError) : renderNoteDrawer(source) })]),
   );
@@ -1001,8 +1001,27 @@ async function restoreVersion(note, version, returnToSourceId = "") {
   } catch (error) { handleError(error); }
 }
 
+const learningGoals = {
+  aware: { label: "了解用途", summary: "知道何时会用到", description: "知道它有什么用，遇到什么问题时会想到它；不要求记住原理和细节。" },
+  find: { label: "会查资料", summary: "需要时能找到", description: "需要时能用关键词或出处找到资料，并核对适用条件；不要求脱离资料背出内容。" },
+  explain: { label: "讲清原理", summary: "用自己的话说明", description: "不看原文，用自己的话说明它为什么成立、适用条件，并举一个例子。" },
+  apply: { label: "换场景应用", summary: "用于新的问题", description: "换一个不同于原文例子的问题，说明怎么用、需要哪些条件，以及什么时候不适用。" },
+};
 function depthLabel(value) {
-  return ({ aware: "知道存在", find: "知道去哪找", explain: "能够解释", apply: "能够迁移应用" })[value] || value;
+  return Object.hasOwn(learningGoals, value) ? learningGoals[value].label : value;
+}
+function learningGoalField(value) {
+  const selected = Object.hasOwn(learningGoals, value) ? value : "aware";
+  const select = selectControl(Object.entries(learningGoals).map(([key, goal]) => [key, `${goal.label} · ${goal.summary}`]), selected, "depth");
+  const hint = el("small", { class: "field-hint", id: "learning-goal-hint", ariaLive: "polite" });
+  select.setAttribute("aria-describedby", "learning-goal-hint");
+  const updateHint = () => { hint.textContent = learningGoals[select.value].description; };
+  select.value = selected;
+  select.addEventListener("change", updateHint);
+  updateHint();
+  const goalField = field("学习目标", select);
+  goalField.append(hint, el("small", { class: "field-hint", text: "选择想学到的程度，用来决定练习方式；不代表已经掌握。按实际需要选即可。" }));
+  return goalField;
 }
 function planStateLabel(value) {
   return ({ pending: "待学习", done: "已完成", skip: "已跳过", skipped: "已跳过", defer: "已延期", deferred: "已延期", pause: "已暂停", paused: "已暂停" })[value] || labels.state(value);
@@ -1089,7 +1108,8 @@ async function studySessionPanel() {
   const turns = asArray(session.turns);
   const latest = turns.at(-1);
   const goalPanel = () => el("div", { class: "notice info" }, [
-    el("strong", { text: `本次目标：${session.goal || depthLabel(session.depth || "explain")}` }),
+    el("strong", { text: `本次目标：${Object.hasOwn(learningGoals, session.depth) ? depthLabel(session.depth) + (session.presetCase ? "（预设演示案例）" : "") : session.goal || depthLabel("explain")}` }),
+    Object.hasOwn(learningGoals, session.depth) ? el("p", { text: learningGoals[session.depth].description }) : null,
     session.mistakeId ? el("p", { text: "误解专项练习：重点检查此前的遗漏或错误，实际反馈会保留为后续纠正依据。" }) : null,
     session.topicId ? el("p", { text: "本次属于主题学习包，结束后可按顺序继续。" }) : null,
     el("p", { text: "结束练习保存本轮表现；确认个人理解保存你自己的表达。这两项记录分别保留，均不等于永久掌握。" }),
