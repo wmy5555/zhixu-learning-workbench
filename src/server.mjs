@@ -9,9 +9,9 @@ import { createOnboarding } from './onboarding.mjs';
 
 const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
 const safeEqual = (a, b) => typeof a === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
-async function readJSON(req) {
+async function readJSON(req, maxBytes = 50 * 1024 * 1024) {
   let size = 0; const chunks = [];
-  for await (const chunk of req) { size += chunk.length; if (size > 50 * 1024 * 1024) fail('请求超过 50 MB，请拆分导入。', 'TOO_LARGE', 413); chunks.push(chunk); }
+  for await (const chunk of req) { size += chunk.length; if (size > maxBytes) fail('请求超过大小限制，请拆分导入。', 'TOO_LARGE', 413); chunks.push(chunk); }
   if (!size) return {};
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { fail('请求不是有效的 JSON。'); }
 }
@@ -22,6 +22,9 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
   const tokenPath = path.join(dataDir,'mcp-token');
   if (!fs.existsSync(tokenPath)) atomicWrite(tokenPath, randomBytes(32).toString('hex'));
   let mcpToken = fs.readFileSync(tokenPath,'utf8').trim();
+  const chatgptTokenPath = path.join(dataDir, 'chatgpt-mcp-token');
+  if (!fs.existsSync(chatgptTokenPath)) atomicWrite(chatgptTokenPath, randomBytes(32).toString('hex'));
+  const chatgptToken = fs.readFileSync(chatgptTokenPath, 'utf8').trim();
   const sessions = new Map(); let timer, busyTick = false;
   function json(res, status, data, headers = {}) { res.writeHead(status, { 'Content-Type':'application/json; charset=utf-8', 'Cache-Control':'no-store', 'X-Content-Type-Options':'nosniff', ...headers }); res.end(JSON.stringify(data)); }
   const server = http.createServer(async(req,res) => {
@@ -51,6 +54,25 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
         for(const [key,value]of sessions)if(Date.now()-value.at>86400000)sessions.delete(key);
         return json(res,200,{csrf},{'Set-Cookie':`learning_session=${id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400`});
       }
+      if (parts[1] === 'chatgpt') {
+        if (!chatgptToken || !safeEqual(req.headers.authorization || '', `Bearer ${chatgptToken}`)) fail('ChatGPT 接入凭据无效。', 'MCP_UNAUTHORIZED', 401);
+        let result;
+        try {
+          service.chatgpt.status();
+          if (url.pathname === '/api/chatgpt/status' && method === 'GET') result = service.chatgpt.status();
+          else if (url.pathname === '/api/chatgpt/conversations' && method === 'POST') result = service.chatgpt.capture(await readJSON(req, 2 * 1024 * 1024));
+          else if (url.pathname === '/api/chatgpt/search' && method === 'GET') result = await service.chatgpt.search(query.q);
+          else if (parts.length === 4 && ['notes', 'sources'].includes(parts[2]) && method === 'GET') result = service.chatgpt.read(parts[3], { sourceOnly: parts[2] === 'sources', offset: query.offset === undefined ? 0 : Number(query.offset), limit: query.limit === undefined ? 12000 : Number(query.limit) });
+          else if (parts.length === 4 && parts[2] === 'related' && method === 'GET') result = service.chatgpt.related(parts[3]);
+          else fail('ChatGPT 接口不存在。', 'NOT_FOUND', 404);
+          service.store.put('mcpCalls', randomBytes(10).toString('hex'), { client: 'chatgpt', operation: parts[2], at: now(), resultCount: result.results?.length ?? result.notes?.length ?? 1, ...(result.status ? { status: result.status } : {}) });
+        } catch (error) {
+          // Only deliberate public errors cross this boundary, never filesystem paths or raw payloads.
+          if (!error.status) fail('知序暂时无法完成操作，请在本机检查服务与资料状态。', 'CHATGPT_OPERATION_FAILED', 500);
+          throw error;
+        }
+        return json(res, method === 'POST' && !result.duplicate ? 201 : 200, result);
+      }
       if(parts[1]==='mcp'){
         if(!safeEqual(req.headers.authorization || '',`Bearer ${mcpToken}`))fail('MCP 访问凭据无效。','MCP_UNAUTHORIZED',401);
         if(!service.settings().mcp.enabled)fail('MCP 尚未启用。','MCP_DISABLED',403);
@@ -62,7 +84,7 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
         else if(parts[2]==='related'&&method==='GET')result=service.related(parts[3]);
         else if(parts[2]==='proposals'&&method==='POST')result={proposal:service.propose(body)};
         else fail('MCP 接口不存在。','NOT_FOUND',404);
-        service.store.put('mcpCalls',randomBytes(10).toString('hex'),{operation:parts[2],id:parts[3]||null,at:now(),resultCount:result.results?.length ?? result.notes?.length ?? 1});
+        service.store.put('mcpCalls',randomBytes(10).toString('hex'),{client:'local',operation:parts[2],id:parts[3]||null,at:now(),resultCount:result.results?.length ?? result.notes?.length ?? 1});
         return json(res,method==='POST'?201:200,result);
       }
       const cookie=(req.headers.cookie || '').split(';').map(x=>x.trim()).find(x=>x.startsWith('learning_session='))?.slice(17),session=sessions.get(cookie);

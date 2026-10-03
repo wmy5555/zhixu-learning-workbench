@@ -185,7 +185,7 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
     if (p && !runtime) open();
     const states = progress(), counts = { done: 0, demonstrated: 0, pending: 0, needs_setup: 0 };
     for (const item of Object.values(states)) counts[item.status]++;
-    const mcpCalls = mainService.store.records('mcpCalls').filter(call => Number.isFinite(Date.parse(call.at))).sort((a, b) => b.at.localeCompare(a.at));
+    const mcpCalls = mainService.store.records('mcpCalls').filter(call => (call.client === undefined || call.client === 'local') && Number.isFinite(Date.parse(call.at))).sort((a, b) => b.at.localeCompare(a.at));
     const externalConnections = {
       mcp: { status: mcpCalls.length ? 'observed' : p?.acknowledged?.['mcp-read'] ? 'reported' : 'pending', lastSeenAt: mcpCalls[0]?.at || null, operations: [...new Set(mcpCalls.map(call => call.operation).filter(op => ['search', 'notes', 'sources', 'related', 'proposals'].includes(op)))] },
       obsidian: { status: p?.acknowledged?.['obsidian-open'] ? 'reported' : 'pending', editReported: Boolean(p?.acknowledged?.['obsidian-edit']) },

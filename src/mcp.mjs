@@ -29,14 +29,14 @@ function nonEmpty(value, label) {
   return text;
 }
 
-export function createTokenProvider({ env = process.env, readFileImpl = readFile } = {}) {
-  if (env.LEARNING_MCP_TOKEN?.trim()) {
-    const token = env.LEARNING_MCP_TOKEN.trim();
+export function createTokenProvider({ env = process.env, readFileImpl = readFile, tokenEnv = "LEARNING_MCP_TOKEN", tokenFile = "mcp-token", defaultDataDir = ".data" } = {}) {
+  if (env[tokenEnv]?.trim()) {
+    const token = env[tokenEnv].trim();
     return async () => token;
   }
 
-  const dataDir = path.resolve(env.LEARNING_DATA_DIR || ".data");
-  const tokenPath = path.join(dataDir, "mcp-token");
+  const dataDir = path.resolve(env.LEARNING_DATA_DIR || defaultDataDir);
+  const tokenPath = path.join(dataDir, tokenFile);
   return async () => {
     try {
       return nonEmpty(await readFileImpl(tokenPath, "utf8"), "MCP token");
@@ -81,6 +81,7 @@ export function createKnowledgeClient({
   tokenProvider = createTokenProvider(),
   fetchImpl = globalThis.fetch,
   timeoutMs = DEFAULT_TIMEOUT_MS,
+  apiPrefix = "/api/mcp",
 } = {}) {
   if (typeof fetchImpl !== "function") throw new TypeError("fetchImpl must be a function");
   const root = normalizeBaseUrl(baseUrl);
@@ -98,6 +99,7 @@ export function createKnowledgeClient({
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: AbortSignal.timeout(timeoutMs),
+        redirect: "error",
       });
     } catch (error) {
       throw new KnowledgeApiError(
@@ -139,20 +141,22 @@ export function createKnowledgeClient({
 
   return {
     search(query) {
-      return request(`/api/mcp/search?q=${encodeURIComponent(query)}`);
+      return request(`${apiPrefix}/search?q=${encodeURIComponent(query)}`);
     },
-    readNote(id) {
-      return request(`/api/mcp/notes/${encodeURIComponent(id)}`);
+    readNote(id, { offset = 0, limit = 12000 } = {}) {
+      return request(`${apiPrefix}/notes/${encodeURIComponent(id)}?offset=${offset}&limit=${limit}`);
     },
-    readSource(id) {
-      return request(`/api/mcp/sources/${encodeURIComponent(id)}`);
+    readSource(id, { offset = 0, limit = 12000 } = {}) {
+      return request(`${apiPrefix}/sources/${encodeURIComponent(id)}?offset=${offset}&limit=${limit}`);
     },
     related(id) {
-      return request(`/api/mcp/related/${encodeURIComponent(id)}`);
+      return request(`${apiPrefix}/related/${encodeURIComponent(id)}`);
     },
     proposeChange(input) {
       return request("/api/mcp/proposals", { method: "POST", body: input });
     },
+    captureConversation(input) { return request(`${apiPrefix}/conversations`, { method: "POST", body: input }); },
+    status() { return request(`${apiPrefix}/status`); },
   };
 }
 
@@ -175,7 +179,7 @@ function failure(error) {
   };
 }
 
-function tool(handler) {
+export function tool(handler) {
   return async (input) => {
     try {
       return success(await handler(input));
