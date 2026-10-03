@@ -158,7 +158,7 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
       else if(resource==='relations'&&!id&&method==='GET')result=service.relationReview();
       else if(resource==='relations'&&action==='action'&&method==='POST')result=service.relationAction(id,body);
       else if(resource==='discover'&&method==='POST')result=service.queue('discover',{useAI:body.useAI===true},`discovery:manual:${new Date().toISOString().slice(0,10)}:${body.useAI===true}`);
-      else if(resource==='jobs'&&!id&&method==='GET')result={jobs:service.store.records('jobs').map(service.publicJob)};
+      else if(resource==='jobs'&&!id&&method==='GET')result=query.view==='status'?service.jobStatuses():{jobs:service.store.records('jobs').map(service.publicJob)};
       else if(resource==='jobs'&&action==='action'&&method==='POST')result=service.jobAction(id,body);
       else if(resource==='prompts'&&method==='GET')result=service.getPrompts();
       else if(resource==='prompts'&&method==='PUT')result=service.updatePrompts(body);

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
+import { createProcessFeedback } from '../public/process-feedback.mjs';
 import { initSidebar } from '../public/sidebar.mjs';
 import { coreSteps, flatSteps } from '../public/onboarding-curriculum.mjs';
 
@@ -54,6 +55,7 @@ const click = node => node.events.click({ target: node, preventDefault() {} });
 const plain = value => JSON.parse(JSON.stringify(value));
 
 function browser(api = {}) {
+  api = { getContext: () => ({ practiceId: '', version: 0 }), ...api };
   const roots = new Map();
   const document = {
     documentElement: new Element('html'),
@@ -65,7 +67,7 @@ function browser(api = {}) {
   };
   document.createTextNode = value => { const node = new Element('text'); node.textContent = value; return node; };
   const context = vm.createContext({
-    api, document, initSidebar, Node: Element, URL, Intl, Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => 'request-ui' },
+    api, document, initSidebar, createProcessFeedback, Node: Element, URL, Intl, Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => 'request-ui' },
     FormData: class {
       constructor(form) { this.form = form; }
       entries() { return descendants(this.form).filter(node => node.name && !node.disabled && ['input', 'textarea', 'select'].includes(node.tagName)).map(node => [node.name, String(node.tagName === 'textarea' ? node.textContent : node.tagName === 'select' ? node.children.find(option => option.selected)?.value || '' : node.value)]); }
@@ -77,8 +79,97 @@ function browser(api = {}) {
   vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
   context.app.manualExtract = vm.runInContext('manualExtract', context);
   context.app.serializeForm = vm.runInContext('serializeForm', context);
+  context.app.processControls = vm.runInContext('processControls', context);
+  context.app.refreshBootstrap = vm.runInContext('refreshBootstrap', context);
+  context.app.processFeedback = vm.runInContext('processFeedback', context);
+  context.app.renderSourceGroupDrawer = vm.runInContext('renderSourceGroupDrawer', context);
+  context.app.toasts = document.querySelector('#toast-region');
   return context.app;
 }
+
+test('AI decomposition shows pending progress, prevents repeat submission, and releases controls after completion or failure', async () => {
+  let release, requests = 0, jobs = [], fail = false;
+  const source = { id: 'synthetic-source', kind: 'source', title: '合成资料', meta: {}, children: [] };
+  const app = browser({ getContext: () => ({ practiceId: '', version: 0 }),
+    processNote: async () => { requests++; if (fail) throw new Error('合成提交失败'); return new Promise(resolve => { release = () => { jobs = [{ id: 'synthetic-job', type: 'process', state: 'queued', payload: { noteId: source.id } }]; resolve(jobs[0]); }; }); },
+    bootstrap: async () => ({ jobs, notes: [source] }), note: async () => source,
+    library: async () => ({ groups: [], standalone: [] }),
+  });
+  // Exercise the actual source controls through their renderer, rather than a copy of the update logic.
+  const controls = app.processControls(source);
+  app.refs.drawerBody.replaceChildren(controls);
+  const pending = click(findButton(controls, '提交 AI 拆解'));
+  assert.equal(findButton(controls, 'AI 拆解处理中…').disabled, true);
+  assert.ok(descendants(controls).some(node => String(node.className).includes('process-spinner')));
+  await click(findButton(controls, 'AI 拆解处理中…'));
+  assert.equal(requests, 1, 'even a second direct handler invocation cannot queue another job');
+  release(); await pending;
+  const currentControls = app.refs.drawerBody.querySelector('.process-controls');
+  assert.equal(findButton(currentControls, 'AI 拆解处理中…').disabled, true);
+  jobs[0].state = 'waiting'; await app.refreshBootstrap();
+  assert.equal(findButton(currentControls, '提交 AI 拆解').disabled, false);
+  assert.doesNotMatch(currentControls.querySelector('.process-status').textContent, /正在|请等待/);
+  assert.equal(currentControls.querySelector('.process-spinner'), null);
+  jobs[0].state = 'done'; await app.refreshBootstrap(); await app.refreshBootstrap();
+  assert.match(currentControls.querySelector('.process-status').textContent, /已完成/);
+  assert.equal(app.toasts.children.filter(node => node.textContent.includes('的 AI 拆解已完成')).length, 1);
+  fail = true;
+  await click(findButton(currentControls, '提交 AI 拆解'));
+  assert.equal(findButton(currentControls, '提交 AI 拆解').disabled, false);
+});
+
+test('a successful process submit remains locked when the following bootstrap refresh fails', async () => {
+  let calls = 0;
+  const source = { id: 'synthetic-source', kind: 'source', title: '合成原文', meta: {} };
+  const job = { id: 'accepted', type: 'process', state: 'queued', payload: { noteId: source.id }, jobRevision: 'same', jobSnapshot: 2 };
+  const app = browser({ processNote: async () => { calls++; return job; }, bootstrap: async () => { throw new Error('合成刷新失败'); } });
+  const controls = app.processControls(source); app.refs.drawerBody.replaceChildren(controls);
+  await click(findButton(controls, '提交 AI 拆解'));
+  assert.equal(findButton(controls, 'AI 拆解处理中…').disabled, true);
+  assert.equal(findButton(controls, '联网检验并找反例').disabled, true);
+  assert.ok(controls.querySelector('.process-spinner'));
+  await click(findButton(controls, '联网检验并找反例'));
+  assert.equal(calls, 1, 'even direct invocation cannot submit a second variant after refresh failure');
+});
+
+test('process terminal transitions refresh saved source results using a background read', async () => {
+  const source = { id: 'synthetic-source', kind: 'source', title: '合成原文', body: '合成原文正文', meta: {}, children: [], jobs: [] };
+  const reads = [];
+  let result = source;
+  const app = browser({ note: async (id, options) => { reads.push({ id, options: plain(options) }); return result; } });
+  app.renderSourceGroupDrawer(source); app.refs.drawer.classList.add('is-open');
+  const job = { id: 'process', type: 'process', state: 'queued', payload: { noteId: source.id } };
+  app.processFeedback.observe({ jobs: [job] });
+  for (const state of ['waiting', 'done', 'failed', 'cancelled']) {
+    const child = { id: 'child', kind: 'knowledge', title: '已保存结果-' + state, body: '已保存的合成正文', meta: { stage: 'candidate' } };
+    result = { ...source, children: [child], jobs: [{ ...job, state }] };
+    app.processFeedback.observe({ jobs: [{ ...job, state }] });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.match(app.refs.drawerBody.textContent, new RegExp(child.title));
+    assert.doesNotMatch(app.refs.drawerBody.textContent, /尚未形成拆解/);
+    assert.deepEqual(reads.at(-1), { id: source.id, options: { background: true } });
+  }
+  assert.equal(reads.length, 4);
+});
+
+test('completion refresh ignores its old result or error after a library switch', async () => {
+  for (const fail of [false, true]) {
+    let release, reject, version = 0;
+    const source = { id: 'synthetic-source', kind: 'source', title: '合成原文', body: '合成正文', meta: {}, children: [] };
+    const app = browser({ getContext: () => ({ practiceId: version ? 'other-library' : '', version }),
+      note: () => new Promise((resolve, fail) => { release = resolve; reject = fail; }) });
+    app.renderSourceGroupDrawer(source); app.refs.drawer.classList.add('is-open');
+    const job = { id: 'process', type: 'process', state: 'queued', payload: { noteId: source.id } };
+    app.processFeedback.observe({ jobs: [job] });
+    app.processFeedback.observe({ jobs: [{ ...job, state: 'done' }] });
+    version++;
+    if (fail) reject(new Error('过期返回错误'));
+    else release({ ...source, title: '旧知识库返回的标题' });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(app.refs.drawerTitle.textContent, source.title);
+    assert.doesNotMatch(app.toasts.textContent, /过期返回错误/);
+  }
+});
 
 test('learning goals preserve saved depth values and update the concrete requirement when selected', () => {
   const app = browser();

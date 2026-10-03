@@ -48,6 +48,8 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   }
   vaultDir ||= path.resolve('vault');
   let store = new Store({ dataDir, vaultDir, backupPurpose: practice ? practicePurpose : undefined });
+  let jobRevision = randomUUID();
+  let jobSnapshot = 0;
   const secret = practice ? { has: () => false, get: () => '' } : createSecrets(dataDir);
   const settings = () => {
     const saved = store.get('settings', 'main', {});
@@ -166,22 +168,35 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
       if (store.list().some(n=>n.kind!=='report') || store.records('sessions').length) fail('当前库已有数据。为避免混淆学习记录，请先备份，使用独立数据目录启动另一个 Vault。', 'VAULT_NOT_EMPTY', 409);
       const newVault = path.resolve(input.vaultDir);
       if (newVault === path.parse(newVault).root || newVault === store.dataDir) fail('请选择专用的 Vault 文件夹。');
-      store.close(); store = new Store({ dataDir, vaultDir: newVault }); next.vaultDir = newVault;
+      store.close(); store = new Store({ dataDir, vaultDir: newVault }); jobRevision = randomUUID(); next.vaultDir = newVault;
     } else next.vaultDir = store.vaultDir;
     const researchChanged = practice && Object.keys(promptDefaults).filter(key => key.startsWith('research')).some(key => (old.prompts[key] ?? promptDefaults[key].template) !== (next.prompts[key] ?? promptDefaults[key].template));
     store.put('settings', 'main', practice ? Object.fromEntries(practicePreferences.map(key => [key, next[key]])) : next);
     if (researchChanged) store.db.prepare("DELETE FROM records WHERE namespace='research'").run();
     return settings();
   }
+  const validExtraction = value => Array.isArray(value?.candidates) && value.candidates.length > 0 && value.candidates.length <= 8
+    && value.candidates.every(candidate => typeof candidate?.title === 'string' && typeof candidate.body === 'string'
+      && Array.isArray(candidate.claims) && candidate.claims.every(claim => typeof claim === 'string'));
+  const processJobs = (id, sourceHash) => store.records('jobs').filter(job => job.type === 'process'
+    && job.payload?.noteId === id && job.payload.hash === sourceHash && !job.presetCase && !job.payload.presetCase);
+  const processReply = (job, reused = false) => ({ ...job, reused, jobRevision, jobSnapshot: ++jobSnapshot });
   function processNote(id, { research = false, reuseExtracted = false } = {}) {
     const source = getNote(id);
     if (source.kind !== 'source') fail('请选择原始资料重新加工。');
     const payload = { noteId: id, hash: source.hash, research: research === true };
-    if (reuseExtracted === true) {
-      const previous = store.records('jobs').filter(j => j.type === 'process' && j.payload.noteId === id && j.payload.hash === source.hash && j.payload.extracted).sort((a,b) => b.createdAt.localeCompare(a.createdAt))[0];
-      if (previous) payload.extracted = structuredClone(previous.payload.extracted);
-    }
-    return queue('process', payload, `process:${id}:${source.hash}${payload.research ? ':research' : ''}`);
+    const previous = processJobs(id, source.hash);
+    const pending = previous.find(job => ['queued','running','waiting'].includes(job.state));
+    if (pending) return processReply(pending, true);
+    if (['failed','cancelled'].includes(previous[0]?.state)) return processReply(previous[0], true);
+    // Repeated decomposition reuses its record, including errors that require an explicit task retry.
+    // The separate research action may refresh evidence, but still reuses the extracted candidates.
+    const matching = previous.filter(job => !payload.research || job.payload.research === true);
+    const existing = matching[0];
+    if (existing && (existing.state !== 'done' || !payload.research || reuseExtracted !== true)) return processReply(existing, true);
+    const extracted = previous.find(job => validExtraction(job.payload.extracted))?.payload.extracted;
+    if (extracted) payload.extracted = structuredClone(extracted);
+    return processReply(queue('process', payload, `process:${id}:${source.hash}${payload.research ? ':research' : ''}`));
   }
   function importItems({ items, process = false, research = false }) {
     if (!Array.isArray(items) || !items.length || items.length > 100) fail('每次请导入 1–100 份文本。');
@@ -252,6 +267,19 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     delete j.runtimeIssues;
     if (['SOURCE_BUDGET','BUDGET_EXCEEDED','BUDGET_UNKNOWN'].includes(j.code) || operationalIssue(j.error || '')) j.error = '已保存，待继续。';
     return j;
+  }
+  function jobStatuses() {
+    // Project small fields directly in SQLite; never return or parse stored model output here.
+    const jobs = store.db.prepare(`SELECT j.key AS id,
+      json_extract(j.json,'$.type') AS type, json_extract(j.json,'$.state') AS state, json_extract(j.json,'$.code') AS code,
+      json_extract(j.json,'$.payload.noteId') AS noteId, json_extract(j.json,'$.payload.research') AS research,
+      coalesce(json_extract(j.json,'$.presetCase'), json_extract(j.json,'$.payload.presetCase')) AS presetCase,
+      json_extract(j.json,'$.createdAt') AS createdAt, json_extract(j.json,'$.updatedAt') AS updatedAt,
+      substr(json_extract(n.json,'$.title'),1,70) AS title
+      FROM records j LEFT JOIN notes n ON n.id=json_extract(j.json,'$.payload.noteId')
+      WHERE j.namespace='jobs' AND json_extract(j.json,'$.type')='process'
+      ORDER BY j.rowid DESC`).all().map(job => ({ ...job, research: job.research === 1 }));
+    return { jobs, jobRevision, jobSnapshot: ++jobSnapshot };
   }
   function editNote(id, input) {
     const old = getNote(id), meta = { ...(input.meta || {}) };
@@ -448,13 +476,15 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   }
   async function processSource(job, signal) {
     const source = getNote(job.payload.noteId); if (source.hash !== job.payload.hash) fail('资料已修改，请对新版本重新加工。', 'SOURCE_CHANGED');
-    let extracted = job.payload.extracted;
+    // Also cover retained jobs queued before another task saved the same source extraction.
+    let extracted = validExtraction(job.payload.extracted) ? job.payload.extracted
+      : processJobs(source.id, source.hash).find(previous => previous.id !== job.id && validExtraction(previous.payload.extracted))?.payload.extracted;
     if (!extracted) {
       extracted = parseJSON((await ai.generate({ system: promptText('serviceSystem'), privacy: privacyFor(source), signal, json: true, prompt: promptText('sourceExtract',{source:source.body}) })).text);
       if (!Array.isArray(extracted.candidates) || !extracted.candidates.length || extracted.candidates.length > 8) fail('拆解结果格式不正确。', 'MODEL_FORMAT');
-      job.payload.extracted = extracted; putJob(job);
     }
     for (const candidate of extracted.candidates) if (typeof candidate.title !== 'string' || typeof candidate.body !== 'string' || !Array.isArray(candidate.claims) || candidate.claims.some(x => typeof x !== 'string')) fail('待选学知识格式不正确。', 'MODEL_FORMAT');
+    job.payload.extracted = structuredClone(extracted); putJob(job);
     for (const candidate of extracted.candidates) candidate.claims = [...new Set(candidate.claims.map(c=>c.trim()).filter(Boolean))];
     const research = job.payload.research === true;
     const shared = new Map(), pending = [], runtimeIssues = [];
@@ -658,6 +688,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     const saved = store.get('restore', token);
     if (!saved || saved.digest !== digest || Date.now() - Date.parse(saved.at) > 600000) fail('恢复预览已过期或内容改变，请重新预览。', 'CONFLICT', 409);
     const result = store.restore(input);
+    jobRevision = randomUUID();
     if (input.preferences) {
       const preferences = practice ? Object.fromEntries(practicePreferences.filter(key => Object.hasOwn(input.preferences, key)).map(key => [key, input.preferences[key]])) : { ...input.preferences };
       delete preferences.vaultDir; delete preferences.dataDir;
@@ -669,7 +700,8 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   recoverJobs();
   const chatgpt = createChatgptBridge({ getStore: () => store, settings, search: tracked(search), getNote, related });
   return { get store(){return store;}, get processing(){return processing;}, get hasPendingOperations(){return processing||activeOperations>0||pausing;}, chatgpt, learningNow, settings, updateSettings, getPrompts, updatePrompts, usage, usageReport, updateUsageSettings, ai, importItems, processNote, listNotes, publicNote, publicJob, library, readPublicNote, noteEvidence, linksPreview, syncLinks, getNote, editNote, extractNote, promote, confirmNote, merge, search:tracked(search), today, planAction, startStudy, session, answerStudy, hintStudy, confirmStudy, finishStudy, mistakeAction, topics, createTopic, updateTopic, topicAction, recommendations, recommendationAction, requestRelations, relationReview, relationAction, related, ask:tracked(ask), updateDraft, propose, proposalAction, queue, runJobs, pauseJobs, jobAction, tick, demo, diagnostics, backup, restore,
-    bootstrap(){return{settings:settings(),stats:{notes:store.list().filter(n=>!n.meta.excerptOnly).length,sources:store.list().filter(n=>n.kind==='source'&&!n.meta.excerptOnly).length,knowledge:store.list().filter(n=>n.kind==='knowledge').length,pending:store.records('jobs').filter(j=>['waiting','failed'].includes(j.state)).length},today:today(),notes:listNotes().filter(n=>!n.meta.excerptOnly).map(publicNote),jobs:store.records('jobs').map(publicJob),conflicts:store.conflicts,capabilities:{offline:true,model:settings().ai.enabled,embedding:settings().embedding.enabled,search:settings().search.enabled}};},
+    jobStatuses,
+    bootstrap(){return{settings:settings(),stats:{notes:store.list().filter(n=>!n.meta.excerptOnly).length,sources:store.list().filter(n=>n.kind==='source'&&!n.meta.excerptOnly).length,knowledge:store.list().filter(n=>n.kind==='knowledge').length,pending:store.records('jobs').filter(j=>['waiting','failed'].includes(j.state)).length},today:today(),notes:listNotes().filter(n=>!n.meta.excerptOnly).map(publicNote),jobs:store.records('jobs').map(publicJob),jobRevision,jobSnapshot:++jobSnapshot,conflicts:store.conflicts,capabilities:{offline:true,model:settings().ai.enabled,embedding:settings().embedding.enabled,search:settings().search.enabled}};},
     async close(){stopped=true;if(practice)await pauseJobs();else{controller?.abort();while(processing||activeOperations)await new Promise(resolve=>setTimeout(resolve,20));}store.close();}
   };
 }

@@ -25,6 +25,7 @@ export function getStepProgress(state, step) {
 
 export function createOnboarding(adapter) {
   let current = null;
+  let proofVersion = 0;
   let selected = savedStep() || "";
   let visible = false;
   let working = false;
@@ -62,7 +63,7 @@ export function createOnboarding(adapter) {
   const inPractice = () => Boolean(api.getContext().practiceId);
   const busy = () => working || Boolean(current?.busy) || api.getContext().pending > 0;
   const stateBody = extra => ({ practiceId: current?.practiceId || api.getContext().practiceId, ...extra });
-  function adopt(value) { current = value?.onboarding || value; if (!selected) selected = current?.currentStepId || flatSteps[0]?.id; }
+  function adopt(value) { current = value?.onboarding || value; proofVersion++; if (!selected) selected = current?.currentStepId || flatSteps[0]?.id; }
   function clearHighlight() { highlightPulse?.cancel(); highlightPulse = null; highlight?.classList.remove("tour-target"); highlight = null; restoreTarget?.(); restoreTarget = null; }
   function placePanel() {
     // Keep the floating window outside the drawer's transformed scroll container.
@@ -130,15 +131,22 @@ export function createOnboarding(adapter) {
   }
   async function refreshProof() {
     if (!current?.practiceId || refreshing || disposed) return;
+    const practiceId = current.practiceId, context = api.getContext();
+    let version = proofVersion;
+    const stillCurrent = () => !disposed && proofVersion === version && current?.practiceId === practiceId
+      && api.getContext().practiceId === context.practiceId && api.getContext().version === context.version;
     refreshing = true;
     try {
-      adopt(await api.onboarding("state", stateBody({})));
+      const proof = await api.onboarding("state", stateBody({}), { background: true });
+      if (!stillCurrent()) return;
+      adopt(proof);
+      version = proofVersion;
       if (checkErrorStepId === step()?.id && getStepProgress(current, step()).complete) {
         errorText = ""; checkErrorStepId = "";
       }
       render();
     }
-    catch (error) { errorText = error.message; checkErrorStepId = ""; compact = false; render(); }
+    catch (error) { if (stillCurrent() && error.code !== "STALE_CONTEXT") { errorText = error.message; checkErrorStepId = ""; compact = false; render(); } }
     finally { refreshing = false; }
   }
   async function switchContext(id, destination) {
@@ -287,6 +295,13 @@ export function createOnboarding(adapter) {
     content.append(choices, el("div", { class: "onboarding-step-head" }, [el("h3", { text: active.title }), badge(progress.label, progress.complete ? "good" : "neutral")]),
       el("p", { class: "onboarding-instruction", text: active.instruction || active.description || "" }));
     if (active.why) content.append(el("p", { class: "fine-print", text: active.why }));
+    if (["process-done", "research-done"].includes(active.check)) {
+      const processing = adapter.processStatus?.(current?.roles?.[active.noteRole]);
+      if (processing?.active) content.append(el("div", { class: "process-status onboarding-process-status", role: "status", ariaLive: "polite" }, [
+        el("span", { class: "spinner process-spinner", ariaHidden: "true" }), el("span", { text: processing.message }),
+      ]));
+      else if (processing && ["waiting", "failed", "cancelled"].includes(processing.state)) content.append(el("p", { class: "notice", role: "status", text: processing.message }));
+    }
     if (active.expected) content.append(el("div", { class: "onboarding-expected" }, [el("strong", { text: "完成后应看到" }), el("p", { text: active.expected })]));
     if (["review-clock-due", "review-finish"].includes(active.id) && !progress.complete) content.append(el("div", { class: "onboarding-expected" }, [
       el("p", { text: "若反馈存在争议，本轮只保留记录，不会创建或更新复习安排。可以重新练习这条知识，核对材料并提交新回答；收到明确反馈并结束后，再继续复习步骤。" }),
@@ -386,7 +401,7 @@ export function createOnboarding(adapter) {
       if (narrow !== narrowScreen()) { narrow = narrowScreen(); if (visible) render(); }
     });
     window.addEventListener("zhixu:request", event => {
-      if (!current?.practiceId || event.detail?.path?.startsWith("/api/onboarding/")) return;
+      if (!current?.practiceId || event.detail?.background || event.detail?.path?.startsWith("/api/onboarding/")) return;
       if (scheduled) window.clearTimeout(scheduled);
       scheduled = window.setTimeout(refreshProof, 200);
     });

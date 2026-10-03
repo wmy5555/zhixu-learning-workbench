@@ -102,6 +102,60 @@ async function webSession(app) {
   };
 }
 
+test('process status polling requires a session, omits task bodies and changes revision after backup restoration', async t => {
+  const app = await startApp(t);
+  assert.equal((await request(app.baseUrl, '/api/jobs?view=status')).status, 401);
+  const session = await webSession(app);
+  const note = app.service.store.create({ kind: 'source', title: '合成状态原文', body: '不应随状态返回的正文', meta: { privacy: 'local', presetCase: 'synthetic-source' } });
+  const job = app.service.queue('process', { noteId: note.id, research: true, extracted: 'large-synthetic-content'.repeat(5000) }, 'synthetic-status');
+  app.service.queue('index', {}, 'synthetic-index');
+  const simulated = app.service.queue('process', { noteId: note.id, presetCase: 'synthetic-job' }, 'synthetic-preset');
+  const backup = app.service.backup();
+  const first = await request(app.baseUrl, '/api/jobs?view=status', { headers: session.headers });
+  assert.equal(first.status, 200);
+  assert.equal(first.body.jobs.length, 2);
+  const status = first.body.jobs.find(value => value.id === job.id);
+  assert.equal(status.noteId, note.id); assert.equal(status.title, note.title); assert.equal(status.research, true);
+  assert.equal(status.presetCase, null, 'only the job itself may be marked as simulated');
+  assert.equal(first.body.jobs.find(value => value.id === simulated.id).presetCase, 'synthetic-job');
+  assert.equal(first.text.includes('extracted'), false); assert.equal(first.text.includes('large-synthetic-content'), false);
+  assert.equal(first.text.includes('不应随状态返回的正文'), false); assert.equal(first.text.includes('payload'), false);
+  const bootstrap = app.service.bootstrap();
+  assert.equal(bootstrap.jobRevision, first.body.jobRevision);
+  assert.ok(bootstrap.jobSnapshot > first.body.jobSnapshot);
+  app.service.store.put('jobs', job.id, { ...job, state: 'done' });
+  app.service.store.put('jobs', simulated.id, { ...simulated, state: 'waiting', code: 'RESEARCH_INCOMPLETE' });
+  const partial = await request(app.baseUrl, '/api/jobs?view=status', { headers: session.headers });
+  assert.equal(partial.body.jobs.find(value => value.id === simulated.id).code, 'RESEARCH_INCOMPLETE');
+  const preview = app.service.restore({ backup });
+  app.service.restore({ backup, preview: false, token: preview.token });
+  const restored = app.service.jobStatuses();
+  assert.notEqual(restored.jobRevision, first.body.jobRevision);
+  assert.equal(restored.jobs.find(value => value.id === job.id).state, 'queued');
+  const practice = await request(app.baseUrl, '/api/onboarding/start', { method: 'POST', headers: session.headers, body: {} });
+  const practiceStatus = await request(app.baseUrl, `/api/practice/${practice.body.practiceId}/jobs?view=status`, { headers: session.headers });
+  assert.equal(practiceStatus.status, 200);
+  assert.notEqual(practiceStatus.body.jobRevision, restored.jobRevision);
+  assert.equal(practiceStatus.body.jobs.some(value => value.id === job.id), false);
+});
+
+test('HTTP repeated decomposition shares pending and completed jobs and orders the returned job before later snapshots', async t => {
+  const app = await startApp(t), session = await webSession(app);
+  const source = app.service.store.create({ kind: 'source', title: 'HTTP 合成去重', body: '本机测试原文', meta: { privacy: 'local' } });
+  const url = `/api/notes/${source.id}/process`;
+  const before = app.service.jobStatuses();
+  const submit = await request(app.baseUrl, url, { method: 'POST', headers: session.headers, body: {} });
+  assert.equal(submit.status, 200); assert.equal(submit.body.reused, false);
+  assert.equal(submit.body.jobRevision, before.jobRevision); assert.ok(submit.body.jobSnapshot > before.jobSnapshot);
+  const repeat = await request(app.baseUrl, url, { method: 'POST', headers: session.headers, body: { research: true } });
+  assert.equal(repeat.body.id, submit.body.id); assert.equal(repeat.body.reused, true);
+  const saved = app.service.store.get('jobs', submit.body.id);
+  app.service.store.put('jobs', saved.id, { ...saved, state: 'done', payload: { ...saved.payload, extracted: { candidates: [{ title: '合成候选', body: '已有拆解正文', claims: [] }] } } });
+  const completed = await request(app.baseUrl, url, { method: 'POST', headers: session.headers, body: {} });
+  assert.equal(completed.body.id, saved.id); assert.equal(completed.body.state, 'done'); assert.equal(completed.body.reused, true);
+  assert.equal(app.service.store.records('jobs').filter(job => job.type === 'process').length, 1);
+});
+
 test('usage routes require a session and CSRF, use complete shared ledger and protect practice writes', async t => {
   const app = await startApp(t);
   const denied = await request(app.baseUrl, '/api/usage'); assert.equal(denied.status, 401);
@@ -214,7 +268,7 @@ test('unknown state-changing actions are rejected and leave the job unchanged', 
   assert.equal(app.service.store.get('jobs', job.id).state, 'queued');
 });
 
-test('HTTP processing defaults to extraction and keeps explicit research in a separate task', async t => {
+test('HTTP processing shares in-flight extraction and permits separate explicit research after completion', async t => {
   const app = await startApp(t);
   const session = await webSession(app);
   const source = app.service.importItems({ items: [{ title: '可选核验', body: '接口测试正文' }] }).notes[0];
@@ -222,6 +276,11 @@ test('HTTP processing defaults to extraction and keeps explicit research in a se
   const plain = await request(app.baseUrl, endpoint, { method: 'POST', headers: session.headers, body: {} });
   assert.equal(plain.status, 200);
   assert.equal(plain.body.payload.research, false);
+  const pending = await request(app.baseUrl, endpoint, { method: 'POST', headers: session.headers, body: { research: true, reuseExtracted: true } });
+  assert.equal(pending.body.id, plain.body.id);
+  assert.equal(pending.body.payload.research, false, 'a second entry cannot silently expand the pending request');
+  const saved = app.service.store.get('jobs', plain.body.id);
+  app.service.store.put('jobs', saved.id, { ...saved, state: 'done', payload: { ...saved.payload, extracted: { candidates: [{ title: '合成候选', body: '已有合成拆解', claims: [] }] } } });
   const explicit = await request(app.baseUrl, endpoint, { method: 'POST', headers: session.headers, body: { research: true, reuseExtracted: true } });
   assert.equal(explicit.status, 200);
   assert.equal(explicit.body.payload.research, true);

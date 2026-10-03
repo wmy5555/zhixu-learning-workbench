@@ -55,6 +55,60 @@ test('switching libraries is blocked while a request is in flight and becomes po
   assert.equal(client.api.getContext().practiceId, '');
 });
 
+test('background job status reads allow a library switch and discard old results while writes still block', async () => {
+  let finish;
+  const calls = [];
+  const client = apiBrowser((path, options) => { calls.push({ path, method: options.method }); return new Promise(resolve => { finish = resolve; }); });
+  client.api.setContext('practice-one');
+  const pending = client.api.jobStatuses();
+  assert.equal(client.api.getContext().pending, 0);
+  client.api.setContext('');
+  finish(response({ jobs: [{ id: 'old', state: 'done' }] }));
+  await assert.rejects(pending, error => error.code === 'STALE_CONTEXT');
+  assert.equal(calls[0].path, '/api/practice/practice-one/jobs?view=status');
+  const session = client.startSession(); finish(response({ csrf: 'synthetic-csrf' })); await session;
+  const write = client.request('/api/jobs?view=status', { method: 'POST', body: {} });
+  assert.equal(client.api.getContext().pending, 1);
+  assert.throws(() => client.api.setContext('practice-two'), error => error.code === 'CONTEXT_BUSY');
+  finish(response({ ok: true })); await write;
+  assert.equal(client.api.getContext().pending, 0);
+});
+
+test('background source reads allow a library switch and cannot exempt foreground reads or writes', async () => {
+  let finish;
+  const client = apiBrowser(() => new Promise(resolve => { finish = resolve; }));
+  client.api.setContext('practice-one');
+  const background = client.api.note('synthetic-source', { background: true });
+  assert.equal(client.api.getContext().pending, 0);
+  client.api.setContext('');
+  finish(response({ id: 'old-source' }));
+  await assert.rejects(background, error => error.code === 'STALE_CONTEXT');
+  const foreground = client.api.note('synthetic-source');
+  assert.throws(() => client.api.setContext('practice-one'), error => error.code === 'CONTEXT_BUSY');
+  finish(response({})); await foreground;
+  const session = client.startSession(); finish(response({ csrf: 'synthetic-csrf' })); await session;
+  const write = client.request('/api/notes/synthetic-source', { method: 'PUT', background: true, body: {} });
+  assert.throws(() => client.api.setContext('practice-one'), error => error.code === 'CONTEXT_BUSY');
+  finish(response({})); await write;
+});
+
+test('background onboarding proof reads do not block switching and cannot exempt writes or foreground reads', async () => {
+  let finish;
+  const client = apiBrowser(() => new Promise(resolve => { finish = resolve; }));
+  const proof = client.api.onboarding('state', { practiceId: 'practice-one' }, { background: true });
+  assert.equal(client.api.getContext().pending, 0);
+  client.api.setContext('practice-one');
+  finish(response({ practiceId: 'old-practice' }));
+  await assert.rejects(proof, error => error.code === 'STALE_CONTEXT');
+  const foreground = client.api.onboarding('state');
+  assert.throws(() => client.api.setContext(''), error => error.code === 'CONTEXT_BUSY');
+  finish(response({})); await foreground;
+  const session = client.startSession(); finish(response({ csrf: 'synthetic-csrf' })); await session;
+  const write = client.api.onboarding('pause', {}, { background: true });
+  assert.throws(() => client.api.setContext(''), error => error.code === 'CONTEXT_BUSY');
+  finish(response({})); await write;
+});
+
 class Element {
   constructor(tag = 'div') {
     this.tagName = tag.toUpperCase(); this.children = []; this.events = {}; this.dataset = {}; this.attributes = {};
@@ -93,13 +147,13 @@ async function tutorialBrowser({ modelReady = true, exists = true, narrow = fals
   const roots = { '.workspace': workspace, '#main': main, '#drawer': drawer, '#drawer-body': drawerBody, '#onboarding-launcher': launcher, '#toast-region': toasts };
   const document = { body, get activeElement() { return Element.activeElement; }, createElement: tag => new Element(tag), createTextNode: text => { const node = new Element('text'); node.textContent = text; return node; }, querySelector: selector => roots[selector] || null, querySelectorAll: selector => selector === '[data-tour]' ? descend(body).filter(node => node.dataset.tour) : [] };
   const requests = [], navigations = [], contexts = [], intervals = [], windowEvents = {};
-  let practiceId = '', state = { practiceId: exists ? 'practice-one' : null, status: exists ? 'paused' : 'not_started', modelReady, currentStepId, progress, roles: {}, clock: { now: '2026-09-30T08:00:00Z' }, busy: false };
+  let practiceId = '', version = 0, state = { practiceId: exists ? 'practice-one' : null, status: exists ? 'paused' : 'not_started', modelReady, currentStepId, progress, roles: {}, clock: { now: '2026-09-30T08:00:00Z' }, busy: false };
   const api = {
-    getContext: () => ({ practiceId, pending: 0 }),
-    setContext: id => { practiceId = id; contexts.push(id); },
-    onboarding: async (action, data = {}) => {
-      requests.push({ action, data: structuredClone(data) });
-      if (action === 'state' && stateRead) await stateRead();
+    getContext: () => ({ practiceId, version, pending: 0 }),
+    setContext: id => { if (practiceId !== id) version++; practiceId = id; contexts.push(id); },
+    onboarding: async (action, data = {}, options = {}) => {
+      requests.push({ action, data: structuredClone(data), options: structuredClone(options) });
+      if (action === 'state' && stateRead) { const read = await stateRead(); if (read) return structuredClone(read); }
       if (action === 'advance' && advance) await advance(data, state);
       if (action === 'reset' && resetRequest) await resetRequest();
       if (action === 'start' || action === 'resume') state = { ...state, practiceId: 'practice-one', status: 'active' };
@@ -117,10 +171,58 @@ async function tutorialBrowser({ modelReady = true, exists = true, narrow = fals
   });
   const stripped = onboardingSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '');
   vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + stripped + '\nthis.make = createOnboarding; this.progress = getStepProgress;', context);
-  const adapter = { navigate: async step => { navigations.push(step.id || step.view); }, contextChanged: async () => {}, refresh: async () => {}, fillSample: async () => {} };
+  const adapter = { navigate: async step => { navigations.push(step.id || step.view); }, contextChanged: async () => {}, refresh: async () => {}, fillSample: async () => {}, processStatus: () => null };
   const tutorial = context.make(adapter); await tutorial.init();
   return { tutorial, adapter, body, workspace, main, drawer, drawerBody, toasts, requests, navigations, contexts, intervals, document, setNarrow(value) { narrow = value; windowEvents.resize?.(); }, progress: context.progress, get state() { return state; }, setState: value => { state = { ...state, ...value }; } };
 }
+
+test('the AI decomposition step shows waiting progress without changing evidence or notifying preset completion', async () => {
+  const ui = await tutorialBrowser({ currentStepId: 'process-ai' });
+  ui.setState({ roles: { capturedSource: 'synthetic-source' } });
+  let status = { state: 'queued', active: true, message: 'AI 拆解已排队，请等待…' };
+  ui.adapter.processStatus = noteId => { assert.equal(noteId, 'synthetic-source'); return status; };
+  await ui.tutorial.open();
+  assert.ok(descend(ui.body).some(node => node.classList.contains('process-spinner')));
+  assert.match(ui.body.textContent, /已排队/);
+  assert.equal(ui.state.progress['process-ai'], undefined);
+  for (const state of ['waiting', 'failed', 'cancelled', 'done']) {
+    status = { state, active: false, message: '合成任务状态：' + state }; await ui.tutorial.refresh();
+    assert.ok(!descend(ui.body).some(node => node.classList.contains('process-spinner')));
+    assert.equal(ui.state.progress['process-ai'], undefined);
+  }
+  assert.equal(ui.toasts.children.length, 0, 'the global task monitor owns completion notifications');
+  ui.tutorial.dispose();
+});
+
+test('a delayed background proof cannot overwrite a practice pause or report an obsolete error', async () => {
+  let release, delayed = false;
+  const ui = await tutorialBrowser({ stateRead: () => delayed ? new Promise(resolve => { release = resolve; }) : undefined });
+  await ui.tutorial.open();
+  const stale = structuredClone(ui.state);
+  delayed = true;
+  const refresh = ui.tutorial.refresh();
+  assert.equal(ui.requests.at(-1).options.background, true);
+  await click(findButton(ui.body, '暂停并回正式库'));
+  release(stale); await refresh;
+  assert.equal(ui.tutorial.state.status, 'paused');
+  assert.equal(ui.contexts.at(-1), '');
+  ui.tutorial.dispose();
+});
+
+test('a delayed background proof cannot roll back a newer checkpoint in the same practice', async () => {
+  let release, delayed = false;
+  const ui = await tutorialBrowser({ stateRead: () => delayed ? new Promise(resolve => { release = resolve; }) : undefined });
+  await ui.tutorial.open();
+  const stale = structuredClone(ui.state);
+  delayed = true;
+  const refresh = ui.tutorial.refresh();
+  await click(findButton(ui.body, '我已阅读'));
+  const first = flatSteps[0], next = flatSteps[1];
+  release(stale); await refresh;
+  assert.equal(ui.tutorial.state.progress[first.id].status, 'demonstrated');
+  assert.equal(ui.tutorial.state.currentStepId, next.id);
+  ui.tutorial.dispose();
+});
 
 test('reading confirmation waits for saving, then navigates exactly one step without completing the next action', async () => {
   let release;

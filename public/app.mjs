@@ -1,4 +1,5 @@
 import { api, ApiError, startSession } from "./api.mjs";
+import { createProcessFeedback } from "./process-feedback.mjs";
 import { initSidebar } from "./sidebar.mjs";
 import {
   el, clear, button, badge, emptyState, formatDate, truncate, safeExternalUrl,
@@ -53,6 +54,15 @@ const state = {
   restoreToken: "",
 };
 let onboarding = null;
+const processFeedback = createProcessFeedback({
+  getContext: () => api.getContext(), readJobs: () => api.jobStatuses(), notify: toast,
+  onChange: changed => {
+    refs.drawerBody.querySelectorAll(".process-controls").forEach(updateProcessControls);
+    if (changed.length) onboarding?.refresh();
+    const sourceId = refs.drawerBody.querySelector(".source-group-drawer")?.dataset.sourceId;
+    if (sourceId && changed.some(job => job.noteId === sourceId && ["done", "waiting", "failed", "cancelled"].includes(job.state))) refreshCompletedSource(sourceId).catch(handleError);
+  },
+});
 function tour(node, id) { node.dataset.tour = id; return node; }
 function recordTourEvent(event) {
   const practiceId = api.getContext?.().practiceId;
@@ -139,7 +149,19 @@ function closeDrawer() {
 
 async function refreshBootstrap() {
   state.bootstrap = await api.bootstrap();
+  processFeedback.observe(state.bootstrap);
   return state.bootstrap;
+}
+
+async function refreshCompletedSource(sourceId) {
+  const context = api.getContext(), scrollTop = refs.drawerBody.scrollTop;
+  let source;
+  try { source = await api.note(sourceId, { background: true }); }
+  catch (error) { if (api.getContext().version === context.version && error.code !== "STALE_CONTEXT") throw error; return; }
+  if (api.getContext().version !== context.version || !refs.drawer.classList.contains("is-open")
+    || refs.drawerBody.querySelector(".source-group-drawer")?.dataset.sourceId !== sourceId) return;
+  renderSourceGroupDrawer(source);
+  refs.drawerBody.scrollTop = scrollTop;
 }
 
 async function navigate(view, options = {}) {
@@ -569,7 +591,7 @@ function renderSourceGroupDrawer(source) {
   const jobs = asArray(source.jobs);
   refs.drawerTitle.textContent = source.title || "未命名原始资料";
   refs.drawerEyebrow.textContent = "原始资料与拆解";
-  const content = el("div", { class: "page-stack source-group-drawer" });
+  const content = el("div", { class: "page-stack source-group-drawer", dataset: { sourceId: source.id } });
   const headActions = el("div", { class: "form-actions" }, [
     button("编辑原始资料", { kind: "primary", onClick: () => renderNoteEditor(source, { returnToSourceId: source.id }) }),
     button("查看版本", { onClick: () => renderHistory(source, { returnToSourceId: source.id }) }),
@@ -809,25 +831,44 @@ async function deleteNote(note, returnToSourceId = "") {
 
 function processControls(note, returnToSourceId = "") {
   const research = el("input", { type: "checkbox", name: "research" });
-  return el("div", { class: "page-stack", dataset: { tour: "note-process" } }, [
+  const controls = el("div", { class: "page-stack process-controls", dataset: { tour: "note-process", processNoteId: note.id } }, [
     el("label", { class: "check-field" }, [research, el("span", { text: "拆解时联网检验正确性并寻找反例（可选）" })]),
     el("div", { class: "form-actions" }, [
-      button("提交 AI 拆解", { kind: "primary", onClick: () => processNote(note, returnToSourceId, { research: research.checked }) }),
-      button("联网检验并找反例", { onClick: () => processNote(note, returnToSourceId, { research: true, reuseExtracted: true }) }),
+      button("提交 AI 拆解", { kind: "primary process-submit", onClick: () => processNote(note, returnToSourceId, { research: research.checked }) }),
+      button("联网检验并找反例", { kind: "quiet process-research", onClick: () => processNote(note, returnToSourceId, { research: true, reuseExtracted: true }) }),
     ]),
+    el("div", { class: "process-status", role: "status", ariaLive: "polite", hidden: true }),
     el("p", { class: "muted", text: "默认只拆解。生成后可手动联网核验整份资料；已有拆解会复用，人工编辑内容将生成修订建议。" }),
   ]);
+  updateProcessControls(controls);
+  return controls;
+}
+
+function updateProcessControls(controls) {
+  const status = processFeedback.status(controls.dataset.processNoteId);
+  const pending = Boolean(status?.active);
+  controls.querySelector(".process-submit").disabled = pending;
+  controls.querySelector(".process-submit").textContent = pending ? "AI 拆解处理中…" : "提交 AI 拆解";
+  controls.querySelector(".process-research").disabled = pending;
+  controls.querySelector("input").disabled = pending;
+  const indicator = controls.querySelector(".process-status");
+  indicator.hidden = !status;
+  clear(indicator).append(...[pending ? el("span", { class: "spinner process-spinner", ariaHidden: "true" }) : null,
+    el("span", { text: status?.message || "" })].filter(Boolean));
 }
 
 async function processNote(note, returnToSourceId = "", options = {}) {
+  if (!processFeedback.begin(note.id)) return;
   try {
     const job = await api.processNote(note.id, options);
+    processFeedback.observe({ jobs: [job], notes: [note], partial: true, jobRevision: job.jobRevision, jobSnapshot: job.jobSnapshot });
     const waitingForQuota = isQuotaWaitMessage(job.error);
-    toast(waitingForQuota || job.state === "waiting" ? "任务已保存，待条件满足后继续" : job.state === "failed" ? "任务已记录失败原因" : (options.research ? "已提交联网核验任务" : "已提交 AI 拆解任务"), job.state === "failed" && !waitingForQuota ? "error" : "success");
+    toast(waitingForQuota || job.state === "waiting" ? "任务已保存，待条件满足后继续" : job.state === "failed" ? "任务已记录失败原因，请到「系统 → 任务」手动重试" : job.state === "cancelled" ? "已有任务已取消，请到「系统 → 任务」手动重试" : job.reused && job.state === "done" ? "已复用已有拆解结果，没有重复调用拆解模型" : job.reused ? "正在复用同一个拆解任务，请等待" : (options.research ? "已提交联网核验任务" : "已提交 AI 拆解任务"), job.state === "failed" && !waitingForQuota ? "error" : "success");
     await refreshBootstrap();
     if (returnToSourceId || note.kind === "source") await refreshSourceGroup(returnToSourceId || note.id);
     else renderNoteDrawer(note);
   } catch (error) { handleError(error); }
+  finally { processFeedback.end(note.id); }
 }
 
 function manualExtract(source, returnToSourceId = "") {
@@ -2243,6 +2284,7 @@ async function init() {
     if (!onboarding) {
       const { createOnboarding } = await import("./onboarding.mjs");
       onboarding = createOnboarding({
+        processStatus: noteId => processFeedback.status(noteId),
         revealTarget: sidebarNavigation.revealTarget,
         navigate: navigateTutorial,
         fillSample: fillTutorialSample,
@@ -2262,6 +2304,7 @@ async function init() {
     }
     await refreshBootstrap();
     await renderCurrent();
+    processFeedback.start();
   } catch (error) {
     renderFailure(error, init);
   }

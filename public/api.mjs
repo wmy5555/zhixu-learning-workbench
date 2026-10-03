@@ -66,13 +66,17 @@ export async function request(path, options = {}) {
   const id = options.scope === "main" ? "" : practiceId;
   const target = id && path.startsWith("/api/") && !path.startsWith("/api/onboarding/")
     ? `/api/practice/${encodeURIComponent(id)}${path.slice(4)}` : path;
-  inFlight++;
+  // Only status polls and explicitly background proof/source reads may outlive a library switch.
+  const backgroundRead = (options.method || "GET") === "GET" && (path === "/api/jobs?view=status"
+    || options.background === true && (path.split("?")[0] === "/api/onboarding/state" || /^\/api\/notes\/[^/?]+$/.test(path)));
+  const blocking = !backgroundRead;
+  if (blocking) inFlight++;
   try {
     const result = await performRequest(target, options);
-    if (options.scope !== "main" && version !== contextVersion) throw new ApiError("知识库已切换，已忽略旧页面的返回结果。", { code: "STALE_CONTEXT" });
-    notifyRequest({ path, method: options.method || "GET", practiceId: id, ok: true });
+    if ((options.scope !== "main" || backgroundRead) && version !== contextVersion) throw new ApiError("知识库已切换，已忽略旧页面的返回结果。", { code: "STALE_CONTEXT" });
+    notifyRequest({ path, method: options.method || "GET", practiceId: id, ok: true, background: !blocking });
     return result;
-  } finally { inFlight--; }
+  } finally { if (blocking) inFlight--; }
 }
 
 async function performRequest(path, options = {}) {
@@ -114,13 +118,13 @@ async function performRequest(path, options = {}) {
 export const api = {
   getContext: getApiContext,
   setContext: setApiContext,
-  onboarding: (action = "state", body = {}) => request(`/api/onboarding/${action}${action === "state" ? toQuery(body) : ""}`, action === "state" ? { scope: "main" } : { method: "POST", body, scope: "main" }),
+  onboarding: (action = "state", body = {}, options = {}) => request(`/api/onboarding/${action}${action === "state" ? toQuery(body) : ""}`, action === "state" ? { scope: "main", background: options.background === true } : { method: "POST", body, scope: "main" }),
   mainSettings: () => request("/api/settings", { scope: "main" }),
   updateMainSettings: (body) => request("/api/settings", { method: "PUT", body, scope: "main" }),
   bootstrap: () => request("/api/bootstrap"),
   library: (filters) => request(`/api/library${toQuery(filters)}`),
   notes: (filters) => request(`/api/notes${toQuery(filters)}`),
-  note: (id) => request(`/api/notes/${encodeURIComponent(id)}`),
+  note: (id, options = {}) => request(`/api/notes/${encodeURIComponent(id)}`, { background: options.background === true }),
   evidence: (id) => request(`/api/notes/${encodeURIComponent(id)}/evidence`),
   linksPreview: (id) => request(`/api/notes/${encodeURIComponent(id)}/links-preview`),
   syncLinks: (id, body) => request(`/api/notes/${encodeURIComponent(id)}/links-sync`, { method: "POST", body }),
@@ -161,6 +165,7 @@ export const api = {
   relationAction: (id, body) => request(`/api/relations/${encodeURIComponent(id)}/action`, { method: "POST", body }),
   discover: (body = {}) => request("/api/discover", { method: "POST", body }),
   jobs: () => request("/api/jobs"),
+  jobStatuses: () => request("/api/jobs?view=status"),
   jobAction: (id, body) => request(`/api/jobs/${encodeURIComponent(id)}/action`, { method: "POST", body }),
   settings: () => request("/api/settings"),
   updateSettings: (body) => request("/api/settings", { method: "PUT", body }),
