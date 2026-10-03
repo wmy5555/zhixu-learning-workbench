@@ -25,6 +25,7 @@ export function getStepProgress(state, step) {
 
 export function createOnboarding(adapter) {
   let current = null;
+  let proofVersion = 0;
   let selected = savedStep() || "";
   let visible = false;
   let working = false;
@@ -62,7 +63,7 @@ export function createOnboarding(adapter) {
   const inPractice = () => Boolean(api.getContext().practiceId);
   const busy = () => working || Boolean(current?.busy) || api.getContext().pending > 0;
   const stateBody = extra => ({ practiceId: current?.practiceId || api.getContext().practiceId, ...extra });
-  function adopt(value) { current = value?.onboarding || value; if (!selected) selected = current?.currentStepId || flatSteps[0]?.id; }
+  function adopt(value) { current = value?.onboarding || value; proofVersion++; if (!selected) selected = current?.currentStepId || flatSteps[0]?.id; }
   function clearHighlight() { highlightPulse?.cancel(); highlightPulse = null; highlight?.classList.remove("tour-target"); highlight = null; restoreTarget?.(); restoreTarget = null; }
   function placePanel() {
     // Keep the floating window outside the drawer's transformed scroll container.
@@ -130,15 +131,22 @@ export function createOnboarding(adapter) {
   }
   async function refreshProof() {
     if (!current?.practiceId || refreshing || disposed) return;
+    const practiceId = current.practiceId, context = api.getContext();
+    let version = proofVersion;
+    const stillCurrent = () => !disposed && proofVersion === version && current?.practiceId === practiceId
+      && api.getContext().practiceId === context.practiceId && api.getContext().version === context.version;
     refreshing = true;
     try {
-      adopt(await api.onboarding("state", stateBody({})));
+      const proof = await api.onboarding("state", stateBody({}), { background: true });
+      if (!stillCurrent()) return;
+      adopt(proof);
+      version = proofVersion;
       if (checkErrorStepId === step()?.id && getStepProgress(current, step()).complete) {
         errorText = ""; checkErrorStepId = "";
       }
       render();
     }
-    catch (error) { errorText = error.message; checkErrorStepId = ""; compact = false; render(); }
+    catch (error) { if (stillCurrent() && error.code !== "STALE_CONTEXT") { errorText = error.message; checkErrorStepId = ""; compact = false; render(); } }
     finally { refreshing = false; }
   }
   async function switchContext(id, destination) {

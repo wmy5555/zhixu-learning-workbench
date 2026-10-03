@@ -116,6 +116,20 @@ test('AI decomposition shows pending progress, prevents repeat submission, and r
   assert.equal(findButton(currentControls, '提交 AI 拆解').disabled, false);
 });
 
+test('a successful process submit remains locked when the following bootstrap refresh fails', async () => {
+  let calls = 0;
+  const source = { id: 'synthetic-source', kind: 'source', title: '合成原文', meta: {} };
+  const job = { id: 'accepted', type: 'process', state: 'queued', payload: { noteId: source.id }, jobRevision: 'same', jobSnapshot: 2 };
+  const app = browser({ processNote: async () => { calls++; return job; }, bootstrap: async () => { throw new Error('合成刷新失败'); } });
+  const controls = app.processControls(source); app.refs.drawerBody.replaceChildren(controls);
+  await click(findButton(controls, '提交 AI 拆解'));
+  assert.equal(findButton(controls, 'AI 拆解处理中…').disabled, true);
+  assert.equal(findButton(controls, '联网检验并找反例').disabled, true);
+  assert.ok(controls.querySelector('.process-spinner'));
+  await click(findButton(controls, '联网检验并找反例'));
+  assert.equal(calls, 1, 'even direct invocation cannot submit a second variant after refresh failure');
+});
+
 test('learning goals preserve saved depth values and update the concrete requirement when selected', () => {
   const app = browser();
   const goals = [

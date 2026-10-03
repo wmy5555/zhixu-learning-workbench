@@ -26,7 +26,7 @@ export function createProcessFeedback({ getContext, readJobs, notify, onChange =
       state.snapshot = snapshot.jobSnapshot;
     }
     for (const note of list(snapshot.notes)) state.notes.set(note.id, { title: note.title });
-    if (Array.isArray(snapshot.jobs)) {
+    if (Array.isArray(snapshot.jobs) && snapshot.partial !== true) {
       const ids = new Set(snapshot.jobs.filter(job => job.type === 'process').map(job => job.id));
       for (const [id, record] of state.jobs) if (!ids.has(id)) { state.jobs.delete(id); changed.push({ ...record, state: 'removed' }); }
     }

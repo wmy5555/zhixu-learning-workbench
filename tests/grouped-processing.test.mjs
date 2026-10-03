@@ -37,6 +37,63 @@ function createSource(service, { title, body, excerptOnly = false }) {
   });
 }
 
+test('repeated submissions before, during and after completion call the extraction model once and keep one result set', async t => {
+  let calls = 0, release;
+  const candidates = ['一', '二'].map(label => ({ title: `合成候选${label}`, body: `合成正文${label}`, claims: [] }));
+  const ai = { generate: async () => { calls++; await new Promise(resolve => { release = resolve; }); return { text: JSON.stringify({ candidates }) }; } };
+  const { service } = await harness(t, ai);
+  const source = createSource(service, { title: '重复提交原文', body: '仅用于本机重复提交验证。' });
+  const first = service.processNote(source.id);
+  for (let i = 0; i < 20; i++) assert.equal(service.processNote(source.id, { research: i % 2 === 0 }).id, first.id);
+  const running = service.runJobs();
+  assert.equal(calls, 1);
+  for (let i = 0; i < 20; i++) assert.equal(service.processNote(source.id, { research: i % 2 === 0, reuseExtracted: true }).id, first.id);
+  release(); await running;
+  const ids = service.readPublicNote(source.id).children.map(note => note.id);
+  assert.equal(ids.length, 2);
+  for (let i = 0; i < 20; i++) {
+    const repeated = service.processNote(source.id);
+    assert.equal(repeated.id, first.id); assert.equal(repeated.state, 'done'); assert.equal(repeated.reused, true);
+  }
+  assert.equal(service.store.records('jobs').filter(job => job.type === 'process').length, 1);
+  assert.equal(calls, 1);
+  assert.deepEqual(service.readPublicNote(source.id).children.map(note => note.id), ids);
+  const restored = (await harness(t, ai)).service;
+  const backup = service.backup(), preview = restored.restore({ backup });
+  restored.restore({ backup, preview: false, token: preview.token });
+  assert.equal(restored.processNote(source.id).id, first.id);
+  assert.equal(calls, 1, 'a restored completed record still prevents another extraction request');
+  const researched = service.processNote(source.id, { research: true, reuseExtracted: true });
+  await service.runJobs(); // queued local relation tasks precede later processing
+  while (service.store.records('jobs').some(job => job.state === 'queued')) await service.runJobs();
+  assert.equal(service.store.get('jobs', researched.id).state, 'done');
+  assert.equal(calls, 1, 'explicit later research reuses the original model extraction');
+  assert.deepEqual(service.readPublicNote(source.id).children.map(note => note.id), ids);
+  assert.equal(service.processNote(source.id, { research: true }).id, researched.id);
+  const changed = service.editNote(source.id, { expectedHash: source.hash, body: '已经修改的另一版本原文。' });
+  const next = service.processNote(source.id);
+  assert.notEqual(next.id, first.id); assert.equal(next.payload.hash, changed.hash);
+  const processingChanged = service.runJobs(); release(); await processingChanged;
+  assert.equal(calls, 2, 'changed source content may legitimately trigger a new extraction');
+});
+
+test('failed submissions require an explicit retry and preset jobs cannot suppress real extraction', async t => {
+  let calls = 0;
+  const { service } = await harness(t, { generate: async () => { calls++; if (calls === 1) throw new Error('synthetic failure'); return { text: JSON.stringify({ candidates: [{ title: '真实调用桩结果', body: '合成正文', claims: [] }] }) }; } });
+  const source = createSource(service, { title: '失败与演示去重', body: '纯合成原文。' });
+  const preset = service.queue('process', { noteId: source.id, hash: source.hash, presetCase: 'synthetic', extracted: { candidates: [{ title: '预设候选', body: '预设正文', claims: [] }] } }, 'synthetic-preset');
+  service.store.put('jobs', preset.id, { ...preset, state: 'done' });
+  const real = service.processNote(source.id);
+  assert.notEqual(real.id, preset.id);
+  await service.runJobs();
+  for (let i = 0; i < 5; i++) assert.equal(service.processNote(source.id).id, real.id);
+  assert.equal(calls, 1, 'repeated submit must not silently retry a failed external call');
+  service.jobAction(real.id, { action: 'retry' }); await service.runJobs();
+  assert.equal(calls, 2);
+  assert.equal(service.store.get('jobs', real.id).state, 'done');
+  assert.equal(service.readPublicNote(source.id).children[0].title, '真实调用桩结果');
+});
+
 function createGeneratedKnowledge(service, {
   source,
   evidenceSource,

@@ -69,6 +69,21 @@ test('authoritative snapshots remove old jobs and backup restoration resets term
   assert.equal(ui.messages.length, 1, 'restored historical completion remains quiet');
 });
 
+test('a submitted job reply retains other jobs and rejects older full snapshots until current status arrives', () => {
+  const ui = monitor();
+  const other = job('other', 'running', { payload: { noteId: 'other-source' } });
+  ui.feedback.observe({ jobs: [other], jobRevision: 'same', jobSnapshot: 1 });
+  ui.feedback.begin('source');
+  ui.feedback.observe({ jobs: [job('accepted', 'queued')], partial: true, jobRevision: 'same', jobSnapshot: 3 });
+  ui.feedback.end('source');
+  assert.equal(ui.feedback.status('other-source').active, true);
+  ui.feedback.observe({ jobs: [other], jobRevision: 'same', jobSnapshot: 2 });
+  assert.equal(ui.feedback.status('source').active, true);
+  assert.equal(ui.feedback.begin('source'), false);
+  ui.feedback.observe({ jobs: [other, job('accepted', 'done')], jobRevision: 'same', jobSnapshot: 4 });
+  assert.equal(ui.messages.length, 1);
+});
+
 test('pending work blocks repeats; waiting and failure stop spinning, and a user retry can later complete', () => {
   const ui = monitor(); ui.feedback.observe({ jobs: [] });
   assert.equal(ui.feedback.begin('source'), true); assert.equal(ui.feedback.begin('source'), false);

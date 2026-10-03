@@ -1,5 +1,7 @@
 # PR 审阅核对与后续事项
 
+2026-10-03 继续 PR #31：已增量读取全部新增普通评论、行内审阅和总结，并采纳[提交成功后刷新失败不应解锁](https://github.com/wmy5555/zhixu-learning-workbench/pull/31#discussion_r4171577527)及[引导证据刷新也须避免阻碍切库](https://github.com/wmy5555/zhixu-learning-workbench/pull/31#discussion_r4171577529)。提交响应立即作为局部快照登记任务，保留其他任务并丢弃比响应更早的完整快照；引导后台状态读取显式不占操作锁，切换或暂停后忽略旧返回与错误，写操作和主动前台读取仍保留保护。同时按用户新增要求补齐同版本原文的完成结果复用、跨提交入口去重及已拆解内容缓存复用；预设案例不充当真实模型结果。失败重试、明确的后续联网核验和新版本原文继续遵循原授权与人工内容保护。
+
 2026-10-03 PR #31 的四项审阅已采纳：[后台查询阻碍知识库切换](https://github.com/wmy5555/zhixu-learning-workbench/pull/31#discussion_r4171504743)改为只有状态读取不占用操作锁，旧知识库返回值仍被丢弃，写操作继续阻止切换；[示例原文误判真实任务](https://github.com/wmy5555/zhixu-learning-workbench/pull/31#discussion_r4171504744)改为只检查任务本身的演示标记；[恢复备份后旧缓存](https://github.com/wmy5555/zhixu-learning-workbench/pull/31#discussion_r4171504746)通过运行期任务集合标识、递增快照和删除记录对齐处理，恢复不会补弹历史完成；[查询携带完整任务历史内容](https://github.com/wmy5555/zhixu-learning-workbench/pull/31#discussion_r4171504749)改为 SQLite 直接投影拆解状态与短标题，不序列化原文或模型返回。新增合成 HTTP 与状态转换回归覆盖上述路径；现有会话、Host、Origin、CSRF、练习隔离及恢复确认保持原约束。
 
 本次同步工作期间新增的 #30 学习目标更新，并读取其最新审阅。[教程应使用改名后的目标选项](https://github.com/wmy5555/zhixu-learning-workbench/pull/30#discussion_r4171447877)涉及教程文字与目标名称的一致性，保留为独立后续修复；本次拆解等待和通知不修改学习目标值、教程目标选项或判定规则。

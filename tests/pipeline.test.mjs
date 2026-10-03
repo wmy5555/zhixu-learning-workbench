@@ -428,7 +428,7 @@ test('a cached research result with limitations is retried instead of suppressin
   assert.equal(candidate.meta.evidence.length, 1);
 });
 
-test('reprocessing a user-edited candidate creates a pending proposal and applies it only after acceptance', async t => {
+test('reprocessing reuses extraction and changes a user-edited candidate only after proposal acceptance', async t => {
   const { service, mock } = await harness(t);
   const imported = service.importItems({
     items: [{ title: '用户编辑保护', body: '加工后用户会修改候选知识。', privacy: 'cloud' }],
@@ -440,6 +440,8 @@ test('reprocessing a user-edited candidate creates a pending proposal and applie
   candidate = service.editNote(candidate.id, { body: userBody, expectedHash: candidate.hash });
   const userHash = candidate.hash;
   const userTopic = candidate.meta.topic;
+  const extraction = service.store.get('jobs', imported.jobs[0].id).payload.extracted.candidates[0];
+  const modelCalls = mock.events.filter(event => event.capability === 'generate').length;
 
   mock.state.candidateBody = '重新研究后建议采用的新正文。';
   mock.state.candidateTopic = '重新研究主题';
@@ -457,19 +459,20 @@ test('reprocessing a user-edited candidate creates a pending proposal and applie
   assert.equal(unchanged.meta.topic, userTopic);
   const proposals = service.store.records('proposals').filter(item => item.noteId === candidate.id && item.state === 'pending');
   assert.equal(proposals.length, 1);
-  assert.match(proposals[0].body, /重新研究后建议采用的新正文/);
-  assert.equal(proposals[0].meta.topic, '重新研究主题');
+  assert.ok(proposals[0].body.includes(extraction.body));
+  assert.equal(proposals[0].meta.topic, extraction.topic);
+  assert.equal(mock.events.filter(event => event.capability === 'generate').length, modelCalls, 'reprocessing does not ask the model to extract again');
 
   const accepted = service.proposalAction(proposals[0].id, { action: 'accept' });
   assert.equal(accepted.state, 'accepted');
   const applied = service.getNote(candidate.id);
-  assert.match(applied.body, /重新研究后建议采用的新正文/);
-  assert.equal(applied.meta.topic, '重新研究主题');
+  assert.ok(applied.body.includes(extraction.body));
+  assert.equal(applied.meta.topic, extraction.topic);
   assert.equal(applied.meta.stage, 'candidate');
   assert.equal(applied.meta.userEdited, false);
 });
 
-test('reprocessing detects an external body edit through generatedBodyHash and proposes instead of overwriting', async t => {
+test('cached reprocessing detects an external body edit and proposes instead of overwriting', async t => {
   const { service, mock } = await harness(t);
   const imported = service.importItems({
     items: [{ title: '外部编辑保护', body: '加工后从 Vault 外部编辑候选。', privacy: 'cloud' }],
@@ -484,6 +487,8 @@ test('reprocessing detects an external body edit through generatedBodyHash and p
   candidate = service.getNote(candidate.id);
   assert.equal(candidate.body, externalBody);
   assert.equal(candidate.meta.userEdited, undefined);
+  const extraction = service.store.get('jobs', imported.jobs[0].id).payload.extracted.candidates[0];
+  const modelCalls = mock.events.filter(event => event.capability === 'generate').length;
 
   mock.state.candidateBody = '再次加工生成但尚未确认的新正文。';
   const retry = service.queue(
@@ -496,5 +501,6 @@ test('reprocessing detects an external body edit through generatedBodyHash and p
   assert.equal(service.getNote(candidate.id).body, externalBody);
   const proposal = service.store.records('proposals').find(item => item.noteId === candidate.id && item.state === 'pending');
   assert.ok(proposal);
-  assert.match(proposal.body, /再次加工生成但尚未确认的新正文/);
+  assert.ok(proposal.body.includes(extraction.body));
+  assert.equal(mock.events.filter(event => event.capability === 'generate').length, modelCalls);
 });

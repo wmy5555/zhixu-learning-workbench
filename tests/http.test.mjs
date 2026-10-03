@@ -136,6 +136,23 @@ test('process status polling requires a session, omits task bodies and changes r
   assert.equal(practiceStatus.body.jobs.some(value => value.id === job.id), false);
 });
 
+test('HTTP repeated decomposition shares pending and completed jobs and orders the returned job before later snapshots', async t => {
+  const app = await startApp(t), session = await webSession(app);
+  const source = app.service.store.create({ kind: 'source', title: 'HTTP 合成去重', body: '本机测试原文', meta: { privacy: 'local' } });
+  const url = `/api/notes/${source.id}/process`;
+  const before = app.service.jobStatuses();
+  const submit = await request(app.baseUrl, url, { method: 'POST', headers: session.headers, body: {} });
+  assert.equal(submit.status, 200); assert.equal(submit.body.reused, false);
+  assert.equal(submit.body.jobRevision, before.jobRevision); assert.ok(submit.body.jobSnapshot > before.jobSnapshot);
+  const repeat = await request(app.baseUrl, url, { method: 'POST', headers: session.headers, body: { research: true } });
+  assert.equal(repeat.body.id, submit.body.id); assert.equal(repeat.body.reused, true);
+  const saved = app.service.store.get('jobs', submit.body.id);
+  app.service.store.put('jobs', saved.id, { ...saved, state: 'done', payload: { ...saved.payload, extracted: { candidates: [{ title: '合成候选', body: '已有拆解正文', claims: [] }] } } });
+  const completed = await request(app.baseUrl, url, { method: 'POST', headers: session.headers, body: {} });
+  assert.equal(completed.body.id, saved.id); assert.equal(completed.body.state, 'done'); assert.equal(completed.body.reused, true);
+  assert.equal(app.service.store.records('jobs').filter(job => job.type === 'process').length, 1);
+});
+
 test('usage routes require a session and CSRF, use complete shared ledger and protect practice writes', async t => {
   const app = await startApp(t);
   const denied = await request(app.baseUrl, '/api/usage'); assert.equal(denied.status, 401);
@@ -248,7 +265,7 @@ test('unknown state-changing actions are rejected and leave the job unchanged', 
   assert.equal(app.service.store.get('jobs', job.id).state, 'queued');
 });
 
-test('HTTP processing defaults to extraction and keeps explicit research in a separate task', async t => {
+test('HTTP processing shares in-flight extraction and permits separate explicit research after completion', async t => {
   const app = await startApp(t);
   const session = await webSession(app);
   const source = app.service.importItems({ items: [{ title: '可选核验', body: '接口测试正文' }] }).notes[0];
@@ -256,6 +273,11 @@ test('HTTP processing defaults to extraction and keeps explicit research in a se
   const plain = await request(app.baseUrl, endpoint, { method: 'POST', headers: session.headers, body: {} });
   assert.equal(plain.status, 200);
   assert.equal(plain.body.payload.research, false);
+  const pending = await request(app.baseUrl, endpoint, { method: 'POST', headers: session.headers, body: { research: true, reuseExtracted: true } });
+  assert.equal(pending.body.id, plain.body.id);
+  assert.equal(pending.body.payload.research, false, 'a second entry cannot silently expand the pending request');
+  const saved = app.service.store.get('jobs', plain.body.id);
+  app.service.store.put('jobs', saved.id, { ...saved, state: 'done', payload: { ...saved.payload, extracted: { candidates: [{ title: '合成候选', body: '已有合成拆解', claims: [] }] } } });
   const explicit = await request(app.baseUrl, endpoint, { method: 'POST', headers: session.headers, body: { research: true, reuseExtracted: true } });
   assert.equal(explicit.status, 200);
   assert.equal(explicit.body.payload.research, true);

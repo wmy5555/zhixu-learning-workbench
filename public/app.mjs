@@ -859,8 +859,9 @@ async function processNote(note, returnToSourceId = "", options = {}) {
   if (!processFeedback.begin(note.id)) return;
   try {
     const job = await api.processNote(note.id, options);
+    processFeedback.observe({ jobs: [job], notes: [note], partial: true, jobRevision: job.jobRevision, jobSnapshot: job.jobSnapshot });
     const waitingForQuota = isQuotaWaitMessage(job.error);
-    toast(waitingForQuota || job.state === "waiting" ? "任务已保存，待条件满足后继续" : job.state === "failed" ? "任务已记录失败原因" : (options.research ? "已提交联网核验任务" : "已提交 AI 拆解任务"), job.state === "failed" && !waitingForQuota ? "error" : "success");
+    toast(waitingForQuota || job.state === "waiting" ? "任务已保存，待条件满足后继续" : job.state === "failed" ? "任务已记录失败原因，请到「系统 → 任务」手动重试" : job.state === "cancelled" ? "已有任务已取消，请到「系统 → 任务」手动重试" : job.reused && job.state === "done" ? "已复用已有拆解结果，没有重复调用拆解模型" : job.reused ? "正在复用同一个拆解任务，请等待" : (options.research ? "已提交联网核验任务" : "已提交 AI 拆解任务"), job.state === "failed" && !waitingForQuota ? "error" : "success");
     await refreshBootstrap();
     if (returnToSourceId || note.kind === "source") await refreshSourceGroup(returnToSourceId || note.id);
     else renderNoteDrawer(note);

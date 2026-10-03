@@ -175,15 +175,27 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     if (researchChanged) store.db.prepare("DELETE FROM records WHERE namespace='research'").run();
     return settings();
   }
+  const validExtraction = value => Array.isArray(value?.candidates) && value.candidates.length > 0 && value.candidates.length <= 8
+    && value.candidates.every(candidate => typeof candidate?.title === 'string' && typeof candidate.body === 'string'
+      && Array.isArray(candidate.claims) && candidate.claims.every(claim => typeof claim === 'string'));
+  const processJobs = (id, sourceHash) => store.records('jobs').filter(job => job.type === 'process'
+    && job.payload?.noteId === id && job.payload.hash === sourceHash && !job.presetCase && !job.payload.presetCase);
+  const processReply = (job, reused = false) => ({ ...job, reused, jobRevision, jobSnapshot: ++jobSnapshot });
   function processNote(id, { research = false, reuseExtracted = false } = {}) {
     const source = getNote(id);
     if (source.kind !== 'source') fail('请选择原始资料重新加工。');
     const payload = { noteId: id, hash: source.hash, research: research === true };
-    if (reuseExtracted === true) {
-      const previous = store.records('jobs').filter(j => j.type === 'process' && j.payload.noteId === id && j.payload.hash === source.hash && j.payload.extracted).sort((a,b) => b.createdAt.localeCompare(a.createdAt))[0];
-      if (previous) payload.extracted = structuredClone(previous.payload.extracted);
-    }
-    return queue('process', payload, `process:${id}:${source.hash}${payload.research ? ':research' : ''}`);
+    const previous = processJobs(id, source.hash);
+    const pending = previous.find(job => ['queued','running','waiting'].includes(job.state));
+    if (pending) return processReply(pending, true);
+    // Repeated decomposition reuses its record, including errors that require an explicit task retry.
+    // The separate research action may refresh evidence, but still reuses the extracted candidates.
+    const matching = previous.filter(job => !payload.research || job.payload.research === true);
+    const existing = matching.find(job => job.state === 'done') || matching[0];
+    if (existing && (!payload.research || reuseExtracted !== true)) return processReply(existing, true);
+    const extracted = previous.find(job => validExtraction(job.payload.extracted))?.payload.extracted;
+    if (extracted) payload.extracted = structuredClone(extracted);
+    return processReply(queue('process', payload, `process:${id}:${source.hash}${payload.research ? ':research' : ''}`));
   }
   function importItems({ items, process = false, research = false }) {
     if (!Array.isArray(items) || !items.length || items.length > 100) fail('每次请导入 1–100 份文本。');
@@ -463,13 +475,15 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   }
   async function processSource(job, signal) {
     const source = getNote(job.payload.noteId); if (source.hash !== job.payload.hash) fail('资料已修改，请对新版本重新加工。', 'SOURCE_CHANGED');
-    let extracted = job.payload.extracted;
+    // Also cover retained jobs queued before another task saved the same source extraction.
+    let extracted = validExtraction(job.payload.extracted) ? job.payload.extracted
+      : processJobs(source.id, source.hash).find(previous => previous.id !== job.id && validExtraction(previous.payload.extracted))?.payload.extracted;
     if (!extracted) {
       extracted = parseJSON((await ai.generate({ system: promptText('serviceSystem'), privacy: privacyFor(source), signal, json: true, prompt: promptText('sourceExtract',{source:source.body}) })).text);
       if (!Array.isArray(extracted.candidates) || !extracted.candidates.length || extracted.candidates.length > 8) fail('拆解结果格式不正确。', 'MODEL_FORMAT');
-      job.payload.extracted = extracted; putJob(job);
     }
     for (const candidate of extracted.candidates) if (typeof candidate.title !== 'string' || typeof candidate.body !== 'string' || !Array.isArray(candidate.claims) || candidate.claims.some(x => typeof x !== 'string')) fail('待选学知识格式不正确。', 'MODEL_FORMAT');
+    job.payload.extracted = structuredClone(extracted); putJob(job);
     for (const candidate of extracted.candidates) candidate.claims = [...new Set(candidate.claims.map(c=>c.trim()).filter(Boolean))];
     const research = job.payload.research === true;
     const shared = new Map(), pending = [], runtimeIssues = [];

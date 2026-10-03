@@ -74,6 +74,23 @@ test('background job status reads allow a library switch and discard old results
   assert.equal(client.api.getContext().pending, 0);
 });
 
+test('background onboarding proof reads do not block switching and cannot exempt writes or foreground reads', async () => {
+  let finish;
+  const client = apiBrowser(() => new Promise(resolve => { finish = resolve; }));
+  const proof = client.api.onboarding('state', { practiceId: 'practice-one' }, { background: true });
+  assert.equal(client.api.getContext().pending, 0);
+  client.api.setContext('practice-one');
+  finish(response({ practiceId: 'old-practice' }));
+  await assert.rejects(proof, error => error.code === 'STALE_CONTEXT');
+  const foreground = client.api.onboarding('state');
+  assert.throws(() => client.api.setContext(''), error => error.code === 'CONTEXT_BUSY');
+  finish(response({})); await foreground;
+  const session = client.startSession(); finish(response({ csrf: 'synthetic-csrf' })); await session;
+  const write = client.api.onboarding('pause', {}, { background: true });
+  assert.throws(() => client.api.setContext(''), error => error.code === 'CONTEXT_BUSY');
+  finish(response({})); await write;
+});
+
 class Element {
   constructor(tag = 'div') {
     this.tagName = tag.toUpperCase(); this.children = []; this.events = {}; this.dataset = {}; this.attributes = {};
@@ -112,13 +129,13 @@ async function tutorialBrowser({ modelReady = true, exists = true, narrow = fals
   const roots = { '.workspace': workspace, '#main': main, '#drawer': drawer, '#drawer-body': drawerBody, '#onboarding-launcher': launcher, '#toast-region': toasts };
   const document = { body, get activeElement() { return Element.activeElement; }, createElement: tag => new Element(tag), createTextNode: text => { const node = new Element('text'); node.textContent = text; return node; }, querySelector: selector => roots[selector] || null, querySelectorAll: selector => selector === '[data-tour]' ? descend(body).filter(node => node.dataset.tour) : [] };
   const requests = [], navigations = [], contexts = [], intervals = [], windowEvents = {};
-  let practiceId = '', state = { practiceId: exists ? 'practice-one' : null, status: exists ? 'paused' : 'not_started', modelReady, currentStepId, progress, roles: {}, clock: { now: '2026-09-30T08:00:00Z' }, busy: false };
+  let practiceId = '', version = 0, state = { practiceId: exists ? 'practice-one' : null, status: exists ? 'paused' : 'not_started', modelReady, currentStepId, progress, roles: {}, clock: { now: '2026-09-30T08:00:00Z' }, busy: false };
   const api = {
-    getContext: () => ({ practiceId, pending: 0 }),
-    setContext: id => { practiceId = id; contexts.push(id); },
-    onboarding: async (action, data = {}) => {
-      requests.push({ action, data: structuredClone(data) });
-      if (action === 'state' && stateRead) await stateRead();
+    getContext: () => ({ practiceId, version, pending: 0 }),
+    setContext: id => { if (practiceId !== id) version++; practiceId = id; contexts.push(id); },
+    onboarding: async (action, data = {}, options = {}) => {
+      requests.push({ action, data: structuredClone(data), options: structuredClone(options) });
+      if (action === 'state' && stateRead) { const read = await stateRead(); if (read) return structuredClone(read); }
       if (action === 'advance' && advance) await advance(data, state);
       if (action === 'reset' && resetRequest) await resetRequest();
       if (action === 'start' || action === 'resume') state = { ...state, practiceId: 'practice-one', status: 'active' };
@@ -156,6 +173,36 @@ test('the AI decomposition step shows waiting progress without changing evidence
     assert.equal(ui.state.progress['process-ai'], undefined);
   }
   assert.equal(ui.toasts.children.length, 0, 'the global task monitor owns completion notifications');
+  ui.tutorial.dispose();
+});
+
+test('a delayed background proof cannot overwrite a practice pause or report an obsolete error', async () => {
+  let release, delayed = false;
+  const ui = await tutorialBrowser({ stateRead: () => delayed ? new Promise(resolve => { release = resolve; }) : undefined });
+  await ui.tutorial.open();
+  const stale = structuredClone(ui.state);
+  delayed = true;
+  const refresh = ui.tutorial.refresh();
+  assert.equal(ui.requests.at(-1).options.background, true);
+  await click(findButton(ui.body, '暂停并回正式库'));
+  release(stale); await refresh;
+  assert.equal(ui.tutorial.state.status, 'paused');
+  assert.equal(ui.contexts.at(-1), '');
+  ui.tutorial.dispose();
+});
+
+test('a delayed background proof cannot roll back a newer checkpoint in the same practice', async () => {
+  let release, delayed = false;
+  const ui = await tutorialBrowser({ stateRead: () => delayed ? new Promise(resolve => { release = resolve; }) : undefined });
+  await ui.tutorial.open();
+  const stale = structuredClone(ui.state);
+  delayed = true;
+  const refresh = ui.tutorial.refresh();
+  await click(findButton(ui.body, '我已阅读'));
+  const first = flatSteps[0], next = flatSteps[1];
+  release(stale); await refresh;
+  assert.equal(ui.tutorial.state.progress[first.id].status, 'demonstrated');
+  assert.equal(ui.tutorial.state.currentStepId, next.id);
   ui.tutorial.dispose();
 });
 
