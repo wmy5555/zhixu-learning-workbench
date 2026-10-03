@@ -50,6 +50,25 @@ test('old/custom extraction outputs and invalid optional structure do not break 
   }
 });
 
+test('saved extraction templates receive the structure contract in the same call for changing materials', async t => {
+  for (const count of [1, 5, 8]) {
+    const values = Array.from({ length: count }, (_, i) => ({ title: `新的材料 ${i}：与旧示例无关的较长标题`, body: `当前合成材料的条目 ${i}。`, claims: [] }));
+    const generated = { hierarchy: values.map((_, i) => ({ child: String(i), parent: null })),
+      edges: count < 2 ? [] : [{ from: '0', to: String(count - 1), type: 'sequence', explanation: '合成顺序', sourceExcerpt: values[0].body, targetExcerpt: values.at(-1).body }] };
+    const { service: s, calls } = setup(t, async () => ({ text: JSON.stringify({ candidates: values, structure: generated }) }));
+    s.updatePrompts({ prompts: { serviceSystem: '保留用户自定义系统说明', sourceExtract: '用户保存的旧拆解提示 {{source}}' } });
+    const result = s.importItems({ items: [{ title: `替换示例 ${count}`, body: `当前资料 ${count}`, privacy: 'cloud' }], process: true });
+    await s.runJobs();
+    const detail = s.readPublicNote(result.notes[0].id);
+    assert.equal(calls.length, 1);
+    assert.match(calls[0].system, /保留用户自定义系统说明.*\n.*同一次回答.*hierarchy.*sourceExcerpt/s);
+    assert.equal(calls[0].prompt, `用户保存的旧拆解提示 当前资料 ${count}`);
+    assert.equal(detail.children.length, count); assert.equal(detail.structure.state, 'ready');
+    assert.equal(detail.structure.hierarchy.length, count);
+    if (count > 1) assert.equal(detail.structure.edges[0].to, detail.children.at(-1).id);
+  }
+});
+
 test('validation removes nonexistent endpoints, invented excerpts, duplicates and hierarchy cycles, but preserves logical cycles', () => {
   const notes = candidates.map((n, i) => ({ ...n, id: String(i) }));
   const reverse = { ...edge('0', '1'), sourceExcerpt: candidates[0].body, targetExcerpt: candidates[1].body };
@@ -146,4 +165,21 @@ test('mind-map collapse retains independent hierarchy and all logical nodes incl
   const logic = layoutSourceMap(notes, [{ from: 'a', to: 'c' }], hierarchy);
   assert.equal(logic.positions.size, 4);
   assert.ok(logic.positions.get('c').y > logic.positions.get('a').y);
+});
+
+test('layouts size changing long titles and root names without overlaps or lost nodes', () => {
+  for (const count of [1, 5, 8, 16]) {
+    const notes = Array.from({ length: count }, (_, i) => ({ id: `sample-${i}`, title: i % 2 ? '长标题包含条件、过程、实例和适用边界'.repeat(5) : `短标题${i}` }));
+    const hierarchy = notes.slice(1).map((n, i) => ({ child: n.id, parent: notes[Math.floor(i / 2)].id }));
+    for (const mode of ['logic', 'mind']) {
+      const layout = layoutSourceMap(notes, notes.slice(1).map((n, i) => ({ from: notes[i].id, to: n.id })), hierarchy, mode, new Set(), '任意变化的来源标题'.repeat(8));
+      const positions = [...layout.positions.values()];
+      assert.equal(positions.length, count + (mode === 'mind' ? 1 : 0));
+      for (let i = 0; i < positions.length; i++) {
+        const a = positions[i];
+        assert.ok(a.x >= 0 && a.y >= 0 && a.x + layout.cardWidth <= layout.width && a.y + layout.cardHeight <= layout.height);
+        for (const b of positions.slice(i + 1)) assert.ok(Math.abs(a.x - b.x) >= layout.cardWidth || Math.abs(a.y - b.y) >= layout.cardHeight, 'cards must not overlap');
+      }
+    }
+  }
 });

@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { Store, now, hash, fail } from './store.mjs';
 import { createSecrets } from './secrets.mjs';
 import { createAI } from './ai.mjs';
-import { promptDefaults, renderPrompt, validatePromptOverrides } from './prompts.mjs';
+import { promptDefaults, renderPrompt, validatePromptOverrides, sourceExtractionStructure } from './prompts.mjs';
 import { createLearning } from './learning.mjs';
 import { createLifecycle } from './knowledge-lifecycle.mjs';
 import { createChatgptBridge } from './chatgpt.mjs';
@@ -510,7 +510,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     let extracted = validExtraction(job.payload.extracted) ? job.payload.extracted
       : processJobs(source.id, source.hash).find(previous => previous.id !== job.id && validExtraction(previous.payload.extracted))?.payload.extracted;
     if (!extracted) {
-      extracted = parseJSON((await ai.generate({ system: promptText('serviceSystem'), privacy: privacyFor(source), signal, json: true, prompt: promptText('sourceExtract',{source:source.body}) })).text);
+      extracted = parseJSON((await ai.generate({ system: `${promptText('serviceSystem')}\n${sourceExtractionStructure}`, privacy: privacyFor(source), signal, json: true, prompt: promptText('sourceExtract',{source:source.body}) })).text);
       if (!Array.isArray(extracted.candidates) || !extracted.candidates.length || extracted.candidates.length > 8) fail('拆解结果格式不正确。', 'MODEL_FORMAT');
     }
     for (const candidate of extracted.candidates) if (typeof candidate.title !== 'string' || typeof candidate.body !== 'string' || !Array.isArray(candidate.claims) || candidate.claims.some(x => typeof x !== 'string')) fail('待选学知识格式不正确。', 'MODEL_FORMAT');

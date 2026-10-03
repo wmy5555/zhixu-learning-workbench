@@ -11,6 +11,7 @@
 - 资料结构由 `src/source-structure.mjs` 校验，存为 SQLite `sourceStructures` 派生记录（键为原始资料 ID），随完整备份保存；不写回原文，不改变既有拆解版本身份。`basis` 记录来源 hash 及各条目标题/正文摘要，内容或成员变化即标记待更新，读取时隐藏旧连线和依据。端点必须属于同组，摘录必须存在；层级防环，逻辑边允许环。
 - `readPublicNote` 的原始资料详情增加可选 `structure`：当前节点、独立的 `hierarchy`、带类型与两端摘录的 `edges`、状态和原因。`sourceExtract` 可附带以候选下标标识的结构，保存后映射至实际笔记 ID；结构缺失不阻断拆解。`POST /api/notes/:id/structure` 排队分析现有内容，以实际 ID 返回结构；复用任务预算、CSRF、资料及父来源外发权限，在模型调用前后校验版本和权限。仅显式执行，不自动重试或晋级知识，不写入跨资料正式关系。
 - `public/source-map.mjs` 用原生按钮与 SVG 绘图：逻辑图将强连通分量折叠后分层，仍画出循环边；思维导图独立按层级布局和折叠。节点选择/缩放/折叠缓存按知识库及来源隔离，显示 AI 建议和有效依据，沿用原有正文操作与引导目标。
+- 拆解调用在现有系统提示词后附加结构输出约定，兼容已保存的旧拆解模板；仍为一次模型调用，缺失结构继续降级保存。排图只使用当前标题、实际 ID 与关系，不依赖练习案例文案；新示例成员替换后清理无效选中/折叠 ID。窗口展开仅改变空间，缩放与适应窗口由单独控件管理，默认不自动缩小文字。
 - YAML frontmatter：稳定 id、kind、stage、sources、topic、privacy；保留未知字段。源码不依赖 Obsidian 常驻。
 - 真实 MCP 官方 SDK，stdio 默认只读；只提供可选提案，Web 确认才写入。
 - 模型：OpenAI-compatible chat completions；嵌入接口独立配置；搜索：Tavily-compatible；网页读取由服务器执行并限制公开地址。
