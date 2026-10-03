@@ -10,28 +10,42 @@ export function createProcessFeedback({ getContext, readJobs, notify, onChange =
   const key = () => getContext().practiceId || '';
   function current() {
     const id = key();
-    if (!contexts.has(id)) contexts.set(id, { initialized: false, jobs: new Map(), notes: new Map(), submitting: new Set() });
+    if (!contexts.has(id)) contexts.set(id, { initialized: false, revision: '', snapshot: 0, oldRevisions: new Set(), jobs: new Map(), notes: new Map(), submitting: new Set() });
     return contexts.get(id);
   }
   function observe(snapshot) {
     const state = current(), changed = [];
-    for (const note of list(snapshot.notes)) state.notes.set(note.id, { title: note.title, presetCase: note.meta?.presetCase });
+    if (snapshot.jobRevision && snapshot.jobRevision !== state.revision) {
+      if (state.oldRevisions.has(snapshot.jobRevision)) return;
+      if (state.revision) state.oldRevisions.add(state.revision);
+      changed.push(...[...state.jobs.values()].map(job => ({ ...job, state: 'removed' })));
+      state.jobs.clear(); state.initialized = false; state.revision = snapshot.jobRevision; state.snapshot = 0;
+    }
+    if (Number.isInteger(snapshot.jobSnapshot)) {
+      if (snapshot.jobSnapshot <= state.snapshot) return;
+      state.snapshot = snapshot.jobSnapshot;
+    }
+    for (const note of list(snapshot.notes)) state.notes.set(note.id, { title: note.title });
+    if (Array.isArray(snapshot.jobs)) {
+      const ids = new Set(snapshot.jobs.filter(job => job.type === 'process').map(job => job.id));
+      for (const [id, record] of state.jobs) if (!ids.has(id)) { state.jobs.delete(id); changed.push({ ...record, state: 'removed' }); }
+    }
     for (const job of list(snapshot.jobs)) {
       if (job.type !== 'process' || !job.id) continue;
       const previous = state.jobs.get(job.id);
       // A slower bootstrap read must not undo completion observed by the poller.
       if (previous?.state === 'done' && activeStates.has(job.state)
         || previous?.updatedAt && job.updatedAt && job.updatedAt < previous.updatedAt) continue;
-      const noteId = job.payload?.noteId;
+      const noteId = job.noteId || job.payload?.noteId;
       const note = state.notes.get(noteId);
-      const record = { id: job.id, state: job.state, noteId, research: job.payload?.research === true,
-        presetCase: job.presetCase || job.payload?.presetCase || note?.presetCase,
+      const record = { id: job.id, state: job.state, noteId, research: job.research === true || job.payload?.research === true,
+        presetCase: job.presetCase || job.payload?.presetCase,
         createdAt: job.createdAt || '', updatedAt: job.updatedAt || '' };
       state.jobs.set(job.id, record);
       if (previous?.state === record.state && previous?.updatedAt === record.updatedAt) continue;
       changed.push(record);
       if (!state.initialized || record.presetCase || previous?.state === record.state) continue;
-      const title = String(note?.title || '资料').slice(0, 70);
+      const title = String(job.title || note?.title || '资料').slice(0, 70);
       if (record.state === 'done') notify(`《${title}》的 AI 拆解已完成${record.research ? '（含联网核验）' : ''}`, 'success');
       else if (record.state === 'failed') notify(`《${title}》的 AI 拆解未完成，原文已保留。请到「系统 → 任务」查看原因。`, 'error');
     }

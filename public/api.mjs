@@ -66,13 +66,16 @@ export async function request(path, options = {}) {
   const id = options.scope === "main" ? "" : practiceId;
   const target = id && path.startsWith("/api/") && !path.startsWith("/api/onboarding/")
     ? `/api/practice/${encodeURIComponent(id)}${path.slice(4)}` : path;
-  inFlight++;
+  // Only the compact, read-only status poll may finish after a library switch.
+  // Its existing context-version check still discards the old result.
+  const blocking = path !== "/api/jobs?view=status" || (options.method || "GET") !== "GET";
+  if (blocking) inFlight++;
   try {
     const result = await performRequest(target, options);
     if (options.scope !== "main" && version !== contextVersion) throw new ApiError("知识库已切换，已忽略旧页面的返回结果。", { code: "STALE_CONTEXT" });
-    notifyRequest({ path, method: options.method || "GET", practiceId: id, ok: true });
+    notifyRequest({ path, method: options.method || "GET", practiceId: id, ok: true, background: !blocking });
     return result;
-  } finally { inFlight--; }
+  } finally { if (blocking) inFlight--; }
 }
 
 async function performRequest(path, options = {}) {
@@ -161,6 +164,7 @@ export const api = {
   relationAction: (id, body) => request(`/api/relations/${encodeURIComponent(id)}/action`, { method: "POST", body }),
   discover: (body = {}) => request("/api/discover", { method: "POST", body }),
   jobs: () => request("/api/jobs"),
+  jobStatuses: () => request("/api/jobs?view=status"),
   jobAction: (id, body) => request(`/api/jobs/${encodeURIComponent(id)}/action`, { method: "POST", body }),
   settings: () => request("/api/settings"),
   updateSettings: (body) => request("/api/settings", { method: "PUT", body }),

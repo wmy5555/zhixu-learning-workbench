@@ -1,5 +1,7 @@
 # PR 审阅核对与后续事项
 
+2026-10-03 PR #31 的四项审阅已采纳：[后台查询阻碍知识库切换](https://github.com/wmy5555/zhixu-learning-workbench/pull/31#discussion_r4171504743)改为只有状态读取不占用操作锁，旧知识库返回值仍被丢弃，写操作继续阻止切换；[示例原文误判真实任务](https://github.com/wmy5555/zhixu-learning-workbench/pull/31#discussion_r4171504744)改为只检查任务本身的演示标记；[恢复备份后旧缓存](https://github.com/wmy5555/zhixu-learning-workbench/pull/31#discussion_r4171504746)通过运行期任务集合标识、递增快照和删除记录对齐处理，恢复不会补弹历史完成；[查询携带完整任务历史内容](https://github.com/wmy5555/zhixu-learning-workbench/pull/31#discussion_r4171504749)改为 SQLite 直接投影拆解状态与短标题，不序列化原文或模型返回。新增合成 HTTP 与状态转换回归覆盖上述路径；现有会话、Host、Origin、CSRF、练习隔离及恢复确认保持原约束。
+
 本次同步工作期间新增的 #30 学习目标更新，并读取其最新审阅。[教程应使用改名后的目标选项](https://github.com/wmy5555/zhixu-learning-workbench/pull/30#discussion_r4171447877)涉及教程文字与目标名称的一致性，保留为独立后续修复；本次拆解等待和通知不修改学习目标值、教程目标选项或判定规则。
 
 2026-10-03 AI 拆解等待与通知：修改前增量读取 #28、#29 的普通评论、行内意见与审阅总结；保留既有排队任务轮询与错误归属修复。本次只处理任务状态显示和短暂通知，不改完成证据或学习资格。#29 最新的缓存案例删除恢复、教程草稿 ID 两项仍按已有记录留待独立修复，涉及案例重建与草稿身份，不属于本次等待提示范围。

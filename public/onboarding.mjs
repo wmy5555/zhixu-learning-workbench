@@ -393,7 +393,7 @@ export function createOnboarding(adapter) {
       if (narrow !== narrowScreen()) { narrow = narrowScreen(); if (visible) render(); }
     });
     window.addEventListener("zhixu:request", event => {
-      if (!current?.practiceId || event.detail?.path?.startsWith("/api/onboarding/")) return;
+      if (!current?.practiceId || event.detail?.background || event.detail?.path?.startsWith("/api/onboarding/")) return;
       if (scheduled) window.clearTimeout(scheduled);
       scheduled = window.setTimeout(refreshProof, 200);
     });

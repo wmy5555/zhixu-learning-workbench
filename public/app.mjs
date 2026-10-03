@@ -55,7 +55,7 @@ const state = {
 };
 let onboarding = null;
 const processFeedback = createProcessFeedback({
-  getContext: () => api.getContext(), readJobs: () => api.jobs(), notify: toast,
+  getContext: () => api.getContext(), readJobs: () => api.jobStatuses(), notify: toast,
   onChange: changed => {
     refs.drawerBody.querySelectorAll(".process-controls").forEach(updateProcessControls);
     if (changed.length) onboarding?.refresh();

@@ -55,6 +55,25 @@ test('switching libraries is blocked while a request is in flight and becomes po
   assert.equal(client.api.getContext().practiceId, '');
 });
 
+test('background job status reads allow a library switch and discard old results while writes still block', async () => {
+  let finish;
+  const calls = [];
+  const client = apiBrowser((path, options) => { calls.push({ path, method: options.method }); return new Promise(resolve => { finish = resolve; }); });
+  client.api.setContext('practice-one');
+  const pending = client.api.jobStatuses();
+  assert.equal(client.api.getContext().pending, 0);
+  client.api.setContext('');
+  finish(response({ jobs: [{ id: 'old', state: 'done' }] }));
+  await assert.rejects(pending, error => error.code === 'STALE_CONTEXT');
+  assert.equal(calls[0].path, '/api/practice/practice-one/jobs?view=status');
+  const session = client.startSession(); finish(response({ csrf: 'synthetic-csrf' })); await session;
+  const write = client.request('/api/jobs?view=status', { method: 'POST', body: {} });
+  assert.equal(client.api.getContext().pending, 1);
+  assert.throws(() => client.api.setContext('practice-two'), error => error.code === 'CONTEXT_BUSY');
+  finish(response({ ok: true })); await write;
+  assert.equal(client.api.getContext().pending, 0);
+});
+
 class Element {
   constructor(tag = 'div') {
     this.tagName = tag.toUpperCase(); this.children = []; this.events = {}; this.dataset = {}; this.attributes = {};

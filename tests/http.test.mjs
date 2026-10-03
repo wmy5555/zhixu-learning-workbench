@@ -102,6 +102,40 @@ async function webSession(app) {
   };
 }
 
+test('process status polling requires a session, omits task bodies and changes revision after backup restoration', async t => {
+  const app = await startApp(t);
+  assert.equal((await request(app.baseUrl, '/api/jobs?view=status')).status, 401);
+  const session = await webSession(app);
+  const note = app.service.store.create({ kind: 'source', title: '合成状态原文', body: '不应随状态返回的正文', meta: { privacy: 'local', presetCase: 'synthetic-source' } });
+  const job = app.service.queue('process', { noteId: note.id, research: true, extracted: 'large-synthetic-content'.repeat(5000) }, 'synthetic-status');
+  app.service.queue('index', {}, 'synthetic-index');
+  const simulated = app.service.queue('process', { noteId: note.id, presetCase: 'synthetic-job' }, 'synthetic-preset');
+  const backup = app.service.backup();
+  const first = await request(app.baseUrl, '/api/jobs?view=status', { headers: session.headers });
+  assert.equal(first.status, 200);
+  assert.equal(first.body.jobs.length, 2);
+  const status = first.body.jobs.find(value => value.id === job.id);
+  assert.equal(status.noteId, note.id); assert.equal(status.title, note.title); assert.equal(status.research, true);
+  assert.equal(status.presetCase, null, 'only the job itself may be marked as simulated');
+  assert.equal(first.body.jobs.find(value => value.id === simulated.id).presetCase, 'synthetic-job');
+  assert.equal(first.text.includes('extracted'), false); assert.equal(first.text.includes('large-synthetic-content'), false);
+  assert.equal(first.text.includes('不应随状态返回的正文'), false); assert.equal(first.text.includes('payload'), false);
+  const bootstrap = app.service.bootstrap();
+  assert.equal(bootstrap.jobRevision, first.body.jobRevision);
+  assert.ok(bootstrap.jobSnapshot > first.body.jobSnapshot);
+  app.service.store.put('jobs', job.id, { ...job, state: 'done' });
+  const preview = app.service.restore({ backup });
+  app.service.restore({ backup, preview: false, token: preview.token });
+  const restored = app.service.jobStatuses();
+  assert.notEqual(restored.jobRevision, first.body.jobRevision);
+  assert.equal(restored.jobs.find(value => value.id === job.id).state, 'queued');
+  const practice = await request(app.baseUrl, '/api/onboarding/start', { method: 'POST', headers: session.headers, body: {} });
+  const practiceStatus = await request(app.baseUrl, `/api/practice/${practice.body.practiceId}/jobs?view=status`, { headers: session.headers });
+  assert.equal(practiceStatus.status, 200);
+  assert.notEqual(practiceStatus.body.jobRevision, restored.jobRevision);
+  assert.equal(practiceStatus.body.jobs.some(value => value.id === job.id), false);
+});
+
 test('usage routes require a session and CSRF, use complete shared ledger and protect practice writes', async t => {
   const app = await startApp(t);
   const denied = await request(app.baseUrl, '/api/usage'); assert.equal(denied.status, 401);

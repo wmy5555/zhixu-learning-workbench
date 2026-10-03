@@ -35,14 +35,38 @@ test('existing completed jobs stay quiet; each newly completed real process noti
   assert.equal(ui.messages.length, 2, 'returning to a library does not replay completion');
 });
 
-test('fast completion between reads is observed; preset cases and unrelated task types never claim real processing', () => {
+test('fast and real processing of preset sources notify; simulated jobs and unrelated task types stay quiet', () => {
   const ui = monitor(); ui.feedback.observe({ jobs: [] });
   const jobs = [job('fast', 'done'), job('preset', 'done', { presetCase: 'synthetic-case' }),
     job('preset-payload', 'done', { payload: { noteId: 'source', presetCase: 'synthetic-case' } }),
     job('index', 'done', { type: 'index' }), job('preset-note', 'done', { payload: { noteId: 'preset-source' } })];
   ui.feedback.observe({ jobs, notes: [{ id: 'preset-source', meta: { presetCase: 'synthetic-case' } }] });
   ui.feedback.observe({ jobs });
-  assert.equal(ui.messages.length, 1); assert.equal(ui.messages[0].tone, 'success');
+  assert.equal(ui.messages.length, 2); assert.ok(ui.messages.every(message => message.tone === 'success'));
+  ui.feedback.observe({ jobs: [job('real-case', 'running', { payload: { noteId: 'preset-source' } })] });
+  assert.equal(ui.feedback.status('preset-source').active, true);
+  assert.equal(ui.feedback.begin('preset-source'), false, 'a preset source does not exempt real pending work from the submit guard');
+  ui.feedback.observe({ jobs: [job('real-case', 'done', { payload: { noteId: 'preset-source' } })] });
+  assert.equal(ui.messages.length, 3);
+});
+
+test('authoritative snapshots remove old jobs and backup restoration resets terminal state without replaying history', () => {
+  const ui = monitor();
+  ui.feedback.observe({ jobs: [job('same', 'done', { updatedAt: '2026-10-03T02:00:00Z' })], jobRevision: 'before', jobSnapshot: 1 });
+  ui.feedback.observe({ jobs: [job('same', 'running')], jobRevision: 'after', jobSnapshot: 2 });
+  assert.equal(ui.feedback.status('source').active, true, 'restoring an old queued job may reuse its identifier');
+  ui.feedback.observe({ jobs: [job('same', 'done')], jobRevision: 'before', jobSnapshot: 8 });
+  assert.equal(ui.feedback.status('source').active, true, 'an old response from before restoration is discarded');
+  ui.feedback.observe({ jobs: [job('same', 'done')], jobRevision: 'after', jobSnapshot: 3 });
+  assert.equal(ui.messages.length, 1);
+  ui.feedback.observe({ jobs: [], jobRevision: 'after', jobSnapshot: 2 });
+  assert.equal(ui.feedback.status('source').state, 'done', 'a delayed snapshot cannot remove a newly observed job');
+  ui.feedback.observe({ jobs: [], jobRevision: 'after', jobSnapshot: 4 });
+  assert.equal(ui.feedback.status('source'), null);
+  assert.equal(ui.feedback.begin('source'), true, 'removed jobs cannot keep their source disabled');
+  ui.feedback.end('source');
+  ui.feedback.observe({ jobs: [job('historical', 'done')], jobRevision: 'another-restore', jobSnapshot: 5 });
+  assert.equal(ui.messages.length, 1, 'restored historical completion remains quiet');
 });
 
 test('pending work blocks repeats; waiting and failure stop spinning, and a user retry can later complete', () => {
