@@ -872,7 +872,22 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
     field("标题", title), field("正文", tour(body, "note-body")),
     ...(sourceFields ? [sourceFields] : []),
     el("div", { class: "form-grid" }, [
-      field("学习状态", el("input", { value: labels.stage(meta.stage), disabled: true }), "学习状态请通过相应操作调整，以便保留理由。"),
+      el("div", { class: "field" }, [
+        field("学习状态", el("input", { value: labels.stage(meta.stage), disabled: true }), "学习状态请通过相应操作调整，以便保留理由。"),
+        note.kind === "knowledge" ? button("前往状态操作", { kind: "text compact", onClick: async () => {
+          const context = api.getContext();
+          if (JSON.stringify(serializeForm(form)) !== originalValues && !await confirmAction({ title: "前往状态操作？", message: "当前修改尚未保存。请取消并先保存；也可以放弃这些修改，返回这条知识的详情进行状态操作。", confirmText: "放弃修改并前往" })) return;
+          const latest = api.getContext();
+          if (latest.practiceId !== context.practiceId || latest.version !== context.version || refs.drawerBody.querySelector("form") !== form) return;
+          renderNoteDrawer(note);
+          const target = refs.drawerBody.querySelector('[data-tour="note-lifecycle"]');
+          if (target) {
+            target.tabIndex = -1;
+            target.scrollIntoView({ block: "center", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
+            target.focus({ preventScroll: true });
+          }
+        } }) : null,
+      ]),
       tour(field("隐私", selectControl([["local", "仅本地"], ["cloud", "允许云端"]], meta.privacy || "local", "privacy"), "此项控制模型、搜索与向量服务；系统中授予 ChatGPT 的独立读取权限仍有效。"), "note-privacy"),
       field("知识主题", el("input", { name: "topic", value: meta.topic || "", placeholder: "可留空" })),
       learningGoalField(meta.depth || "aware"),
@@ -880,6 +895,7 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
     el("div", { class: "form-actions" }, [button("保存修改", { kind: "primary", type: "submit" }), button("取消", { onClick: () => returnToSourceId ? refreshSourceGroup(returnToSourceId).catch(handleError) : renderNoteDrawer(note) })]),
   );
   const initialFields = serializeForm(form);
+  const originalValues = JSON.stringify(initialFields);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const data = serializeForm(form);

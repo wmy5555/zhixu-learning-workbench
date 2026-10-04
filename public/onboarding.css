@@ -28,6 +28,10 @@
 .onboarding-content { display: grid; gap: 12px; }
 .onboarding-content p { margin: 0; }
 .onboarding-content select { width: 100%; min-width: 0; }
+.onboarding-verification-help { margin-top: 8px; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.onboarding-verification-help summary { cursor: help; text-decoration: underline dotted; text-underline-offset: 3px; }
+.onboarding-verification-help summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+.onboarding-verification-help[open] p { padding-top: 8px; }
 .onboarding-catalog { padding: 10px 12px; background: var(--panel-soft); border-radius: 10px; }
 .onboarding-catalog summary, .onboarding-clock summary { cursor: pointer; font-size: 12px; }
 .onboarding-catalog button { display: block; width: 100%; text-align: left; font-size: 12px; margin-top: 3px; }
