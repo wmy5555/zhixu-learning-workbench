@@ -73,6 +73,26 @@ function createKnowledge(service, {
   });
 }
 
+test('material reprocessing targets the tracked input source and never substitutes a surviving unrelated source', async t => {
+  const calls = [], h = await makeHarness(t, { aiOverride: offlineAI(calls) }), s = h.service;
+  const first = s.store.create({ kind: 'source', title: '合成来源甲', body: '合成原文甲' });
+  const tracked = s.store.create({ kind: 'source', title: '合成来源乙', body: '合成原文乙' });
+  const refs = [{ id: first.id, role: 'input' }, { id: tracked.id, role: 'input' }];
+  const note = createKnowledge(s, { title: '合成多来源知识', meta: { sources: refs, processKey: `${tracked.id}:${tracked.hash}:0` } });
+  assert.equal(s.today().items.some(item => item.noteId === note.id), true);
+  const changed = s.editNote(tracked.id, { expectedHash: tracked.hash, body: '合成修改后的原文乙' });
+  const unavailable = () => s.today().unavailable.find(item => item.noteId === note.id);
+  assert.equal(unavailable().code, 'material');
+  assert.equal(unavailable().sourceId, tracked.id);
+  s.store.delete(tracked.id, changed.hash);
+  assert.equal(unavailable().sourceId, undefined, 'a deleted tracked source cannot be replaced by the first surviving input');
+  assert.match(unavailable().reason, /修改或删除/);
+  assert.equal(s.getNote(first.id).body, first.body);
+  const untracked = createKnowledge(s, { title: '合成未明确来源的限制', meta: { sources: refs, researchLimitations: ['合成待核验'] } });
+  assert.equal(s.today().unavailable.find(item => item.noteId === untracked.id).sourceId, undefined);
+  assert.equal(calls.length, 0);
+});
+
 test('external Markdown edits are detected and reindexed before reads and search', async t => {
   const h = await makeHarness(t);
   const note = createKnowledge(h.service, { title: '外部同步', body: '旧内容不会继续命中' });

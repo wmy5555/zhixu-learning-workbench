@@ -109,7 +109,11 @@ export function createLearning(dependencies) {
     let used = fixed.filter(p => p.state === 'done').reduce((sum, p) => sum + p.minutes, 0);
     const pending = [], scheduledIds = new Set();
     for (const note of ordered) {
-      if (dependenciesFor(note).some(id => !done.has(id) && !scheduledIds.has(id))) continue;
+      const prerequisiteId = dependenciesFor(note).find(id => !done.has(id) && !scheduledIds.has(id));
+      if (prerequisiteId) {
+        blocked.push({ noteId: note.id, prerequisiteId, reason: '前置知识尚未进入今日安排，请先查看前置知识的未安排原因；可调整预算或改天学习。' });
+        continue;
+      }
       const minutes = goals[depthOf(note)].minutes;
       if (used + minutes > config.dailyMinutes) continue;
       const review = reviews.get(note.id), mistake = mistakes.get(note.id), bundle = bundleFor.get(note.id);
@@ -124,7 +128,27 @@ export function createLearning(dependencies) {
     for (const p of existing) if (!fixedIds.has(p.noteId) && !scheduledIds.has(p.noteId)) {
       store.put('plans', p.id, { ...p, state: candidateMap.has(p.noteId) ? 'budget_deferred' : 'paused' });
     }
-    return { date, items: [...fixed, ...pending], minutes: pending.reduce((sum, p) => sum + p.minutes, 0), budget: config.dailyMinutes, backlog: Math.max(0, waiting.length - pending.length), blocked, reason: '先安排到期复习和薄弱点，再按主题前置顺序学习；超出预算的材料留待以后。' };
+    const unavailable = all.filter(n => n.kind === 'knowledge' && !scheduledIds.has(n.id)).map(note => {
+      const materialIssues = dependencies.limitationsFor?.(note) || note.meta.researchLimitations || [];
+      const result = (code, reason) => {
+        const inputs = uniqueStrings(textList(note.meta.sources?.filter(ref => ref.role === 'input').map(ref => ref.id)));
+        const targetId = note.meta.processKey ? note.meta.processKey.split(':')[0] : inputs.length === 1 ? inputs[0] : null;
+        const sourceId = code === 'material' && materialIssues.length && byId.get(targetId)?.kind === 'source' ? targetId : null;
+        return { noteId: note.id, title: note.title, code, reason, ...(sourceId ? { sourceId } : {}) };
+      };
+      if (note.meta.supersededBy) return result('superseded', '这条知识已被合并或替代，请查看保留的知识；重新加工不能恢复旧条目的学习状态。');
+      if (note.meta.stage === 'retired') return result('retired', '这条知识已设为不再使用，因此不进入今日清单。若想继续，请打开知识详情重新选择学习状态并填写理由。');
+      if (!eligible(note)) return result('material', materialIssues.join('；') || '这条知识暂不符合学习条件，请查看知识详情。');
+      if (!learningStages.has(note.meta.stage)) return result('stage', '还未加入学习。请打开知识详情，选择“加入学习”并填写理由。');
+      if (config.pausedIds.includes(note.id) || pausedMembers.has(note.id)) return result('paused', '这条知识或所属主题已暂停，请在系统的暂停项或主题详情中恢复。');
+      const fixedPlan = fixed.find(p => p.noteId === note.id);
+      if (fixedPlan) return result('today_action', fixedPlan.state === 'done' ? '今天已完成这项学习。' : '今天已跳过、延期或暂停，请查看今日安排；下一天会重新按规则安排。');
+      if (!due(note)) return result('not_due', Number.isFinite(Date.parse(reviews.get(note.id).dueAt)) ? `还未到复习时间：${dayAt(new Date(reviews.get(note.id).dueAt), config.timezone)}（${config.timezone}）。可到期再生成清单；教程可使用“跳到下次复习”。` : '复习时间记录无效，请查看知识详情和复习记录。');
+      const blocker = blocked.find(item => item.noteId === note.id);
+      if (blocker) return { ...result('prerequisite', blocker.reason), ...(blocker.prerequisiteId && byId.has(blocker.prerequisiteId) ? { prerequisiteId: blocker.prerequisiteId, prerequisiteTitle: byId.get(blocker.prerequisiteId).title } : {}) };
+      return result('budget', `今日剩余预算 ${Math.max(0, config.dailyMinutes - used)} 分钟；这条知识需要 ${goals[depthOf(note)].minutes} 分钟，或其前置项尚未安排。可调整预算或改天学习。`);
+    });
+    return { date, items: [...fixed, ...pending], minutes: pending.reduce((sum, p) => sum + p.minutes, 0), budget: config.dailyMinutes, backlog: Math.max(0, waiting.length - pending.length), blocked, unavailable, reason: '先安排到期复习和薄弱点，再按主题前置顺序学习；超出预算的材料留待以后。' };
   }
   function planAction(id, { action, days = 1 }) {
     const store = storage(), plan = store.get('plans', id);
