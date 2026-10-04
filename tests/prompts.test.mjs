@@ -1,9 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createAI } from '../src/ai.mjs';
-import { promptDefaults, renderPrompt, validatePromptOverrides } from '../src/prompts.mjs';
+import { promptDefaults, renderPrompt, validatePromptOverrides, extractionResearchContract } from '../src/prompts.mjs';
 
 const PUBLIC_BASE = 'https://8.8.8.8/v1';
+
+test('legacy defaults become neutral queries, while custom prompts retain their content and receive factual boundaries', () => {
+  const legacy = { researchSearchOppose: '{{context}} criticism counterexample contradictory evidence' };
+  assert.equal(renderPrompt('researchSearchOppose', { context: 'division' }, legacy), 'division conditions limitations exceptions counterexamples');
+  assert.equal(renderPrompt('researchSearchOppose', { context: 'division' }, { researchSearchOppose: 'CUSTOM {{context}} boundary' }), 'CUSTOM division boundary');
+  const prompt = renderPrompt('researchEvaluation', { claim: 'a=b implies a/c=b/c for c≠0', pages: '[]' }, { researchEvaluation: 'CUSTOM {{claim}} {{pages}}' });
+  assert.match(prompt, /^CUSTOM a=b/);
+  for (const rule of [/必要前提/, /改变或违反前提.*limit/, /不因此填写 limitations 或 unresolvedConflict/, /没有反例不等于已证明正确/, /经验事实检查支持、反对证据/, /原始出处/]) assert.match(prompt, rule);
+  assert.match(extractionResearchContract, /claimChecks/);
+  assert.match(extractionResearchContract, /formal/);
+});
 
 test('prompt metadata exposes complete defaults and renders values literally', () => {
   for (const key of [
@@ -98,7 +109,8 @@ test('researchBatch uses saved search, system, and evaluation prompt overrides',
   assert.match(searches[0], /^CUSTOM SUPPORT /);
   assert.match(searches[1], /^CUSTOM OPPOSE /);
   assert.ok(searches.every((query) => query.length <= 350));
-  assert.equal(modelRequest.messages[0].content, 'CUSTOM RESEARCH SYSTEM');
+  assert.match(modelRequest.messages[0].content, /^CUSTOM RESEARCH SYSTEM/);
+  assert.match(modelRequest.messages[0].content, /不强行寻找反例/);
   assert.match(modelRequest.messages[1].content, /^CUSTOM BATCH topic=A topic /);
   assert.match(modelRequest.messages[1].content, /"A claim"/);
   assert.equal(result.results[0].evidence[0].excerpt, 'Exact evidence.');

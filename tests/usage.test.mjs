@@ -68,6 +68,9 @@ test('usage settings preserve secrets/capability flags and historical costs, rej
   const saved = service.updateUsageSettings({ pricingFor, ai: { inputPrice: '2', outputPrice: '5', cachedInputPrice: '', enabled: true, apiKey: 'must-not-save' }, search: { requestPrice: '0.01' } });
   assert.equal(saved.ai.enabled, false); assert.equal(saved.ai.hasKey, false);
   assert.equal(saved.ai.dailyCallLimit, 77); assert.equal(saved.ai.monthlyBudget, 12); assert.equal(saved.ai.inputPrice, 2);
+  assert.equal(service.settings().ai.sourceCallLimit, 120);
+  assert.equal(service.updateUsageSettings({ pricingFor, ai: { sourceCallLimit: 300 } }).ai.sourceCallLimit, 300);
+  for (const sourceCallLimit of [0,301,1.5,null,'',false,true]) assert.throws(() => service.updateUsageSettings({ pricingFor, ai: { sourceCallLimit } }));
   assert.equal(saved.ai.cachedInputPrice, null); assert.equal(saved.search.requestPrice, .01);
   assert.equal(service.store.get('calls', 'historical').cost, null);
   assert.throws(() => service.updateUsageSettings({ pricingFor, ai: { inputPrice: -1 } }));

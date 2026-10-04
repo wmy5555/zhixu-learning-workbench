@@ -1,0 +1,254 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import fs from 'node:fs';
+import path from 'node:path';
+import { createAI } from '../src/ai.mjs';
+import { createService } from '../src/service.mjs';
+import { hash } from '../src/store.mjs';
+
+const json = value => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
+function transport(limit = 120, redirects = false, transientFailure = false) {
+  const requests = [], queries = [], evaluated = [], pages = new Map();
+  let pageId = 0;
+  const ai = createAI({
+    getSettings: async () => ({ ai: { enabled: true, baseUrl: 'https://8.8.8.8/v1', model: 'synthetic', sourceCallLimit: limit, dailyCallLimit: 500 }, search: { enabled: true, baseUrl: 'https://8.8.8.8' }, fetch: { enabled: true } }),
+    getSecret: async () => 'synthetic-key', getUsage: async () => ({ callsToday: 0, costMonth: 0 }), recordCall: async () => {},
+    fetchImpl: async (url, options) => {
+      const p = new URL(url); requests.push(p.pathname);
+      if (transientFailure && p.pathname.startsWith('/page-')) { transientFailure = false; return new Response('Synthetic temporary failure', { status: 503 }); }
+      if (p.pathname === '/search') {
+        queries.push(JSON.parse(options.body).query);
+        return json({ results: Array.from({ length: 3 }, () => ({ url: `https://8.8.8.8/${redirects ? 'redirect' : 'page'}-${++pageId}`, title: `Synthetic ${pageId}` })) });
+      }
+      if (p.pathname.includes('redirect')) return new Response('', { status: 302, headers: { location: p.href.replace('redirect', 'page') } });
+      if (p.pathname === '/v1/chat/completions') {
+        const prompt = JSON.parse(options.body).messages.at(-1).content;
+        const claims = JSON.parse(prompt.match(/主张：(.*?)\n\n候选正文：/s)[1]);
+        const supplied = JSON.parse(prompt.match(/候选正文：(.*?)\n\n输出 JSON：/s)[1]);
+        evaluated.push(...claims.map(c => c.claim));
+        return json({ choices: [{ message: { content: JSON.stringify({ results: claims.map(c => ({ claimIndex: c.claimIndex,
+          assessments: [{ pageIndex: 0, role: 'support', excerpt: pages.get(new URL(supplied[0].url).pathname), rationale: 'Synthetic direct evidence.' }],
+          conclusion: 'Synthetic support within stated conditions; no counterexample found.', evidenceSufficient: true, unresolvedConflict: false, limitations: [] })) }) } }] });
+      }
+      const text = `Unique synthetic evidence ${p.pathname}. ${'Distinct context ' + p.pathname}`;
+      pages.set(p.pathname, text);
+      return new Response(text, { headers: { 'content-type': 'text/plain' } });
+    },
+  });
+  return { ai, requests, queries, evaluated };
+}
+
+for (const size of [15, 24]) test(`${size} claims reach the tail in one budget, without requiring opposition`, async () => {
+  const h = transport(), claims = Array.from({ length: size }, (_, i) => `Claim ${i}: division requires a nonzero divisor`), checkpoints = [];
+  const result = await h.ai.withBudget({ limit: 120, sourceId: 'synthetic-source' }, () => h.ai.researchBatch({ claims, privacy: 'cloud',
+    hints: claims.map(claim => ({ claim, kind: 'formal', subject: claim })), onBatch: results => checkpoints.push(results.map(r => r.claim)) }));
+  assert.deepEqual(h.evaluated, claims);
+  assert.equal(checkpoints.length, size / 3);
+  assert.equal(result.results.length, size);
+  assert.ok(result.results.every(r => r.coverage === 'searched' && r.evidence.length && !r.limitations.length));
+  assert.ok(h.requests.length <= 1 + 7 * (size / 3));
+  assert.ok(h.queries.every(q => q.length <= 350 && !q.includes('criticism')));
+  assert.ok(h.queries.some(q => q.includes('定义 证明 前提 适用条件')));
+});
+
+test('redirects share the outer budget and leave capacity to evaluate saved pages', async () => {
+  const h = transport(12, true), claims = Array.from({ length: 15 }, (_, i) => `Synthetic fact ${i}`);
+  const result = await h.ai.withBudget({ limit: 12, sourceId: 'bounded-source' }, () => h.ai.researchBatch({ claims, privacy: 'cloud' }));
+  assert.ok(h.requests.length <= 12);
+  assert.ok(h.evaluated.length >= 3, 'at least the first fetched group is evaluated');
+  assert.equal(result.issues[0].code, 'SOURCE_BUDGET');
+  assert.ok(result.results.some(r => r.coverage === 'unsearched'));
+  assert.ok(result.results.some(r => r.evidence.length));
+});
+
+test('temporary page retries and redirects consume the same allowance while evaluation remains possible', async () => {
+  const h = transport(12, true, true), claims = Array.from({ length: 6 }, (_, i) => `Synthetic retry fact ${i}`);
+  const result = await h.ai.researchBatch({ claims, privacy: 'cloud' });
+  assert.ok(h.requests.length <= 12);
+  assert.ok(h.requests.filter(p => p.startsWith('/page-')).length > new Set(h.requests.filter(p => p.startsWith('/page-'))).size, 'the temporary failure was retried');
+  assert.equal(h.evaluated.length, 3);
+  assert.ok(result.results.slice(0, 3).every(r => r.evidence.length));
+  assert.ok(result.results.slice(3).every(r => r.coverage === 'unsearched'));
+});
+
+test('an unsearchable first group cannot starve either later searchable group on repeated runs', async () => {
+  const h = transport(), long = 'Synthetic long claim with more than twenty four characters';
+  const claims = [0,1,2].map(i => `${long} ${i}`).concat(['A', 'B', 'C', `${long} tail`]);
+  const prompts = { researchSearchSupport: `${'x'.repeat(270)}{{context}}`, researchSearchOppose: `${'y'.repeat(270)}{{context}}` };
+  for (let run = 0; run < 2; run++) {
+    const checkpoints = [], before = h.requests.length;
+    const result = await h.ai.researchBatch({ claims, privacy: 'cloud', prompts, onBatch: results => checkpoints.push(results) });
+    assert.equal(checkpoints.length, 3, 'each group is planned once without a retry loop');
+    assert.ok(result.results.slice(0,3).every(r => r.stopCode === 'SEARCH_QUERY_TOO_LONG' && r.coverage === 'unsearched'));
+    assert.ok(result.results.slice(3).every(r => r.evidence.length && !r.limitations.length));
+    assert.equal(h.requests.length - before, run ? 2 : 14, 'later groups run; the second run can reuse fetched pages');
+    assert.deepEqual(result.issues.map(i => i.code), ['SEARCH_QUERY_TOO_LONG']);
+  }
+  assert.deepEqual(h.evaluated, [...claims.slice(3), ...claims.slice(3)]);
+});
+
+for (const partialCheckpoint of [false, true]) test(`expired cache remains limited after network interruption (partial checkpoint: ${partialCheckpoint})`, async t => {
+  const root = fs.mkdtempSync(path.resolve('.tmp/expired-checkpoint-'));
+  const claims = ['Synthetic fresh claim', 'Synthetic stale claim A', 'Synthetic stale claim B'];
+  let service, allowCompletion = false;
+  const complete = claim => ({ claim, evidence: [{ url: `https://example.invalid/${claims.indexOf(claim)}`, title: claim, excerpt: `Synthetic evidence for ${claim}`, role: 'support', fetchedAt: new Date().toISOString() }], limitations: [], coverage: 'searched' });
+  const ai = { generate: async () => ({ text: JSON.stringify({ candidates: [{ title: '合成缓存条目', body: '合成正文', claims }] }) }), withBudget: async (_, fn) => fn(),
+    researchBatch: async ({ claims: pending, onBatch }) => {
+      if (allowCompletion) { const results = pending.map(complete); await onBatch(results); return { results }; }
+      assert.deepEqual(pending, claims.slice(1));
+      const note = service.getNote(service.readPublicNote(source.id).children[0].id);
+      assert.match(note.meta.researchLimitations.join(' '), /缓存已过期/);
+      assert.throws(() => service.startStudy({ noteId: note.id }), error => error.code === 'RESEARCH_REQUIRED');
+      if (partialCheckpoint) await onBatch([complete(claims[1])]);
+      throw Object.assign(new Error('Synthetic network interruption'), { code: 'NETWORK_ERROR' });
+    } };
+  service = createService({ dataDir: path.join(root,'data'), vaultDir: path.join(root,'vault'), aiOverride: ai });
+  t.after(async () => { await service.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const source = service.importItems({ items: [{ title: '合成缓存来源', body: '仅使用合成缓存', privacy: 'cloud' }] }).notes[0];
+  const staleAt = new Date(Date.now() - 8*86400000).toISOString();
+  for (const [index, claim] of claims.entries()) service.store.put('research', hash(`${claim}:${source.hash}`), { result: complete(claim), at: index ? staleAt : new Date().toISOString(), coverage: 'searched', attempts: 1 });
+  const job = service.processNote(source.id, { research: true }); await service.runJobs();
+  const note = service.getNote(service.readPublicNote(source.id).children[0].id);
+  assert.equal(service.store.get('jobs', job.id).researchProgress.verified, partialCheckpoint ? 2 : 1);
+  assert.match(note.meta.researchLimitations.join(' '), /Synthetic stale claim B.*缓存已过期/);
+  assert.equal(note.meta.evidence.length, 3, 'old evidence remains readable, with its limitation');
+  assert.equal(service.store.get('research', hash(`${claims[2]}:${source.hash}`)).at, staleAt);
+  assert.throws(() => service.startStudy({ noteId: note.id }), error => error.code === 'RESEARCH_REQUIRED');
+  allowCompletion = true; service.jobAction(job.id, { action: 'retry' }); await service.runJobs();
+  assert.equal(service.store.get('jobs', job.id).researchProgress.verified, 3);
+  assert.equal(service.getNote(note.id).meta.researchLimitations.length, 0, 'only successful rechecking clears stale limitations');
+});
+
+for (const scenario of [
+  { name: 'correct formal proposition needs no counterexample', claim: 'a=b and c≠0 imply a/c=b/c', role: 'support', sufficient: true, conflict: false, limitations: [] },
+  { name: 'missing nonzero premise remains limited', claim: 'a=b imply a/c=b/c for any c', role: 'limit', sufficient: false, conflict: false, limitations: ['缺少除数非零的前提。'] },
+  { name: 'outside-premise example is a boundary rather than a contradiction', claim: 'a=b and c≠0 imply a/c=b/c', role: 'limit', sufficient: true, conflict: false, limitations: [] },
+  { name: 'empirical counterevidence retains unresolved conflict', claim: 'All observed swans are white', role: 'oppose', sufficient: true, conflict: true, limitations: ['合成观察与原结论冲突。'] },
+]) test(`bounded synthetic evaluation: ${scenario.name}`, async () => {
+  const excerpt = 'Synthetic quoted evidence for a bounded scenario.';
+  const ai = createAI({
+    getSettings: () => ({ ai: { enabled: true, baseUrl: 'https://8.8.8.8/v1', model: 'synthetic', sourceCallLimit: 120 }, search: { enabled: true, baseUrl: 'https://8.8.8.8' }, fetch: { enabled: true } }),
+    getSecret: () => 'synthetic-key', getUsage: () => ({ callsToday: 0, costMonth: 0 }), recordCall: () => {},
+    fetchImpl: async (url, options) => {
+      const target = new URL(url);
+      if (target.pathname === '/search') return json({ results: [{ url: 'https://8.8.8.8/page', title: 'Synthetic scenario' }] });
+      if (target.pathname === '/page') return new Response(excerpt, { headers: { 'content-type': 'text/plain' } });
+      const prompt = JSON.parse(options.body).messages.at(-1).content;
+      assert.match(prompt, /同一前提下/); assert.match(prompt, /不因此填写 limitations/);
+      return json({ choices: [{ message: { content: JSON.stringify({ results: [{ claimIndex: 0, assessments: [{ pageIndex: 0, role: scenario.role, excerpt, rationale: scenario.name }], conclusion: scenario.name, evidenceSufficient: scenario.sufficient, unresolvedConflict: scenario.conflict, limitations: scenario.limitations }] }) } }] });
+    },
+  });
+  const { results: [result] } = await ai.researchBatch({ claims: [scenario.claim], privacy: 'cloud' });
+  assert.equal(result.evidence[0].role, scenario.role);
+  assert.equal(result.limitations.length > 0, !scenario.sufficient || scenario.conflict);
+});
+
+test('extraction is saved before research; restart resumes untouched claims and preserves IDs and edits', async t => {
+  fs.mkdirSync('.tmp', { recursive: true });
+  const root = fs.mkdtempSync(path.resolve('.tmp/research-resume-'));
+  let service, extractionCalls = 0, attempts = 0, entered, release;
+  const ready = new Promise(resolve => { entered = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const observed = [], claims = Array.from({ length: 15 }, (_, i) => `合成主张 ${i}`);
+  const candidates = Array.from({ length: 5 }, (_, i) => ({ title: `合成条目 ${i}`, body: `合成正文 ${i}`, claims: claims.slice(i*3, i*3+3) }));
+  const result = claim => ({ claim, evidence: [], limitations: ['合成证据不足'], coverage: 'searched' });
+  const ai = {
+    generate: async () => { extractionCalls++; return { text: JSON.stringify({ candidates }) }; },
+    withBudget: async ({ limit }, fn) => { assert.equal(limit, 120); return fn(); },
+    researchBatch: async ({ claims: pending, onBatch }) => {
+      observed.push([...pending]); attempts++;
+      if (attempts === 1) {
+        entered(); await gate;
+        await onBatch(pending.slice(0,3).map(result));
+        throw Object.assign(new Error('synthetic budget stop'), { code: 'SOURCE_BUDGET' });
+      }
+      const results = pending.map(result); await onBatch(results); return { results };
+    },
+  };
+  const open = () => createService({ dataDir: path.join(root,'data'), vaultDir: path.join(root,'vault'), aiOverride: ai });
+  service = open();
+  t.after(async () => { release(); await service.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const source = service.importItems({ items: [{ title: '合成预算续跑', body: '合成资料，不访问真实供应商。', privacy: 'cloud' }] }).notes[0];
+  const job = service.processNote(source.id, { research: true }), running = service.runJobs(); await ready;
+  const status = service.jobStatuses().jobs.find(j => j.id === job.id);
+  assert.equal(status.state, 'running'); assert.equal(status.extractionSaved, true); assert.equal(status.savedCount, 5);
+  assert.equal(status.phase, 'research'); assert.equal(JSON.stringify(status).includes('合成正文'), false);
+  const ids = service.readPublicNote(source.id).children.map(n => n.id);
+  release(); await running;
+  assert.equal(service.store.get('jobs', job.id).code, 'RESEARCH_INCOMPLETE');
+  assert.equal(service.store.get('jobs', job.id).stopCode, 'SOURCE_BUDGET');
+  await service.close(); service = open();
+  const edited = service.getNote(ids[0]); service.editNote(edited.id, { expectedHash: edited.hash, body: '用户自己的理解，必须保留。' });
+  service.jobAction(job.id, { action: 'retry' }); await service.runJobs();
+  assert.deepEqual(observed[1].slice(0,12), claims.slice(3));
+  assert.equal(extractionCalls, 1);
+  assert.deepEqual(service.readPublicNote(source.id).children.map(n => n.id), ids);
+  assert.equal(service.getNote(ids[0]).body, '用户自己的理解，必须保留。');
+  assert.equal(service.store.get('jobs', job.id).stopCode, null);
+  assert.equal(service.jobStatuses().jobs.find(j => j.id === job.id).researchProgress.covered, 15);
+  const hashes = ids.map(id => service.getNote(id).hash), proposals = service.store.records('proposals').length;
+  const relationCount = service.store.records('jobs').filter(j => j.type === 'relate').length;
+  service.jobAction(job.id, { action: 'retry' }); await service.runJobs();
+  assert.deepEqual(ids.map(id => service.getNote(id).hash), hashes, 'unchanged results do not rewrite notes');
+  assert.equal(service.store.records('proposals').length, proposals, 'same proposal is not duplicated');
+  assert.equal(service.store.records('jobs').filter(j => j.type === 'relate').length, relationCount, 'unchanged facts do not create redundant relation tasks');
+  service.editNote(source.id, { expectedHash: source.hash, body: '改动后的合成原文。' });
+  assert.equal(service.publicJob(service.store.get('jobs', job.id)).extractionSaved, false);
+});
+
+for (const acceptDuringRun of [false, true]) test(`later checkpoints preserve user choices and supersede only pending proposals (accept during run: ${acceptDuringRun})`, async t => {
+  const root = fs.mkdtempSync(path.resolve('.tmp/proposal-checkpoints-'));
+  const claims = Array.from({ length: 6 }, (_, i) => `Synthetic claim ${i}`), snapshots = [];
+  let service;
+  const ai = { generate: async () => ({ text: JSON.stringify({ candidates: [{ title: '合成多批候选', body: '合成候选正文', claims }] }) }), withBudget: async (_, fn) => fn(),
+    researchBatch: async ({ onBatch }) => {
+      const all = [];
+      for (let offset = 0; offset < claims.length; offset += 3) {
+        const results = claims.slice(offset, offset+3).map(claim => ({ claim, evidence: [{ url: `https://8.8.8.8/${claims.indexOf(claim)}`, title: claim, excerpt: `检查结果：${claim}`, role: 'support', fetchedAt: '2026-10-04T00:00:00Z' }], limitations: [], coverage: 'searched' }));
+        all.push(...results); await onBatch(results);
+        const pending = service.store.records('proposals').filter(p => p.state === 'pending');
+        assert.equal(pending.length, 1); snapshots.push(pending[0]);
+        if (acceptDuringRun && offset === 0) service.proposalAction(pending[0].id, { action: 'accept' });
+      }
+      return { results: all };
+    } };
+  service = createService({ dataDir: path.join(root,'data'), vaultDir: path.join(root,'vault'), aiOverride: ai });
+  t.after(async () => { await service.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const source = service.importItems({ items: [{ title: '合成修订来源', body: '合成原文', privacy: 'cloud' }], process: true }).notes[0];
+  await service.runJobs();
+  const child = service.readPublicNote(source.id).children[0];
+  service.editNote(child.id, { body: '保留用户修改', expectedHash: child.hash });
+  service.processNote(source.id, { research: true, reuseExtracted: true });
+  while (service.store.records('jobs').some(j => j.state === 'queued')) await service.runJobs();
+  assert.equal(service.getNote(child.id).body, acceptDuringRun ? snapshots[0].body : '保留用户修改');
+  assert.equal(service.store.get('proposals', snapshots[0].id).state, acceptDuringRun ? 'accepted' : 'superseded');
+  assert.throws(() => service.proposalAction(snapshots[0].id, { action: 'accept' }));
+  assert.match(snapshots[1].body, /检查结果：Synthetic claim 5/);
+  assert.equal(snapshots[0].meta.evidence.length, 3);
+  assert.equal(snapshots[1].meta.evidence.length, 6);
+  service.proposalAction(snapshots[1].id, { action: 'accept' });
+  assert.match(service.getNote(child.id).body, /检查结果：Synthetic claim 5/);
+});
+
+test('a deleted checkpoint candidate stays deleted across the next batch and restart retry', async t => {
+  const root = fs.mkdtempSync(path.resolve('.tmp/deleted-checkpoint-'));
+  let service, entered, release, extractions = 0, researchCalls = 0;
+  const ready = new Promise(resolve => { entered = resolve; }), gate = new Promise(resolve => { release = resolve; });
+  const candidates = [0,1].map(i => ({ title: `合成候选 ${i}`, body: `合成正文 ${i}`, claims: [`合成主张 ${i}`] }));
+  const ai = { generate: async () => { extractions++; return { text: JSON.stringify({ candidates }) }; }, withBudget: async (_, fn) => fn(),
+    researchBatch: async ({ claims, onBatch }) => { researchCalls++; entered(); await gate; const results = claims.map(claim => ({ claim, evidence: [], limitations: ['合成未核验'] })); await onBatch(results); return { results }; } };
+  const open = () => createService({ dataDir: path.join(root,'data'), vaultDir: path.join(root,'vault'), aiOverride: ai });
+  service = open();
+  t.after(async () => { release(); await service.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const source = service.importItems({ items: [{ title: '合成删除检查点', body: '合成原文', privacy: 'cloud' }] }).notes[0];
+  const job = service.processNote(source.id, { research: true }), running = service.runJobs(); await ready;
+  const children = service.readPublicNote(source.id).children;
+  service.store.delete(children[0].id, children[0].hash); release(); await running;
+  assert.equal(service.store.get('jobs', job.id).code, 'CANDIDATE_REMOVED');
+  assert.deepEqual(service.readPublicNote(source.id).children.map(n => n.id), [children[1].id]);
+  await service.close(); service = open();
+  service.jobAction(job.id, { action: 'retry' }); await service.runJobs();
+  assert.equal(service.store.get('jobs', job.id).code, 'CANDIDATE_REMOVED');
+  assert.deepEqual(service.readPublicNote(source.id).children.map(n => n.id), [children[1].id]);
+  assert.equal(extractions, 1); assert.equal(researchCalls, 1);
+});

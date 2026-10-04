@@ -223,7 +223,7 @@ test('research reads both search directions and uses model semantics rather than
         seenQueries.push(request.query);
         assert.equal('api_key' in request, false);
         assert.match(options.headers.authorization, /^Bearer /);
-        const opposing = request.query.includes('contradictory evidence');
+        const opposing = request.query.includes('conditions limitations');
         return jsonResponse({ results: [{
           title: opposing ? 'Opposing page' : 'Supporting page',
           url: `https://8.8.8.8/${opposing ? 'oppose' : 'support'}`,
@@ -255,7 +255,7 @@ test('research reads both search directions and uses model semantics rather than
   const result = await h.ai.research({ claim: 'claim context', privacy: 'cloud' });
   assert.equal(seenQueries.length, 2);
   assert.ok(seenQueries.some((query) => query.includes('primary source evidence')));
-  assert.ok(seenQueries.some((query) => query.includes('contradictory evidence')));
+  assert.ok(seenQueries.some((query) => query.includes('conditions limitations')));
   assert.deepEqual(new Set(result.evidence.map((item) => item.role)), new Set(['support', 'oppose']));
   assert.ok(result.evidence.every((item) => item.excerpt.includes('FULL_PAGE_')));
   assert.ok(result.evidence.every((item) => !item.excerpt.includes('SEARCH_SNIPPET')));
@@ -270,7 +270,7 @@ test('research rejects model excerpts that are not exact substrings of fetched p
     fetchImpl: async (url, options) => {
       const parsed = new URL(url);
       if (parsed.pathname === '/search') {
-        const opposing = JSON.parse(options.body).query.includes('contradictory evidence');
+        const opposing = JSON.parse(options.body).query.includes('conditions limitations');
         return jsonResponse({ results: [{
           title: opposing ? 'Second' : 'First',
           url: `https://8.8.8.8/${opposing ? 'two' : 'one'}`,

@@ -27,7 +27,7 @@ function harness({ sourceCallLimit, prompts, allClaims = [], failOpposing = fals
       if (target.pathname === '/search') {
         const query = JSON.parse(options.body).query;
         queries.push(query);
-        if (failOpposing && query.includes('contradictory evidence')) return json({ error: 'Synthetic search failure' }, 400);
+        if (failOpposing && query.includes('conditions limitations')) return json({ error: 'Synthetic search failure' }, 400);
         const key = createHash('sha256').update(query).digest('hex').slice(0, 12);
         return json({ results: Array.from({ length: 4 }, (_, index) => ({ title: 'Synthetic evidence', url: `https://8.8.8.8/page-${key}-${index}`, content: 'A snippet is never evidence.' })) });
       }
@@ -49,33 +49,31 @@ function harness({ sourceCallLimit, prompts, allClaims = [], failOpposing = fals
   return { ai, queries, pageUrls, modelClaims, requests, calls };
 }
 
-test('later claims receive their own support and opposition queries within the shared page limit', async () => {
+test('later claims receive their own support and opposition queries within each group page limit', async () => {
   const claims = claimsFor(8), h = harness({ allClaims: claims });
   const result = await h.ai.researchBatch({ claims, topic: 'A grouped synthetic topic', privacy: 'cloud' });
   assert.equal(h.queries.length, 6);
   for (const claim of claims) {
     assert.equal(h.queries.filter(query => query.includes(claim) && query.includes('primary source evidence')).length, 1);
-    assert.equal(h.queries.filter(query => query.includes(claim) && query.includes('contradictory evidence')).length, 1);
+    assert.equal(h.queries.filter(query => query.includes(claim) && query.includes('conditions limitations')).length, 1);
   }
   assert.ok(h.queries.every(query => query.length <= 350));
-  assert.ok(h.pageUrls.length <= 4);
-  assert.ok(h.requests.length <= 11);
-  assert.equal(h.modelClaims[0].length, 8);
+  assert.ok(h.pageUrls.length <= 12);
+  assert.ok(h.requests.length <= 21);
+  assert.equal(h.modelClaims.flat().length, 8);
   assert.ok(result.results.every(item => item.evidence.length === 1 && item.limitations.length === 0));
 });
 
-test('batches have a hard group cap even without an outer budget, and omitted claims are not sent to the evaluator', async () => {
+test('a small shared budget stops later groups without discarding evaluated claims', async () => {
   const claims = claimsFor(20), h = harness({ sourceCallLimit: 30, allClaims: claims });
   const result = await h.ai.researchBatch({ claims, privacy: 'cloud' });
-  assert.equal(h.queries.length, 6);
-  assert.ok(h.pageUrls.length <= 4);
-  assert.ok(h.requests.length <= 11);
-  assert.deepEqual(h.modelClaims[0].map(item => item.claim), claims.slice(0, 9));
-  for (const item of result.results.slice(9)) {
-    assert.match(item.limitations.join(' '), /未纳入本轮/);
-    assert.deepEqual(item.evidence, []);
-    assert.match(item.conclusion, /未执行/);
-  }
+  assert.equal(h.queries.length, 8);
+  assert.ok(h.pageUrls.length <= 16);
+  assert.ok(h.requests.length <= 30);
+  assert.deepEqual(h.modelClaims.flat().map(item => item.claim), claims.slice(0, 12));
+  assert.ok(result.results.slice(0, 12).every(item => item.evidence.length > 0));
+  assert.ok(result.results.slice(12).every(item => item.coverage === 'unsearched' && item.evidence.length === 0));
+  assert.equal(result.issues[0].code, 'SOURCE_BUDGET');
 });
 
 test('research planning accounts for the preceding source call instead of resetting its budget', async () => {
@@ -88,7 +86,7 @@ test('research planning accounts for the preceding source call instead of resett
   assert.ok(h.requests.length <= 8);
   assert.ok(h.calls.every(call => call.sourceId === 'synthetic-source'));
   assert.deepEqual(h.modelClaims[0].map(item => item.claim), claims.slice(0, 3));
-  assert.ok(result.results.slice(3).every(item => item.limitations.some(message => message.includes('未纳入本轮'))));
+  assert.ok(result.results.slice(3).every(item => item.coverage === 'unsearched'));
 });
 
 test('insufficient budget and oversized custom search templates return explicit gaps without transport', async () => {
@@ -99,7 +97,9 @@ test('insufficient budget and oversized custom search templates return explicit 
   const custom = harness({ allClaims: claims, prompts: { researchSearchSupport: `${'模板前缀'.repeat(100)} {{context}}` } });
   const omitted = await custom.ai.researchBatch({ claims, privacy: 'cloud' });
   assert.equal(custom.requests.length, 0);
-  assert.ok(omitted.results.every(item => item.limitations.some(message => message.includes('350'))));
+  assert.ok(omitted.results.slice(0, 3).every(item => item.limitations.some(message => message.includes('350'))));
+  assert.ok(omitted.results.every(item => item.coverage === 'unsearched'));
+  assert.equal(omitted.issues[0].code, 'SEARCH_QUERY_TOO_LONG');
   await assert.rejects(() => custom.ai.researchBatch({ claims, privacy: 'local' }), { code: 'PRIVACY_LOCAL' });
   assert.equal(custom.requests.length, 0);
 });
@@ -109,6 +109,31 @@ test('a failed search direction remains a coverage limitation despite a confiden
   const result = await h.ai.researchBatch({ claims, privacy: 'cloud' });
   assert.ok(result.results.every(item => item.limitations.some(message => message.includes('反证方向检索失败'))));
   assert.ok(result.results.every(item => item.evidence.every(evidence => evidence.excerpt === 'SYNTHETIC EVIDENCE')));
+});
+
+test('unsearchable templates persist actionable diagnostics without marking claims covered or repeating extraction', async t => {
+  const root = fs.mkdtempSync(path.resolve('.tmp/unsearchable-template-'));
+  const claims = claimsFor(3), h = harness({ allClaims: claims });
+  const service = createService({ dataDir: path.join(root,'data'), vaultDir: path.join(root,'vault'), aiOverride: h.ai });
+  t.after(async () => { await service.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  service.updatePrompts({ prompts: { researchSearchSupport: `${'模板前缀'.repeat(100)} {{context}}` } });
+  const imported = service.importItems({ items: [{ title: '合成模板错误', body: '合成原文', privacy: 'cloud' }], process: true, research: true });
+  await service.runJobs();
+  const job = service.store.get('jobs', imported.jobs[0].id), child = service.readPublicNote(imported.notes[0].id).children[0];
+  assert.equal(job.stopCode, 'SEARCH_QUERY_TOO_LONG'); assert.equal(job.researchProgress.covered, 0);
+  assert.match(child.meta.researchLimitations.join(' '), /350/);
+  assert.ok(service.store.records('research').every(r => r.coverage === 'unsearched' && r.attempts === 0));
+  service.jobAction(job.id, { action: 'retry' }); await service.runJobs();
+  assert.equal(h.requests.length, 1); assert.equal(service.getNote(child.id).hash, child.hash);
+  // A failed planning attempt must not erase coverage recorded by an earlier run.
+  for (const row of service.store.db.prepare("SELECT key FROM records WHERE namespace='research'").all()) {
+    const saved = service.store.get('research', row.key);
+    service.store.put('research', row.key, { ...saved, coverage: 'searched', attempts: 1 });
+  }
+  service.jobAction(job.id, { action: 'retry' }); await service.runJobs();
+  assert.equal(service.store.get('jobs', job.id).researchProgress.covered, 3);
+  assert.ok(service.store.records('research').every(r => r.attempts === 1));
+  assert.equal(h.requests.length, 1);
 });
 
 test('source retries reuse completed research and advance through the remaining groups without new extraction', async t => {

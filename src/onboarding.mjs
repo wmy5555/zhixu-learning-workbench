@@ -172,8 +172,8 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
     }
     const done = type => f.jobs.some(j => j.type === type && j.state === 'done' && !j.presetCase && (!targetId || j.payload?.noteId === targetId));
     const tests = {
-      process: () => done('process'),
-      'process-done': () => done('process'),
+      process: () => f.jobs.some(j => j.type === 'process' && (!targetId || j.payload?.noteId === targetId) && f.service.publicJob(j).extractionSaved),
+      'process-done': () => f.jobs.some(j => j.type === 'process' && (!targetId || j.payload?.noteId === targetId) && f.service.publicJob(j).extractionSaved),
       'study-feedback': () => realSessions.some(s => s.turns?.some(t => t.feedback) || s.feedback),
       'study-followup': () => realSessions.some(s => s.turns?.filter(t => t.feedback).length >= 2),
       'study-finish': () => realSessions.some(s => s.status === 'completed' && !s.completion?.abandoned),

@@ -4,6 +4,19 @@ import { createProcessFeedback } from '../public/process-feedback.mjs';
 
 const job = (id, state, extra = {}) => ({ id, type: 'process', state, createdAt: '2026-10-03T00:00:00Z', payload: { noteId: 'source' }, ...extra });
 
+test('saved extraction and research progress are shown independently without duplicate notifications', () => {
+  const ui = monitor(); ui.feedback.observe({ jobs: [job('partial','queued')] });
+  const progress = { extractionSaved: true, phase: 'research', research: true, researchProgress: { total: 15, covered: 3, verified: 1 } };
+  ui.feedback.observe({ jobs: [job('partial','running',progress)] });
+  assert.match(ui.feedback.status('source').message, /拆解已保存.*3\/15/);
+  assert.equal(ui.messages.length, 1);
+  ui.feedback.observe({ jobs: [job('partial','running',{ ...progress, researchProgress: { total: 15, covered: 6, verified: 1 } })] });
+  assert.match(ui.feedback.status('source').message, /6\/15/); assert.equal(ui.messages.length, 1);
+  ui.feedback.observe({ jobs: [job('partial','waiting',{ ...progress, code: 'RESEARCH_INCOMPLETE' })] });
+  assert.match(ui.feedback.status('source').message, /可以先阅读/);
+  assert.doesNotMatch(ui.feedback.status('source').message, /拆解需等待/);
+});
+
 test('structure submissions block duplicate extraction and survive failed reads only in their own library', async () => {
   const ui = monitor(async () => { throw new Error('合成读取失败'); });
   ui.feedback.observe({ jobs: [], jobRevision: 'r', jobSnapshot: 1 });

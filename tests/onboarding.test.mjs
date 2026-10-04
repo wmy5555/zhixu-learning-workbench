@@ -187,6 +187,25 @@ test('checking or reading a step cannot fabricate successful AI processing', t =
   assert.notEqual(result.progress[step.id].status, 'demonstrated');
 });
 
+test('saved real extraction completes its tutorial step while evidence remains pending', async t => {
+  const h = harness(t, { ai: {
+    test: async () => ({ message: '受控离线连接' }),
+    generate: async () => ({ text: JSON.stringify({ candidates: [{ title: '合成事实候选', body: '合成正文', claims: ['待查的合成事实'] }] }) }),
+    researchBatch: async ({ claims }) => ({ results: claims.map(claim => ({ claim, evidence: [], limitations: ['合成证据不足'] })) }),
+  } });
+  const s = h.manager.start(); await h.ready();
+  const p = h.manager.currentService, source = p.getNote(s.roles.source);
+  if (source.meta.privacy !== 'cloud') p.editNote(source.id, { expectedHash: source.hash, meta: { privacy: 'cloud' } });
+  const job = p.processNote(source.id, { research: true }); await p.runJobs();
+  assert.equal(p.store.get('jobs', job.id).state, 'waiting');
+  const step = flatSteps.find(item => item.check === 'process-done');
+  const state = h.manager.checkpoint(s.practiceId, { stepId: step.id });
+  assert.equal(state.progress[step.id].status, 'done');
+  assert.equal(p.publicJob(p.store.get('jobs', job.id)).extractionSaved, true);
+  const candidate = p.readPublicNote(source.id).children.find(n => n.title === '合成事实候选');
+  assert.ok(p.getNote(candidate.id).meta.researchLimitations.length);
+});
+
 test('external experience confirmations remain separate from observed MCP channel calls', t => {
   const h = harness(t), s = h.manager.start();
   h.manager.checkpoint(s.practiceId, { stepId: 'mcp-read', mode: 'external' });
