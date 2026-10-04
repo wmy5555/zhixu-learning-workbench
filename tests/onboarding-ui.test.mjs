@@ -279,7 +279,7 @@ test('successful action check waits for evidence, shows a toast, and offers expl
   release(); await pending;
   assert.equal(ui.state.currentStepId, 'capture-save');
   assert.equal(ui.navigations.length, before, 'success leaves the current step visible');
-  assert.match(ui.toasts.textContent, /检查已通过：已找到这一步的完成记录/);
+  assert.match(ui.toasts.textContent, /这一步已完成，可以继续了/);
   assert.equal(ui.toasts.children[0].classList.contains('toast-success'), true);
   assert.ok(findButton(ui.body, '进行下一步').classList.contains('primary-button'));
   assert.equal(findButton(ui.body, '检查这一步'), undefined);
@@ -361,8 +361,8 @@ test('refreshing completed evidence preserves an unrelated clock operation error
 
 test('case and external confirmations retain truthful feedback and stay within the selected route', async () => {
   for (const [id, expected, label] of [
-    ['proposal-accept', /检查已通过：已找到演示案例记录/, '检查这一步'],
-    ['obsidian-open', /已记录你的外部体验确认；不代表系统验证连接成功/, '记录我已在外部体验'],
+    ['proposal-accept', /这一步已完成，进度已记为“已看案例”/, '检查这一步'],
+    ['obsidian-open', /体验进度已记录，可以继续下一步/, '记录我已在外部体验'],
   ]) {
     let checking = false;
     const target = flatSteps.find(step => step.id === id);
@@ -884,8 +884,8 @@ test('external experience summary distinguishes call evidence from self-reported
   ui.setState({ externalConnections: { mcp: { status: 'observed', lastSeenAt: '2026-09-30T08:00:00Z' }, obsidian: { status: 'reported', editReported: false } } });
   await ui.tutorial.open();
   await click(descend(ui.body).find(node => node.tagName === 'BUTTON' && node.textContent.includes(chapters.at(-1).title.replace(/^\d+\.\s*/, ''))));
-  assert.match(ui.body.textContent, /发现正式通道调用记录/);
-  assert.match(ui.body.textContent, /不等于此刻在线/);
+  assert.match(ui.body.textContent, /已找到调用记录/);
+  assert.match(ui.body.textContent, /可在诊断页查看详情/);
   assert.match(ui.body.textContent, /用户确认已打开；外部编辑待体验/);
   ui.tutorial.dispose();
 });

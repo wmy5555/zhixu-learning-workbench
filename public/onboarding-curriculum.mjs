@@ -19,29 +19,37 @@ export const readingExample = {
 
 export const chapters = [
   { id: 'setup', title: '1. 配好 AI 和学习环境', steps: [
-    step('setup-welcome', '先认清练习空间', '阅读顶部“练习空间”与演示日期。正式库用于你的资料，这里使用虚构读书任务；暂停后可从本步继续。', '知道当前在哪个空间，才能放心练习。', '顶部持续显示练习标识；你能找到暂停和重置入口。', 'today', 'nav-today'),
+    step('setup-welcome', '认识首页', '这里是“今日”首页，集中查看学习安排和处理进度。左上角菜单可以打开导航，前往收集、知识库、学习和输出等页面。先按下面的介绍看看首页各块内容。', '日常使用时，可以先收集一份资料，再生成今日清单，或继续已安排的学习。', '你能找到收集入口，读懂内容统计，并知道去哪里开始学习或查看任务。', 'today', 'nav-today', { overview: [
+      { title: '引导进度', body: '查看已完成的步数，点击“继续新手引导”接着练习。扩展阅读可以按需要选择。' },
+      { title: '快速收集', body: '用右上角的“快速收集”保存文章、摘录或想法。日期卡片上的“收集资料”也能进入收集页；小屏幕上可以从这里开始。' },
+      { title: '日期与今日概览', body: '查看今天的安排、预计学习时间和时间预算。点击“收集资料”添加内容，或“生成今日清单”安排已有知识。' },
+      { title: '四项统计', body: '“已存内容”是库里的条目总数；“今日待学习”是尚未完成的安排；“待处理任务”统计等待继续或失败的任务；“异常任务”只统计失败的任务。' },
+      { title: '今日安排', body: '新学、到期复习和错题会汇总在这里。点击“开始”进入练习；暂时没空时可以“延期”“跳过”或“暂停”。“调整预算”可以修改每日学习时间。' },
+      { title: '处理动态', body: '查看 AI 拆解、批改等任务的进度。遇到等待或失败时，可进入“系统 → 任务”查看详情。' },
+      { title: '今日原则', body: '提醒你把注意力放在理解上。学习记录会保留回答、提示使用和后续修正，方便回顾。' },
+    ] }),
     step('setup-model', '填写模型服务信息', '在 AI 模型区域填写供应商提供的 HTTPS 服务地址、模型名和密钥，勾选启用。已有配置可以直接使用；不要把密钥粘贴到笔记或教程中。', '拆解和批改需要真正可用的 AI 服务。', '地址、模型和启用状态已填好，密钥只在设置中保存。', 'system', 'settings-model', settings),
     action('setup-save', '保存 AI 配置', '点击“保存能力设置”。这里保存的是正式能力配置，之后正式库和练习空间共用。', '先保存才能测试正在使用的配置。', '页面显示设置已保存，密钥显示已设置。', 'system', 'settings-save', 'settings-save', settings),
-    action('setup-test', '亲自测试 AI 连接', '点击模型区域的“测试连接”，等待实际返回成功。失败时检查地址、模型和供应商余额后手动重试。', '这一结果决定主线能否进行，填写完不等于连通。', '本次配置的实际连接测试成功；修改连接配置后需要重测。', 'system', 'settings-model', 'ai-test', settings),
+    action('setup-test', '测试 AI 连接', '点击模型区域的“测试连接”，等待连接结果。失败时检查地址、模型和供应商余额，再重试。', '连接成功后，就可以用 AI 拆解资料和批改回答。', '页面提示连接成功；修改连接配置后，再测试一次。', 'system', 'settings-model', 'ai-test', settings),
     step('setup-budget', '看懂请求上限和等待时间', '在用量与费用查看 token、每日请求上限和月预算；模型等待时间仍在能力设置。费用未知不等于免费。练习与正式使用共用额度；每次外部请求由你点击触发。', '理解等待和费用，避免失败时连续点击。', '你知道预算不足或超时后要查看任务，再自行决定是否重试。', 'system', 'usage-budget', { tab: 'usage' }),
     action('setup-preferences', '设置本次练习的节奏', '把每日学习时间设为 25 分钟，确认自己的时区和清单生成时间，点击保存。', '今日安排按时区、预算和生成时间工作。', '练习偏好保存成功。', 'system', 'settings-general', 'preferences-save', settings),
     step('setup-storage', '认识两处保存位置', '打开诊断，查看练习的 Vault 和数据目录。Markdown 保存内容，数据库保存可重建索引与运行记录；后面只在此练习 Vault 体验外部编辑。', '避免把练习文件操作到正式资料。', '你能辨认当前练习 Vault 路径。', 'system', 'system-diagnostics', { tab: 'diagnostics' }),
   ] },
   { id: 'capture', title: '2. 收集示例资料', steps: [
     action('capture-save', '粘贴并保存第一份资料', '点击“填入示例”，查看标题、原文、平台、作者和位置；保持“仅本地”，点击保存。', '先保留原始材料，后续加工也能追溯出处。', '出现“小岚的读书分享”及保存结果，原文保持完整。', 'capture', 'capture-form', 'import', { sample: readingExample, needs: ['ai'] }),
-    step('capture-source', '打开刚刚保存的原文', '点击框选的“查看原始资料全文”展开原文，再展开“原始资料信息”核对来源。原文、之后的知识、你的回答会分别保存。', '加工结果不能替代原始资料。', '能读到完整虚构文本和来源信息。', 'library', 'note-original', { noteRole: 'capturedSource' }),
+    step('capture-source', '打开刚刚保存的原文', '点击框选的“查看原始资料全文”展开原文，再展开“原始资料信息”，看看作者、链接和位置。', '之后阅读拆解结果时，也可以从这里回到原文。', '能读到完整练习文本和来源信息。', 'library', 'note-original', { noteRole: 'capturedSource' }),
     action('capture-permission', '只为示例允许外发', '编辑刚保存的示例，把隐私改为“允许云端”，保存。稍后学习示例知识时，也要为其原文和知识分别亲自允许外发。', 'AI 需要你的外发授权，本地保存不会自动授权。', '这份示例显示允许外发，正式资料不受影响。', 'library', 'note-editor', 'privacy-cloud', { noteRole: 'capturedSource' }),
-    step('capture-download', '下载两份练习文件', '下载教程提供的“读书卡片.md”和“查找线索.txt”，保存在容易找到的位置。文件只有原创虚构内容。', '接下来用真实文件体验批量导入。', '本机得到 .md 和 .txt 两个示例文件。', 'capture', 'capture-batch', { downloads: [{ title: '读书卡片.md', href: '/tutorial-examples/reading-card.md' }, { title: '查找线索.txt', href: '/tutorial-examples/finding-clues.txt' }] }),
+    step('capture-download', '下载两份练习文件', '下载下方的“读书卡片.md”和“查找线索.txt”，保存在容易找到的位置。下一步会一起导入它们。', '批量导入适合一次收集多份材料。', '本机得到 .md 和 .txt 两个示例文件。', 'capture', 'capture-batch', { downloads: [{ title: '读书卡片.md', href: '/tutorial-examples/reading-card.md' }, { title: '查找线索.txt', href: '/tutorial-examples/finding-clues.txt' }] }),
     action('capture-batch', '一次导入两个文件', '在“批量导入”同时选择刚下载的 .md 和 .txt 文件，保持本地权限后导入。', '批量保存也应逐条保留来源。', '两份文件各自出现在收集结果中。', 'capture', 'capture-batch', 'import-batch'),
   ] },
   { id: 'process', title: '3. 拆解与核验', steps: [
-    action('process-ai', '用真实 AI 拆解原文', '对“小岚的读书分享”点击“AI 拆解”，等待任务完成。不要在等待期间反复提交。', '观察原文如何变成可选择的知识条目。', '同一来源下出现真实模型返回的候选知识；失败保留原文和任务原因。', 'library', 'note-process', 'process-done', { noteRole: 'capturedSource', needs: ['ai'] }),
+    action('process-ai', '用 AI 拆解原文', '对“小岚的读书分享”点击“AI 拆解”，等待结果。处理进度可以在“系统 → 任务”中查看。', '观察原文如何变成可选择的知识条目。', '原文下方出现拆解出的候选知识；失败时可到任务页查看原因。', 'library', 'note-process', 'process-done', { noteRole: 'capturedSource', needs: ['ai'] }),
     step('process-group', '读懂来源和候选知识的关系', '展开来源分组，分别打开原文和拆解出的知识。检查 AI 是否加入了原文没有的事实。', 'AI 的整理和事实核验是不同环节。', '能沿来源回到原文；待核验事实仍显示限制。', 'library', 'library-content'),
-    action('process-manual', '亲手整理一条观点', '对示例原文选择“手动整理为待选学”。标题写“先确定分享的问题”，用自己的话写小岚的个人安排；类型选“仅个人观点或虚构练习”，目标选“讲清原理”，保存。不要用这个类型绕过事实核验。', '真实 AI 输出含未核验事实时，仍可整理原文里的个人观点继续主线。', '出现一条关联原文的候选知识，没有伪造研究证据。', 'library', 'note-extract', 'extract', { noteRole: 'capturedSource', sample: { title: '先确定分享的问题', body: '在本次虚构读书任务中，小岚先写下想讨论的问题，再选择对应摘录。这个安排仅用于她的分享，不代表对所有学习者都有效。', topic: '读书与知识整理', claimType: 'opinion' } }),
+    action('process-manual', '亲手整理一条观点', '对示例原文选择“手动整理为待选学”。标题写“先确定分享的问题”，用自己的话写小岚的个人安排；类型选“仅个人观点或虚构练习”，目标选“讲清原理”，保存。涉及事实的其他内容使用事实类型，并继续核验。', '手工整理适合保存你特别想学的一段内容。', '原文下方出现你整理的候选知识，保留标题、正文与出处。', 'library', 'note-extract', 'extract', { noteRole: 'capturedSource', sample: { title: '先确定分享的问题', body: '在本次虚构读书任务中，小岚先写下想讨论的问题，再选择对应摘录。这个安排仅用于她的分享，不代表对所有学习者都有效。', topic: '读书与知识整理', claimType: 'opinion' } }),
     external('process-search-config', '配置搜索与正文读取能力', '如要真实联网核验，在能力设置点击“前往正式 API 配置”，填写搜索服务信息，启用公开网页读取，保存后分别测试搜索与读取。暂不配置可把本项保留为“待配置”。', '核验必须有可读取的依据，搜索摘要不能代替正文。', '真实配置测试成功，或本项清楚保留为待配置。', 'system', 'settings-capabilities', { ...settings, needs: ['search'] }),
     action('process-validity', '设置资料的复查期限', '编辑这份原始资料，将“核验有效天数”设为 7 并保存。', '容易变化的信息到期后需要重新检查。', '原始资料保存了 7 天的复查周期。', 'library', 'note-editor', 'research-interval', { noteRole: 'capturedSource' }),
     action('process-research', '主动运行联网核验', '在原始资料中选择联网加工并提交。只对服务实际返回的事实和可读取正文记录结论；若虚构文本没有待核验事实，查看“无事实待核验”的实际结果。', '亲自观察外部能力可用时的完整流程。', '任务确实完成，或明确显示缺少正文、额度不足等原因。', 'library', 'note-process', 'research-done', { noteRole: 'capturedSource', needs: ['ai', 'search', 'fetch'] }),
-    preset('process-evidence', '查看支持、反对和限制案例', '加载“证据展示”预设案例，然后打开证据详情，分别查看支持、反对、限制和引用原文。所有证据都是虚构，不能用于真实结论。', '即使主线没有事实主张，也能认识证据如何展示。', '详情显示三类依据，并始终带“预设演示案例”标记。', 'library', 'note-evidence', 'evidence-open', 'evidence', { noteRole: 'evidenceKnowledge' }),
+    preset('process-evidence', '查看支持、反对和限制案例', '加载“证据展示”案例，打开证据详情，看看支持、反对和限制分别显示在哪里，再展开引用原文。', '这里可以对照不同依据，了解一条结论的适用条件。', '详情显示三类依据及引用原文，带有“预设演示案例”标记。', 'library', 'note-evidence', 'evidence-open', 'evidence', { noteRole: 'evidenceKnowledge' }),
     preset('process-expired', '观察材料过期提示', '加载“资料过期”案例，打开知识，查看过期提示与重新研究入口；真正重新研究由你主动点击。', '陈旧材料不会因为曾有依据就永久可用。', '显示待复查原因，该案例不能直接进入正常学习。', 'library', 'note-detail', 'note-open', 'expired', { noteRole: 'staleKnowledge' }),
   ] },
   { id: 'library', title: '4. 管理知识', steps: [
@@ -49,9 +57,9 @@ export const chapters = [
     action('library-edit', '修改一条知识并保存', '编辑“能够解释”示例，在正文末尾补充一句你对虚构任务的观察并保存。', '人工整理的内容应被明确保留。', '详情显示你的修改，历史里保留旧版。', 'library', 'note-editor', 'note-edit', { noteRole: 'explain' }),
     action('library-aware', '设置“知道存在”目标', '打开“知道存在”示例，编辑页确认学习目标为“了解用途”并保存。回到详情点击“设为仅供查阅”，理由写“知道这张卡片的用途即可”。', '不同材料不必都深入练习。', '这条知识以仅供查阅保存，学习目标是知道存在。', 'library', 'note-lifecycle', 'depth-aware', { noteRole: 'aware' }),
     action('library-find', '设置“知道去哪找”目标', '打开“知道去哪找”示例，编辑页确认学习目标为“会查资料”并保存。回到详情点击“设为仅供查阅”，填写保留查找线索的理由。', '有些知识保留查找线索就足够。', '这条知识保留来源位置和查找目标。', 'library', 'note-lifecycle', 'depth-find', { noteRole: 'find' }),
-    action('library-explain', '把解释目标加入学习', '接下来使用练习库预先准备的“能够解释”卡片，体验稳定的学习流程；它是虚构示例，不是刚才的 AI 输出。打开编辑页，确认学习目标为“讲清原理”并保存，再点击“加入学习”，理由写“我要用自己的话说明出处的作用”。', '练习目标决定提问方式。', '知识进入正在学习，之后出现解释型问题。', 'library', 'note-lifecycle', 'depth-explain', { noteRole: 'explain' }),
+    action('library-explain', '把解释目标加入学习', '打开练习库准备好的“能够解释”示例卡片，在编辑页将学习目标设为“讲清原理”并保存，再点击“加入学习”，理由写“我要用自己的话说明出处的作用”。', '练习目标决定提问方式。', '知识进入正在学习，之后出现解释型问题。', 'library', 'note-lifecycle', 'depth-explain', { noteRole: 'explain' }),
     action('library-apply', '把应用目标加入学习', '打开“能够迁移应用”示例，编辑页确认对应深度并保存。回到详情点击“加入学习”，理由写“想把方法用于另一种分享”。', '应用练习需要换场景并说明边界。', '另一条独立知识进入学习，保留应用目标。', 'library', 'note-lifecycle', 'depth-apply', { noteRole: 'apply' }),
-    step('library-stages', '看懂六个知识阶段', '阅读知识状态：仅供查阅、待选学、正在学习、已整理个人理解、重点知识、不再使用。整理个人理解需要自己的解释；重点知识还应审阅学习和实际使用依据。', '避免把整理完成或时间流逝当成掌握。', '知道调整阶段必须写理由，建议不会自动晋级。', 'library', 'note-lifecycle', { noteRole: 'explain' }),
+    step('library-stages', '看懂六个知识阶段', '阅读知识状态：仅供查阅、待选学、正在学习、已整理个人理解、重点知识、不再使用。整理个人理解需要自己的解释；重点知识还应审阅学习和实际使用依据。', '阶段帮助你区分留作参考、准备学习和已经整理过的内容。', '详情中可以查看当前阶段，调整阶段时需要填写理由。', 'library', 'note-lifecycle', { noteRole: 'explain' }),
     preset('library-history', '查看内容历史', '加载“历史、重复与删除”案例，打开“历史恢复专用卡片”的“查看版本”，阅读旧文版本 A 与当前版本 B。', '历史帮助比较修改，防止丢失原意。', '专用卡片显示修改前版本，主线学习知识不受影响。', 'library', 'note-history', 'history-open', 'duplicates', { noteRole: 'versionNote' }),
     preset('library-restore', '恢复练习知识的旧版', '在“历史恢复专用卡片”的版本列表选择版本 A，确认恢复，再打开这张专用卡片核对。', '通过专用卡片理解恢复会改变当前内容和属性。', '专用卡片恢复旧文，操作留有历史；主线解释知识保持原有阶段和权限。', 'library', 'note-history', 'history-restore', 'duplicates', { noteRole: 'versionNote' }),
     preset('library-merge-preview', '预览合并两条重复内容', '加载“重复与删除”案例，打开保留项的合并界面，选择另一条“重复”示例并预览。', '先看合并后的正文和来源，再决定。', '预览包含两份观点和全部来源。', 'library', 'note-merge', 'merge-preview', 'duplicates', { noteRole: 'mergeKeep' }),
@@ -60,27 +68,27 @@ export const chapters = [
     action('library-suggestions', '查看知识使用建议', '打开知识使用建议，阅读一条建议的触发原因和依据；暂不接受需要后续学习证据的建议。', '建议来自行为记录，最后由你判断。', '看见理由和可采取的操作；后面会再次回访。', 'library', 'library-recommendations', 'recommendations-open'),
   ] },
   { id: 'study', title: '5. 完成一次学习', steps: [
-    action('study-source-permission', '允许示例原文参与批改', '打开“练习原文 · 小岚的读书工作台”，隐私选择“允许云端”并保存。知识的底层原文也需要授权。', '仅允许知识外发不能绕过原文的本地限制。', '该原创虚构来源允许外发，四张知识仍需分别授权。', 'library', 'note-editor', 'privacy-cloud', { noteRole: 'source' }),
+    action('study-source-permission', '允许示例原文参与批改', '打开“练习原文 · 小岚的读书工作台”，隐私选择“允许云端”并保存。', '批改会用到知识及其原文，两处权限需要分别设置。', '原文显示允许云端处理；下一步设置知识的权限。', 'library', 'note-editor', 'privacy-cloud', { noteRole: 'source' }),
     action('study-permission', '允许解释示例用于真实批改', '打开“能够解释”示例的编辑页，选允许外发并保存。只授权这条虚构示例。', '学习问题和回答需要与材料一起交给模型。', '这条示例允许外发，后续批改可正常请求。', 'library', 'note-editor', 'privacy-cloud', { noteRole: 'explain' }),
     action('study-plan', '生成今日清单', '回到今日，点击生成或刷新今日安排，找到刚加入学习的“能够解释”示例。', '清单按学习目标、到期时间和预算安排。', '出现今日待学项、预计分钟和安排理由。', 'today', 'today-generate', 'today-generate'),
     step('study-reason', '阅读为什么这样安排', '查看每项的理由、预计时间、超出预算的余量和被前置知识阻塞的提示。', '今日清单不是固定打卡列表。', '能说明一项是新学、到期复习还是错题练习。', 'today', 'today-plan'),
     action('study-defer', '把应用示例延期一天', '在“能够迁移应用”安排上点击延期，按钮会顺延一天。若清单没有该示例，可先在“知识管理进阶”中完成“把应用目标加入学习”，再刷新今日安排。', '忙碌时可主动调整安排。', '该项显示延期，不再占用当前待学时间。', 'today', 'today-plan', 'plan-defer', { noteRole: 'apply' }),
     action('study-start', '开始解释示例', '对“能够解释”点击开始学习，阅读材料和本次目标。', '先理解原文，再独立回答。', '打开学习会话，显示原文和解释型问题。', 'study', 'study-queue', 'study-start', { noteRole: 'explain' }),
     action('study-hide', '隐藏材料后自己想一想', '点击隐藏原文，先不看提示，在输入区用自己的话思考。', '区分独立回忆与照着原文回答。', '原文已折叠，问题和回答框仍可操作。', 'study', 'study-material', 'study-hide'),
-    action('study-answer', '提交你自己的回答', '在回答框解释：小岚为什么把观点、摘录和位置分别记录，以及什么情况下仍需核对。请自行组织语言，点击提交。', '学习证据来自你的真实作答。', '你的回答已保存，界面显示等待批改。', 'study', 'study-answer', 'study-answer', { needs: ['ai'] }),
+    action('study-answer', '提交你自己的回答', '在回答框解释：小岚为什么把观点、摘录和位置分别记录，以及什么情况下仍需核对。请自行组织语言，点击提交。', '提交后，AI 会结合材料给出反馈，帮你找到需要补充的地方。', '你的回答已保存，界面显示等待批改。', 'study', 'study-answer', 'study-answer', { needs: ['ai'] }),
     action('study-feedback', '核对真实 AI 反馈', '等待批改完成，逐项阅读判断、遗漏、修正依据和追问。AI 判定也可能需要质疑。', '收到回复后再决定如何改进。', '本轮显示实际模型反馈；失败显示原因为未完成。', 'study', 'study-session', 'study-feedback', { needs: ['ai'] }),
     action('study-followup', '回答一次追问', '根据反馈，在下一轮输入自己的补充解释并提交，等待第二轮反馈。若核心练习已经结束，请先对“能够解释”开始新一轮练习并提交首轮回答。完成本专题后记得结束这轮练习。', '多轮练习记录理解的变化。', '同一会话保留至少两轮问题、回答和反馈。', 'study', 'study-answer', 'study-followup', { needs: ['ai'] }),
     action('study-resume', '从最近会话回到这里', '切到其他页面，再在学习页的最近会话中点击继续本次会话。', '学习可以中断后继续，不必重复提交。', '已有两轮回答和反馈仍然存在。', 'study', 'study-history', 'study-resume'),
     action('study-finish', '结束本次练习', '等全部反馈完成后点击结束练习，阅读本次结算和下次复习时间。若存在争议，本轮只保留记录；复习步骤提供重新练习入口，由你核对材料并提交新回答。', '结束练习才会按实际表现安排复习；有争议的记录不产生复习结算。', '本次会话完成，并说明是否独立、是否使用提示或存在争议。', 'study', 'study-finish', 'study-finish'),
-    action('study-confirm', '亲自确认自己的理解', '在“确认我的理解”填写你自己的解释并确认。不要直接复制模型建议。', 'AI 建议与用户确认分别保存。', '知识保存个人理解和用户确认记录；这不代表已经成为核心知识。', 'study', 'study-confirm', 'study-confirm'),
+    action('study-confirm', '保存自己的理解', '在“确认我的理解”中，用自己的话写下这条知识的含义和一个例子，再点击确认。可以参考刚才的反馈补充说明。', '这里保存你整理后的理解，方便以后复习和使用。', '知识详情显示你写下的个人理解和确认记录。', 'study', 'study-confirm', 'study-confirm'),
   ] },
   { id: 'review', title: '6. 加速体验复习', steps: [
     action('review-same-day', '试一次同日追加练习', '保持当前演示日期，对解释示例再做一次独立作答并结束，阅读“同日追加”的说明。', '同一天多做一次不会让间隔不断翻倍。', '同日正常追加没有重复增加复习间隔。', 'study', 'study-queue', 'review-same-day', { noteRole: 'explain', needs: ['ai'] }),
-    action('review-clock-day', '把练习日期推进一天', '在引导卡片点击“推进一天”，观察演示日期。电脑时间和正式库的日期不会跟着改变。', '立即体验需要隔天才能观察的行为。', '只有练习日期向后一天，尚未新增学习成绩。', 'today', 'today-plan', 'clock-day'),
+    action('review-clock-day', '把练习日期推进一天', '在引导卡片点击“推进一天”，看看练习日期和今日清单如何变化。', '可以马上体验第二天的安排，电脑时间和正式库日期保持原样。', '顶部的练习日期向后一天。', 'today', 'today-plan', 'clock-day'),
     action('review-clock-due', '前往下一次真正到期', '在引导的练习时间区域点击“跳到下次复习”，查看今日清单中的复习项。若已经到期，直接刷新查看。只有练习学习日期改变，电脑时间、正式库和请求预算不变。', '复习要按已保存的到期时间发生。', '解释示例作为到期复习出现。', 'today', 'today-plan', 'clock-due'),
-    action('review-finish', '完成一次跨日到期复习', '开始到期复习，隐藏原文，自己作答，等真实反馈后结束。回答不理想时，如实保留结果。', '间隔依据实际表现调整，时间加速不会制造正确回答。', '显示本次复习结果及下一次时间；仅满足条件的独立成功会增加间隔。', 'study', 'study-queue', 'review-finish', { noteRole: 'explain', needs: ['ai'] }),
+    action('review-finish', '完成一次到期复习', '打开到期复习，先隐藏原文，再回答问题。查看反馈后结束练习，看看下一次复习安排。', '知序会根据这次回答和提示使用情况，调整复习间隔。', '显示本次复习结果及下一次复习时间。', 'study', 'study-queue', 'review-finish', { noteRole: 'explain', needs: ['ai'] }),
     preset('review-hint', '查看提示会如何影响练习', '加载“提示完成”预设案例，打开已准备的预设会话，点击“分级提示”；阅读提示来自哪里。', '提示是帮助，同时需要如实记录使用。', '预设会话显示提示，并记录本次使用过提示。', 'study', 'study-hint', 'study-hint', 'hints', { noteRole: 'hintSession' }),
-    preset('review-hint-finish', '观察带提示结果的近期安排', '继续“提示完成”案例中准备好的预设会话，点击结束练习并查看原因；其中的预设回答不算你的成绩。', '用明确标记的例子观察提示或错误导致的近期再练。', '预设会话显示近期复习，完成状态是“已看案例”。', 'study', 'study-finish', 'study-finish', 'hints', { noteRole: 'hintSession' }),
+    preset('review-hint-finish', '观察带提示结果的近期安排', '继续“提示完成”案例中的会话，点击结束练习，看看近期复习安排及其原因。', '借助这个案例，了解使用提示后会怎样安排下一次练习。', '预设会话显示近期复习，完成状态是“已看案例”。', 'study', 'study-finish', 'study-finish', 'hints', { noteRole: 'hintSession' }),
     preset('review-skip', '跳过今日的一项安排', '刷新今日清单，在“仅供今日跳过的安排”上点击“今日跳过”。若今日预算已用完，先推进一天再刷新。', '跳过只处理当天安排。', '专用案例项显示今日跳过，解释和应用示例仍保留。', 'today', 'today-plan', 'plan-skip', 'hints', { noteRole: 'skipKnowledge' }),
     preset('review-pause', '暂停不准备继续学的条目', '在“仅供暂停的安排”上点击暂停，与“今日跳过”对照阅读。若今日预算已用完，先推进一天再刷新。', '暂停会让条目离开后续日常安排。', '专用案例项显示暂停；可在设置的暂停项中恢复。', 'today', 'today-plan', 'plan-pause', 'hints', { noteRole: 'pauseKnowledge' }),
   ] },
@@ -89,7 +97,7 @@ export const chapters = [
     preset('mistake-study', '开始一次专项练习', '在该错题点击针对练习，阅读针对遗漏提出的问题。若继续提交答案，先为此虚构案例允许外发，并自行作答。', '纠错练习针对具体误解。', '学习会话显示这条错题的上下文。', 'study', 'study-mistakes', 'mistake-study', 'mistakes', { tab: 'mistakes', noteRole: 'mistake' }),
     preset('mistake-dispute', '对判定提出质疑', '回到案例错题，点击质疑并填写“我需要重新核对这条判定的依据”。', 'AI 的结论可以被质疑。', '错题变为已质疑，争议不会当作独立成功记录。', 'study', 'study-mistakes', 'mistake-dispute', 'mistakes', { tab: 'mistakes', noteRole: 'mistake' }),
     preset('mistake-reopen', '重新打开错题', '在刚质疑的错题上点击重新打开。', '处理状态可以修正，记录仍保留。', '错题恢复未解决状态。', 'study', 'study-mistakes', 'mistake-reopen', 'mistakes', { tab: 'mistakes', noteRole: 'mistake' }),
-    preset('mistake-resolve', '标记已经纠正', '阅读案例中的修正依据，点击已纠正。这是预设处理流程，不代表你已通过专项练习。', '处理按钮表达你的判断，不伪造学习分数。', '错题标为已纠正。', 'study', 'study-mistakes', 'mistake-resolve', 'mistakes', { tab: 'mistakes', noteRole: 'mistake' }),
+    preset('mistake-resolve', '标记已经纠正', '阅读案例中的修正依据，点击“已纠正”，看看错题的处理状态如何变化。', '纠正后仍可查看原回答和修正依据，方便回顾。', '错题标为已纠正。', 'study', 'study-mistakes', 'mistake-resolve', 'mistakes', { tab: 'mistakes', noteRole: 'mistake' }),
     preset('mistake-revoke', '撤销不成立的错题', '点击撤销，说明“预设流程练习：此记录不作为我的错误证据”。', '不成立的判定应明确撤销。', '记录变为已撤销，原始内容仍能追溯。', 'study', 'study-mistakes', 'mistake-revoke', 'mistakes', { tab: 'mistakes', noteRole: 'mistake' }),
   ] },
   { id: 'topics', title: '8. 组织主题学习', steps: [
@@ -128,7 +136,7 @@ export const chapters = [
     action('output-use', '标记真正采用的知识', '勾选你确实用于这次练习输出的引用，保存采用记录。仅生成或看见引用不算采用。', '实际使用记录是之后知识建议的一项依据。', '出现你明确勾选的采用记录。', 'output', 'draft-editor', 'draft-use'),
     action('output-unuse', '取消一次采用标记', '取消刚才一个引用的采用勾选并保存，检查记录随之撤回。', '误勾选可以更正，不应累积虚假使用。', '取消的引用不再计作本草稿实际采用。', 'output', 'draft-editor', 'draft-unuse'),
     action('output-capture', '把草稿送回收集箱', '在草稿中选择送回收集箱，检查标题和正文后保存为新资料。', '输出可成为下一轮整理的输入。', '收集箱出现新资料，并保留你确认后的正文。', 'output', 'draft-editor', 'draft-capture'),
-    preset('output-core-review', '读懂核心知识建议的依据', '加载“核心建议”案例，打开知识使用建议，核对三天独立练习和两天采用记录。所有日期和回答均为预设，不是你的掌握证明。', '单纯推进日期不能产生核心建议。', '预设记录单独标记，建议显示具体依据。', 'library', 'library-recommendations', 'recommendations-open', 'core-suggestion', { noteRole: 'coreKnowledge' }),
+    preset('output-core-review', '读懂核心知识建议的依据', '加载“核心建议”案例，打开知识使用建议，展开三天练习和两天采用记录，看看建议是怎样形成的。', '知序会结合练习和使用记录，建议哪些知识值得重点保留。', '预设记录单独标记，建议显示具体依据。', 'library', 'library-recommendations', 'recommendations-open', 'core-suggestion', { noteRole: 'coreKnowledge' }),
     preset('output-core-accept', '接受一次预设阶段建议', '只对带“预设演示案例”的核心建议点击接受，查看知识阶段变化。', '练习最后仍由用户决定阶段。', '案例知识成为核心，主线学习记录不被替代。', 'library', 'library-recommendations', 'recommendation-accept', 'core-suggestion', { noteRole: 'coreKnowledge' }),
     preset('output-suggestion-dismiss', '暂不采纳另一条建议', '在知识使用建议中找到“暂不采纳建议的专用卡片”，阅读转为查阅的理由后点击“暂不采用”。', '建议可以拒绝，不必全部接受。', '专用卡片的建议记为已处理，知识阶段仍为待选学。', 'library', 'library-recommendations', 'recommendation-dismiss', 'core-suggestion', { noteRole: 'dismissKnowledge' }),
   ] },
@@ -137,7 +145,7 @@ export const chapters = [
     preset('jobs-detail', '打开一个任务的详情', '加载“任务故障”案例，将筛选恢复为全部，展开预设索引失败任务的“查看详情”，阅读失败原因。', '任务状态解释当前发生了什么。', '看见预设失败任务的原因和案例标记。', 'system', 'system-jobs', 'job-open', 'jobs', { tab: 'jobs', noteRole: 'failedJob' }),
     preset('jobs-cancel', '取消预设的等待任务', '加载“任务故障”案例，找到“预设演示案例：等待取消”的任务并点击取消。', '取消停止后续执行，但保留已保存输入。', '该任务变为已取消。', 'system', 'system-jobs', 'job-cancel', 'jobs', { tab: 'jobs', noteRole: 'cancelJob' }),
     preset('jobs-retry', '手动重试预设失败任务', '对“预设演示案例：索引失败”点击重试，观察新状态。该预设案例仅重新扫描本地练习资料，不会发起外部请求。', '失败不会自动重复请求，重试由你决定。', '预设任务重新排队并显示本地扫描结果，仍标为案例。', 'system', 'system-jobs', 'job-retry', 'jobs', { tab: 'jobs', noteRole: 'failedJob' }),
-    action('calls-open', '查看真实调用记录', '进入诊断，查看调用次数、耗时、费用是否未知和实际成功或失败记录。预设案例没有真实供应商调用。', '区分任务结果与外部调用情况。', '调用记录与实际操作一致，不把费用未知写成零。', 'system', 'system-calls', 'calls-open', { tab: 'diagnostics' }),
+    action('calls-open', '查看 AI 调用记录', '进入诊断，查看调用次数、耗时、费用及成功或失败记录。可以找到之前拆解、出题和批改的请求。', '遇到等待或失败时，可以从这里了解请求情况。', '诊断页显示调用记录；缺少价格信息的费用显示为未知。', 'system', 'system-calls', 'calls-open', { tab: 'diagnostics' }),
     action('prompts-save', '修改练习提示词', '在能力设置展开提示词，阅读变量说明，只在一份模板末尾补充“请使用简洁中文”，保存；保留所有必填变量。', '练习提示词可独立调整，影响之后主动发起的调用。', '练习模板保存成功，已有记录不被重写。', 'system', 'settings-prompts', 'prompts-save', settings),
     action('prompts-reset', '恢复默认提示词', '把刚修改的模板恢复默认并保存。', '试验后可以回到已知模板。', '该模板恢复默认内容。', 'system', 'settings-prompts', 'prompts-reset', settings),
     action('appearance-theme', '切换日间与夜间外观', '点击外观中的日间或夜间选项，检查文字、抽屉和引导卡片；这是浏览器外观设置。', '选择适合自己的阅读环境。', '整个界面和引导都切换主题。', 'system', 'system-appearance', 'appearance-theme', { tab: 'appearance' }),
@@ -148,16 +156,16 @@ export const chapters = [
     step('backup-boundary', '记住附件的备份范围', '阅读备份说明：JSON 备份包含 Markdown 与运行记录；图片、其他附件和 .obsidian 配置需要另外备份整个 Vault。', '避免恢复时才发现附件未在文件里。', '能区分应用备份与整个文件夹备份。', 'system', 'system-backup', { tab: 'data' }),
   ] },
   { id: 'external', title: '12. 外部工具与文件协作', steps: [
-    external('mcp-config', '了解并配置正式 MCP 通道', '在能力设置阅读 MCP 接入说明。如需使用，点击“前往正式 API 配置”，在正式设置主动启用，再按文档配置外部客户端的 stdio 服务。教程不会替你开启；外部 MCP 连接的是正式库。', '先认清外部工具的访问范围。', '未连接时保持待配置，不把本地页面当成外部接通。', 'system', 'settings-mcp', { tab: 'settings', needs: ['mcp'] }),
-    external('mcp-read', '在外部客户端实际读取', '实际连接后，在客户端调用只读查找、读取知识、读取来源和关联查询。确认客户端返回真实结果，再回诊断核对调用记录。', '只有真实客户端调用才能证明接通。', '诊断有实际 MCP 调用记录；人工勾选只能记已看说明。', 'system', 'system-diagnostics', { tab: 'diagnostics', needs: ['mcp'] }),
+    external('mcp-config', '了解并配置正式 MCP 通道', '在能力设置阅读 MCP 接入说明。如需使用，点击“前往正式 API 配置”，在正式设置主动启用，再按文档配置外部客户端的 stdio 服务。外部 MCP 连接的是正式库。', '配置后，外部客户端可以按你授予的权限查找和读取知识。', '能力设置中可以查看 MCP 的启用状态和接入方法；暂未连接时保留待配置。', 'system', 'settings-mcp', { tab: 'settings', needs: ['mcp'] }),
+    external('mcp-read', '在外部客户端读取知识', '连接后，在客户端试试只读查找、读取知识、读取来源和关联查询。查看返回结果，再回诊断页查看调用记录。', '可以从外部客户端查找材料，并回到知序追踪它的出处。', '客户端显示查询结果，诊断页可以查看 MCP 调用记录。', 'system', 'system-diagnostics', { tab: 'diagnostics', needs: ['mcp'] }),
     preset('proposal-accept', '审阅并接受预设写入提案', '加载“写入提案”案例，在写入提案页比较修改前后，对“待接受”提案点击接受。它是练习用记录，没有开启 MCP 权限。', '外部建议先审阅，才可写入。', '案例提案被接受，专用知识正文改变。', 'system', 'system-proposals', 'proposal-accept', 'proposals', { tab: 'proposals', noteRole: 'proposal' }),
     preset('proposal-reject', '拒绝另一份预设提案', '对“待拒绝”提案检查理由后点击拒绝。', '不适合的建议不必写入。', '提案变为已拒绝，专用知识保持原文。', 'system', 'system-proposals', 'proposal-reject', 'proposals', { tab: 'proposals', noteRole: 'proposalReject' }),
-    external('obsidian-open', '用 Obsidian 打开练习 Vault', '复制诊断中当前练习 Vault 路径，在 Obsidian 选择“打开文件夹作为仓库”，只打开这个练习目录。未安装可保留待体验。', '知识内容也能在外部 Markdown 工具中阅读。', 'Obsidian 中看见练习资料；本页不能代替外部打开的实际验证。', 'system', 'system-diagnostics', { tab: 'diagnostics', needs: ['obsidian'] }),
+    external('obsidian-open', '用 Obsidian 打开练习 Vault', '复制诊断中当前练习 Vault 路径，在 Obsidian 选择“打开文件夹作为仓库”，打开这个练习目录。未安装可保留待体验。', '知识内容也能在外部 Markdown 工具中阅读。', 'Obsidian 中显示练习资料；体验后可以在引导中记录进度。', 'system', 'system-diagnostics', { tab: 'diagnostics', needs: ['obsidian'] }),
     external('obsidian-edit', '外部编辑并核对稳定身份', '在 Obsidian 给一条练习知识补充一句备注，保留开头 id、kind 等属性，保存；回知序刷新并核对同一条知识。', '文件名可变，稳定 id 连接学习记录和关系。', '同一知识显示外部修改，已有身份和历史仍可追溯。', 'library', 'note-detail', { noteRole: 'find', needs: ['obsidian'] }),
     preset('links-preview', '预览知识链接更新', '加载“链接与冲突”案例，打开“链接更新专用主题”的链接预览，核对将添加的成员链接以及原来的说明。', '先看系统准备修改哪部分链接。', '预览显示待添加的成员链接，保留专用主题的原文。', 'library', 'note-links', 'links-preview', 'conflicts', { noteRole: 'linkTopic' }),
     preset('links-sync', '确认同步链接', '在“链接更新专用主题”的预览中点击“确认更新链接”，再打开主题查看结果。', '保持应用与 Markdown 中的链接一致。', '专用主题的链接更新完成，原来的说明仍保留。', 'library', 'note-links', 'links-sync', 'conflicts', { noteRole: 'linkTopic' }),
     preset('conflicts-read', '认识外部编辑冲突', '加载“冲突”案例，在系统冲突页阅读旧版与新版的差别，再打开专用知识查看历史。此案例不会覆盖你手写的内容。', '冲突需要对照处理，不能静默选择某一版。', '看到明确的预设冲突报告及两个版本。', 'system', 'system-conflicts', 'conflicts-open', 'conflicts', { tab: 'conflicts', noteRole: 'conflictNote' }),
-    step('complete-review', '回顾核心体验', '查看核心流程进度，回顾保存原文、加工、亲自作答、确认理解、到期复习和引用输出。完成后可以回正式库开始使用；扩展阅读按兴趣自选，不必全部学习。', '完成核心体验不代表掌握所有知识，也不代表可选外部服务已接通。', '核心步骤都有完成记录；可选教程未学习或待配置不会阻止核心流程完成。', 'today', 'nav-today'),
+    step('complete-review', '回顾核心体验', '看看核心流程进度，回顾如何保存原文、拆解知识、作答、整理理解、复习和输出。完成后，回正式库收集自己的第一份资料；也可以按兴趣选择扩展阅读。', '以后可以从今日页或左下角帮助入口，继续练习和查看教程。', '核心步骤都有完成记录；可以回正式库开始使用，或继续扩展阅读。', 'today', 'nav-today'),
   ] },
 ];
 
@@ -212,23 +220,23 @@ export function getCurriculum(materialId) {
   if (curriculumCache.has(materialId)) return curriculumCache.get(materialId);
   const [keyword, semantic] = scenarioQueries[materialId];
   const overrides = {
-    'setup-welcome': { instruction: `本次选择“${material.label.slice(2)}”。阅读练习空间标识；之后围绕同一原文学习、复习和输出。模拟心得不是你的个人理解，真实摘录也不等于已经核验。` },
-    'capture-save': { sample: materialSample(materialId), expected: materialId === 'custom' ? '保存你粘贴的原文和填写的出处，个人心得尚未确认为理解。' : `保存“${material.source.title}”的原文摘录、来源与模拟心得，尚无学习成绩。` },
+    'setup-welcome': { instruction: '这里是“今日”首页，集中查看学习安排和处理进度。左上角菜单可以打开导航，前往收集、知识库、学习和输出等页面。先按下面的介绍看看首页各块内容。' },
+    'capture-save': { sample: materialSample(materialId), expected: materialId === 'custom' ? '资料列表中出现你保存的材料，打开后可以查看原文、心得和出处。' : `资料列表中出现“${material.source.title}”，打开后可以查看原文摘录、心得示例和来源。` },
     'capture-source': { expected: '能读到完整选段、明确的省略标记、作者、链接和许可；模拟心得单独标明。' },
-    'process-ai': { instruction: '对刚保存的原文点击“AI 拆解”，等待实际任务完成，再检查候选知识是否忠实于原文。', expected: '当前原文下出现真实模型返回的候选知识；不预先填入 AI 答案。' },
+    'process-ai': { instruction: '对刚保存的原文点击“AI 拆解”，等待结果。完成后，看看原文被整理成了哪些候选知识。', expected: '当前原文下方出现拆解出的候选知识，可以逐条打开查看。' },
     'process-group': { instruction: `对照原文检查候选知识，留意这些内容是否被拆开并保留条件：${material.focus.join(' ')} ${material.verification}` },
-    'process-manual': { instruction: '对当前原文点击“手动整理为待选学”，亲自填写标题、正文与出处，学习目标选“讲清原理”。数学、代码行为等事实保持事实类型并继续核验；作者主张和自己的选择应如实标明身份，不能用观点类型掩盖事实。', sample: null, why: '手工整理与 AI 拆解都须保留来源和事实限制。' },
+    'process-manual': { instruction: '对当前原文点击“手动整理为待选学”，填写标题、整理后的正文与出处，学习目标选“讲清原理”。按内容选择类型：数学、代码行为等选择事实，作者看法或个人选择使用对应的观点类型。事实条目保存后可继续联网核验。', sample: null, why: '手工整理适合保存你特别想学的一段内容，之后可以从知识详情回查出处。', expected: '原文下方出现你整理的候选知识，保留标题、正文与出处。' },
     'process-research': { instruction: `对原文主动运行联网加工，审阅返回正文、依据与限制。${material.verification}` },
     'library-filter': { instruction: `搜索“${keyword}”，切换类型、阶段和分组，找到本场景原文与真实拆解条目。` },
     'library-edit': { instruction: '编辑已选知识，补充你自己的观察并保存；保留 AI 整理与个人补充的身份。' },
-    'library-explain': { instruction: `从本原文的实际候选中选择一条，主线目标：${material.goals[2][1]}。选好后打开编辑页，将“学习目标”设为“讲清原理”并保存，再“加入学习”并填写理由。仍待核验的事实须先联网加工、审阅依据；没有可学条目时不能伪造完成。`, why: '学习使用你选中的真实拆解结果，不切回无关预设卡片。', expected: '当前原文的一条实际知识进入学习，之后沿用同一条知识。' },
+    'library-explain': { instruction: `从这份原文的候选知识中选一条，练习目标：${material.goals[2][1]}。打开编辑页，将“学习目标”设为“讲清原理”并保存，再点击“加入学习”并填写理由。若条目显示“待核验”，先完成联网加工并查看依据，再加入学习。`, why: '接下来的学习和复习会围绕你选中的这条知识展开。', expected: '选中的知识进入正在学习，可以从详情开始练习。' },
     'study-source-permission': { instruction: '核对本场景原文的外发权限。之前已允许时无需重复授权；仅本地时由你决定是否允许。', expected: '选中知识关联的真实原文允许外发，未授权的其他资料保持本地。' },
     'study-permission': { instruction: '打开刚选中的解释知识，把隐私改为“允许云端”并保存；核对底层原文也已授权。' },
     'study-start': { instruction: `对已选的解释知识点击开始学习。主线问题：${material.recall}` },
-    'study-answer': { instruction: `先按学习会话中的题目独立作答：${material.recall} 不填入参考答案。` },
+    'study-answer': { instruction: `阅读学习会话中的题目，在回答框用自己的话作答：${material.recall} 写好后点击提交，等待反馈。` },
     'study-followup': { instruction: `回答实际 AI 反馈中的追问，保留你自己的表达。可继续思考：${material.followup} 若上轮已结束，重新开始同一知识的练习。` },
-    'study-confirm': { instruction: `在“确认我的理解”亲自组织解释，不复制模拟心得或 AI 结论。可围绕这些空白整理：${material.confirm}`, sample: null },
-    'review-finish': { instruction: `开始同一知识的到期复习，隐藏材料后回答本次会话中的新问题：${material.review} 等待实际反馈并结束，不把推进日期当成正确作答。` },
+    'study-confirm': { instruction: `在“确认我的理解”中，结合刚才的练习和反馈，写下自己的解释。可以按这个顺序整理：${material.confirm} 写好后点击确认。`, sample: null },
+    'review-finish': { instruction: `打开这条知识的到期复习，先隐藏材料，再回答本次会话中的新问题：${material.review} 查看反馈后结束练习，看看下一次复习时间。` },
     'topic-create': { title: '建立本场景的学习主题', instruction: '新建主题，选本原文的真实解释与应用知识作为成员，核对目的和顺序后保存。', sample: { title: material.label.slice(2), body: material.goals[2][1] + '\n\n' + material.goals[3][1] } },
     'topic-copy': { instruction: '复制当前主题，保留成员，另起一个符合你本次目标的名字后保存。' },
     'topic-split': { instruction: '复制或拆分当前主题，移除暂不需要的成员，用新的任务目标另存。' },
@@ -238,14 +246,13 @@ export function getCurriculum(materialId) {
     'output-outline': { instruction: '选择组织提纲，用本场景的输出目标生成提纲；核对哪些部分有原文依据。', sample: { question: `为以下任务组织提纲，不写成已经实践有效的总结：${material.output}` } },
     'output-draft': { instruction: `${material.output} 选择草稿，亲自允许本次查询外发后生成。`, sample: { question: material.output + '\n\n需要应用的练习情境：' + material.transfer + (material.transferCode ? '\n\n' + material.transferCode : '') } },
     'output-edit': { instruction: '打开主线刚生成的草稿，按本场景的用途改写，核对引用、假设与限制后保存。' },
-    'output-use': { instruction: '用草稿检查或完善本次练习方案，再只勾选确实采用的知识并保存。不把练习采用说成真实生活已经实施。' },
+    'output-use': { instruction: '用草稿检查或完善本次练习方案，再勾选这次用到的知识并保存。之后可以在知识详情查看采用记录。' },
     'capture-download': { instruction: '下载本场景的“伴读原文.md”和“应用练习.txt”。原文保留署名与许可，练习问题单独存放，不含参考答案。', downloads: [{ title: '伴读原文.md', material: materialId, companion: true }, { title: '应用练习.txt', material: materialId, exercise: true }] },
     'capture-batch': { instruction: '批量导入刚下载的伴读原文与练习问题文件，保持仅本地，再核对每份来源。主线仍使用之前选中的原文。' },
     'relation-local': { instruction: `对解释知识本地寻找联系。${material.companion?.proposal || '可以另存一份相关原文，核对哪些内容构成补充、条件或对照；相似不等于支持。'}` },
     'relation-ai': { instruction: `仅为参与比较的原文与知识亲自允许外发，再请求 AI 细查联系。${material.companion?.proposal || '核对双方摘录、关系类型与适用边界。'} 返回结果只是待审阅建议。` },
   };
   if (materialId === 'custom') {
-    overrides['setup-welcome'].instruction = '本次使用你自行粘贴的材料。内容先保存在独立练习区，不会自动交给外部模型；亲自核对出处、权限与是否含敏感信息。';
     overrides['capture-save'].instruction = '点击“填入示例”，检查之前粘贴的原文和出处。需要时继续修改，保持“仅本地”，亲自保存。';
     overrides['capture-source'].expected = '能读到自己粘贴的完整原文、所填出处和单独的个人心得。';
     overrides['capture-download'] = { instruction: '准备自己的一份补充材料 .md 和一份应用问题 .txt；不含密码或不愿外发的敏感信息。', downloads: [] };
@@ -255,7 +262,7 @@ export function getCurriculum(materialId) {
   }
   ['aware', 'find', 'apply'].forEach((role, index) => {
     const goalIndex = role === 'apply' ? 3 : index;
-    overrides[`library-${role}`] = { title: `设置“${goalNames[role]}”目标`, instruction: `在本原文下选择主线以外的一条实际知识，目标：${material.goals[goalIndex][1]}。编辑“学习目标”为“${goalNames[role]}”后保存，再${role === 'apply' ? '加入学习' : '设为仅供查阅'}并写下理由。这三个扩展目标可按顺序沿用同一条非主线知识，旧操作记录保留；没有可用条目时先手动整理另一项内容，事实仍须核验。`, expected: '保留实际来源与所选目标，没有预设成绩，也不改变主线知识。' };
+    overrides[`library-${role}`] = { title: `设置“${goalNames[role]}”目标`, instruction: `在这份原文下另选一条知识，目标：${material.goals[goalIndex][1]}。将“学习目标”设为“${goalNames[role]}”后保存，再${role === 'apply' ? '加入学习' : '设为仅供查阅'}并写下理由。三个扩展目标可以依次用同一条知识体验；没有其他条目时，先手动整理一项内容。事实条目需完成核验后再学习。`, expected: '这条知识显示所选目标，之后可以继续体验其他目标；核心流程仍围绕之前选中的知识。' };
   });
   const rows = flatSteps.map(item => {
     if (item.caseId) return item;
