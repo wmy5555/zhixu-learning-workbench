@@ -70,7 +70,7 @@ export const chapters = [
   { id: 'study', title: '5. 完成一次学习', steps: [
     action('study-source-permission', '允许示例原文参与批改', '打开“练习原文 · 小岚的读书工作台”，隐私选择“允许云端”并保存。', '批改会用到知识及其原文，两处权限需要分别设置。', '原文显示允许云端处理；下一步设置知识的权限。', 'library', 'note-editor', 'privacy-cloud', { noteRole: 'source' }),
     action('study-permission', '允许解释示例用于真实批改', '打开“能够解释”示例的编辑页，选允许外发并保存。只授权这条虚构示例。', '学习问题和回答需要与材料一起交给模型。', '这条示例允许外发，后续批改可正常请求。', 'library', 'note-editor', 'privacy-cloud', { noteRole: 'explain' }),
-    action('study-plan', '生成今日清单', '回到今日，点击生成或刷新今日安排，找到刚加入学习的“能够解释”示例。', '清单按学习目标、到期时间和预算安排。', '出现今日待学项、预计分钟和安排理由。', 'today', 'today-generate', 'today-generate'),
+    action('study-plan', '生成今日清单', '回到今日，点击“生成今日清单”或“重新安排”，找到刚加入学习的解释知识。若没有出现，按“未安排的原因”检查学习状态、核验、暂停与预算，再生成清单。', '清单按学习目标、到期时间和预算安排。', '选中的解释知识出现在今日待学项中，显示预计分钟和安排理由。', 'today', 'today-generate', 'today-generate', { noteRole: 'explain' }),
     step('study-reason', '阅读为什么这样安排', '查看每项的理由、预计时间、超出预算的余量和被前置知识阻塞的提示。', '今日清单不是固定打卡列表。', '能说明一项是新学、到期复习还是错题练习。', 'today', 'today-plan'),
     action('study-defer', '把应用示例延期一天', '在“能够迁移应用”安排上点击延期，按钮会顺延一天。若清单没有该示例，可先在“知识管理进阶”中完成“把应用目标加入学习”，再刷新今日安排。', '忙碌时可主动调整安排。', '该项显示延期，不再占用当前待学时间。', 'today', 'today-plan', 'plan-defer', { noteRole: 'apply' }),
     action('study-start', '开始解释示例', '对“能够解释”点击开始学习，阅读材料和本次目标。', '先理解原文，再独立回答。', '打开学习会话，显示原文和解释型问题。', 'study', 'study-queue', 'study-start', { noteRole: 'explain' }),

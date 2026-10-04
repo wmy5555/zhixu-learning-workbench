@@ -253,6 +253,15 @@ async function renderToday() {
     sectionHeading("今日安排", "主题学习、到期复习与错题会在这里汇合", button("调整预算", { onClick: () => { state.systemTab = "settings"; navigate("system"); } })),
     items.length ? el("div", { class: "list" }, items.map(todayItem)) : emptyState("还没有今日任务", "生成清单只会安排已有内容，并受时间预算和暂停项限制。", button("生成清单", { kind: "primary", onClick: generateToday })),
   ]);
+  const unavailable = asArray(today.unavailable);
+  if (unavailable.length) taskPanel.append(el("details", { open: !items.some(item => item.state === "pending") }, [
+    el("summary", { text: `未安排的原因 · ${unavailable.length} 项` }),
+    el("div", { class: "list" }, unavailable.map(item => el("div", { class: "list-item no-icon" }, [
+      el("div", { class: "item-copy" }, [el("h3", { text: item.title }), el("p", { text: item.reason })]),
+      el("div", { class: "item-actions" }, [button("查看知识", { kind: "text", onClick: () => openNote(item.noteId) }),
+        item.sourceId ? button("查看原文并重新加工", { kind: "text", onClick: () => openNote(item.sourceId) }) : null]),
+    ]))),
+  ]));
 
   const side = el("aside", { class: "page-stack" }, [
     el("section", { class: "panel" }, [
@@ -274,7 +283,7 @@ async function generateToday() {
   try {
     const today = await api.generateToday();
     if (state.bootstrap) state.bootstrap.today = today;
-    toast("今日清单已更新", "success");
+    toast(asArray(today.items).some(item => item.state === "pending") ? "今日清单已更新" : "本次没有待学项，请查看未安排的原因", "success");
     await renderToday();
   } catch (error) { handleError(error); }
 }
@@ -869,14 +878,16 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
     ]),
     el("div", { class: "form-actions" }, [button("保存修改", { kind: "primary", type: "submit" }), button("取消", { onClick: () => returnToSourceId ? refreshSourceGroup(returnToSourceId).catch(handleError) : renderNoteDrawer(note) })]),
   );
+  const initialFields = serializeForm(form);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const data = serializeForm(form);
     try {
       if (note.kind === "source" && (!Number.isInteger(Number(data.researchIntervalDays)) || Number(data.researchIntervalDays) < 1 || Number(data.researchIntervalDays) > 365)) throw new Error("核验有效天数应为 1–365 的整数。");
       const sourceMeta = note.kind === "source" ? { platform: data.platform || "", author: data.author || "", url: data.url || "", date: data.date || "", locator: data.locator || "", researchIntervalDays: Number(data.researchIntervalDays) } : {};
-      const updated = await api.updateNote(note.id, { body: data.body, title: data.title, expectedHash: note.hash, meta: { privacy: data.privacy, topic: data.topic, depth: data.depth, ...sourceMeta } });
-      toast("已保存，并保留版本记录", "success");
+      const changedMeta = Object.fromEntries(Object.entries({ topic: data.topic, depth: data.depth, ...sourceMeta }).filter(([key]) => data[key] !== initialFields[key]));
+      const updated = await api.updateNote(note.id, { body: data.body, title: data.title, expectedHash: note.hash, meta: { privacy: data.privacy, ...changedMeta } });
+      toast(updated.hash === note.hash ? "内容未改变，已确认当前设置" : "已保存，并保留版本记录", "success");
       await refreshBootstrap();
       if (returnToSourceId) await refreshSourceGroup(returnToSourceId);
       else {
@@ -2244,6 +2255,7 @@ async function renderCurrent() {
 async function navigateTutorial(step, tutorial) {
   const prerequisite = (id, message) => ({ target: "onboarding-prerequisite", prerequisite: id, message });
   const missingContent = () => {
+    if (step.id === "study-plan") return { target: "onboarding-prerequisite", prerequisite: "library-explain", message: "请先选择本原文的解释知识并加入学习，再回今日生成清单。" };
     if (step.caseId) return { target: "onboarding-case", message: "请先点击框选的“准备演示案例”，重新准备后再定位案例中的操作。" };
     if (step.noteRole === "createdTopic") return prerequisite("topic-create", "尚未找到对应主题，请先创建并保存一个练习主题。");
     if (step.noteRole === "capturedSource") return prerequisite("capture-save", "尚未找到收集的资料，请先保存练习资料。");

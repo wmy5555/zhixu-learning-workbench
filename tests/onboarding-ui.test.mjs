@@ -490,6 +490,19 @@ test('goal extensions reuse non-main candidates and offer manual creation when o
   ui.tutorial.dispose();
 });
 
+test('planning a selected candidate offers the actual join-learning prerequisite without promoting it', async () => {
+  const ui = await tutorialBrowser({ currentStepId: 'study-plan' });
+  ui.setState({ materialId: 'reading', roles: { explain: 'main' }, learningCandidates: [{ id: 'main', title: '合成主线', stage: 'candidate', depth: 'explain', limitations: [] }] });
+  await ui.tutorial.open();
+  assert.match(ui.body.textContent, /选中的解释知识还未加入学习/);
+  await click(findButton(ui.body, '回到加入学习这一步'));
+  assert.equal(ui.navigations.at(-1), 'library-explain');
+  assert.equal(ui.state.learningCandidates[0].stage, 'candidate');
+  assert.ok(ui.requests.every(call => ['state', 'resume', 'checkpoint'].includes(call.action)));
+  assert.notEqual(ui.state.progress['study-plan']?.status, 'done');
+  ui.tutorial.dispose();
+});
+
 test('each chapter persists the selected step before navigating, with real and demonstrated progress distinct', async () => {
   const ui = await tutorialBrowser();
   await ui.tutorial.open();

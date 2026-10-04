@@ -152,7 +152,18 @@ for (const materialId of [...materials.map(item => item.id), 'custom']) test(`${
   await practice(`notes/${applyId}/confirm`, { expectedHash: otherNote.hash, body: marker }); await pump();
   assert.equal((await guide('checkpoint', { stepId: 'study-confirm' })).progress['study-confirm'].status, 'pending', 'confirmation of another knowledge cannot complete the main learning step');
   await edit(knowledgeId, { privacy: 'cloud', depth: 'explain' });
+  const beforeLearning = await practice('today/generate', {});
+  assert.ok(!beforeLearning.items.some(item => item.noteId === knowledgeId));
+  assert.equal(beforeLearning.unavailable.find(item => item.noteId === knowledgeId).code, 'stage');
+  assert.equal((await guide('checkpoint', { stepId: 'study-plan' })).progress['study-plan'].status, 'pending', 'unrelated scheduled knowledge cannot complete the main planning step');
   await practice(`notes/${knowledgeId}/promote`, { stage: 'learning', depth: 'explain', reason: marker });
+  const sourceBefore = await practice(`notes/${source.id}`);
+  const sourceSaved = await edit(source.id, { privacy: 'cloud' });
+  assert.equal(sourceSaved.hash, sourceBefore.hash, 'reconfirming source permission must not invalidate the processed source version');
+  assert.deepEqual((await practice(`notes/${knowledgeId}/evidence`)).limitations, []);
+  const plan = await practice('today/generate', {});
+  assert.ok(plan.items.some(item => item.noteId === knowledgeId && item.state === 'pending'));
+  assert.equal((await guide('checkpoint', { stepId: 'study-plan' })).progress['study-plan'].status, 'done');
   let session = await practice('study/start', { noteId: knowledgeId });
   assert.equal(session.question, f.material.recall);
   await guide('select-knowledge', { noteId: applyId }, 409);

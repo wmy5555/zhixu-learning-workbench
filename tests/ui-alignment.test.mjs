@@ -94,6 +94,7 @@ function browser(api = {}) {
   context.app.toasts = document.querySelector('#toast-region');
   context.app.dialogs = document.body;
   context.app.jobsPanel = vm.runInContext('jobsPanel', context);
+  context.app.generateToday = vm.runInContext('generateToday', context);
   return context.app;
 }
 
@@ -780,6 +781,41 @@ test('source research interval defaults to 30, validates 1–365 whole days and 
   days.value = '90'; await form.events.submit({ preventDefault() {} });
   assert.equal(writes.length, 1); assert.equal(writes[0].body.meta.researchIntervalDays, 90);
   assert.equal(writes[0].body.expectedHash, 'v1');
+});
+
+test('saving an untouched source editor submits no display defaults; actual changed fields still persist', async () => {
+  const source = { id: 'source-noop', kind: 'source', title: '合成来源', body: '合成原文', hash: 'original', meta: { privacy: 'cloud' } };
+  const writes = [];
+  const app = browser({ updateNote: async (id, body) => { writes.push(plain(body)); return source; }, bootstrap: async () => ({}) });
+  app.renderNoteEditor(source);
+  await app.refs.drawerBody.children[0].events.submit({ preventDefault() {} });
+  assert.deepEqual(writes[0].meta, { privacy: 'cloud' });
+  assert.equal(writes[0].expectedHash, source.hash);
+  assert.match(app.toasts.textContent, /内容未改变/);
+  app.renderNoteEditor(source);
+  const form = app.refs.drawerBody.children[0];
+  control(form, 'author').value = '合成作者';
+  await form.events.submit({ preventDefault() {} });
+  assert.deepEqual(writes[1].meta, { privacy: 'cloud', author: '合成作者' });
+});
+
+test('empty daily plans show the actual reasons with working knowledge and budget entry points', async () => {
+  const note = { id: 'missing', kind: 'knowledge', title: '合成待学项', body: '合成正文', meta: {} };
+  const source = { id: 'source', kind: 'source', title: '合成原文', body: '合成正文', meta: {} };
+  const app = browser({ generateToday: async () => ({ items: [], unavailable: [{ noteId: note.id, title: note.title, sourceId: source.id, code: 'material', reason: '底层原始资料已修改或删除，需要重新加工。' }] }), note: async id => id === source.id ? source : note });
+  app.state.bootstrap = { today: { items: [] } };
+  await app.generateToday();
+  const panel = app.refs.main;
+  assert.match(panel.textContent, /未安排的原因.*原始资料已修改/);
+  assert.equal(panel.querySelector('details').open, true);
+  assert.match(app.toasts.textContent, /本次没有待学项/);
+  assert.ok(findButton(panel, '调整预算'));
+  await click(findButton(panel, '查看知识'));
+  assert.equal(app.refs.drawerTitle.textContent, note.title);
+  assert.ok(findButton(app.refs.drawerBody, '加入学习'));
+  await click(findButton(panel, '查看原文并重新加工'));
+  assert.equal(app.refs.drawerTitle.textContent, source.title);
+  assert.ok(findButton(app.refs.drawerBody, '提交 AI 拆解'));
 });
 
 test('alignment API routes preserve explicit options and write requests use the session CSRF token', async () => {

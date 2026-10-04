@@ -69,6 +69,24 @@ test('overdue reviews and unresolved mistakes are selected before new learning w
   assert.equal(h.calls.length, 0);
 });
 
+test('unscheduled knowledge exposes stage, research, pause, due time and budget without changing eligibility', t => {
+  const h = harness(t), candidate = h.knowledge('未选学', { stage: 'candidate' }), blocked = h.knowledge('未核验', { researchLimitations: ['待核验'] });
+  const paused = h.knowledge('暂停'), future = h.knowledge('未到期'), budget = h.knowledge('时间不足');
+  h.configure({ dailyMinutes: 1, pausedIds: [paused.id] });
+  h.store.put('reviews', future.id, { noteId: future.id, dueAt: '2099-01-01T00:00:00.000Z' });
+  const result = h.learning.today(), reasons = new Map(result.unavailable.map(item => [item.noteId, item]));
+  assert.equal(result.items.length, 0);
+  assert.equal(reasons.get(candidate.id).code, 'stage');
+  assert.equal(reasons.get(blocked.id).code, 'material');
+  assert.equal(reasons.get(paused.id).code, 'paused');
+  assert.equal(reasons.get(future.id).code, 'not_due');
+  assert.match(reasons.get(future.id).reason, /2099-01-01/);
+  assert.equal(reasons.get(budget.id).code, 'budget');
+  assert.match(reasons.get(budget.id).reason, /1 分钟.*5 分钟/);
+  assert.deepEqual(h.learning.today(), result, 'repeated generation stays idempotent');
+  assert.equal(h.calls.length, 0);
+});
+
 test('topic membership order and explicit prerequisite ids determine the daily learning path', t => {
   const h = harness(t), a = h.knowledge('后创建也可先学'), b = h.knowledge('最后学习'), c = h.knowledge('主题首项'), p = h.knowledge('主题前置'), q = h.knowledge('条目前置');
   h.store.update(b.id, { expectedHash: b.hash, meta: { prerequisites: [q.id] } });

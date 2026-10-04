@@ -193,6 +193,7 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
       else if (p?.acknowledged?.[step.id]) status = 'demonstrated';
       else if (step.needs?.some(cap => !ready(cap))) status = 'needs_setup';
       result[step.id] = { status };
+      if (step.id === 'study-plan' && status === 'pending') result[step.id].reason = '请让选中的解释知识实际出现在今日待学项中；清单为空或缺少这条知识时，按今日页“未安排的原因”处理后重新生成。';
     }
     return result;
   }
@@ -401,7 +402,12 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
       if (itemId === 'merge') event(body.preview !== false ? 'merge-preview' : 'merge');
       if (action === 'relate') event(body.useAI ? 'relate-ai-request' : 'relate-local');
     }
-    if (resource === 'today' && method === 'POST') { event('today-generate'); if (action === 'action') event(`today-${body.action}`); }
+    if (resource === 'today' && method === 'POST') {
+      if (!action && result.items?.some(item => item.noteId === p.roles.explain && item.state === 'pending')) {
+        noteEvent('today-generate', { noteId: p.roles.explain, entities: [p.roles.explain] });
+      }
+      if (action === 'action') event(`today-${body.action}`);
+    }
     if (resource === 'study') {
       if (itemId === 'start') { event('study-start'); p.roles.currentSession = result.id; if (body.mistakeId) event('mistake-practice'); }
       if (action === 'answer') event('study-answer');
