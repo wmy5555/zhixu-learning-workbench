@@ -42,7 +42,8 @@ class Element {
   querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
   insertBefore(node, reference) { const at = this.children.indexOf(reference); this.children.splice(at < 0 ? this.children.length : at, 0, node); }
   get lastChild() { return this.children.at(-1); }
-  focus() {}
+  focus(options) { this.focused = true; this.focusOptions = options; }
+  scrollIntoView(options) { this.scrollOptions = options; }
   remove() { if (this.parentNode) this.parentNode.children = this.parentNode.children.filter(child => child !== this); }
   cloneNode() { return this; }
 }
@@ -768,6 +769,70 @@ test('enabled AI leaves no literal null notice on study, output or knowledge edi
   await app.renderOutput(); assert.doesNotMatch(app.refs.main.textContent, /null/);
   app.renderNoteEditor({ id: 'a', kind: 'knowledge', body: '正文', meta: {} });
   assert.doesNotMatch(app.refs.drawerBody.textContent, /null/);
+});
+
+test('state shortcut locates the current knowledge actions without changing state or issuing requests', async () => {
+  let requests = 0;
+  const app = browser({ note: async () => { requests++; }, promoteNote: async () => { requests++; }, updateNote: async () => { requests++; } });
+  const note = { id: 'synthetic-child', kind: 'knowledge', title: '当前知识', body: '合成正文', meta: { stage: 'candidate', privacy: 'cloud', depth: 'explain' } };
+  app.renderNoteEditor(note, { returnToSourceId: 'synthetic-source' });
+  const shortcut = findButton(app.refs.drawerBody, '前往状态操作');
+  assert.equal(shortcut.type, 'button');
+  await click(shortcut);
+  const target = app.refs.drawerBody.querySelector('[data-tour="note-lifecycle"]');
+  assert.ok(target);
+  assert.equal(target.focused, true);
+  assert.equal(target.scrollOptions.block, 'center');
+  assert.equal(app.refs.drawerTitle.textContent, note.title);
+  assert.ok(findButton(target, '加入学习'));
+  assert.equal(app.refs.drawerBody.querySelector('form'), null);
+  assert.equal(requests, 0);
+  assert.equal(note.meta.stage, 'candidate');
+});
+
+test('state shortcut cancellation retains every unsaved field and explicit discard navigates', async () => {
+  const app = browser();
+  const note = { id: 'synthetic-draft', kind: 'knowledge', title: '标题', body: '正文', meta: {} };
+  app.renderNoteEditor(note);
+  const form = app.refs.drawerBody.children[0];
+  for (const [name, value] of [['title', '未保存标题'], ['body', '未保存正文'], ['privacy', 'cloud'], ['topic', '未保存主题'], ['depth', 'explain']]) {
+    const input = control(form, name), original = input.value;
+    if (name === 'body') input.textContent = value; else input.value = value;
+    const before = JSON.stringify(app.serializeForm(form));
+    const pending = click(findButton(form, '前往状态操作'));
+    assert.match(app.dialogs.textContent, /当前修改尚未保存/);
+    await click(findButton(app.dialogs, '取消')); await pending;
+    assert.equal(app.refs.drawerBody.children[0], form);
+    assert.equal(JSON.stringify(app.serializeForm(form)), before);
+    if (name === 'body') input.textContent = note.body; else input.value = original;
+  }
+  control(form, 'title').value = '明确放弃的修改';
+  const pending = click(findButton(form, '前往状态操作'));
+  await click(findButton(app.dialogs, '放弃修改并前往')); await pending;
+  assert.ok(app.refs.drawerBody.querySelector('[data-tour="note-lifecycle"]'));
+  assert.equal(app.refs.drawerTitle.textContent, note.title);
+});
+
+test('state shortcut ignores stale confirmations after switching libraries or opening another editor', async () => {
+  let version = 0;
+  const app = browser({ getContext: () => ({ practiceId: version ? 'another' : 'first', version }) });
+  const note = { id: 'synthetic-old', kind: 'knowledge', title: '旧内容', body: '正文', meta: {} };
+  for (const change of ['library', 'editor']) {
+    app.renderNoteEditor(note);
+    const form = app.refs.drawerBody.children[0];
+    control(form, 'title').value = '未保存';
+    const pending = click(findButton(form, '前往状态操作'));
+    if (change === 'library') version++;
+    else app.renderNoteEditor({ ...note, id: 'synthetic-new', title: '另一条内容' });
+    const current = app.refs.drawerBody.children[0];
+    await click(findButton(app.dialogs, '放弃修改并前往')); await pending;
+    assert.equal(app.refs.drawerBody.children[0], current);
+    assert.equal(app.refs.drawerBody.dataset.tour, 'note-editor');
+  }
+  for (const kind of ['source', 'mistake']) {
+    app.renderNoteEditor({ ...note, kind });
+    assert.equal(findButton(app.refs.drawerBody, '前往状态操作'), undefined);
+  }
 });
 
 test('source research interval defaults to 30, validates 1–365 whole days and saves a numeric value', async () => {
