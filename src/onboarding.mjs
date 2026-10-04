@@ -163,6 +163,13 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
     const targetId = record.practice?.roles?.[role];
     const realSessions = f.sessions.filter(s => !preset(s) && (!targetId || s.noteId === targetId || s.id === targetId));
     const realEvidence = f.store.records('studyEvidence').filter(e => !preset(e) && (!targetId || e.noteId === targetId));
+    if (checkId === 'today-generate' && targetId) {
+      const previous = record.practice?.events?.['today-generate'];
+      const legacyClick = (Array.isArray(previous) ? previous : previous ? [previous] : []).some(event => !event.noteId && !event.presetCase && !event.entities?.some(exists));
+      const plans = f.store.records('plans').filter(plan => plan.noteId === targetId && !preset(plan));
+      // Unscoped old clicks alone are insufficient; completed or actually opened plans preserve real progress.
+      return legacyClick && plans.some(plan => plan.state === 'done' || realSessions.some(session => session.planId === plan.id));
+    }
     const done = type => f.jobs.some(j => j.type === type && j.state === 'done' && !j.presetCase && (!targetId || j.payload?.noteId === targetId));
     const tests = {
       process: () => f.jobs.some(j => j.type === 'process' && (!targetId || j.payload?.noteId === targetId) && f.service.publicJob(j).extractionSaved),
@@ -193,6 +200,7 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
       else if (p?.acknowledged?.[step.id]) status = 'demonstrated';
       else if (step.needs?.some(cap => !ready(cap))) status = 'needs_setup';
       result[step.id] = { status };
+      if (step.id === 'study-plan' && status === 'pending') result[step.id].reason = '请让选中的解释知识实际出现在今日待学项中；清单为空或缺少这条知识时，按今日页“未安排的原因”处理后重新生成。';
     }
     return result;
   }
@@ -387,7 +395,7 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
       if (method === 'GET' && itemId && !action) event('note-open');
       if (method === 'PUT') {
         event('note-edit');
-        if (body.meta?.privacy === 'cloud') event('privacy-cloud');
+        if (result?.meta?.privacy === 'cloud') event('privacy-cloud');
         if (body.meta?.researchIntervalDays) event('research-interval');
         if (body.meta?.depth) event(`depth-${body.meta.depth}`);
       }
@@ -401,7 +409,12 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
       if (itemId === 'merge') event(body.preview !== false ? 'merge-preview' : 'merge');
       if (action === 'relate') event(body.useAI ? 'relate-ai-request' : 'relate-local');
     }
-    if (resource === 'today' && method === 'POST') { event('today-generate'); if (action === 'action') event(`today-${body.action}`); }
+    if (resource === 'today' && method === 'POST') {
+      if (!action && result.items?.some(item => item.noteId === p.roles.explain && item.state === 'pending')) {
+        noteEvent('today-generate', { noteId: p.roles.explain, entities: [p.roles.explain] });
+      }
+      if (action === 'action') event(`today-${body.action}`);
+    }
     if (resource === 'study') {
       if (itemId === 'start') { event('study-start'); p.roles.currentSession = result.id; if (body.mistakeId) event('mistake-practice'); }
       if (action === 'answer') event('study-answer');

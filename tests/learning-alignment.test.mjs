@@ -69,6 +69,62 @@ test('overdue reviews and unresolved mistakes are selected before new learning w
   assert.equal(h.calls.length, 0);
 });
 
+test('unscheduled knowledge exposes stage, research, pause, due time and budget without changing eligibility', t => {
+  const h = harness(t), candidate = h.knowledge('未选学', { stage: 'candidate' }), blocked = h.knowledge('未核验', { researchLimitations: ['待核验'] });
+  const paused = h.knowledge('暂停'), future = h.knowledge('未到期'), budget = h.knowledge('时间不足');
+  h.configure({ dailyMinutes: 1, pausedIds: [paused.id] });
+  h.store.put('reviews', future.id, { noteId: future.id, dueAt: '2099-01-01T00:00:00.000Z' });
+  const result = h.learning.today(), reasons = new Map(result.unavailable.map(item => [item.noteId, item]));
+  assert.equal(result.items.length, 0);
+  assert.equal(reasons.get(candidate.id).code, 'stage');
+  assert.equal(reasons.get(blocked.id).code, 'material');
+  assert.equal(reasons.get(paused.id).code, 'paused');
+  assert.equal(reasons.get(future.id).code, 'not_due');
+  assert.match(reasons.get(future.id).reason, /2099-01-01/);
+  assert.equal(reasons.get(budget.id).code, 'budget');
+  assert.match(reasons.get(budget.id).reason, /1 分钟.*5 分钟/);
+  assert.deepEqual(h.learning.today(), result, 'repeated generation stays idempotent');
+  assert.equal(h.calls.length, 0);
+});
+
+test('unavailable prerequisites stay identifiable while retired and superseded notes never offer reprocessing', t => {
+  const h = harness(t), source = h.store.create({ kind: 'source', title: '合成来源', body: '合成原文' });
+  const refs = [{ id: source.id, role: 'input' }];
+  const retired = h.knowledge('已停用', { stage: 'retired', sources: refs }), replaced = h.knowledge('已替代', { supersededBy: 'synthetic-new', sources: refs });
+  const prerequisite = h.knowledge('必须先处理', { researchLimitations: ['待核验'], sources: refs });
+  const dependent = h.knowledge('后续知识', { prerequisites: [prerequisite.id] });
+  const reasons = new Map(h.learning.today().unavailable.map(item => [item.noteId, item]));
+  assert.equal(reasons.get(retired.id).code, 'retired');
+  assert.equal(reasons.get(replaced.id).code, 'superseded');
+  assert.equal(reasons.get(retired.id).sourceId, undefined);
+  assert.equal(reasons.get(replaced.id).sourceId, undefined);
+  assert.equal(reasons.get(prerequisite.id).sourceId, source.id);
+  assert.equal(reasons.get(dependent.id).prerequisiteId, prerequisite.id);
+  assert.equal(reasons.get(dependent.id).prerequisiteTitle, prerequisite.title);
+  assert.equal(h.calls.length, 0);
+});
+
+test('a prerequisite omitted by the budget pass identifies the actual blocker instead of teaching its dependent', t => {
+  const h = harness(t), prerequisite = h.knowledge('合成预算前置', { depth: 'apply' });
+  const dependent = h.knowledge('合成后续', { depth: 'aware', prerequisites: [prerequisite.id] });
+  h.configure({ dailyMinutes: 5 });
+  const result = h.learning.today(), reasons = new Map(result.unavailable.map(item => [item.noteId, item]));
+  assert.equal(result.items.length, 0);
+  assert.equal(reasons.get(prerequisite.id).code, 'budget');
+  assert.equal(reasons.get(dependent.id).code, 'prerequisite');
+  assert.equal(reasons.get(dependent.id).prerequisiteId, prerequisite.id);
+  assert.equal(reasons.get(dependent.id).prerequisiteTitle, prerequisite.title);
+  assert.equal(result.blocked.find(item => item.noteId === dependent.id).prerequisiteId, prerequisite.id);
+  h.configure({ dailyMinutes: 10 });
+  assert.deepEqual(h.learning.today().items.map(item => item.noteId), [prerequisite.id, dependent.id]);
+  const legacy = h.store.create({ kind: 'knowledge', title: '合成缺省目标', body: '合成正文', meta: { stage: 'learning' } });
+  h.configure({ dailyMinutes: 15 });
+  const legacyPlan = h.learning.today().items.find(item => item.noteId === legacy.id);
+  assert.equal(legacyPlan.depth, 'explain');
+  assert.equal(legacyPlan.minutes, 5);
+  assert.equal(h.calls.length, 0);
+});
+
 test('topic membership order and explicit prerequisite ids determine the daily learning path', t => {
   const h = harness(t), a = h.knowledge('后创建也可先学'), b = h.knowledge('最后学习'), c = h.knowledge('主题首项'), p = h.knowledge('主题前置'), q = h.knowledge('条目前置');
   h.store.update(b.id, { expectedHash: b.hash, meta: { prerequisites: [q.id] } });

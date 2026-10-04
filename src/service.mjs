@@ -338,6 +338,10 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     if (meta.privacy && !['local','cloud'].includes(meta.privacy)) fail('隐私范围无效。');
     if(meta.researchIntervalDays!==undefined && (!Number.isInteger(Number(meta.researchIntervalDays)) || Number(meta.researchIntervalDays)<1 || Number(meta.researchIntervalDays)>365))fail('核验有效天数应为1–365。');
     if(meta.researchIntervalDays!==undefined)meta.researchIntervalDays=Number(meta.researchIntervalDays);
+    if (!input.expectedHash || input.expectedHash !== old.hash) fail('文件已发生变化。请查看当前版本，再合并你的修改。', 'CONFLICT', 409);
+    // Reconfirming unchanged fields must not create a new source version.
+    if ((input.title === undefined || input.title === old.title) && (input.body === undefined || input.body === old.body)
+      && Object.entries(meta).every(([key, value]) => JSON.stringify(value) === JSON.stringify(old.meta[key]))) return old;
     const result = store.update(id, { ...input, meta: { ...meta, ...(old.kind === 'knowledge' ? { userEdited: true } : {}) } });
     if (old.kind === 'knowledge') requestRelations(id);
     return result;
@@ -422,7 +426,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     return { results, diagnostics: { mode: options.mode || 'keyword', semanticUsed, keywordIds: keyword.slice(0,12).map(r => r.note.id), semanticIds: semantic.slice(0,12).map(r => r.note.id), scanned: notes.length, elapsedMs: Date.now() - started, limitations } };
   }
   const {today,planAction,session,startStudy,answerStudy,hintStudy,confirmStudy,finishStudy,mistakeAction,topics,createTopic,updateTopic,topicAction,grade} = createLearning({
-    get store(){return store;}, settings, getNote, eligible, privacyFor, queue, ai, promptText, parseJSON, confirmNote, updateSettings, learningClock: learningDate, practice, getPracticeQuestion: practice ? getPracticeQuestion : undefined
+    get store(){return store;}, settings, getNote, eligible, limitationsFor: materialLimitations, privacyFor, queue, ai, promptText, parseJSON, confirmNote, updateSettings, learningClock: learningDate, practice, getPracticeQuestion: practice ? getPracticeQuestion : undefined
   });
   const {recommendations,recommendationAction} = createLifecycle({get store(){return store;},settings,materialLimitations,getNote,promote,merge});
   function valuableRelation(r, left, right) {

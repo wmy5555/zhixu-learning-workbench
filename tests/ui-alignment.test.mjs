@@ -95,6 +95,7 @@ function browser(api = {}) {
   context.app.toasts = document.querySelector('#toast-region');
   context.app.dialogs = document.body;
   context.app.jobsPanel = vm.runInContext('jobsPanel', context);
+  context.app.generateToday = vm.runInContext('generateToday', context);
   return context.app;
 }
 
@@ -512,6 +513,30 @@ test('learning goals preserve saved depth values and update the concrete require
   }
 });
 
+test('legacy knowledge editors display the effective explain goal while unchanged saves omit defaults', async () => {
+  const writes = [], note = { id: 'legacy-goal', kind: 'knowledge', title: '合成缺省目标', body: '合成正文', hash: 'legacy', meta: {} };
+  const app = browser({ updateNote: async (id, body) => { writes.push(plain(body)); return note; }, bootstrap: async () => ({}) });
+  for (const depth of [undefined, 'unsupported']) {
+    app.renderNoteEditor({ ...note, meta: depth ? { depth } : {} });
+    const form = app.refs.drawerBody.children[0];
+    assert.equal(control(form, 'depth').children.find(option => option.selected).value, 'explain');
+    assert.match(descendants(form).find(node => node.attributes.id === 'learning-goal-hint').textContent, /不看原文/);
+    await form.events.submit({ preventDefault() {} });
+    assert.deepEqual(writes.at(-1).meta, {});
+  }
+  app.renderNoteEditor(note);
+  const changedTitle = app.refs.drawerBody.children[0];
+  control(changedTitle, 'title').value = '合成修改后的标题';
+  await changedTitle.events.submit({ preventDefault() {} });
+  assert.equal(writes.at(-1).title, '合成修改后的标题');
+  assert.deepEqual(writes.at(-1).meta, {});
+  app.renderNoteEditor(note);
+  const changedGoal = app.refs.drawerBody.children[0];
+  control(changedGoal, 'depth').children.forEach(option => { option.selected = option.value === 'aware'; });
+  await changedGoal.events.submit({ preventDefault() {} });
+  assert.deepEqual(writes.at(-1).meta, { depth: 'aware' });
+});
+
 test('manual extraction and saved study sessions show the same goal requirements', async () => {
   const app = browser();
   app.manualExtract({ id: 'synthetic-source' });
@@ -798,7 +823,7 @@ test('state shortcut cancellation retains every unsaved field and explicit disca
   const note = { id: 'synthetic-draft', kind: 'knowledge', title: '标题', body: '正文', meta: {} };
   app.renderNoteEditor(note);
   const form = app.refs.drawerBody.children[0];
-  for (const [name, value] of [['title', '未保存标题'], ['body', '未保存正文'], ['privacy', 'cloud'], ['topic', '未保存主题'], ['depth', 'explain']]) {
+  for (const [name, value] of [['title', '未保存标题'], ['body', '未保存正文'], ['privacy', 'cloud'], ['topic', '未保存主题'], ['depth', 'aware']]) {
     const input = control(form, name), original = input.value;
     if (name === 'body') input.textContent = value; else input.value = value;
     const before = JSON.stringify(app.serializeForm(form));
@@ -851,6 +876,52 @@ test('source research interval defaults to 30, validates 1–365 whole days and 
   days.value = '90'; await form.events.submit({ preventDefault() {} });
   assert.equal(writes.length, 1); assert.equal(writes[0].body.meta.researchIntervalDays, 90);
   assert.equal(writes[0].body.expectedHash, 'v1');
+});
+
+test('saving an untouched source editor submits no display defaults; actual changed fields still persist', async () => {
+  const source = { id: 'source-noop', kind: 'source', title: '合成来源', body: '合成原文', hash: 'original', meta: { privacy: 'cloud' } };
+  const writes = [];
+  const app = browser({ updateNote: async (id, body) => { writes.push(plain(body)); return source; }, bootstrap: async () => ({}) });
+  app.renderNoteEditor(source);
+  await app.refs.drawerBody.children[0].events.submit({ preventDefault() {} });
+  assert.deepEqual(writes[0].meta, {});
+  assert.equal(writes[0].expectedHash, source.hash);
+  assert.match(app.toasts.textContent, /内容未改变/);
+  app.renderNoteEditor(source);
+  const form = app.refs.drawerBody.children[0];
+  control(form, 'author').value = '合成作者';
+  await form.events.submit({ preventDefault() {} });
+  assert.deepEqual(writes[1].meta, { author: '合成作者' });
+  app.renderNoteEditor({ ...source, meta: {} });
+  await app.refs.drawerBody.children[0].events.submit({ preventDefault() {} });
+  assert.deepEqual(writes[2].meta, {}, 'an implicit local privacy default is not a source edit');
+  app.renderNoteEditor({ ...source, meta: {} });
+  const localForm = app.refs.drawerBody.children[0];
+  control(localForm, 'privacy').children.forEach(option => { option.selected = option.value === 'cloud'; });
+  await localForm.events.submit({ preventDefault() {} });
+  assert.deepEqual(writes[3].meta, { privacy: 'cloud' }, 'an actual privacy change remains explicit');
+});
+
+test('empty daily plans show the actual reasons with working knowledge and budget entry points', async () => {
+  const note = { id: 'missing', kind: 'knowledge', title: '合成待学项', body: '合成正文', meta: {} };
+  const source = { id: 'source', kind: 'source', title: '合成原文', body: '合成正文', meta: {} };
+  const prerequisite = { ...note, id: 'prerequisite', title: '合成前置知识' };
+  const app = browser({ generateToday: async () => ({ items: [], unavailable: [{ noteId: note.id, title: note.title, sourceId: source.id, code: 'material', reason: '底层原始资料已修改或删除，需要重新加工。' }, { noteId: 'dependent', title: '合成后续', prerequisiteId: prerequisite.id, prerequisiteTitle: prerequisite.title, code: 'prerequisite', reason: '请先处理前置知识。' }] }), note: async id => id === source.id ? source : id === prerequisite.id ? prerequisite : note });
+  app.state.bootstrap = { today: { items: [] } };
+  await app.generateToday();
+  const panel = app.refs.main;
+  assert.match(panel.textContent, /未安排的原因.*原始资料已修改/);
+  assert.equal(panel.querySelector('details').open, true);
+  assert.match(app.toasts.textContent, /本次没有待学项/);
+  assert.ok(findButton(panel, '调整预算'));
+  await click(findButton(panel, '查看知识'));
+  assert.equal(app.refs.drawerTitle.textContent, note.title);
+  assert.ok(findButton(app.refs.drawerBody, '加入学习'));
+  await click(findButton(panel, '查看原文并重新加工'));
+  assert.equal(app.refs.drawerTitle.textContent, source.title);
+  assert.ok(findButton(app.refs.drawerBody, '提交 AI 拆解'));
+  await click(findButton(panel, `查看前置知识：${prerequisite.title}`));
+  assert.equal(app.refs.drawerTitle.textContent, prerequisite.title);
 });
 
 test('alignment API routes preserve explicit options and write requests use the session CSRF token', async () => {

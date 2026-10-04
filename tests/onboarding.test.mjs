@@ -304,6 +304,52 @@ test('sample permissions and depth steps are proved for their own role, not anot
   assert.equal(h.manager.state().progress['library-aware'].status, 'done');
 });
 
+test('unchanged edits preserve source versions while stale saves and real edits retain their restrictions', async t => {
+  const h = harness(t), state = h.manager.start(); await h.ready();
+  const p = h.manager.currentService, source = p.getNote(state.roles.source);
+  const knowledge = p.store.create({ kind: 'knowledge', title: '合成拆解', body: '保留版本', meta: { stage: 'learning', sources: [{ id: source.id, role: 'input' }], processKey: `${source.id}:${source.hash}:0` } });
+  const historyLength = p.store.history(source.id).length;
+  assert.equal(p.editNote(source.id, { expectedHash: source.hash, title: source.title, body: source.body, meta: { privacy: source.meta.privacy } }).hash, source.hash);
+  assert.equal(p.store.history(source.id).length, historyLength);
+  assert.deepEqual(p.noteEvidence(knowledge.id).limitations, []);
+  const edited = p.editNote(source.id, { expectedHash: source.hash, body: source.body + '\n真实修改（合成数据）' });
+  assert.notEqual(edited.hash, source.hash);
+  assert.match(p.noteEvidence(knowledge.id).limitations.join(), /原始资料已修改/);
+  assert.ok(!p.today().items.some(item => item.noteId === knowledge.id));
+  assert.equal(p.today().unavailable.find(item => item.noteId === knowledge.id).sourceId, source.id);
+  assert.throws(() => p.editNote(source.id, { expectedHash: source.hash, body: edited.body }), { code: 'CONFLICT' });
+  assert.throws(() => p.editNote(source.id, { body: edited.body }), { code: 'CONFLICT' });
+  const revised = p.editNote(source.id, { expectedHash: edited.hash, meta: { locator: '新增合成来源定位' } });
+  assert.notEqual(revised.hash, edited.hash, 'a real metadata change still creates a new version');
+});
+
+test('old unscoped generate clicks need actual main plan use or completion to preserve progress', async t => {
+  const h = harness(t), started = h.manager.start(); await h.ready();
+  await h.manager.close();
+  const file = path.join(h.dataDir, 'onboarding', 'state.json'), saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  saved.practice.events['today-generate'] = [{ at: new Date().toISOString(), entities: ['generate'] }];
+  fs.writeFileSync(file, JSON.stringify(saved));
+  const restored = await h.reopen(); restored.resume(started.practiceId);
+  const p = restored.currentService;
+  assert.equal(restored.state().progress['study-plan'].status, 'pending', 'an old empty click is insufficient');
+  const unrelated = p.store.create({ kind: 'knowledge', title: '非主线', body: '合成正文', meta: { stage: 'learning' } });
+  p.today();
+  assert.equal(restored.state().progress['study-plan'].status, 'pending', 'unrelated plans cannot prove the main step');
+  p.promote(started.roles.explain, { stage: 'learning', reason: '合成选学' });
+  const plan = p.today().items.find(item => item.noteId === started.roles.explain);
+  assert.equal(restored.state().progress['study-plan'].status, 'pending', 'a pending plan alone cannot upgrade an old empty click');
+  const session = p.startStudy({ noteId: started.roles.explain, planId: plan.id });
+  assert.equal(restored.state().progress['study-plan'].status, 'done');
+  p.store.remove('sessions', session.id);
+  p.store.put('plans', plan.id, { ...plan, state: 'done' });
+  assert.equal(restored.state().progress['study-plan'].status, 'done', 'finished plans preserve old actual scheduling even across later dates');
+  restored.advance(started.practiceId, 'day');
+  assert.equal(restored.state().progress['study-plan'].status, 'done');
+  p.store.put('plans', plan.id, { ...plan, state: 'done', presetCase: 'hints' });
+  assert.equal(restored.state().progress['study-plan'].status, 'pending', 'preset cases do not repair real progress');
+  assert.ok(p.store.row(unrelated.id));
+});
+
 test('HTTP scopes keep CSRF, reuse browser sessions and reject cross-purpose restores and settings writes', async t => {
   const h = harness(t); const app = createApp({ dataDir: h.dataDir, service: h.main, scheduler: false });
   app.server.listen(0, '127.0.0.1'); await once(app.server, 'listening');
