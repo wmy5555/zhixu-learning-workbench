@@ -278,6 +278,51 @@ test('both source maps pan with the mouse without selecting nodes after dragging
   assert.equal(viewport.scrollLeft, 0, 'reading cards do not intercept text selection');
 });
 
+test('wheel zoom anchors both maps under the pointer, retains selection and leaves reading and browser gestures alone', async () => {
+  const app = browser();
+  const source = { id: 'wheel-source', title: '可替换的合成示例', meta: {}, children: ['a', 'b', 'c'].map(id => ({ id, title: id, body: '正文', meta: {} })) };
+  app.renderSourceGroupDrawer(source);
+  const panel = app.refs.drawerBody, viewport = panel.querySelector('.map-viewport'), view = app.state.sourceMaps.get(':wheel-source');
+  viewport.clientWidth = 400; viewport.clientHeight = 300;
+  viewport.getBoundingClientRect = () => ({ left: 10, top: 20 });
+  const prepare = () => {
+    const canvas = viewport.querySelector('.map-canvas');
+    canvas.getBoundingClientRect = () => ({ left: 10 + Math.max(0, (400 - parseFloat(canvas.style.width) * view.zoom) / 2) - viewport.scrollLeft,
+      top: 20 + Math.max(0, (300 - parseFloat(canvas.style.height) * view.zoom) / 2) - viewport.scrollTop });
+    return canvas;
+  };
+  const wheel = (extra = {}) => {
+    let prevented = false;
+    viewport.events.wheel({ deltaY: -100, deltaMode: 0, clientX: 210, clientY: 170, preventDefault() { prevented = true; }, ...extra });
+    return prevented;
+  };
+  for (const mode of ['逻辑图', '思维导图']) {
+    await click(findButton(panel, mode)); await click(findButton(panel, `${Math.round(view.zoom * 100)}%`));
+    const canvas = prepare(), selected = view.selected, detail = panel.querySelector('.map-detail').children[0];
+    viewport.scrollLeft = 150; viewport.scrollTop = 120;
+    const before = canvas.getBoundingClientRect(), x = (210 - before.left) / view.zoom, y = (170 - before.top) / view.zoom;
+    assert.equal(wheel(), true); assert.ok(view.zoom > 1);
+    const after = canvas.getBoundingClientRect();
+    assert.ok(Math.abs((210 - after.left) / view.zoom - x) < 1e-8);
+    assert.ok(Math.abs((170 - after.top) / view.zoom - y) < 1e-8);
+    assert.equal(view.selected, selected); assert.equal(viewport.querySelector('.map-canvas'), canvas);
+    assert.equal(panel.querySelector('.map-detail').children[0], detail, 'zoom does not recreate reading content');
+    wheel({ deltaY: 100 }); assert.ok(Math.abs(view.zoom - 1) < 1e-8);
+    for (const extra of [{ ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { deltaY: 0 }, { deltaY: NaN }, { clientX: 415 }]) {
+      const zoom = view.zoom; assert.equal(wheel(extra), false); assert.equal(view.zoom, zoom);
+    }
+    wheel({ deltaY: -1, deltaMode: 1 }); assert.ok(Math.abs(view.zoom - Math.exp(.032)) < 1e-8);
+    wheel({ deltaY: 1, deltaMode: 1 });
+    wheel({ deltaY: -1, deltaMode: 2 }); assert.ok(Math.abs(view.zoom - Math.exp(.32)) < 1e-8);
+    for (let i = 0; i < 30; i++) wheel();
+    assert.equal(view.zoom, 1.8); assert.equal(findButton(panel, '+').disabled, true); assert.equal(wheel(), true);
+    for (let i = 0; i < 30; i++) wheel({ deltaY: 100 });
+    assert.equal(view.zoom, .15); assert.equal(findButton(panel, '−').disabled, true);
+  }
+  await click(findButton(panel, '阅读全部条目'));
+  const zoom = view.zoom; assert.equal(wheel(), false); assert.equal(view.zoom, zoom);
+});
+
 test('task failures explain stored error codes and retain original diagnostics behind a separate disclosure', async () => {
   for (const [code, error, expected] of [
     ['ETIMEDOUT', 'connect ETIMEDOUT 203.0.113.10:443', /连接 AI 服务超时/],

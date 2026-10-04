@@ -129,7 +129,7 @@ export function createSourceMap({ source, children, view = {}, renderDetail, ana
   const root = el('section', { class: 'source-map panel', dataset: { tour: 'source-structure' } });
   const toolbar = el('div', { class: 'map-toolbar' });
   const tabs = el('div', { class: 'map-tabs', role: 'group', 'aria-label': '结构视图' });
-  const viewport = el('div', { class: 'map-viewport', role: 'region', tabindex: '0', 'aria-label': '资料结构，可按住鼠标拖动或滚动查看，使用节点按钮阅读' });
+  const viewport = el('div', { class: 'map-viewport', role: 'region', tabindex: '0', 'aria-label': '资料结构，可按住鼠标拖动、滚轮缩放，使用节点按钮阅读' });
   const finishPan = enableMapPanning(viewport);
   const detail = el('div', { class: 'map-detail', 'aria-live': 'polite' });
   const relationDetail = el('div', { class: 'map-relations' });
@@ -159,6 +159,35 @@ export function createSourceMap({ source, children, view = {}, renderDetail, ana
     viewport.scrollTop = Math.max(0, (position.y + layout.cardHeight / 2) * view.zoom - viewport.clientHeight / 2);
   }
   function select(id, focus = false) { view.selected = id; draw(); if (focus) nodeButtons.get(id)?.focus({ preventScroll: true }); }
+  function scaleCanvas(frame, canvas, width, height) {
+    frame.style.width = `${width * view.zoom}px`; frame.style.height = `${height * view.zoom}px`;
+    canvas.style.transform = `scale(${view.zoom})`;
+    canvas.style.left = `max(0px, calc((100% - ${width * view.zoom}px) / 2))`;
+    canvas.style.top = `max(0px, calc((100% - ${height * view.zoom}px) / 2))`;
+  }
+  viewport.addEventListener('wheel', event => {
+    // Preserve browser zoom gestures, horizontal scrolling and the full-text reader.
+    if (listMode || event.ctrlKey || event.metaKey || event.shiftKey || !Number.isFinite(event.deltaY) || !event.deltaY) return;
+    const bounds = viewport.getBoundingClientRect();
+    if (event.clientX >= bounds.left + viewport.clientWidth || event.clientY >= bounds.top + viewport.clientHeight) return;
+    event.preventDefault();
+    const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewport.clientHeight : 1;
+    const next = Math.max(.15, Math.min(1.8, view.zoom * Math.exp(-Math.max(-160, Math.min(160, event.deltaY * unit)) * .002)));
+    if (next === view.zoom) return;
+    const frame = viewport.querySelector('.map-frame'), canvas = viewport.querySelector('.map-canvas');
+    if (!frame || !canvas) return;
+    finishPan();
+    const before = canvas.getBoundingClientRect();
+    const x = (event.clientX - before.left) / view.zoom, y = (event.clientY - before.top) / view.zoom;
+    view.zoom = next;
+    scaleCanvas(frame, canvas, parseFloat(canvas.style.width), parseFloat(canvas.style.height));
+    const after = canvas.getBoundingClientRect();
+    // Compensate for both native scroll clamping and centering when the map is smaller than its window.
+    viewport.scrollLeft += after.left + x * next - event.clientX;
+    viewport.scrollTop += after.top + y * next - event.clientY;
+    zoomReset.textContent = `${Math.round(next * 100)}%`;
+    zoomOut.disabled = next <= .15; zoomIn.disabled = next >= 1.8;
+  }, { passive: false });
   function drawDetail() {
     clear(detail); clear(relationDetail);
     const note = notes.get(view.selected);
@@ -192,12 +221,10 @@ export function createSourceMap({ source, children, view = {}, renderDetail, ana
     detail.hidden = false; relationDetail.hidden = false;
     const layout = layoutForView();
     const frame = el('div', { class: 'map-frame' });
-    frame.style.width = `${layout.width * view.zoom}px`; frame.style.height = `${layout.height * view.zoom}px`;
     const canvas = el('div', { class: 'map-canvas' });
-    canvas.style.width = `${layout.width}px`; canvas.style.height = `${layout.height}px`; canvas.style.transform = `scale(${view.zoom})`;
+    canvas.style.width = `${layout.width}px`; canvas.style.height = `${layout.height}px`;
     // CSS recenters after a drawer/viewport resize without changing the user's zoom.
-    canvas.style.left = `max(0px, calc((100% - ${layout.width * view.zoom}px) / 2))`;
-    canvas.style.top = `max(0px, calc((100% - ${layout.height * view.zoom}px) / 2))`;
+    scaleCanvas(frame, canvas, layout.width, layout.height);
     const svg = svgElement('svg', { width: layout.width, height: layout.height, 'aria-hidden': 'true', class: 'map-lines' });
     const markerId = `map-arrow-${++mapSerial}`, defs = svgElement('defs'), marker = svgElement('marker', { id: markerId, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 6, markerHeight: 6, orient: 'auto-start-reverse' });
     marker.append(svgElement('path', { d: 'M 0 0 L 10 5 L 0 10 z', fill: 'context-stroke' })); defs.append(marker); svg.append(defs);
@@ -277,7 +304,7 @@ export function createSourceMap({ source, children, view = {}, renderDetail, ana
     el('p', { class: 'fine-print', text: '新资料在 AI 拆解时一并分析结构。重新分析会发送获准的原文与当前条目，可能产生费用。' }),
     el('p', { class: 'map-status', role: 'status', text: data.message || (edges.length ? `${children.length} 条拆解 · ${edges.length} 条逻辑联系 · 点击条目查看正文与依据` : '没有可靠的逻辑连线；思维导图显示资料归属与已分析层级。') }),
     el('p', { class: 'structure-job-status notice info', role: 'status', hidden: true, dataset: { sourceId: source.id } }), toolbar, viewport,
-    el('div', { class: 'map-reading-bar' }, [el('span', { class: 'fine-print', text: '按住鼠标拖动或滚动查看 · 分支表示层级，箭头表示逻辑 · AI 建议尚未确认' }), readAll]), relationDetail, detail);
+    el('div', { class: 'map-reading-bar' }, [el('span', { class: 'fine-print', text: '按住鼠标拖动 · 滚轮向上放大、向下缩小 · AI 建议尚未确认' }), readAll]), relationDetail, detail);
   draw();
   queueMicrotask(() => { if (root.isConnected) centerSelected(); });
   return root;

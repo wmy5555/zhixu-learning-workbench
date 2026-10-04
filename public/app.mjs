@@ -502,6 +502,14 @@ function relationControls(note) {
   return el("details", { class: "child-more-actions", dataset: { tour: "note-relations" } }, [
     el("summary", { text: "查找关联" }),
     el("div", { class: "page-stack original-body" }, [el("p", { class: "fine-print", text: "默认仅在本机查找可探索的材料。AI 分析会发送获准材料，并可能产生费用。" }),
+      el("div", { class: "notice info" }, [
+        el("strong", { text: "什么时候使用 AI 分析？" }),
+        el("ul", {}, [
+          el("li", { text: "先用本机查找：想找同一主题的材料，或只是快速浏览可能的联系时，先不勾选 AI。" }),
+          el("li", { text: "再考虑 AI：本机结果不够贴切，或想比较说法不同但机制、用途相似的知识，分辨它们是否相互支持、存在冲突或适用条件不同时。" }),
+        ]),
+        el("p", { class: "fine-print", text: "开启前请确认相关材料允许外发，并已配置 AI。分析结果只是建议，请核对原文依据后再决定是否接受；AI 不一定能找到有用的关联。" }),
+      ]),
       el("label", { class: "check-field" }, [useAI, el("span", { text: "本次允许 AI 分析关联（可能产生费用）" })]),
       el("div", { class: "form-actions" }, [run, button("查看关联结果", { kind: "text", onClick: () => { closeDrawer(); navigate("discover"); } })]), status]),
   ]);
