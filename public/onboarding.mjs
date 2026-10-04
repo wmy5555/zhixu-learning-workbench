@@ -27,7 +27,7 @@ export function chooseMaterial(initialId = "course") {
     const dialog = el("div", { class: "dialog onboarding-material-dialog", role: "dialog", ariaModal: "true", ariaLabel: "选择练习材料" });
     const options = el("fieldset", { class: "onboarding-material-options" }, [el("legend", { text: "选择贴近自己的场景" })]);
     const preview = el("section", { class: "onboarding-material-preview", ariaLive: "polite" });
-    const customFields = Object.fromEntries([['title', '材料标题', 240], ['body', '原文', 150000], ['note', '个人心得（可不填）', 10000], ['author', '作者（可不填）', 1000], ['url', '出处链接（可不填）', 2000], ['locator', '章节或位置（可不填）', 2000]].map(([key, label, maxLength]) => [key, { label, control: el(['body', 'note'].includes(key) ? 'textarea' : 'input', { name: `custom-${key}`, ariaLabel: label, rows: key === 'body' ? 8 : 3, maxLength }) }]));
+    const customFields = Object.fromEntries([['title', '材料标题', 200], ['body', '原文', 150000], ['note', '个人心得（可不填）', 10000], ['author', '作者（可不填）', 1000], ['url', '出处链接（可不填）', 2000], ['locator', '章节或位置（可不填）', 2000]].map(([key, label, maxLength]) => [key, { label, control: el(['body', 'note'].includes(key) ? 'textarea' : 'input', { name: `custom-${key}`, ariaLabel: label, rows: key === 'body' ? 8 : 3, maxLength }) }]));
     const customError = el("p", { class: "notice danger", role: "alert", hidden: true });
     function showPreview() {
       const item = getMaterial(selectedId);
@@ -365,9 +365,11 @@ export function createOnboarding(adapter) {
       }) } });
       select.dataset.tour = "onboarding-knowledge";
       select.append(el("option", { value: "", text: "选择一条实际候选知识", selected: !selectedNote }));
-      (current.learningCandidates || []).forEach(note => select.append(el("option", { value: note.id, text: `${note.title}${note.limitations?.length ? "（待核验或复查）" : ""}`, selected: note.id === selectedNote, disabled: Boolean(note.limitations?.length || ["aware", "find", "explain", "apply"].some(other => other !== role && current.roles?.[other] === note.id)) })));
+      const unavailable = note => Boolean(note.limitations?.length || (role === "explain" ? ["aware", "find", "apply"].some(other => current.roles?.[other] === note.id) : current.roles?.explain === note.id));
+      (current.learningCandidates || []).forEach(note => select.append(el("option", { value: note.id, text: `${note.title}${note.limitations?.length ? "（待核验或复查）" : ""}`, selected: note.id === selectedNote, disabled: unavailable(note) })));
       content.append(select);
       if (!(current.learningCandidates || []).length) content.append(el("p", { class: "notice", text: "本原文还没有实际候选，请先完成拆解。" }));
+      else if (current.learningCandidates.every(unavailable)) content.append(el("div", {}, [el("p", { class: "notice", text: "这个目标还没有可用的独立条目。可从原文手动整理另一项内容；事实仍须核验，尚不可用时保留未完成。不要改变主线知识的目标来补齐扩展。" }), button("整理另一条知识", { kind: "text compact", disabled: working || !current.roles?.capturedSource, onClick: () => run(() => goTo(flatSteps.find(item => item.id === "process-manual"))) })]));
       if ((current.learningCandidates || []).some(note => note.limitations?.length)) content.append(el("div", {}, [el("p", { class: "notice", text: "待核验的事实不能选入主线。请先联网加工并审阅返回依据。" }), button("前往联网核验", { kind: "text compact", disabled: working, onClick: () => run(() => goTo(flatSteps.find(item => item.id === "process-research"))) })]));
     }
     if (active.why) content.append(el("p", { class: "fine-print", text: active.why }));

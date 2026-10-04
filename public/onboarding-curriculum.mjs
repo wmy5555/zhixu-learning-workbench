@@ -255,7 +255,7 @@ export function getCurriculum(materialId) {
   }
   ['aware', 'find', 'apply'].forEach((role, index) => {
     const goalIndex = role === 'apply' ? 3 : index;
-    overrides[`library-${role}`] = { title: `设置“${goalNames[role]}”目标`, instruction: `在本原文下选择另一条实际知识，目标：${material.goals[goalIndex][1]}。编辑“学习目标”为“${goalNames[role]}”后保存，再${role === 'apply' ? '加入学习' : '设为仅供查阅'}并写下理由。不要为展示目标重复给同一条知识设置不同深度。`, expected: '保留实际来源与所选目标，没有预设成绩。' };
+    overrides[`library-${role}`] = { title: `设置“${goalNames[role]}”目标`, instruction: `在本原文下选择主线以外的一条实际知识，目标：${material.goals[goalIndex][1]}。编辑“学习目标”为“${goalNames[role]}”后保存，再${role === 'apply' ? '加入学习' : '设为仅供查阅'}并写下理由。这三个扩展目标可按顺序沿用同一条非主线知识，旧操作记录保留；没有可用条目时先手动整理另一项内容，事实仍须核验。`, expected: '保留实际来源与所选目标，没有预设成绩，也不改变主线知识。' };
   });
   const rows = flatSteps.map(item => {
     if (item.caseId) return item;

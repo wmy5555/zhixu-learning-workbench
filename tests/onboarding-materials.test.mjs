@@ -12,7 +12,7 @@ import { getCurriculum } from '../public/onboarding-curriculum.mjs';
 
 const marker = '【离线受控场景测试，非供应商返回、非真实作答】';
 const tempRoot = path.resolve(import.meta.dirname, '..', '.tmp');
-const custom = { title: '合成自选资料', body: '只用于测试的原文：记录检查条件，再将方法用于另一个例子。\n第二段保留原来的换行。', note: '这是一段合成心得，不是用户的私人资料。', author: '测试作者', url: 'https://example.invalid/custom', locator: '第 1—2 段' };
+const custom = { title: '合成自选资料'.repeat(33) + '合成', body: '只用于测试的原文：记录检查条件，再将方法用于另一个例子。\n第二段保留原来的换行。', note: '这是一段合成心得，不是用户的私人资料。', author: '测试作者', url: 'https://example.invalid/custom', locator: '第 1—2 段' };
 const excerptHashes = {
   course: ['23891dbbe1ff03d83793d541c3f3f23dc5e852343eeb9dc4219482915f7bd86b', '8772414400dde95f7d1241110bb094a171d263f8a5bfb6ade8deb6deb746510c'],
   reading: ['53acc702c12cdbca9202f6d4736ec23521a435e227d6d0d5d1871bd3d33299c7', 'a288f805cdc314d5f8335a4c761fc5d0c928cb64e89c5d0d9c0031687f44cf6a'],
@@ -42,6 +42,8 @@ test('five approved source-dominant materials retain excerpts, licences and scen
   assert.ok(materialSample('tech').body.includes('8. By copying, installing or otherwise using Python'));
   assert.match(materials[0].source.title, /一元一次方程/);
   assert.equal(customSample(custom).body.includes(custom.body), true);
+  assert.equal(customSample(custom).title.length, 200);
+  assert.throws(() => customSample({ ...custom, title: '字'.repeat(201) }));
   assert.throws(() => customSample({ ...custom, url: 'javascript:alert(1)' }));
 });
 
@@ -105,15 +107,23 @@ for (const materialId of [...materials.map(item => item.id), 'custom']) test(`${
   await request('/api/onboarding/start', { materialId: materialId === 'work' ? 'reading' : 'work' }, 'POST', 409);
   await request('/api/settings', { ai: { enabled: true, model: 'offline-controlled', baseUrl: 'https://example.invalid/v1' } }, 'PUT');
   await guide('test', { capability: 'model' });
+  await guide('checkpoint', { stepId: 'capture-batch' });
+  await practice('import', { items: [{ title: marker + '伴读', body: '先导入的合成伴读，不应成为主线。' }, { title: marker + '应用问题', body: '合成扩展问题，不应成为主线。' }] });
+  let current = await request('/api/onboarding/state');
+  assert.equal(current.roles.capturedSource, undefined);
+  assert.equal(current.roles.source, undefined);
+  assert.equal((await guide('checkpoint', { stepId: 'capture-save' })).progress['capture-save'].status, 'pending');
   const sample = materialId === 'custom' ? f.state.customSample : materialSample(materialId);
   const source = (await practice('import', { items: [{ ...sample, privacy: 'local' }] })).notes[0];
   assert.equal((await practice(`notes/${source.id}`)).body, sample.body);
+  assert.equal((await practice(`notes/${source.id}`)).title, sample.title);
+  assert.equal((await guide('checkpoint', { stepId: 'capture-save' })).progress['capture-save'].status, 'done');
   assert.equal((await practice(`notes/${source.id}/process`, { research: false })).state, 'queued');
   await pump();
   assert.equal((await practice('jobs')).jobs.find(job => job.type === 'process').state, 'waiting', 'no automatic cloud permission');
   await edit(source.id, { privacy: 'cloud' });
   await practice(`notes/${source.id}/process`, { research: false }); await pump();
-  let current = await request('/api/onboarding/state');
+  current = await request('/api/onboarding/state');
   assert.equal(current.roles.source, source.id);
   assert.equal(current.learningCandidates.length, 2);
   const knowledgeId = current.learningCandidates.find(note => note.depth === 'explain').id;
@@ -128,6 +138,14 @@ for (const materialId of [...materials.map(item => item.id), 'custom']) test(`${
   const applyId = current.learningCandidates.find(note => note.id !== knowledgeId).id;
   await guide('select-knowledge', { noteId: knowledgeId, role: 'apply' }, 409);
   await guide('select-knowledge', { noteId: applyId, role: 'apply' });
+  await guide('select-knowledge', { noteId: applyId, role: 'aware' });
+  current = await guide('select-knowledge', { noteId: applyId, role: 'find' });
+  assert.equal(current.roles.aware, applyId);
+  assert.equal(current.roles.find, applyId);
+  assert.equal(current.roles.apply, applyId, 'two candidates support the main role plus sequential extension goals');
+  const otherNote = await practice(`notes/${applyId}`);
+  await practice(`notes/${applyId}/confirm`, { expectedHash: otherNote.hash, body: marker }); await pump();
+  assert.equal((await guide('checkpoint', { stepId: 'study-confirm' })).progress['study-confirm'].status, 'pending', 'confirmation of another knowledge cannot complete the main learning step');
   await edit(knowledgeId, { privacy: 'cloud', depth: 'explain' });
   await practice(`notes/${knowledgeId}/promote`, { stage: 'learning', depth: 'explain', reason: marker });
   let session = await practice('study/start', { noteId: knowledgeId });
@@ -136,6 +154,7 @@ for (const materialId of [...materials.map(item => item.id), 'custom']) test(`${
   const completion = await f.answer(session);
   assert.equal(completion.completion.reviewSettled, true);
   await practice(`study/${session.id}/confirm`, { body: marker }); await pump();
+  assert.equal((await guide('checkpoint', { stepId: 'study-confirm' })).progress['study-confirm'].status, 'done');
   const pending = await guide('checkpoint', { stepId: 'review-finish' });
   assert.equal(pending.progress['review-finish'].status, 'pending', 'time alone is not review evidence');
   current = await guide('advance', { action: 'next' });
@@ -169,6 +188,7 @@ test('invalid custom input and invalid scene reset preserve the existing practic
   const f = await fixture(t, 'reading');
   const oldId = f.state.practiceId;
   await f.guide('reset', { materialId: 'custom', customMaterial: { ...custom, body: '' } }, 400);
+  await f.guide('reset', { materialId: 'custom', customMaterial: { ...custom, title: '字'.repeat(201) } }, 400);
   await f.guide('reset', { materialId: 'unknown' }, 400);
   assert.equal((await f.request('/api/onboarding/state')).practiceId, oldId);
   const changed = await f.guide('reset', { materialId: 'custom', customMaterial: custom });

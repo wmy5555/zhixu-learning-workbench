@@ -362,7 +362,7 @@ export function customSample(input) {
     if (typeof value !== 'string' || value.length > max || required && !value.trim()) throw new Error('材料字段为空或过长，请检查标题、原文和出处。');
     return value;
   };
-  const title = text('title', 240, true), original = text('body', 150000, true), note = text('note', 10000);
+  const title = text('title', 200, true), original = text('body', 150000, true), note = text('note', 10000);
   const author = text('author', 1000), url = text('url', 2000), locator = text('locator', 2000);
   if (url) {
     let parsed; try { parsed = new URL(url); } catch { throw new Error('出处链接格式无效。'); }

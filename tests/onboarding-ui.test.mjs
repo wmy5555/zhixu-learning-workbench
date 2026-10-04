@@ -456,6 +456,7 @@ test('custom material validates locally, retains typed text across preview choic
   assert.ok(ui.body.textContent.includes('材料字段为空或过长'));
   assert.ok(!ui.requests.some(call => call.action === 'start'));
   const input = name => descend(ui.body).find(node => node.getAttribute('name') === `custom-${name}`);
+  assert.equal(input('title').getAttribute('max-length'), '200');
   input('title').value = '合成自选输入'; input('body').value = '合成原文第一段。\n第二段保持换行。'; input('note').value = '合成心得，不是确认理解。';
   descend(ui.body).find(node => node.value === 'reading').events.change({ target: { value: 'reading' } });
   radio.events.change({ target: { value: 'custom' } });
@@ -469,6 +470,23 @@ test('custom material validates locally, retains typed text across preview choic
   assert.ok(samples[0].body.includes('合成原文第一段。\n第二段保持换行。'));
   assert.ok(samples[0].body.includes('用户填写，尚未确认理解'));
   assert.ok(!ui.requests.some(call => call.action === 'import'));
+  ui.tutorial.dispose();
+});
+
+test('goal extensions reuse non-main candidates and offer manual creation when only the main candidate exists', async () => {
+  const ui = await tutorialBrowser({ currentStepId: 'library-aware' });
+  ui.setState({ materialId: 'reading', roles: { capturedSource: 'source', explain: 'main', apply: 'other' }, learningCandidates: [{ id: 'main', title: '主线', limitations: [] }, { id: 'other', title: '扩展', limitations: [] }] });
+  await ui.tutorial.open();
+  let select = descend(ui.body).find(node => node.dataset.tour === 'onboarding-knowledge');
+  assert.equal(select.children.find(node => node.value === 'main').disabled, true);
+  assert.equal(select.children.find(node => node.value === 'other').disabled, false);
+  ui.setState({ learningCandidates: [{ id: 'main', title: '主线', limitations: [] }] });
+  await ui.tutorial.refresh();
+  assert.match(ui.body.textContent, /手动整理另一项内容/);
+  await click(findButton(ui.body, '整理另一条知识'));
+  assert.equal(ui.navigations.at(-1), 'process-manual');
+  assert.ok(!ui.requests.some(call => call.action === 'import' || call.data.mode === 'read'));
+  assert.equal(ui.state.progress['library-aware'], undefined);
   ui.tutorial.dispose();
 });
 

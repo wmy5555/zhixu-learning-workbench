@@ -28,6 +28,7 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
   const stateFile = path.join(root, 'state.json');
   let record = emptyRecord(), runtime = null, closed = false, transitioning = false;
   const steps = () => getCurriculum(record.practice?.materialId).flatSteps;
+  const evidenceRole = step => step.noteRole || (record.practice?.materialId && step.id === 'capture-save' ? 'capturedSource' : null);
   function safePath(file) {
     const relative = path.relative(path.resolve(dataDir), file);
     if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) fail('练习路径无效。', 'PRACTICE_PATH', 403);
@@ -135,8 +136,8 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
   function matchingEvents(checkId, step = {}) {
     const p = record.practice, value = p?.events?.[checkId] || record.events?.[checkId];
     const items = Array.isArray(value) ? value : value ? [value] : [];
-    const roleId = p?.roles?.[step.noteRole];
-    if (p?.materialId && step.noteRole && !roleId) return [];
+    const role = evidenceRole(step), roleId = p?.roles?.[role];
+    if (p?.materialId && role && !roleId) return [];
     return items.filter(event => {
       if (!step.caseId && event.presetCase) return false;
       if (step.caseId && (!p?.cases?.[step.caseId] || event.at < p.cases[step.caseId].at)) return false;
@@ -146,7 +147,8 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
   }
   function check(checkId, f, step = {}) {
     if (!checkId) return false;
-    if (record.practice?.materialId && step.noteRole && !record.practice.roles[step.noteRole]) return false;
+    const role = evidenceRole(step);
+    if (record.practice?.materialId && role && !record.practice.roles[role]) return false;
     checkId = checkAliases[checkId] || checkId;
     if (checkId === 'model-test') return ready('model');
     if (checkId.startsWith('test-')) return ready(checkId.slice(5));
@@ -158,7 +160,7 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
     if (events.length) return true;
     if (!f) return false;
     const preset = record => Boolean(record.presetCase || (record.noteId && exists(record.noteId) && f.store.read(record.noteId).meta.presetCase));
-    const targetId = record.practice?.roles?.[step.noteRole];
+    const targetId = record.practice?.roles?.[role];
     const realSessions = f.sessions.filter(s => !preset(s) && (!targetId || s.noteId === targetId || s.id === targetId));
     const realEvidence = f.store.records('studyEvidence').filter(e => !preset(e) && (!targetId || e.noteId === targetId));
     const done = type => f.jobs.some(j => j.type === type && j.state === 'done' && !j.presetCase && (!targetId || j.payload?.noteId === targetId));
@@ -168,7 +170,7 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
       'study-feedback': () => realSessions.some(s => s.turns?.some(t => t.feedback) || s.feedback),
       'study-followup': () => realSessions.some(s => s.turns?.filter(t => t.feedback).length >= 2),
       'study-finish': () => realSessions.some(s => s.status === 'completed' && !s.completion?.abandoned),
-      'study-confirm': () => f.notes.some(n => n.meta.confirmedAt && !n.meta.presetCase),
+      'study-confirm': () => f.notes.some(n => n.meta.confirmedAt && !n.meta.presetCase && (!targetId || n.id === targetId)),
       review: () => realEvidence.some(e => e.reviewSettled && realEvidence.some(other => other.noteId === e.noteId && other.day !== e.day)),
       'topic-suggest': () => done('topics'),
       'index-update': () => ready('embedding') && done('index') && Number(f.service.diagnostics().index.vectors) > 0,
@@ -275,7 +277,7 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
     const service = open().service;
     const note = service.getNote(noteId);
     if (note.kind !== 'knowledge' || note.meta.presetCase || note.meta.supersededBy || !note.meta.sources?.some(ref => ref.id === p.roles.capturedSource && ref.role === 'input')) fail('请选择当前原文下的实际候选知识，不能使用预设案例。', 'ONBOARDING_KNOWLEDGE', 409);
-    if (['aware', 'find', 'explain', 'apply'].some(other => other !== role && p.roles[other] === noteId)) fail('请为这个目标选择另一条知识，保留主线知识的目标与学习记录。', 'ONBOARDING_KNOWLEDGE', 409);
+    if (role === 'explain' ? ['aware', 'find', 'apply'].some(other => p.roles[other] === noteId) : p.roles.explain === noteId) fail('请为扩展目标选择主线以外的知识，保留主线知识的目标与学习记录。', 'ONBOARDING_KNOWLEDGE', 409);
     if (role === 'explain' && p.roles.explain !== noteId && service.store.records('sessions').some(session => session.noteId === p.roles.explain && !session.presetCase)) fail('这条知识已经开始学习，请继续当前知识；换主线需确认重新练习。', 'ONBOARDING_LEARNING_LOCKED', 409);
     if (service.noteEvidence(noteId).limitations.length) fail('这条知识仍需核验或复查。请先对原文联网加工并审阅依据，再选入主线；不要改成个人观点绕过核验。', 'RESEARCH_REQUIRED', 409);
     p.roles[role] = noteId; p.roles.source = p.roles.capturedSource;
@@ -371,11 +373,12 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
     const observedNoteId = exists(result?.noteId) ? result.noteId : (result?.id && exists(result.id) ? result.id : exists(itemId) ? itemId : null);
     const storedItem = itemId && ['jobs', 'proposals', 'relations'].includes(resource) ? runtime.service.store.get(resource, itemId) : null;
     const presetCase = result?.presetCase || result?.meta?.presetCase || storedItem?.presetCase || (observedNoteId && runtime.service.store.read(observedNoteId).meta.presetCase);
-    const entities = [itemId, result?.id, result?.draftId, result?.noteId, body.noteId, body.mistakeId, body.topicId, body.keepId].filter(value => typeof value === 'string');
+    const entities = [itemId, result?.id, result?.draftId, result?.noteId, body.noteId, body.mistakeId, body.topicId, body.keepId, ...(Array.isArray(result?.notes) ? result.notes.map(note => note.id) : [])].filter(value => typeof value === 'string');
     const event = name => noteEvent(name, { entities, ...(observedNoteId ? { noteId: observedNoteId } : {}), ...(presetCase ? { presetCase } : {}), ...(result?.meta?.depth ? { depth: result.meta.depth, stage: result.meta.stage } : {}) });
     if (resource === 'import' && method === 'POST') {
       event('import'); event(body.items?.length > 1 ? 'import-batch' : 'import-text');
-      if (result.notes?.[0] && !exists(p.roles.capturedSource)) {
+      const mainCapture = !p.materialId || p.currentStepId === 'capture-save' && body.items?.length === 1;
+      if (mainCapture && result.notes?.[0] && !exists(p.roles.capturedSource)) {
         p.roles.capturedSource = result.notes[0].id;
         if (p.materialId) p.roles.source = result.notes[0].id;
       }
@@ -435,7 +438,7 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
       if (context && typeof context.roles === 'object' && typeof context.cases === 'object') {
         p.roles = Object.fromEntries(Object.entries(context.roles || {}).filter(([role, value]) => /^[a-zA-Z][a-zA-Z0-9]{0,63}$/.test(role) && typeof value === 'string' && /^[a-zA-Z0-9:_-]{1,160}$/.test(value)));
         p.cases = Object.fromEntries(Object.entries(context.cases || {}).filter(([key, value]) => caseIds.includes(key) && Number.isFinite(Date.parse(value?.at))).map(([key, value]) => [key, { at: new Date(value.at).toISOString() }]));
-        if (context.materialId === null || getMaterial(context.materialId)) p.materialId = context.materialId;
+        if (context.materialId == null || getMaterial(context.materialId)) p.materialId = context.materialId || null;
       }
       const restoredTime = body.backup?.learningTime || context?.learningTime;
       if (Number.isFinite(Date.parse(restoredTime))) { p.clockAt = new Date(restoredTime).toISOString(); runtime.anchor = Date.now(); }
