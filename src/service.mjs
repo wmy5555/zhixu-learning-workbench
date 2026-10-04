@@ -630,9 +630,10 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
       for (let result of results) {
         if (!pending.includes(result.claim) || result.coverage === 'unsearched' && !result.stopCode) continue;
         const key = keyFor(result.claim), previous = store.get('research', key);
-        const coverage = result.coverage || 'searched';
+        const attemptCoverage = result.coverage || 'searched';
+        const coverage = previous?.coverage === 'searched' ? 'searched' : attemptCoverage;
         if (previous?.result.evidence?.length && !result.evidence?.length) result = { ...previous.result, claim: result.claim, limitations: [...new Set([...(previous.result.limitations || []), ...(result.limitations || [])])], coverage };
-        store.put('research', key, { result, at: now(), coverage, attempts: (previous?.attempts || 0) + (coverage === 'unsearched' ? 0 : 1) });
+        store.put('research', key, { result, at: now(), coverage, attempts: (previous?.attempts || 0) + (attemptCoverage === 'unsearched' ? 0 : 1) });
         shared.set(result.claim, result); changedClaims.add(result.claim);
       }
       await saveResults(true); updateProgress();

@@ -125,6 +125,15 @@ test('unsearchable templates persist actionable diagnostics without marking clai
   assert.ok(service.store.records('research').every(r => r.coverage === 'unsearched' && r.attempts === 0));
   service.jobAction(job.id, { action: 'retry' }); await service.runJobs();
   assert.equal(h.requests.length, 1); assert.equal(service.getNote(child.id).hash, child.hash);
+  // A failed planning attempt must not erase coverage recorded by an earlier run.
+  for (const row of service.store.db.prepare("SELECT key FROM records WHERE namespace='research'").all()) {
+    const saved = service.store.get('research', row.key);
+    service.store.put('research', row.key, { ...saved, coverage: 'searched', attempts: 1 });
+  }
+  service.jobAction(job.id, { action: 'retry' }); await service.runJobs();
+  assert.equal(service.store.get('jobs', job.id).researchProgress.covered, 3);
+  assert.ok(service.store.records('research').every(r => r.attempts === 1));
+  assert.equal(h.requests.length, 1);
 });
 
 test('source retries reuse completed research and advance through the remaining groups without new extraction', async t => {
