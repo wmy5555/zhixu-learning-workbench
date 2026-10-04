@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createAI } from '../src/ai.mjs';
 import { createService } from '../src/service.mjs';
+import { hash } from '../src/store.mjs';
 
 const json = value => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
 function transport(limit = 120, redirects = false, transientFailure = false) {
@@ -68,6 +69,54 @@ test('temporary page retries and redirects consume the same allowance while eval
   assert.equal(h.evaluated.length, 3);
   assert.ok(result.results.slice(0, 3).every(r => r.evidence.length));
   assert.ok(result.results.slice(3).every(r => r.coverage === 'unsearched'));
+});
+
+test('an unsearchable first group cannot starve either later searchable group on repeated runs', async () => {
+  const h = transport(), long = 'Synthetic long claim with more than twenty four characters';
+  const claims = [0,1,2].map(i => `${long} ${i}`).concat(['A', 'B', 'C', `${long} tail`]);
+  const prompts = { researchSearchSupport: `${'x'.repeat(270)}{{context}}`, researchSearchOppose: `${'y'.repeat(270)}{{context}}` };
+  for (let run = 0; run < 2; run++) {
+    const checkpoints = [], before = h.requests.length;
+    const result = await h.ai.researchBatch({ claims, privacy: 'cloud', prompts, onBatch: results => checkpoints.push(results) });
+    assert.equal(checkpoints.length, 3, 'each group is planned once without a retry loop');
+    assert.ok(result.results.slice(0,3).every(r => r.stopCode === 'SEARCH_QUERY_TOO_LONG' && r.coverage === 'unsearched'));
+    assert.ok(result.results.slice(3).every(r => r.evidence.length && !r.limitations.length));
+    assert.equal(h.requests.length - before, run ? 2 : 14, 'later groups run; the second run can reuse fetched pages');
+    assert.deepEqual(result.issues.map(i => i.code), ['SEARCH_QUERY_TOO_LONG']);
+  }
+  assert.deepEqual(h.evaluated, [...claims.slice(3), ...claims.slice(3)]);
+});
+
+for (const partialCheckpoint of [false, true]) test(`expired cache remains limited after network interruption (partial checkpoint: ${partialCheckpoint})`, async t => {
+  const root = fs.mkdtempSync(path.resolve('.tmp/expired-checkpoint-'));
+  const claims = ['Synthetic fresh claim', 'Synthetic stale claim A', 'Synthetic stale claim B'];
+  let service, allowCompletion = false;
+  const complete = claim => ({ claim, evidence: [{ url: `https://example.invalid/${claims.indexOf(claim)}`, title: claim, excerpt: `Synthetic evidence for ${claim}`, role: 'support', fetchedAt: new Date().toISOString() }], limitations: [], coverage: 'searched' });
+  const ai = { generate: async () => ({ text: JSON.stringify({ candidates: [{ title: '合成缓存条目', body: '合成正文', claims }] }) }), withBudget: async (_, fn) => fn(),
+    researchBatch: async ({ claims: pending, onBatch }) => {
+      if (allowCompletion) { const results = pending.map(complete); await onBatch(results); return { results }; }
+      assert.deepEqual(pending, claims.slice(1));
+      const note = service.getNote(service.readPublicNote(source.id).children[0].id);
+      assert.match(note.meta.researchLimitations.join(' '), /缓存已过期/);
+      assert.throws(() => service.startStudy({ noteId: note.id }), error => error.code === 'RESEARCH_REQUIRED');
+      if (partialCheckpoint) await onBatch([complete(claims[1])]);
+      throw Object.assign(new Error('Synthetic network interruption'), { code: 'NETWORK_ERROR' });
+    } };
+  service = createService({ dataDir: path.join(root,'data'), vaultDir: path.join(root,'vault'), aiOverride: ai });
+  t.after(async () => { await service.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const source = service.importItems({ items: [{ title: '合成缓存来源', body: '仅使用合成缓存', privacy: 'cloud' }] }).notes[0];
+  const staleAt = new Date(Date.now() - 8*86400000).toISOString();
+  for (const [index, claim] of claims.entries()) service.store.put('research', hash(`${claim}:${source.hash}`), { result: complete(claim), at: index ? staleAt : new Date().toISOString(), coverage: 'searched', attempts: 1 });
+  const job = service.processNote(source.id, { research: true }); await service.runJobs();
+  const note = service.getNote(service.readPublicNote(source.id).children[0].id);
+  assert.equal(service.store.get('jobs', job.id).researchProgress.verified, partialCheckpoint ? 2 : 1);
+  assert.match(note.meta.researchLimitations.join(' '), /Synthetic stale claim B.*缓存已过期/);
+  assert.equal(note.meta.evidence.length, 3, 'old evidence remains readable, with its limitation');
+  assert.equal(service.store.get('research', hash(`${claims[2]}:${source.hash}`)).at, staleAt);
+  assert.throws(() => service.startStudy({ noteId: note.id }), error => error.code === 'RESEARCH_REQUIRED');
+  allowCompletion = true; service.jobAction(job.id, { action: 'retry' }); await service.runJobs();
+  assert.equal(service.store.get('jobs', job.id).researchProgress.verified, 3);
+  assert.equal(service.getNote(note.id).meta.researchLimitations.length, 0, 'only successful rechecking clears stale limitations');
 });
 
 for (const scenario of [

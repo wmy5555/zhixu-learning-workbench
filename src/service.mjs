@@ -622,8 +622,12 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     const pending = [];
     for (const claim of claims) {
       const cached = store.get('research', keyFor(claim));
-      if (cached) shared.set(claim, cached.result);
-      if (cached?.result.evidence?.length && !cached.result.limitations?.length && Date.now() - Date.parse(cached.at) < 7*86400000) changedClaims.add(claim);
+      const fresh = cached && Date.now() - Date.parse(cached.at) < 7*86400000;
+      if (cached) {
+        shared.set(claim, fresh ? cached.result : { ...cached.result, limitations: [...new Set([...(cached.result.limitations || []), `“${claim}”的核验缓存已过期，尚待重新核验。`])] });
+        if (!fresh) changedClaims.add(claim);
+      }
+      if (fresh && cached.result.evidence?.length && !cached.result.limitations?.length) changedClaims.add(claim);
       else pending.push(claim);
     }
     // Unvisited claims precede unsuccessful earlier groups; later retries rotate fairly.

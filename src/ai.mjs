@@ -938,7 +938,8 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
       } finally { budget.reserveEvaluation = reserve; }
       results.push(...batch.results);
       await onBatch?.(batch.results);
-      if (issues.length) break;
+      // A local planning failure must not starve later groups that still fit.
+      if (issues.some(issue => issue.code !== 'SEARCH_QUERY_TOO_LONG')) break;
     }
     for (const claim of claims.slice(results.length)) results.push({ claim, evidence: [], coverage: 'unsearched', limitations: ['该主张尚未轮到检索；继续核验时优先处理。'] });
     return { results, issues };
