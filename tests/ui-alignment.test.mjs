@@ -4,6 +4,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 import { createProcessFeedback } from '../public/process-feedback.mjs';
 import { initSidebar } from '../public/sidebar.mjs';
+import { describeJobError } from '../public/ui.mjs';
 import { coreSteps, flatSteps } from '../public/onboarding-curriculum.mjs';
 
 import { tutorialFixture } from './fixtures/tutorial-ui.mjs';
@@ -21,8 +22,10 @@ class Element {
     this.classList = { add: name => { this.className = (this.className || '') + ' ' + name; }, remove: name => { this.className = (this.className || '').split(' ').filter(item => item !== name).join(' '); }, contains: name => (this.className || '').split(' ').includes(name), toggle() {} };
   }
   set textContent(value) { this._text = String(value); this.children = []; }
+  set value(value) { this._value = value; if (this.tagName === 'select') this.children.forEach(child => { child.selected = child.value === value; }); }
+  get value() { return this.tagName === 'select' ? this.children.find(child => child.selected)?.value ?? this._value : this._value; }
   get textContent() { return this._text + this.children.map(child => child.textContent ?? String(child)).join(''); }
-  append(...children) { this.children.push(...children.map(child => { if (child instanceof Element) return child; const text = new Element('text'); text.textContent = String(child); return text; })); }
+  append(...children) { this.children.push(...children.map(child => { if (child instanceof Element) { child.parentNode = this; return child; } const text = new Element('text'); text.textContent = String(child); text.parentNode = this; return text; })); }
   prepend(...children) { this.children.unshift(...children); }
   get options() { return this.children; }
   replaceChildren(...children) { this._text = ''; this.children = []; this.append(...children); }
@@ -39,7 +42,7 @@ class Element {
   insertBefore(node, reference) { const at = this.children.indexOf(reference); this.children.splice(at < 0 ? this.children.length : at, 0, node); }
   get lastChild() { return this.children.at(-1); }
   focus() {}
-  remove() {}
+  remove() { if (this.parentNode) this.parentNode.children = this.parentNode.children.filter(child => child !== this); }
   cloneNode() { return this; }
 }
 function descendants(node) { return [node, ...node.children.flatMap(child => child instanceof Element ? descendants(child) : [])]; }
@@ -88,6 +91,8 @@ function browser(api = {}) {
   context.app.processFeedback = vm.runInContext('processFeedback', context);
   context.app.renderSourceGroupDrawer = vm.runInContext('renderSourceGroupDrawer', context);
   context.app.toasts = document.querySelector('#toast-region');
+  context.app.dialogs = document.body;
+  context.app.jobsPanel = vm.runInContext('jobsPanel', context);
   return context.app;
 }
 
@@ -162,7 +167,9 @@ test('structure submission retains its lock after read failure and completion re
   app.renderSourceGroupDrawer(source); app.refs.drawer.classList.add('is-open');
   await click(descendants(app.refs.drawerBody).find(n => n.dataset.noteId === 'b'));
   const submit = findButton(app.refs.drawerBody, '重新分析结构');
-  await click(submit); await app.processFeedback.poll();
+  const submitting = click(submit);
+  await click(findButton(app.dialogs, '确认重新分析')); await submitting;
+  await app.processFeedback.poll();
   assert.equal(submit.disabled, true);
   await click(submit); assert.equal(calls, 1);
   app.processFeedback.observe({ jobs: [{ ...job, state: 'done' }], jobRevision: 'r', jobSnapshot: 3 });
@@ -203,6 +210,103 @@ test('source-map expansion preserves zoom, fit uses the visible canvas, and repl
   assert.equal(view.selected, 'another-id'); assert.equal(view.collapsed.size, 0);
   assert.match(panel.querySelector('.map-detail').textContent, /完全不同的内容/);
   assert.equal(requests, 0, 'viewing new example content never initiates AI work');
+});
+
+test('structure analysis waits for confirmation, ignores cancellation and stale context, and submits once', async () => {
+  let requests = 0, practiceId = '', version = 0;
+  const source = { id: 'confirm-source', title: '任意示例标题', kind: 'source', meta: {}, children: [{ id: 'child', title: '拆解内容', body: '正文', meta: {} }] };
+  const app = browser({ getContext: () => ({ practiceId, version }), sourceStructure: async () => { requests++; return { id: 'job', type: 'structure', state: 'queued', payload: { noteId: source.id } }; } });
+  app.renderSourceGroupDrawer(source);
+  const submit = findButton(app.refs.drawerBody, '重新分析结构');
+  let pending = click(submit);
+  assert.equal(requests, 0);
+  assert.match(app.dialogs.textContent, /任意示例标题.*AI 服务.*调用费用.*正文保留/);
+  await click(submit);
+  assert.equal(descendants(app.dialogs).filter(node => node.attributes.role === 'dialog').length, 1);
+  await click(findButton(app.dialogs, '取消')); await pending;
+  assert.equal(requests, 0); assert.equal(app.processFeedback.status(source.id), null);
+  pending = click(submit);
+  const dialog = descendants(app.dialogs).find(node => node.attributes.role === 'dialog');
+  dialog.events.keydown({ key: 'Escape', preventDefault() {}, stopPropagation() {} }); await pending;
+  assert.equal(requests, 0);
+  pending = click(submit); practiceId = 'other-library'; version++;
+  await click(findButton(app.dialogs, '确认重新分析')); await pending;
+  assert.equal(requests, 0); assert.match(app.toasts.textContent, /知识库已切换.*未提交/);
+  pending = click(submit);
+  await click(findButton(app.dialogs, '确认重新分析')); await pending; await click(submit);
+  assert.equal(requests, 1); assert.equal(app.dialogs.children.length, 0);
+});
+
+test('both source maps pan with the mouse without selecting nodes after dragging and retain clicks and touch scrolling', async () => {
+  const app = browser();
+  const source = { id: 'pan-source', title: '合成来源', meta: {}, children: ['a', 'b'].map(id => ({ id, title: id, body: '正文', meta: {} })) };
+  app.renderSourceGroupDrawer(source);
+  const panel = app.refs.drawerBody, viewport = panel.querySelector('.map-viewport');
+  viewport.clientWidth = 400; viewport.clientHeight = 320;
+  viewport.getBoundingClientRect = () => ({ left: 0, top: 0 });
+  let captured = null;
+  viewport.setPointerCapture = id => { captured = id; }; viewport.hasPointerCapture = id => captured === id; viewport.releasePointerCapture = () => { captured = null; };
+  const pointer = extra => ({ pointerId: 1, pointerType: 'mouse', button: 0, buttons: 1, clientX: 180, clientY: 160, target: viewport, preventDefault() {}, ...extra });
+  for (const mode of ['逻辑图', '思维导图']) {
+    await click(findButton(panel, mode)); viewport.scrollLeft = 100; viewport.scrollTop = 150;
+    const selected = app.state.sourceMaps.get(':pan-source').selected;
+    viewport.events.pointerdown(pointer({})); viewport.events.pointermove(pointer({ clientX: 120, clientY: 100 }));
+    assert.equal(viewport.scrollLeft, 160); assert.equal(viewport.scrollTop, 210); assert.equal(captured, 1);
+    assert.equal(app.state.sourceMaps.get(':pan-source').selected, selected);
+    viewport.events.pointerup(pointer({ buttons: 0 }));
+    let blocked = false;
+    viewport.events.click({ detail: 1, preventDefault() {}, stopPropagation() { blocked = true; } });
+    assert.equal(blocked, true); assert.equal(captured, null); assert.equal(viewport.classList.contains('is-panning'), false);
+    viewport.events.pointerdown(pointer({})); viewport.events.pointermove(pointer({ clientX: 182 })); viewport.events.pointerup(pointer({ buttons: 0 }));
+    blocked = false; viewport.events.click({ detail: 1, preventDefault() {}, stopPropagation() { blocked = true; } });
+    assert.equal(blocked, false, 'small movements retain normal clicks');
+    await click(descendants(panel).find(n => n.dataset.noteId === 'b'));
+    assert.match(panel.querySelector('.map-detail').textContent, /b/);
+    viewport.scrollLeft = 100;
+    viewport.events.pointerdown(pointer({ pointerType: 'touch' })); viewport.events.pointermove(pointer({ pointerType: 'touch', clientX: 50 }));
+    assert.equal(viewport.scrollLeft, 100, 'touch remains native scrolling');
+    viewport.events.pointerdown(pointer({})); viewport.events.pointermove(pointer({ clientX: 130 })); viewport.events.pointercancel(pointer({}));
+    assert.equal(captured, null); assert.equal(viewport.classList.contains('is-panning'), false);
+    blocked = false; viewport.events.click({ detail: 0, preventDefault() {}, stopPropagation() { blocked = true; } });
+    assert.equal(blocked, false, 'keyboard activation remains available');
+    viewport.events.pointerdown(pointer({})); viewport.events.pointerleave();
+    viewport.scrollLeft = 90; viewport.events.pointermove(pointer({ clientX: 30 }));
+    assert.equal(viewport.scrollLeft, 90, 'leaving before dragging cannot leave a pending gesture');
+  }
+  await click(findButton(panel, '阅读全部条目')); viewport.scrollLeft = 0;
+  viewport.events.pointerdown(pointer({})); viewport.events.pointermove(pointer({ clientX: 90 }));
+  assert.equal(viewport.scrollLeft, 0, 'reading cards do not intercept text selection');
+});
+
+test('task failures explain stored error codes and retain original diagnostics behind a separate disclosure', async () => {
+  for (const [code, error, expected] of [
+    ['ETIMEDOUT', 'connect ETIMEDOUT 203.0.113.10:443', /连接 AI 服务超时/],
+    ['TASK_FAILED', 'connect ETIMEDOUT 203.0.113.10:443', /超时/],
+    ['DNS_FAILED', '', /无法找到/], ['ECONNRESET', '', /中断/], ['PRIVACY_LOCAL', '', /外发/],
+    ['BUDGET_EXCEEDED', '今日外部调用次数已达到上限。', /今日/], ['BUDGET_UNKNOWN', '', /预算/],
+    ['MISSING_CREDENTIALS', '', /尚未准备/], ['SOURCE_CHANGED', '', /变化/], ['MODEL_FORMAT', '', /结果/],
+    ['PROVIDER_ERROR', '外部服务返回 401', /拒绝/], ['PROVIDER_ERROR', 'HTTP 429', /限制/], ['UNKNOWN', 'unexpected failure', /暂未完成/],
+    ['UNKNOWN', 'value mismatch: 403 records', /暂未完成/],
+  ]) {
+    const value = describeJobError({ type: 'structure', code, error });
+    assert.match(value.title, expected); assert.ok(value.reason); assert.ok(value.next);
+  }
+  assert.match(describeJobError({ state: 'cancelled', code: 'BUDGET_EXCEEDED' }).title, /已取消/);
+  const raw = 'connect ETIMEDOUT 203.0.113.10:443 <script>untrusted()</script>';
+  const job = { id: 'failed-structure', type: 'structure', state: 'failed', code: 'ETIMEDOUT', error: raw };
+  let retries = 0;
+  const app = browser({ jobs: async () => ({ jobs: [job] }), jobAction: async () => { retries++; }, bootstrap: async () => ({}) });
+  app.state.systemTab = 'jobs';
+  const panel = await app.jobsPanel();
+  assert.match(panel.querySelector('.job-error-title').textContent, /连接 AI 服务超时/);
+  assert.match(panel.querySelector('.call-error').textContent, /网络或代理.*连接恢复后/);
+  const technical = panel.querySelector('.job-technical');
+  assert.equal(technical.open, false); assert.match(technical.textContent, /ETIMEDOUT.*203\.0\.113/s);
+  assert.equal(panel.querySelector('script'), null);
+  let pending = click(findButton(panel, '重试')); assert.equal(retries, 0);
+  await click(findButton(app.dialogs, '取消')); await pending; assert.equal(retries, 0);
+  pending = click(findButton(panel, '重试'));
+  await click(findButton(app.dialogs, '确认重新分析')); await pending; assert.equal(retries, 1);
 });
 
 test('a successful process submit remains locked when the following bootstrap refresh fails', async () => {

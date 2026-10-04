@@ -3,7 +3,7 @@ import test from 'node:test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createService } from '../src/service.mjs';
-import { normalizeStructure } from '../src/source-structure.mjs';
+import { normalizeStructure, structureRecord } from '../src/source-structure.mjs';
 import { layoutSourceMap } from '../public/source-map.mjs';
 
 fs.mkdirSync(path.resolve('.tmp'), { recursive: true });
@@ -107,6 +107,22 @@ test('changes, added members and deleted members mark the graph stale without di
   assert.equal(s.readPublicNote(data.source.id).structure.nodes.length, 3);
   s.store.delete(notes[1].id, notes[1].hash);
   assert.equal(s.readPublicNote(data.source.id).structure.nodes.length, 2);
+});
+
+test('failed reanalysis preserves the previously saved structure and edited notes', async t => {
+  for (const failure of ['timeout', 'invalid-json', 'missing-structure']) {
+    const { service: s } = setup(t, async () => {
+      if (failure === 'timeout') throw Object.assign(new Error('connect ETIMEDOUT 203.0.113.10:443'), { code: 'ETIMEDOUT' });
+      return { text: failure === 'invalid-json' ? 'invalid result' : '{}' };
+    });
+    const { source, notes } = material(s), saved = structureRecord(source, notes, forNotes(notes));
+    s.store.put('sourceStructures', source.id, saved);
+    const job = s.requestSourceStructure(source.id); await s.runJobs();
+    assert.equal(s.store.get('jobs', job.id).state, 'failed');
+    assert.deepEqual(s.store.get('sourceStructures', source.id), saved);
+    assert.deepEqual(notes.map(n => s.getNote(n.id).body), notes.map(n => n.body));
+    assert.equal(s.readPublicNote(source.id).structure.edges.length, 1);
+  }
 });
 
 test('local-only children block external analysis and permission revocation during the call discards the result', async t => {

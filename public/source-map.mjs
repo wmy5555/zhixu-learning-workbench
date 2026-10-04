@@ -75,6 +75,47 @@ export function layoutSourceMap(nodes, edges, hierarchy, mode = 'logic', collaps
   return { positions, width, height: Math.max(320, maxRank * levelStep + cardHeight + 128), cardWidth, cardHeight, levelStep };
 }
 
+export function enableMapPanning(viewport) {
+  let drag = null, suppressClick = false;
+  const finish = () => {
+    const previous = drag; drag = null;
+    viewport.classList.remove('is-panning');
+    if (previous?.moved) {
+      suppressClick = true;
+      if (viewport.hasPointerCapture?.(previous.id)) viewport.releasePointerCapture(previous.id);
+    }
+  };
+  viewport.addEventListener('pointerdown', event => {
+    suppressClick = false;
+    if (viewport.dataset.reading !== 'false' || event.button !== 0 || event.pointerType === 'touch' || drag) return;
+    if (event.target.closest?.('.map-collapse-button, a, input, select, textarea')) return;
+    const bounds = viewport.getBoundingClientRect();
+    // Leave native scrollbars and touch scrolling available.
+    if (event.clientX >= bounds.left + viewport.clientWidth || event.clientY >= bounds.top + viewport.clientHeight) return;
+    drag = { id: event.pointerId, x: event.clientX, y: event.clientY, left: viewport.scrollLeft, top: viewport.scrollTop, moved: false };
+  });
+  viewport.addEventListener('pointermove', event => {
+    if (!drag || event.pointerId !== drag.id) return;
+    if (!(event.buttons & 1)) { finish(); return; }
+    const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
+    if (!drag.moved && Math.hypot(dx, dy) < 5) return;
+    if (!drag.moved) {
+      drag.moved = true; viewport.setPointerCapture?.(drag.id); viewport.classList.add('is-panning');
+    }
+    event.preventDefault();
+    viewport.scrollLeft = drag.left - dx; viewport.scrollTop = drag.top - dy;
+  });
+  for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) viewport.addEventListener(name, event => {
+    if (drag?.id === event.pointerId) finish();
+  });
+  viewport.addEventListener('pointerleave', () => { if (drag && !drag.moved) finish(); });
+  viewport.addEventListener('click', event => {
+    if (suppressClick && event.detail !== 0) { event.preventDefault(); event.stopPropagation(); }
+    suppressClick = false;
+  }, true);
+  return finish;
+}
+
 export function createSourceMap({ source, children, view = {}, renderDetail, analyze, onExpand = () => {} }) {
   const data = source.structure || { state: 'missing', hierarchy: [], edges: [], message: '这份旧资料尚无结构建议，可重新分析；当前仅显示来源归属。' };
   const edges = Array.isArray(data.edges) ? data.edges : [], hierarchy = Array.isArray(data.hierarchy) ? data.hierarchy : [];
@@ -88,7 +129,8 @@ export function createSourceMap({ source, children, view = {}, renderDetail, ana
   const root = el('section', { class: 'source-map panel', dataset: { tour: 'source-structure' } });
   const toolbar = el('div', { class: 'map-toolbar' });
   const tabs = el('div', { class: 'map-tabs', role: 'group', 'aria-label': '结构视图' });
-  const viewport = el('div', { class: 'map-viewport', role: 'region', tabindex: '0', 'aria-label': '资料结构，可滚动查看，使用节点按钮阅读' });
+  const viewport = el('div', { class: 'map-viewport', role: 'region', tabindex: '0', 'aria-label': '资料结构，可按住鼠标拖动或滚动查看，使用节点按钮阅读' });
+  const finishPan = enableMapPanning(viewport);
   const detail = el('div', { class: 'map-detail', 'aria-live': 'polite' });
   const relationDetail = el('div', { class: 'map-relations' });
   const nodeButtons = new Map(), modeButtons = new Map();
@@ -136,6 +178,7 @@ export function createSourceMap({ source, children, view = {}, renderDetail, ana
     }
   }
   function draw() {
+    finishPan();
     const left = viewport.scrollLeft || 0, top = viewport.scrollTop || 0;
     clear(viewport); nodeButtons.clear();
     viewport.dataset.mode = view.mode;
@@ -234,7 +277,7 @@ export function createSourceMap({ source, children, view = {}, renderDetail, ana
     el('p', { class: 'fine-print', text: '新资料在 AI 拆解时一并分析结构。重新分析会发送获准的原文与当前条目，可能产生费用。' }),
     el('p', { class: 'map-status', role: 'status', text: data.message || (edges.length ? `${children.length} 条拆解 · ${edges.length} 条逻辑联系 · 点击条目查看正文与依据` : '没有可靠的逻辑连线；思维导图显示资料归属与已分析层级。') }),
     el('p', { class: 'structure-job-status notice info', role: 'status', hidden: true, dataset: { sourceId: source.id } }), toolbar, viewport,
-    el('div', { class: 'map-reading-bar' }, [el('span', { class: 'fine-print', text: '可滚动查看 · 分支表示层级，箭头表示逻辑 · AI 建议尚未确认' }), readAll]), relationDetail, detail);
+    el('div', { class: 'map-reading-bar' }, [el('span', { class: 'fine-print', text: '按住鼠标拖动或滚动查看 · 分支表示层级，箭头表示逻辑 · AI 建议尚未确认' }), readAll]), relationDetail, detail);
   draw();
   queueMicrotask(() => { if (root.isConnected) centerSelected(); });
   return root;

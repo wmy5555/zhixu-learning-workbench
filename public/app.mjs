@@ -4,7 +4,7 @@ import { createSourceMap } from "./source-map.mjs";
 import { initSidebar } from "./sidebar.mjs";
 import {
   el, clear, button, badge, emptyState, formatDate, truncate, safeExternalUrl,
-  labels, stateTone, field, toast, confirmAction, promptAction, serializeForm,
+  labels, stateTone, field, toast, confirmAction, promptAction, serializeForm, describeJobError,
 } from "./ui.mjs";
 
 const refs = {
@@ -300,12 +300,12 @@ function isQuotaWaitMessage(value) {
 
 function jobSummary(job) {
   if (isQuotaWaitMessage(job?.error)) return "已保存，待外部请求额度恢复后继续";
-  return job?.error || `更新于 ${formatDate(job?.updatedAt, true)}`;
+  return job?.error || job?.code ? describeJobError(job).title : `更新于 ${formatDate(job?.updatedAt, true)}`;
 }
 
 function groupJobSummary(job) {
   if (isQuotaWaitMessage(job?.error) || job?.state === "waiting") return "已保存，待继续";
-  if (job?.error) return job.error;
+  if (job?.error || job?.code) return describeJobError(job).title;
   if (job?.state === "failed") return "处理未完成，已保留任务记录";
   if (job?.state === "done") return "拆解任务已完成";
   return "拆解任务正在处理";
@@ -664,14 +664,33 @@ function updateStructureButton(control) {
   control.title = status?.message || '仅分析现有条目的关系，保留正文';
 }
 
-async function analyzeStructure(source) {
-  if (!processFeedback.begin(source.id, 'structure')) return;
+const structureConfirmations = new Set();
+async function runConfirmedStructure(key, title, run) {
+  const context = api.getContext(), scopedKey = `${context.practiceId || ''}:${key}`;
+  if (structureConfirmations.has(scopedKey)) return;
+  structureConfirmations.add(scopedKey);
   try {
-    const job = await api.sourceStructure(source.id);
-    processFeedback.observe({ jobs: [job], notes: [source], partial: true, jobRevision: job.jobRevision, jobSnapshot: job.jobSnapshot });
-    toast(['queued', 'running'].includes(job.state) ? '逻辑关系分析已排队，原文和拆解内容保留' : '该任务正在等待条件，请到「系统 → 任务」查看原因并重试', ['queued', 'running'].includes(job.state) ? 'success' : 'info');
+    if (!await confirmAction({ title: '重新分析资料结构？', confirmText: '确认重新分析',
+      message: `${title ? `《${title}》：` : ''}将把获准外发的原文和当前拆解条目发送给已配置的 AI 服务，重新分析逻辑关系和分支层级，可能产生调用费用。原文与条目正文保留，成功后更新结构建议。` })) return;
+    const current = api.getContext();
+    if (current.practiceId !== context.practiceId || current.version !== context.version) {
+      toast('知识库已切换，本次分析未提交。请在当前资料中重新操作。', 'info'); return;
+    }
+    await run();
   } catch (error) { handleError(error); }
-  finally { processFeedback.end(source.id); }
+  finally { structureConfirmations.delete(scopedKey); }
+}
+
+async function analyzeStructure(source) {
+  if (processFeedback.status(source.id)?.active) return;
+  await runConfirmedStructure(`source:${source.id}`, source.title, async () => {
+    if (!processFeedback.begin(source.id, 'structure')) return;
+    try {
+      const job = await api.sourceStructure(source.id);
+      processFeedback.observe({ jobs: [job], notes: [source], partial: true, jobRevision: job.jobRevision, jobSnapshot: job.jobSnapshot });
+      toast(['queued', 'running'].includes(job.state) ? '逻辑关系分析已排队，原文和拆解内容保留' : '该任务正在等待条件，请到「系统 → 任务」查看原因并重试', ['queued', 'running'].includes(job.state) ? 'success' : 'info');
+    } finally { processFeedback.end(source.id); }
+  });
 }
 
 function childSection(note, source, index) {
@@ -1975,9 +1994,20 @@ async function jobsPanel() {
         const progress = Math.max(0,Math.min(100,number(job.progress)));
         details.append(el("small",{text:progress+"%"}));
       }
-      if (job.error) details.append(el("details",{class:"call-error",on:{toggle:event=>{if(event.target.open)recordTourEvent("job-open");}}},[el("summary",{text:"查看详情"}),el("pre",{text:jobSummary(job)})]));
+      if (job.error || job.code) {
+        const explanation = describeJobError(job);
+        details.append(el('p', { class: 'job-error-title', text: explanation.title }),
+          el('details', { class: 'call-error', on: { toggle: event => { if (event.target.open) recordTourEvent('job-open'); } } }, [
+            el('summary', { text: '查看详情' }),
+            el('p', { class: 'job-error-help', text: explanation.reason }),
+            el('p', { class: 'job-error-help', text: `可以这样处理：${explanation.next}` }),
+            job.type === 'structure' ? el('p', { class: 'job-error-help', text: '原文和拆解条目保留，已有结构建议可继续查看。' }) : null,
+            el('details', { class: 'job-technical' }, [el('summary', { text: '技术信息（供排查）' }),
+              el('pre', { text: `错误代码：${job.code || '未提供'}\n原始信息：${job.error || '未提供'}` })]),
+          ]));
+      }
       const actions = el("div",{class:"item-actions"});
-      if (["failed","cancelled","waiting"].includes(job.state)) actions.append(button("重试",{kind:"primary compact",onClick:()=>actJob(job.id,"retry")}));
+      if (["failed","cancelled","waiting"].includes(job.state)) actions.append(button("重试",{kind:"primary compact",onClick:()=>actJob(job.id,"retry",job)}));
       if (["queued","running","waiting"].includes(job.state)) actions.append(button("取消",{kind:"quiet compact",onClick:()=>actJob(job.id,"cancel")}));
       body.append(el("tr",{},[
         el("td",{text:formatDate(job.updatedAt || job.createdAt,true)}),
@@ -2000,7 +2030,8 @@ async function jobsPanel() {
   return panel;
 }
 
-async function actJob(id, action) {
+async function actJob(id, action, job) {
+  if (action === 'retry' && job?.type === 'structure') return runConfirmedStructure(`job:${id}`, '', () => actJob(id, action));
   try { await api.jobAction(id, { action }); toast(action === "retry" ? "已重新排队" : "任务已取消", "success"); await refreshBootstrap(); await renderSystem(); }
   catch (error) { handleError(error); }
 }
