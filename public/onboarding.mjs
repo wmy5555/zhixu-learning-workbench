@@ -372,12 +372,15 @@ export function createOnboarding(adapter) {
       if (!(current.learningCandidates || []).length) content.append(el("p", { class: "notice", text: "本原文还没有实际候选，请先完成拆解。" }));
       else if (current.learningCandidates.every(unavailable)) content.append(el("div", {}, [el("p", { class: "notice", text: "这个目标还没有可用的独立条目。可从原文手动整理另一项内容；事实仍须核验，尚不可用时保留未完成。不要改变主线知识的目标来补齐扩展。" }), button("整理另一条知识", { kind: "text compact", disabled: working || !current.roles?.capturedSource, onClick: () => run(() => goTo(flatSteps.find(item => item.id === "process-manual"))) })]));
       if ((current.learningCandidates || []).some(note => note.limitations?.length)) {
+        let openedByHover = false;
         const explanation = el("details", { class: "onboarding-verification-help" }, [
-          el("summary", { text: "为什么待核验的事实不能进入主线？" }),
+          el("summary", { text: "为什么待核验的事实不能进入主线？", on: { click: event => {
+            if (openedByHover) { event.preventDefault(); openedByHover = false; explanation.open = true; }
+          } } }),
           el("p", { text: "主线知识会用于接下来的练习和复习。尚未核验的事实可能有错误、缺少依据或适用条件，反复练习会加深错误理解。先联网核验并审阅来源、结论和适用范围，再决定是否加入学习；联网返回的结果也需要你判断。" }),
         ]);
-        explanation.addEventListener("mouseenter", () => { explanation.open = true; });
-        explanation.addEventListener("mouseleave", () => { if (!explanation.contains(document.activeElement)) explanation.open = false; });
+        explanation.addEventListener("mouseenter", () => { if (!explanation.open) { openedByHover = true; explanation.open = true; } });
+        explanation.addEventListener("mouseleave", () => { if (openedByHover && !explanation.contains(document.activeElement)) { explanation.open = false; openedByHover = false; } });
         content.append(el("div", {}, [el("div", { class: "notice" }, [el("p", { text: "待核验的事实不能选入主线。请先联网加工并审阅返回依据。" }), explanation]), button("前往联网核验", { kind: "text compact", disabled: working, onClick: () => run(() => goTo(flatSteps.find(item => item.id === "process-research"))) })]));
       }
     }

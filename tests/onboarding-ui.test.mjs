@@ -486,6 +486,16 @@ test('verification help expands on hover without unlocking candidates or submitt
   const requests = ui.requests.length;
   help.events.mouseenter(); assert.equal(help.open, true);
   help.events.mouseleave(); assert.equal(help.open, false);
+  const activate = () => {
+    let prevented = false;
+    help.children[0].events.click({ preventDefault() { prevented = true; } });
+    if (!prevented) help.open = !help.open; // Native summary default action.
+  };
+  help.events.mouseenter(); activate(); help.events.mouseleave();
+  assert.equal(help.open, true, 'first click after hover or compatibility mouse events keeps it open');
+  activate(); assert.equal(help.open, false, 'a second explicit activation closes it');
+  activate(); assert.equal(help.open, true, 'activation without hover uses the native toggle');
+  activate(); assert.equal(help.open, false);
   help.events.mouseenter(); help.children[0].focus(); help.events.mouseleave();
   assert.equal(help.open, true, 'keyboard focus keeps the explanation readable');
   assert.equal(ui.requests.length, requests);
