@@ -789,20 +789,29 @@ test('saving an untouched source editor submits no display defaults; actual chan
   const app = browser({ updateNote: async (id, body) => { writes.push(plain(body)); return source; }, bootstrap: async () => ({}) });
   app.renderNoteEditor(source);
   await app.refs.drawerBody.children[0].events.submit({ preventDefault() {} });
-  assert.deepEqual(writes[0].meta, { privacy: 'cloud' });
+  assert.deepEqual(writes[0].meta, {});
   assert.equal(writes[0].expectedHash, source.hash);
   assert.match(app.toasts.textContent, /内容未改变/);
   app.renderNoteEditor(source);
   const form = app.refs.drawerBody.children[0];
   control(form, 'author').value = '合成作者';
   await form.events.submit({ preventDefault() {} });
-  assert.deepEqual(writes[1].meta, { privacy: 'cloud', author: '合成作者' });
+  assert.deepEqual(writes[1].meta, { author: '合成作者' });
+  app.renderNoteEditor({ ...source, meta: {} });
+  await app.refs.drawerBody.children[0].events.submit({ preventDefault() {} });
+  assert.deepEqual(writes[2].meta, {}, 'an implicit local privacy default is not a source edit');
+  app.renderNoteEditor({ ...source, meta: {} });
+  const localForm = app.refs.drawerBody.children[0];
+  control(localForm, 'privacy').children.forEach(option => { option.selected = option.value === 'cloud'; });
+  await localForm.events.submit({ preventDefault() {} });
+  assert.deepEqual(writes[3].meta, { privacy: 'cloud' }, 'an actual privacy change remains explicit');
 });
 
 test('empty daily plans show the actual reasons with working knowledge and budget entry points', async () => {
   const note = { id: 'missing', kind: 'knowledge', title: '合成待学项', body: '合成正文', meta: {} };
   const source = { id: 'source', kind: 'source', title: '合成原文', body: '合成正文', meta: {} };
-  const app = browser({ generateToday: async () => ({ items: [], unavailable: [{ noteId: note.id, title: note.title, sourceId: source.id, code: 'material', reason: '底层原始资料已修改或删除，需要重新加工。' }] }), note: async id => id === source.id ? source : note });
+  const prerequisite = { ...note, id: 'prerequisite', title: '合成前置知识' };
+  const app = browser({ generateToday: async () => ({ items: [], unavailable: [{ noteId: note.id, title: note.title, sourceId: source.id, code: 'material', reason: '底层原始资料已修改或删除，需要重新加工。' }, { noteId: 'dependent', title: '合成后续', prerequisiteId: prerequisite.id, prerequisiteTitle: prerequisite.title, code: 'prerequisite', reason: '请先处理前置知识。' }] }), note: async id => id === source.id ? source : id === prerequisite.id ? prerequisite : note });
   app.state.bootstrap = { today: { items: [] } };
   await app.generateToday();
   const panel = app.refs.main;
@@ -816,6 +825,8 @@ test('empty daily plans show the actual reasons with working knowledge and budge
   await click(findButton(panel, '查看原文并重新加工'));
   assert.equal(app.refs.drawerTitle.textContent, source.title);
   assert.ok(findButton(app.refs.drawerBody, '提交 AI 拆解'));
+  await click(findButton(panel, `查看前置知识：${prerequisite.title}`));
+  assert.equal(app.refs.drawerTitle.textContent, prerequisite.title);
 });
 
 test('alignment API routes preserve explicit options and write requests use the session CSRF token', async () => {

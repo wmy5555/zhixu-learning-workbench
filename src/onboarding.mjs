@@ -163,6 +163,13 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
     const targetId = record.practice?.roles?.[role];
     const realSessions = f.sessions.filter(s => !preset(s) && (!targetId || s.noteId === targetId || s.id === targetId));
     const realEvidence = f.store.records('studyEvidence').filter(e => !preset(e) && (!targetId || e.noteId === targetId));
+    if (checkId === 'today-generate' && targetId) {
+      const previous = record.practice?.events?.['today-generate'];
+      const legacyClick = (Array.isArray(previous) ? previous : previous ? [previous] : []).some(event => !event.noteId && !event.presetCase && !event.entities?.some(exists));
+      const plans = f.store.records('plans').filter(plan => plan.noteId === targetId && !preset(plan));
+      // Unscoped old clicks alone are insufficient; completed or actually opened plans preserve real progress.
+      return legacyClick && plans.some(plan => plan.state === 'done' || realSessions.some(session => session.planId === plan.id));
+    }
     const done = type => f.jobs.some(j => j.type === type && j.state === 'done' && !j.presetCase && (!targetId || j.payload?.noteId === targetId));
     const tests = {
       process: () => done('process'),
@@ -388,7 +395,7 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
       if (method === 'GET' && itemId && !action) event('note-open');
       if (method === 'PUT') {
         event('note-edit');
-        if (body.meta?.privacy === 'cloud') event('privacy-cloud');
+        if (result?.meta?.privacy === 'cloud') event('privacy-cloud');
         if (body.meta?.researchIntervalDays) event('research-interval');
         if (body.meta?.depth) event(`depth-${body.meta.depth}`);
       }

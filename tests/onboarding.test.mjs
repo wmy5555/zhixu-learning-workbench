@@ -304,6 +304,33 @@ test('unchanged edits preserve source versions while stale saves and real edits 
   assert.notEqual(revised.hash, edited.hash, 'a real metadata change still creates a new version');
 });
 
+test('old unscoped generate clicks need actual main plan use or completion to preserve progress', async t => {
+  const h = harness(t), started = h.manager.start(); await h.ready();
+  await h.manager.close();
+  const file = path.join(h.dataDir, 'onboarding', 'state.json'), saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  saved.practice.events['today-generate'] = [{ at: new Date().toISOString(), entities: ['generate'] }];
+  fs.writeFileSync(file, JSON.stringify(saved));
+  const restored = await h.reopen(); restored.resume(started.practiceId);
+  const p = restored.currentService;
+  assert.equal(restored.state().progress['study-plan'].status, 'pending', 'an old empty click is insufficient');
+  const unrelated = p.store.create({ kind: 'knowledge', title: '非主线', body: '合成正文', meta: { stage: 'learning' } });
+  p.today();
+  assert.equal(restored.state().progress['study-plan'].status, 'pending', 'unrelated plans cannot prove the main step');
+  p.promote(started.roles.explain, { stage: 'learning', reason: '合成选学' });
+  const plan = p.today().items.find(item => item.noteId === started.roles.explain);
+  assert.equal(restored.state().progress['study-plan'].status, 'pending', 'a pending plan alone cannot upgrade an old empty click');
+  const session = p.startStudy({ noteId: started.roles.explain, planId: plan.id });
+  assert.equal(restored.state().progress['study-plan'].status, 'done');
+  p.store.remove('sessions', session.id);
+  p.store.put('plans', plan.id, { ...plan, state: 'done' });
+  assert.equal(restored.state().progress['study-plan'].status, 'done', 'finished plans preserve old actual scheduling even across later dates');
+  restored.advance(started.practiceId, 'day');
+  assert.equal(restored.state().progress['study-plan'].status, 'done');
+  p.store.put('plans', plan.id, { ...plan, state: 'done', presetCase: 'hints' });
+  assert.equal(restored.state().progress['study-plan'].status, 'pending', 'preset cases do not repair real progress');
+  assert.ok(p.store.row(unrelated.id));
+});
+
 test('HTTP scopes keep CSRF, reuse browser sessions and reject cross-purpose restores and settings writes', async t => {
   const h = harness(t); const app = createApp({ dataDir: h.dataDir, service: h.main, scheduler: false });
   app.server.listen(0, '127.0.0.1'); await once(app.server, 'listening');

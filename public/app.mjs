@@ -259,6 +259,7 @@ async function renderToday() {
     el("div", { class: "list" }, unavailable.map(item => el("div", { class: "list-item no-icon" }, [
       el("div", { class: "item-copy" }, [el("h3", { text: item.title }), el("p", { text: item.reason })]),
       el("div", { class: "item-actions" }, [button("查看知识", { kind: "text", onClick: () => openNote(item.noteId) }),
+        item.prerequisiteId ? button(`查看前置知识：${item.prerequisiteTitle}`, { kind: "text", onClick: () => openNote(item.prerequisiteId) }) : null,
         item.sourceId ? button("查看原文并重新加工", { kind: "text", onClick: () => openNote(item.sourceId) }) : null]),
     ]))),
   ]));
@@ -885,8 +886,8 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
     try {
       if (note.kind === "source" && (!Number.isInteger(Number(data.researchIntervalDays)) || Number(data.researchIntervalDays) < 1 || Number(data.researchIntervalDays) > 365)) throw new Error("核验有效天数应为 1–365 的整数。");
       const sourceMeta = note.kind === "source" ? { platform: data.platform || "", author: data.author || "", url: data.url || "", date: data.date || "", locator: data.locator || "", researchIntervalDays: Number(data.researchIntervalDays) } : {};
-      const changedMeta = Object.fromEntries(Object.entries({ topic: data.topic, depth: data.depth, ...sourceMeta }).filter(([key]) => data[key] !== initialFields[key]));
-      const updated = await api.updateNote(note.id, { body: data.body, title: data.title, expectedHash: note.hash, meta: { privacy: data.privacy, ...changedMeta } });
+      const changedMeta = Object.fromEntries(Object.entries({ privacy: data.privacy, topic: data.topic, depth: data.depth, ...sourceMeta }).filter(([key]) => data[key] !== initialFields[key]));
+      const updated = await api.updateNote(note.id, { body: data.body, title: data.title, expectedHash: note.hash, meta: changedMeta });
       toast(updated.hash === note.hash ? "内容未改变，已确认当前设置" : "已保存，并保留版本记录", "success");
       await refreshBootstrap();
       if (returnToSourceId) await refreshSourceGroup(returnToSourceId);

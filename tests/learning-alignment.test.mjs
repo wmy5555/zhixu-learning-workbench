@@ -87,6 +87,23 @@ test('unscheduled knowledge exposes stage, research, pause, due time and budget 
   assert.equal(h.calls.length, 0);
 });
 
+test('unavailable prerequisites stay identifiable while retired and superseded notes never offer reprocessing', t => {
+  const h = harness(t), source = h.store.create({ kind: 'source', title: '合成来源', body: '合成原文' });
+  const refs = [{ id: source.id, role: 'input' }];
+  const retired = h.knowledge('已停用', { stage: 'retired', sources: refs }), replaced = h.knowledge('已替代', { supersededBy: 'synthetic-new', sources: refs });
+  const prerequisite = h.knowledge('必须先处理', { researchLimitations: ['待核验'], sources: refs });
+  const dependent = h.knowledge('后续知识', { prerequisites: [prerequisite.id] });
+  const reasons = new Map(h.learning.today().unavailable.map(item => [item.noteId, item]));
+  assert.equal(reasons.get(retired.id).code, 'retired');
+  assert.equal(reasons.get(replaced.id).code, 'superseded');
+  assert.equal(reasons.get(retired.id).sourceId, undefined);
+  assert.equal(reasons.get(replaced.id).sourceId, undefined);
+  assert.equal(reasons.get(prerequisite.id).sourceId, source.id);
+  assert.equal(reasons.get(dependent.id).prerequisiteId, prerequisite.id);
+  assert.equal(reasons.get(dependent.id).prerequisiteTitle, prerequisite.title);
+  assert.equal(h.calls.length, 0);
+});
+
 test('topic membership order and explicit prerequisite ids determine the daily learning path', t => {
   const h = harness(t), a = h.knowledge('后创建也可先学'), b = h.knowledge('最后学习'), c = h.knowledge('主题首项'), p = h.knowledge('主题前置'), q = h.knowledge('条目前置');
   h.store.update(b.id, { expectedHash: b.hash, meta: { prerequisites: [q.id] } });
