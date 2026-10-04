@@ -172,11 +172,31 @@ for (const materialId of [...materials.map(item => item.id), 'custom']) test(`${
   const application = await practice('study/start', { noteId: applyId });
   assert.ok(application.question.startsWith(f.material.transfer));
   await f.answer(application);
+  await practice('search?q=' + encodeURIComponent(randomUUID()) + '&mode=keyword');
+  assert.equal((await guide('checkpoint', { stepId: 'search-keyword' })).progress['search-keyword'].status, 'pending', 'an empty search cannot complete retrieval of the selected source');
+  const unrelatedTerm = 'zzbranch' + randomUUID().slice(0, 8);
+  const unrelated = (await practice('import', { items: [{ title: unrelatedTerm, body: unrelatedTerm }] })).notes[0];
+  const unrelatedSearch = await practice('search?q=' + unrelatedTerm + '&mode=keyword');
+  assert.ok(unrelatedSearch.results.some(note => note.id === unrelated.id));
+  assert.equal((await guide('checkpoint', { stepId: 'search-keyword' })).progress['search-keyword'].status, 'pending', 'unrelated results cannot complete main-material retrieval');
+  await practice('notes/' + unrelated.id, { expectedHash: (await practice('notes/' + unrelated.id)).hash }, 'DELETE');
+  const mainTitle = (await practice('notes/' + knowledgeId)).title;
+  const selectedSearch = await practice('search?q=' + encodeURIComponent(mainTitle) + '&mode=keyword');
+  assert.ok(selectedSearch.results.some(note => [source.id, knowledgeId, applyId].includes(note.id)));
+  assert.equal((await guide('checkpoint', { stepId: 'search-keyword' })).progress['search-keyword'].status, 'done');
   const draft = await practice('ask', { question: f.material.output, mode: 'draft', privacy: 'cloud', scope: ['knowledge', 'source'] });
   assert.equal(draft.generated, true);
   await practice(`drafts/${draft.draftId}`, { body: draft.answer + '\n' + marker, usedIds: [draft.citations[0].id] }, 'PUT');
   current = await request('/api/onboarding/state');
   assert.equal(current.materialId, materialId); assert.equal(current.roles.draft, draft.draftId); assert.equal(current.roles.explain, knowledgeId);
+  for (const mode of ['answer', 'outline']) {
+    const otherOutput = await practice('ask', { question: f.material.output, mode, privacy: 'cloud', scope: ['knowledge', 'source'] });
+    assert.equal(otherOutput.generated, true);
+    assert.notEqual(otherOutput.draftId, draft.draftId);
+    current = await request('/api/onboarding/state');
+    assert.equal(current.roles.draft, draft.draftId, 'optional output modes cannot replace the main draft');
+    for (const stepId of ['output-draft', 'output-edit', 'output-use']) assert.equal(current.progress[stepId].status, 'done');
+  }
   const backup = await practice('backup');
   await guide('pause');
   await guide('resume');

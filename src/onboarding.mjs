@@ -416,11 +416,17 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
       if (action === 'action') event(`topic-${body.action}`);
     }
     if (resource === 'relations' && action === 'action') event(`relation-${body.action}`);
-    if (resource === 'search') { if(!['semantic','hybrid'].includes(query.mode)||result.diagnostics?.semanticUsed===true)event(`search-${query.mode || 'keyword'}`); if (!result.results?.length) event('search-empty'); if (Object.keys(query).some(k => ['stage', 'topic', 'kind', 'source', 'from', 'to'].includes(k))) event('search-filter'); }
     const fromMaterial = noteId => exists(noteId) && (noteId === p.roles.capturedSource || runtime.service.getNote(noteId).meta.sources?.some(ref => ref.id === p.roles.capturedSource && ref.role === 'input'));
+    if (resource === 'search') {
+      const mode = query.mode || 'keyword';
+      const matchedMaterial = !p.materialId || result.results?.some(note => fromMaterial(note.id));
+      if ((!['semantic','hybrid'].includes(mode) || result.diagnostics?.semanticUsed === true) && (mode !== 'keyword' || matchedMaterial)) event(`search-${mode}`);
+      if (!result.results?.length) event('search-empty');
+      if (Object.keys(query).some(k => ['stage', 'topic', 'kind', 'source', 'from', 'to'].includes(k))) event('search-filter');
+    }
     if (resource === 'ask' && method === 'POST' && result.draftId && (!p.materialId || result.generated === true && result.citations?.some(citation => fromMaterial(citation.id)))) {
       if(result.generated===true)event(`output-${body.mode || 'answer'}`);
-      p.roles.draft = result.draftId;
+      if (!p.materialId || body.mode === 'draft') p.roles.draft = result.draftId;
     }
     if (resource === 'drafts' && method === 'PUT') {
       event('draft-save');
