@@ -27,7 +27,7 @@ function harness({ sourceCallLimit, prompts, allClaims = [], failOpposing = fals
       if (target.pathname === '/search') {
         const query = JSON.parse(options.body).query;
         queries.push(query);
-        if (failOpposing && query.includes('contradictory evidence')) return json({ error: 'Synthetic search failure' }, 400);
+        if (failOpposing && query.includes('conditions limitations')) return json({ error: 'Synthetic search failure' }, 400);
         const key = createHash('sha256').update(query).digest('hex').slice(0, 12);
         return json({ results: Array.from({ length: 4 }, (_, index) => ({ title: 'Synthetic evidence', url: `https://8.8.8.8/page-${key}-${index}`, content: 'A snippet is never evidence.' })) });
       }
@@ -49,33 +49,31 @@ function harness({ sourceCallLimit, prompts, allClaims = [], failOpposing = fals
   return { ai, queries, pageUrls, modelClaims, requests, calls };
 }
 
-test('later claims receive their own support and opposition queries within the shared page limit', async () => {
+test('later claims receive their own support and opposition queries within each group page limit', async () => {
   const claims = claimsFor(8), h = harness({ allClaims: claims });
   const result = await h.ai.researchBatch({ claims, topic: 'A grouped synthetic topic', privacy: 'cloud' });
   assert.equal(h.queries.length, 6);
   for (const claim of claims) {
     assert.equal(h.queries.filter(query => query.includes(claim) && query.includes('primary source evidence')).length, 1);
-    assert.equal(h.queries.filter(query => query.includes(claim) && query.includes('contradictory evidence')).length, 1);
+    assert.equal(h.queries.filter(query => query.includes(claim) && query.includes('conditions limitations')).length, 1);
   }
   assert.ok(h.queries.every(query => query.length <= 350));
-  assert.ok(h.pageUrls.length <= 4);
-  assert.ok(h.requests.length <= 11);
-  assert.equal(h.modelClaims[0].length, 8);
+  assert.ok(h.pageUrls.length <= 12);
+  assert.ok(h.requests.length <= 21);
+  assert.equal(h.modelClaims.flat().length, 8);
   assert.ok(result.results.every(item => item.evidence.length === 1 && item.limitations.length === 0));
 });
 
-test('batches have a hard group cap even without an outer budget, and omitted claims are not sent to the evaluator', async () => {
+test('a small shared budget stops later groups without discarding evaluated claims', async () => {
   const claims = claimsFor(20), h = harness({ sourceCallLimit: 30, allClaims: claims });
   const result = await h.ai.researchBatch({ claims, privacy: 'cloud' });
-  assert.equal(h.queries.length, 6);
-  assert.ok(h.pageUrls.length <= 4);
-  assert.ok(h.requests.length <= 11);
-  assert.deepEqual(h.modelClaims[0].map(item => item.claim), claims.slice(0, 9));
-  for (const item of result.results.slice(9)) {
-    assert.match(item.limitations.join(' '), /未纳入本轮/);
-    assert.deepEqual(item.evidence, []);
-    assert.match(item.conclusion, /未执行/);
-  }
+  assert.equal(h.queries.length, 8);
+  assert.ok(h.pageUrls.length <= 16);
+  assert.ok(h.requests.length <= 30);
+  assert.deepEqual(h.modelClaims.flat().map(item => item.claim), claims.slice(0, 12));
+  assert.ok(result.results.slice(0, 12).every(item => item.evidence.length > 0));
+  assert.ok(result.results.slice(12).every(item => item.coverage === 'unsearched' && item.evidence.length === 0));
+  assert.equal(result.issues[0].code, 'SOURCE_BUDGET');
 });
 
 test('research planning accounts for the preceding source call instead of resetting its budget', async () => {
@@ -88,7 +86,7 @@ test('research planning accounts for the preceding source call instead of resett
   assert.ok(h.requests.length <= 8);
   assert.ok(h.calls.every(call => call.sourceId === 'synthetic-source'));
   assert.deepEqual(h.modelClaims[0].map(item => item.claim), claims.slice(0, 3));
-  assert.ok(result.results.slice(3).every(item => item.limitations.some(message => message.includes('未纳入本轮'))));
+  assert.ok(result.results.slice(3).every(item => item.coverage === 'unsearched'));
 });
 
 test('insufficient budget and oversized custom search templates return explicit gaps without transport', async () => {

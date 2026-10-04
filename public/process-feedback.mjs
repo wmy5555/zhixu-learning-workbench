@@ -40,17 +40,21 @@ export function createProcessFeedback({ getContext, readJobs, notify, onChange =
       const noteId = job.noteId || job.payload?.noteId;
       const note = state.notes.get(noteId);
       const record = { id: job.id, type: job.type, state: job.state, code: job.code, noteId, research: job.research === true || job.payload?.research === true,
+        extractionSaved: job.extractionSaved === true, savedCount: job.savedCount || 0, phase: job.phase,
+        researchProgress: job.researchProgress, stopCode: job.stopCode,
         presetCase: job.presetCase || job.payload?.presetCase,
         createdAt: job.createdAt || '', updatedAt: job.updatedAt || '' };
       state.jobs.set(job.id, record);
-      if (previous?.state === record.state && previous?.updatedAt === record.updatedAt) continue;
+      if (previous?.state === record.state && previous?.updatedAt === record.updatedAt && previous?.extractionSaved === record.extractionSaved && previous?.phase === record.phase && JSON.stringify(previous?.researchProgress) === JSON.stringify(record.researchProgress)) continue;
       changed.push(record);
-      if (!state.initialized || record.presetCase || previous?.state === record.state) continue;
+      if (!state.initialized || record.presetCase) continue;
       const title = String(job.title || note?.title || '资料').slice(0, 70);
       const task = record.type === 'structure' ? '逻辑关系分析' : 'AI 拆解';
+      if (record.extractionSaved && !previous?.extractionSaved && record.state === 'running') notify(`《${title}》的拆解已保存，可以先阅读；正在继续联网核验。`, 'success');
+      if (previous?.state === record.state) continue;
       if (record.state === 'done') notify(`《${title}》的 ${task}已完成${record.research ? '（含联网核验）' : ''}`, 'success');
       else if (record.state === 'waiting' && record.code === 'RESEARCH_INCOMPLETE') notify(`《${title}》的 AI 拆解已保存，部分事实尚待核验。`, 'success');
-      else if (record.state === 'failed') notify(`《${title}》的 ${task}未完成，原文已保留。请到「系统 → 任务」查看原因。`, 'error');
+      else if (record.state === 'failed') notify(record.extractionSaved ? `《${title}》的拆解已保存，后续核验停止。请到「系统 → 任务」查看原因。` : `《${title}》的 ${task}未完成，原文已保留。请到「系统 → 任务」查看原因。`, 'error');
     }
     state.initialized = true;
     if (changed.length) {
@@ -70,7 +74,14 @@ export function createProcessFeedback({ getContext, readJobs, notify, onChange =
       waiting: '拆解需等待条件满足，请到「系统 → 任务」查看原因并重试。',
       failed: 'AI 拆解未完成，请到「系统 → 任务」查看原因并重试。',
       cancelled: '拆解任务已取消，原文已保留。', done: 'AI 拆解已完成。' };
-    const message = messages[job.state] || '';
+    let message = messages[job.state] || '';
+    if (job.type === 'process' && job.extractionSaved) {
+      const progress = job.researchProgress;
+      const detail = progress?.total ? `已检索 ${progress.covered}/${progress.total} 项，证据充分 ${progress.verified} 项。` : '';
+      message = activeStates.has(job.state) ? `拆解已保存，正在继续联网核验。${detail}`
+        : job.research && job.state !== 'done' ? `拆解已保存，可以先阅读。${detail}尚待核验的内容可到「系统 → 任务」继续核验。`
+        : messages.done;
+    }
     return { ...job, active: activeStates.has(job.state), message: job.type === 'structure' ? message.replaceAll('AI 拆解', '逻辑关系分析').replaceAll('拆解', '关系分析') : message };
   }
   function begin(noteId, type = 'process') {

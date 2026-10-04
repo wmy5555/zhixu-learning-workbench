@@ -430,9 +430,9 @@ test('a successful process submit remains locked when the following bootstrap re
   const controls = app.processControls(source); app.refs.drawerBody.replaceChildren(controls);
   await click(findButton(controls, '提交 AI 拆解'));
   assert.equal(findButton(controls, 'AI 拆解处理中…').disabled, true);
-  assert.equal(findButton(controls, '联网检验并找反例').disabled, true);
+  assert.equal(findButton(controls, '联网核验事实与适用条件').disabled, true);
   assert.ok(controls.querySelector('.process-spinner'));
-  await click(findButton(controls, '联网检验并找反例'));
+  await click(findButton(controls, '联网核验事实与适用条件'));
   assert.equal(calls, 1, 'even direct invocation cannot submit a second variant after refresh failure');
 });
 

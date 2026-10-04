@@ -64,7 +64,7 @@ const processFeedback = createProcessFeedback({
     refs.drawerBody.querySelectorAll('.structure-job-status').forEach(updateStructureStatus);
     if (changed.length) onboarding?.refresh();
     const sourceId = refs.drawerBody.querySelector(".source-group-drawer")?.dataset.sourceId;
-    if (sourceId && changed.some(job => job.noteId === sourceId && ["done", "waiting", "failed", "cancelled"].includes(job.state))) refreshCompletedSource(sourceId).catch(handleError);
+    if (sourceId && changed.some(job => job.noteId === sourceId && (job.extractionSaved || ["done", "waiting", "failed", "cancelled"].includes(job.state)))) refreshCompletedSource(sourceId).catch(handleError);
   },
 });
 function tour(node, id) { node.dataset.tour = id; return node; }
@@ -906,10 +906,10 @@ async function deleteNote(note, returnToSourceId = "") {
 function processControls(note, returnToSourceId = "") {
   const research = el("input", { type: "checkbox", name: "research" });
   const controls = el("div", { class: "page-stack process-controls", dataset: { tour: "note-process", processNoteId: note.id } }, [
-    el("label", { class: "check-field" }, [research, el("span", { text: "拆解时联网检验正确性并寻找反例（可选）" })]),
+    el("label", { class: "check-field" }, [research, el("span", { text: "联网核验事实与适用条件（含反例，可选）" })]),
     el("div", { class: "form-actions" }, [
       button("提交 AI 拆解", { kind: "primary process-submit", onClick: () => processNote(note, returnToSourceId, { research: research.checked }) }),
-      button("联网检验并找反例", { kind: "quiet process-research", onClick: () => processNote(note, returnToSourceId, { research: true, reuseExtracted: true }) }),
+      button("联网核验事实与适用条件", { kind: "quiet process-research", onClick: () => processNote(note, returnToSourceId, { research: true, reuseExtracted: true }) }),
     ]),
     el("div", { class: "process-status", role: "status", ariaLive: "polite", hidden: true }),
     el("p", { class: "muted", text: "默认只拆解。生成后可手动联网核验整份资料；已有拆解会复用，人工编辑内容将生成修订建议。" }),
@@ -937,7 +937,7 @@ async function processNote(note, returnToSourceId = "", options = {}) {
     const job = await api.processNote(note.id, options);
     processFeedback.observe({ jobs: [job], notes: [note], partial: true, jobRevision: job.jobRevision, jobSnapshot: job.jobSnapshot });
     const waitingForQuota = isQuotaWaitMessage(job.error);
-    toast(waitingForQuota || job.state === "waiting" ? "任务已保存，待条件满足后继续" : job.state === "failed" ? "任务已记录失败原因，请到「系统 → 任务」手动重试" : job.state === "cancelled" ? "已有任务已取消，请到「系统 → 任务」手动重试" : job.reused && job.state === "done" ? "这份资料已有拆解结果，可直接查看。" : job.reused ? "这份资料正在拆解，请稍候。" : (options.research ? "已提交联网核验任务" : "已提交 AI 拆解任务"), job.state === "failed" && !waitingForQuota ? "error" : "success");
+    toast(job.extractionSaved && job.state !== "done" ? "拆解已保存，可先阅读；剩余事实可到任务页继续核验。" : waitingForQuota || job.state === "waiting" ? "任务已保存，待条件满足后继续" : job.state === "failed" ? "任务已记录失败原因，请到「系统 → 任务」手动重试" : job.state === "cancelled" ? "已有任务已取消，请到「系统 → 任务」手动重试" : job.reused && job.state === "done" ? "这份资料已有拆解结果，可直接查看。" : job.reused ? "这份资料正在拆解，请稍候。" : (options.research ? "已提交联网核验任务" : "已提交 AI 拆解任务"), job.state === "failed" && !waitingForQuota ? "error" : "success");
     await refreshBootstrap();
     if (returnToSourceId || note.kind === "source") await refreshSourceGroup(returnToSourceId || note.id);
     else renderNoteDrawer(note);
@@ -1847,7 +1847,7 @@ async function settingsPanel() {
   const aiEnabled = el("input", { name: "aiEnabled", type: "checkbox", checked: Boolean(ai.enabled) });
   const modelPanel = el("section", { class: "panel" }, [sectionHeading("文本生成", "OpenAI-compatible 接口；密钥只写入，不会回显", button("测试连接", { onClick: () => testCapability("model") })), el("label", { class: "check-field" }, [aiEnabled, "启用文本生成能力"]), el("div", { class: "form-grid" }, [field("服务地址", el("input", { name: "aiBaseUrl", value: ai.baseUrl || "", placeholder: "https://…" })), field("模型", el("input", { name: "aiModel", value: ai.model || "", placeholder: "模型名称" })), field("API 密钥", el("input", { name: "aiKey", type: "password", placeholder: ai.hasKey ? "已保存；留空保持不变" : "输入密钥" }))])]);
   modelPanel.append(el("div", { class: "usage-settings-link" }, [el("span", { text: "Token 统计、请求上限和月预算已集中到用量与费用。" }), button("查看用量与费用", { onClick: () => { state.systemTab = "usage"; setPage("system"); renderSystem().catch(handleError); } })]));
-  modelPanel.append(el("div", { class: "notice info", text: `每份原始资料的单次拆解默认最多使用 ${number(ai.sourceCallLimit ?? 12)} 次外部请求。达到系统每日总上限时，任务会显示“已保存，待继续”，不会把等待误报为完成。` }));
+  modelPanel.append(el("div", { class: "notice info", text: `每份原始资料的单次拆解默认最多使用 ${number(ai.sourceCallLimit ?? 120)} 次外部请求。达到系统每日总上限时，任务会显示“已保存，待继续”，不会把等待误报为完成。` }));
   modelPanel.append(field("模型最长等待时间（秒）", el("input", {name:"modelTimeoutSeconds",type:"number",min:1,max:600,value:(ai.timeoutMs ?? 180000)/1000}), "整理长资料通常比连接测试慢。默认等待 180 秒；失败不自动重发，避免重复计费。"));
   const embeddingEnabled = el("input", { name: "embeddingEnabled", type: "checkbox", checked: Boolean(embedding.enabled) });
   const searchEnabled = el("input", { name: "searchEnabled", type: "checkbox", checked: Boolean(search.enabled) });
@@ -1894,7 +1894,7 @@ async function settingsPanel() {
     const payload = {
       dailyMinutes: number(data.dailyMinutes), timezone: data.timezone, scheduleTime: data.scheduleTime, vaultDir: data.vaultDir,
       focusTopics: String(data.focusTopics || "").split(/[,，]/).map((x) => x.trim()).filter(Boolean),
-      ai: { enabled: aiEnabled.checked, baseUrl: data.aiBaseUrl, model: data.aiModel, apiKey: data.aiKey, timeoutMs:number(data.modelTimeoutSeconds)*1000, sourceCallLimit: number(ai.sourceCallLimit ?? 12) },
+      ai: { enabled: aiEnabled.checked, baseUrl: data.aiBaseUrl, model: data.aiModel, apiKey: data.aiKey, timeoutMs:number(data.modelTimeoutSeconds)*1000, sourceCallLimit: number(ai.sourceCallLimit ?? 120) },
       embedding: { enabled: embeddingEnabled.checked, baseUrl: data.embeddingBaseUrl, model: data.embeddingModel, apiKey: data.embeddingKey },
       search: { enabled: searchEnabled.checked, baseUrl: data.searchBaseUrl, apiKey: data.searchKey },
       fetch: { enabled: fetchEnabled.checked }, mcp: { enabled: mcpEnabled.checked, allowProposals: proposals.checked, chatgptEnabled: chatgptEnabled.checked, chatgptAllowRead: chatgptAllowRead.checked },
@@ -2026,7 +2026,7 @@ async function jobsPanel() {
           ]));
       }
       const actions = el("div",{class:"item-actions"});
-      if (["failed","cancelled","waiting"].includes(job.state)) actions.append(button("重试",{kind:"primary compact",onClick:()=>actJob(job.id,"retry",job)}));
+      if (["failed","cancelled","waiting"].includes(job.state)) actions.append(button(job.type === "process" && job.extractionSaved ? "继续核验" : "重试",{kind:"primary compact",onClick:()=>actJob(job.id,"retry",job)}));
       if (["queued","running","waiting"].includes(job.state)) actions.append(button("取消",{kind:"quiet compact",onClick:()=>actJob(job.id,"cancel")}));
       body.append(el("tr",{},[
         el("td",{text:formatDate(job.updatedAt || job.createdAt,true)}),

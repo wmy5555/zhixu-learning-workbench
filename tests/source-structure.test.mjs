@@ -6,6 +6,25 @@ import { createService } from '../src/service.mjs';
 import { normalizeStructure, structureRecord } from '../src/source-structure.mjs';
 import { layoutSourceMap } from '../public/source-map.mjs';
 
+test('dense captions, cycles and long edges avoid one another and every node', () => {
+  const nodes = Array.from({ length: 8 }, (_, i) => ({ id: String(i), title: `合成节点 ${i}` }));
+  const overlap = (a,b) => a.x < b.x+b.width && a.x+a.width > b.x && a.y < b.y+b.height && a.y+a.height > b.y;
+  for (const pairs of [
+    [[1,3],[3,5],[3,7],[3,6],[6,3],[1,4],[4,5],[4,7]],
+    [[0,1],[1,0],[1,2],[0,7],[2,3],[3,4],[4,5],[5,6],[6,7],[7,2]],
+  ]) {
+    const edges = pairs.map(([from,to]) => ({ from: String(from), to: String(to) }));
+    const layout = layoutSourceMap(nodes, edges, []);
+    assert.equal(layout.routes.length, edges.length);
+    const boxes = layout.routes.map(r => r.label);
+    for (const [i, box] of boxes.entries()) {
+      assert.ok(box.x >= 0 && box.y >= 0 && box.x+box.width <= layout.width && box.y+box.height <= layout.height);
+      assert.ok(boxes.slice(i+1).every(other => !overlap(box,other)));
+      assert.ok([...layout.positions.values()].every(p => !overlap(box,{ ...p,width:layout.cardWidth,height:layout.cardHeight })));
+    }
+  }
+});
+
 fs.mkdirSync(path.resolve('.tmp'), { recursive: true });
 function setup(t, generate = async () => ({ text: '{}' }), practice = false) {
   const root = fs.mkdtempSync(path.resolve('.tmp/structure-'));

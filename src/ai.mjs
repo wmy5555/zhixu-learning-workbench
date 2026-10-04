@@ -457,9 +457,12 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     return sourceBudget.run({ limit, sourceId: sourceId.trim(), used: 0 }, fn);
   }
 
-  function consumeSourceBudget() {
+  function consumeSourceBudget(capability) {
     const budget = sourceBudget.getStore();
     if (!budget) return;
+    if (capability === 'fetch' && budget.reserveEvaluation && budget.used >= budget.limit - 1) {
+      throw fail('RESEARCH_PAGE_BUDGET', '本轮网页读取已停止，剩余额度留给已读证据评价。');
+    }
     if (budget.used >= budget.limit) {
       throw fail('SOURCE_BUDGET', `来源 ${budget.sourceId} 的外部请求已达到任务上限 ${budget.limit}。`);
     }
@@ -552,7 +555,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     const sourceId = sourceBudget.getStore()?.sourceId;
     try {
       response = await withPermit(combinedSignal, async () => {
-        consumeSourceBudget();
+        consumeSourceBudget(capability);
         try {
           sent = true;
           started = Date.now();
@@ -907,7 +910,39 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     };
   }
 
-  async function researchBatch({ claims, topic = '', privacy, signal, prompts } = {}) {
+  async function researchBatch({ claims, topic = '', privacy, signal, prompts, hints = [], onBatch, checkCurrent } = {}) {
+    assertCloud(privacy);
+    if (!Array.isArray(claims) || !claims.length || claims.some(claim => typeof claim !== 'string' || !claim.trim())) throw fail('INVALID_INPUT', 'claims 必须是非空字符串数组。');
+    if (typeof topic !== 'string') throw fail('INVALID_INPUT', 'topic 必须是字符串。');
+    const config = await settings();
+    if (!sourceBudget.getStore()) return withBudget({ limit: clampInteger(config.ai.sourceCallLimit, 120, 1, 300), sourceId: `research-batch-${hashKey(claims).slice(0, 16)}` },
+      () => researchBatch({ claims, topic, privacy, signal, prompts, hints, onBatch, checkCurrent }));
+    const results = [], issues = [], budget = sourceBudget.getStore();
+    for (let offset = 0; offset < claims.length; offset += 3) {
+      checkCurrent?.();
+      if (signal?.aborted) throw fail('CANCELLED', '请求已取消。');
+      if (budget.limit - budget.used < 4) { issues.push({ code: 'SOURCE_BUDGET', message: '剩余额度不足以完成下一组检索、网页读取和评价。' }); break; }
+      const group = claims.slice(offset, offset + 3);
+      let batch;
+      const reserve = budget.reserveEvaluation;
+      budget.reserveEvaluation = true;
+      try {
+        batch = await researchGroup({ claims: group, topic, privacy, signal, prompts, hints });
+        batch.results = batch.results.map(result => ({ coverage: 'searched', ...result }));
+      } catch (error) {
+        if (['CANCELLED','PRIVACY_LOCAL','CAPABILITY_DISABLED','MISSING_CREDENTIALS','INVALID_CONFIG'].includes(error.code) || signal?.aborted) throw error;
+        issues.push({ code: error.code || 'RESEARCH_FAILED', message: error.message });
+        batch = { results: group.map(claim => ({ claim, evidence: [], limitations: ['本轮核验未能完成，已保存的证据保留。'], coverage: 'incomplete' })) };
+      } finally { budget.reserveEvaluation = reserve; }
+      results.push(...batch.results);
+      await onBatch?.(batch.results);
+      if (issues.length) break;
+    }
+    for (const claim of claims.slice(results.length)) results.push({ claim, evidence: [], coverage: 'unsearched', limitations: ['该主张尚未轮到检索；继续核验时优先处理。'] });
+    return { results, issues };
+  }
+
+  async function researchGroup({ claims, topic = '', privacy, signal, prompts, hints = [] } = {}) {
     assertCloud(privacy);
     if (!Array.isArray(claims) || !claims.length || claims.some((claim) => typeof claim !== 'string' || !claim.trim())) {
       throw fail('INVALID_INPUT', 'claims 必须是非空字符串数组。');
@@ -919,7 +954,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     const normalizedClaims = claims.map((claim) => claim.trim());
     const config = await settings(), promptOverrides = validatePromptOverrides(prompts ?? config.prompts);
     if (!sourceBudget.getStore()) {
-      return withBudget({ limit: clampInteger(config.ai.sourceCallLimit, 12, 1, 30), sourceId: `research-batch-${hashKey(normalizedClaims).slice(0, 16)}` },
+      return withBudget({ limit: clampInteger(config.ai.sourceCallLimit, 120, 1, 300), sourceId: `research-batch-${hashKey(normalizedClaims).slice(0, 16)}` },
         () => researchBatch({ claims: normalizedClaims, topic, privacy, signal, prompts: promptOverrides }));
     }
     const subject = String(topic ?? '').trim();
@@ -935,7 +970,10 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
       for (const title of [compact(subject, 60), '']) {
         const build = limit => renderPrompt(key, { context: [
           ...(title ? [`topic: ${title}`] : []),
-          `facts: ${indexes.map(index => compact(normalizedClaims[index], limit)).join('; ')}`,
+          `facts: ${indexes.map(index => {
+            const hint = hints.find(hint => hint.claim === normalizedClaims[index]);
+            return compact(hint?.subject || normalizedClaims[index], limit) + (hint?.kind === 'formal' ? ' 定义 证明 前提 适用条件' : hint?.kind === 'attribution' ? ' 原始出处 原文' : '');
+          }).join('; ')}`,
         ].join('; ') }, promptOverrides);
         if (build(24).length > 350) continue;
         let low = 24, high = 100;
@@ -955,7 +993,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     const claimIndexes = scheduled.flatMap(group => group.indexes);
     const directions = ['support', 'oppose'].flatMap(direction => scheduled.map(group => ({ direction, query: group[direction], claimIndexes: group.indexes, groupIndex: group.groupIndex })));
     const notes = [`共 ${groups.length} 个检索组，本轮安排 ${scheduled.length} 组、${claimIndexes.length} 项主张；每组同时搜索支持与反证，网页读取总上限 ${pageLimit}。`];
-    const uncovered = (claim, claimIndex) => ({ claim, evidence: [], limitations: coverageLimitations[claimIndex], conclusion: '本轮未执行该主张的针对检索，暂不能形成证据结论。', notice: notes.join(' ') });
+    const uncovered = (claim, claimIndex) => ({ claim, evidence: [], coverage: 'unsearched', limitations: coverageLimitations[claimIndex], conclusion: '本轮未执行该主张的针对检索，暂不能形成证据结论。', notice: notes.join(' ') });
     if (!directions.length) return { results: normalizedClaims.map(uncovered) };
     const searches = await Promise.allSettled(directions.map(({ query }) => search({ query, privacy, signal })));
     const foundByDirection = directions.map(() => []);

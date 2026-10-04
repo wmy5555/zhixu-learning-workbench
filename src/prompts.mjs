@@ -2,6 +2,8 @@ const MAX_TEMPLATE_LENGTH = 30_000;
 const PLACEHOLDER = /{{\s*([^{}]+?)\s*}}/g;
 const VARIABLE_NAME = /^[A-Za-z][A-Za-z0-9_]*$/;
 
+export const researchPolicy = '核验规则：按主张类型选择方法。数学、定义和形式推导检查定义、证明步骤、必要前提、适用条件与常见误用，不预设其错误，不强行寻找反例。同一前提下确实否定结论才是反例/oppose；改变或违反前提的例子属于适用范围/limit，不构成原命题冲突。经验事实检查支持、反对证据与条件；出处主张必须核对原始出处。没有找到有效反例可以如实说明，不因此填写 limitations 或 unresolvedConflict；没有反例不等于已证明正确。缺乏支持证据、结论错误、存在冲突必须区分，不凭模型记忆宣布事实已核验。结构关系同样遵守这些规则，不凑反例或连线。';
+
 // This response contract also accompanies older saved extraction templates.
 export const sourceExtractionStructure = '资料拆解输出约定：在同一次回答中完成条目拆解、分支层级和逻辑关系分析，返回 JSON {"candidates":[...],"structure":{"hierarchy":[],"edges":[]}}，不要留待第二次调用。structure 中所有节点引用均为 candidates 从 0 开始的序号字符串。hierarchy 每项为 {child,parent}，parent 为 null 表示直属原文；层级仅表达包含，不把支持当作包含。edges 每项为 {from,to,type,explanation,sourceExcerpt,targetExcerpt}，type 为 support（支持）、explain（解释）、prerequisite（前提）、example（实例）、counterexample（反例）、limit（限定）、application（应用）或 sequence（先后）；from 表示对 to 的作用。两端 excerpt 分别逐字取自对应 candidate.body，explanation 说明依据。先确定正文再引用其中原句；不要改写摘录。仅分析当前给定材料，不套用示例标题、固定数量或预设关系。没有可靠关系时返回空数组，不强行连线；不得宣称用户已掌握。';
 
@@ -75,9 +77,9 @@ export const promptDefaults = Object.freeze({
     ['context'],
   ),
   researchSearchOppose: metadata(
-    '反证搜索',
-    '生成寻找批评、反例和矛盾证据的短搜索词；实际请求仍限制为最多 350 字符。',
-    '{{context}} criticism counterexample contradictory evidence',
+    '适用条件与反例搜索',
+    '查找适用条件、边界、常见误用与有依据的反例，不预设结论错误；最多 350 字符。',
+    '{{context}} conditions limitations exceptions counterexamples',
     ['context'],
   ),
   researchEvaluation: metadata(
@@ -136,11 +138,20 @@ export function renderPrompt(key, values = {}, overrides = {}) {
   const definition = promptDefaults[key];
   if (!values || typeof values !== 'object' || Array.isArray(values)) throw promptError(`提示词“${key}”的变量值必须是对象。`);
   const validated = validatePromptOverrides(overrides);
-  const template = validated[key] ?? definition.template;
+  const template = effectivePromptTemplate(key, validated);
   for (const name of definition.variables) {
     if (!Object.hasOwn(values, name) || values[name] === undefined || values[name] === null) {
       throw promptError(`提示词“${key}”缺少变量值“${name}”。`);
     }
   }
-  return template.replace(PLACEHOLDER, (_match, rawName) => String(values[rawName.trim()]));
+  const rendered = template.replace(PLACEHOLDER, (_match, rawName) => String(values[rawName.trim()]));
+  return ['researchSystem','researchEvaluation','researchBatchEvaluation','sourceStructure'].includes(key) ? `${rendered}\n\n${researchPolicy}` : rendered;
+}
+
+export const extractionResearchContract = `${researchPolicy}\nclaims 保持事实字符串数组，每条保留命题的前提和含义；数学知识应提取数学命题本身，不要全部改写为“某网页说过”。只有出处本身需要核对时才提取出处主张。每个 candidate 可附 claimChecks 数组，每项 {claimIndex,kind,subject}：claimIndex 指向本条 claims 下标；kind 为 formal（数学或形式推导）、empirical（经验事实）、attribution（出处核对）；subject 为保留关键条件的简短检索主题。不新增原文没有的命题、不删去重要条件。`;
+
+export function effectivePromptTemplate(key, overrides = {}) {
+  const saved = overrides[key];
+  return key === 'researchSearchOppose' && saved === '{{context}} criticism counterexample contradictory evidence'
+    ? promptDefaults[key].template : saved ?? promptDefaults[key].template;
 }

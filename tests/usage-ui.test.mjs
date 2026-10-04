@@ -73,9 +73,9 @@ test('dashboard labels incomplete costs, renders model names as text and saves o
   assert.equal(descendants(panel).some(node => node.tagName === 'script'), false);
   assert.match(panel.textContent, /<script>bad\(\)<\/script>/);
   const form = descendants(panel).find(node => node.tagName === 'form');
-  control(panel, 'monthlyBudget').value = '9'; control(panel, 'inputPrice').value = '';
+  control(panel, 'sourceCallLimit').value = '180'; control(panel, 'monthlyBudget').value = '9'; control(panel, 'inputPrice').value = '';
   await form.events.submit({ preventDefault() {} });
-  assert.equal(saves[0].ai.monthlyBudget, 9); assert.equal(saves[0].ai.inputPrice, null);
+  assert.equal(saves[0].ai.sourceCallLimit, 180); assert.equal(saves[0].ai.monthlyBudget, 9); assert.equal(saves[0].ai.inputPrice, null);
   assert.deepEqual(Object.keys(saves[0]).sort(), ['ai', 'embedding', 'pricingFor', 'search']);
   assert.equal(saves[0].pricingFor.ai.model, 'alpha'); assert.equal(requests.length, 2);
   assert.match(panel.textContent, /新单价从后续请求开始生效/);

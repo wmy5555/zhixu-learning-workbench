@@ -96,6 +96,7 @@ function settingsForm(settings, readOnly, save, refresh) {
       el('legend', { class: 'sr-only', text: '预算与单价设置' }),
       el('div', { class: 'form-grid' }, [
         field('每日外部请求总上限', numberInput('dailyCallLimit', ai.dailyCallLimit ?? 500, '1'), '涵盖模型、嵌入、搜索和网页读取；0 表示暂停外部请求。'),
+        field('单任务外部请求上限', el('input', { name: 'sourceCallLimit', type: 'number', min: 1, max: 300, step: 1, required: true, value: ai.sourceCallLimit ?? 120 }), '默认 120 次，范围 1–300；包括搜索、网页读取、重定向、重试和模型请求，任务完成即停止。'),
         field('月预算', numberInput('monthlyBudget', ai.monthlyBudget ?? 0), '0 表示未设置。启用后如本月存在未知费用，将停止新请求。'),
       ]),
       el('p', { class: 'notice info', text: '所有单价和月预算须使用同一货币单位（例如都用人民币），此处不自动换汇。留空表示未知，只有明确免费才填 0。' }),
@@ -109,7 +110,7 @@ function settingsForm(settings, readOnly, save, refresh) {
         field(`语义嵌入输入单价 / 百万 token${embedding.model ? ` · ${embedding.model}` : ''}`, numberInput('embeddingPrice', embedding.inputPrice)),
         field('联网搜索单价 / 次', numberInput('searchPrice', search.requestPrice), '按当前高级搜索请求填写；连接或 HTTP 失败时费用保持未知。'),
       ]),
-      el('p', { class: 'fine-print', text: `单份资料上限仍为 ${ai.sourceCallLimit ?? 12} 次；模型等待上限为 ${(ai.timeoutMs ?? 180000) / 1000} 秒。更换服务地址或模型后需重新填写单价。预算按请求前的已记录费用检查，单次请求仍可能超过余额。` }),
+      el('p', { class: 'fine-print', text: `多个核验批次共享单任务额度；模型等待上限为 ${(ai.timeoutMs ?? 180000) / 1000} 秒。更换服务地址或模型后需重新填写单价。预算按请求前的已记录费用检查，单次请求仍可能超过余额。` }),
     ]), submit, status,
   ]);
   form.addEventListener('submit', async event => {
@@ -120,7 +121,7 @@ function settingsForm(settings, readOnly, save, refresh) {
     try {
       await save({
         pricingFor: Object.fromEntries(['ai', 'embedding', 'search'].map(group => [group, { baseUrl: settings[group]?.baseUrl || '', model: settings[group]?.model || '' }])),
-        ai: { dailyCallLimit: number('dailyCallLimit'), monthlyBudget: number('monthlyBudget'), inputPrice: number('inputPrice'), outputPrice: number('outputPrice'), cachedInputPrice: number('cachedInputPrice') },
+        ai: { sourceCallLimit: number('sourceCallLimit'), dailyCallLimit: number('dailyCallLimit'), monthlyBudget: number('monthlyBudget'), inputPrice: number('inputPrice'), outputPrice: number('outputPrice'), cachedInputPrice: number('cachedInputPrice') },
         embedding: { inputPrice: number('embeddingPrice') }, search: { requestPrice: number('searchPrice') },
       });
       status.textContent = '已保存。新单价从后续请求开始生效；历史记录保持原样。';

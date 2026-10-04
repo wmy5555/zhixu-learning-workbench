@@ -334,7 +334,7 @@ test('processing batches unique claims once inside the source budget and leaves 
 
   const budgetEvents = events.filter(event => event.type === 'withBudget');
   assert.equal(budgetEvents.length, 1);
-  assert.deepEqual(budgetEvents[0].options, { limit: 12, sourceId: source.id });
+  assert.deepEqual(budgetEvents[0].options, { limit: 120, sourceId: source.id });
   const batchEvents = events.filter(event => event.type === 'researchBatch');
   assert.equal(batchEvents.length, 1);
   assert.deepEqual(batchEvents[0].input.claims, ['共享主张', '第一项独有主张', '第二项仍不完整']);

@@ -70,9 +70,48 @@ export function layoutSourceMap(nodes, edges, hierarchy, mode = 'logic', collaps
     for (const id of visible) positions.set(id, { x: 32 + ranks.get(id) * columnStep, y: offset + rows.get(id) * rowStep });
     return { positions, width: maxRank * columnStep + cardWidth + 64, height, cardWidth, cardHeight, levelStep };
   }
-  const width = Math.max(560, maxItems * (cardWidth + 56) + 80);
-  for (const [rank, members] of levels) members.forEach((id, i) => positions.set(id, { x: (i + .5) * width / members.length - cardWidth / 2, y: 64 + rank * levelStep }));
-  return { positions, width, height: Math.max(320, maxRank * levelStep + cardHeight + 128), cardWidth, cardHeight, levelStep };
+  // Each edge has a reserved caption lane between cards. Back/cycle edges use the
+  // band above their earliest endpoint; long edges travel through side gutters.
+  const gutter = 48 + links.length * 8;
+  const width = Math.max(560, maxItems * (cardWidth + 56) + gutter * 2);
+  for (const [rank, members] of levels) members.forEach((id, i) => positions.set(id, { x: gutter + (i + .5) * (width - gutter * 2) / members.length - cardWidth / 2, y: 0 }));
+  const bands = new Map();
+  for (const edge of links) {
+    const a = ranks.get(edge.from), b = ranks.get(edge.to), band = b > a ? a : Math.min(a,b) - 1;
+    if (!bands.has(band)) bands.set(band, []);
+    bands.get(band).push(edge);
+  }
+  const gap = rank => Math.max(80, (bands.get(rank)?.length || 0) * 32 + 32);
+  let y = gap(-1);
+  const rowY = new Map();
+  for (let rank = 0; rank <= maxRank; rank++) {
+    rowY.set(rank, y);
+    for (const id of levels.get(rank) || []) positions.get(id).y = y;
+    y += cardHeight + gap(rank);
+  }
+  const routes = links.map((edge, index) => {
+    const a = positions.get(edge.from), b = positions.get(edge.to);
+    const forward = b.y > a.y, band = forward ? ranks.get(edge.from) : Math.min(ranks.get(edge.from),ranks.get(edge.to)) - 1;
+    const floor = band < 0 ? 0 : rowY.get(band) + cardHeight;
+    const ty = floor + 24 + bands.get(band).indexOf(edge) * 32;
+    const x1 = a.x + cardWidth / 2, x2 = b.x + cardWidth / 2;
+    const rail = index % 2 ? width - 20 - index * 8 : 20 + index * 8;
+    let d, tx;
+    if (forward && ranks.get(edge.to) === ranks.get(edge.from) + 1) {
+      d = 'M'+x1+','+(a.y+cardHeight)+' L'+x1+','+ty+' L'+x2+','+ty+' L'+x2+','+b.y;
+      tx = (x1+x2)/2;
+    } else if (forward) {
+      d = 'M'+x1+','+(a.y+cardHeight)+' L'+x1+','+ty+' L'+rail+','+ty+' L'+rail+','+(b.y-12)+' L'+x2+','+(b.y-12)+' L'+x2+','+b.y;
+      tx = (x1+rail)/2;
+    } else {
+      const start = a.x + cardWidth * .7, end = b.x + cardWidth * .3;
+      d = 'M'+start+','+a.y+' L'+start+','+(a.y-12)+' L'+rail+','+(a.y-12)+' L'+rail+','+ty+' L'+end+','+ty+' L'+end+','+b.y;
+      tx = (rail+end)/2;
+    }
+    return { edge, d, tx, ty, label: { x: tx-22, y: ty-15, width: 44, height: 24 } };
+  });
+  return { positions, width, height: Math.max(320, y), cardWidth, cardHeight, levelStep, routes };
+
 }
 
 export function enableMapPanning(viewport) {
@@ -229,35 +268,28 @@ export function createSourceMap({ source, children, view = {}, renderDetail, ana
     const markerId = `map-arrow-${++mapSerial}`, defs = svgElement('defs'), marker = svgElement('marker', { id: markerId, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 6, markerHeight: 6, orient: 'auto-start-reverse' });
     marker.append(svgElement('path', { d: 'M 0 0 L 10 5 L 0 10 z', fill: 'context-stroke' })); defs.append(marker); svg.append(defs);
     const painted = view.mode === 'mind' ? children.map(n => ({ from: hierarchy.find(h => h.child === n.id)?.parent || '__source__', to: n.id, type: 'contains' })) : edges;
-    for (const [i, edge] of painted.entries()) {
+    const captions = svgElement('g');
+    for (const edge of painted) {
       const a = layout.positions.get(edge.from), b = layout.positions.get(edge.to); if (!a || !b) continue;
       const related = edge.from === view.selected || edge.to === view.selected;
       let d, tx, ty;
       if (view.mode === 'mind') {
         const x1 = a.x + layout.cardWidth, x2 = b.x, y1 = a.y + layout.cardHeight / 2, y2 = b.y + layout.cardHeight / 2;
         d = `M${x1},${y1} C${(x1+x2)/2},${y1} ${(x1+x2)/2},${y2} ${x2},${y2}`;
-      } else if (b.y - a.y > layout.levelStep) {
-        // Route a relation that skips layers beside intermediate cards, never through their text.
-        const left = a.x < b.x, rail = left ? 20 + (i % 3) * 9 : layout.width - 20 - (i % 3) * 9;
-        const x1 = a.x + layout.cardWidth / 2, y1 = a.y + layout.cardHeight, x2 = left ? b.x : b.x + layout.cardWidth, y2 = b.y + layout.cardHeight / 2;
-        d = `M${x1},${y1} C${x1},${y1+22} ${rail},${y1+22} ${rail},${y1+38} L${rail},${y2-14} Q${rail},${y2} ${x2},${y2}`;
-        tx = rail + (left ? 24 : -24); ty = (y1+y2)/2;
-      } else if (b.y > a.y) {
-        const incoming = painted.filter(e => e.to === edge.to), slot = incoming.indexOf(edge);
-        const x1 = a.x + layout.cardWidth / 2, x2 = b.x + layout.cardWidth * (slot + 1) / (incoming.length + 1), y1 = a.y + layout.cardHeight, y2 = b.y, mid = (y1+y2)/2;
-        d = `M${x1},${y1} C${x1},${mid} ${x2},${mid} ${x2},${y2}`; tx = (x1+x2)/2; ty = mid + (slot % 3 - 1) * 18;
       } else {
-        const y = Math.max(18, Math.min(a.y,b.y) - 28 - (i % 3)*12), x1 = a.x+layout.cardWidth*.7, x2 = b.x+layout.cardWidth*.3;
-        d = `M${x1},${a.y} C${x1},${y} ${x2},${y} ${x2},${b.y}`; tx = (x1+x2)/2; ty = y-2;
+        const route = layout.routes.find(route => route.edge === edge);
+        if (!route) continue;
+        ({ d, tx, ty } = route);
       }
       svg.append(svgElement('path', { d, 'data-tone': toneFor(edge.to), class: `map-line${related ? ' is-related' : ''}`, ...(view.mode === 'logic' ? { 'marker-end': `url(#${markerId})` } : {}) }));
       if (view.mode === 'logic') {
         const label = svgElement('g', { class: `map-edge-caption${related ? ' is-related' : ''}` });
         label.append(svgElement('rect', { x: tx - 22, y: ty - 15, width: 44, height: 24, rx: 8 }),
           svgElement('text', { x: tx, y: ty + 2, 'text-anchor': 'middle', class: 'map-edge-label' }, sourceMapLabels[edge.type] || '关联'));
-        svg.append(label);
+        captions.append(label);
       }
     }
+    svg.append(captions);
     canvas.append(svg);
     for (const [id, position] of layout.positions) {
       const note = notes.get(id), isRoot = id === '__source__';

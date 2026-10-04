@@ -117,7 +117,7 @@ test('source processing renders the saved sourceExtract template into the actual
   const custom = 'CUSTOM_SOURCE_EXTRACT_MARKER\n只处理这份资料：{{source}}';
   service.updatePrompts({ prompts: { sourceExtract: custom } });
   const imported = service.importItems({
-    items: [{ title: '提示词渲染来源', body: sourceBody, privacy: 'local' }],
+    items: [{ title: '提示词渲染来源', body: sourceBody, privacy: 'cloud' }],
     process: true,
   });
 
