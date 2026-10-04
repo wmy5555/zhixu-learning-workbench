@@ -90,6 +90,8 @@ generate 返回 `{text,usage}`；embed → `{vectors}`；search → `{results:[{
 ## 2026-09-29 对齐接口
 
 - `src/learning.mjs` 集中主题、今日安排、错题与结束练习结算；`src/knowledge-lifecycle.mjs` 根据已有证据提出建议，不自动确认理解。
+- `public/onboarding-materials.mjs` 保留五组经审阅的真实摘录、模拟心得、学习任务与第三方许可，不作为预建知识或证据。`getCurriculum(materialId)` 沿用原步骤身份与进度；`custom` 正文只存在隔离练习记录，不能混入公共素材。
+- `POST /api/onboarding/start {materialId,customMaterial?}` 选择场景，`select-knowledge {practiceId,noteId,role}` 选择当前原文的实际可学知识。练习备份保留场景、角色与时间。仅隔离服务注入场景提问回调，正式学习不受影响，既有核验与外发限制不变。
 - `GET /api/notes/:id/evidence` 按需返回保留的原文证据；列表仍隐藏内部摘录。
 - `GET /api/recommendations`、`POST /api/recommendations/:id/action {action:'accept'|'dismiss'}`：阶段建议走原晋级规则；合并返回预览；研究返回原始资料入口，不自动调用研究。
 - `POST /api/study/start` 支持 `topicId`、`mistakeId`；`POST /api/study/:id/finish` 幂等完成整场练习，争议不结算复习。

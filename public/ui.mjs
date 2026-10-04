@@ -136,7 +136,7 @@ export function toast(message, tone = "default", timeout = 4200) {
   window.setTimeout(() => item.remove(), timeout);
 }
 
-function containDialogKeyboard(dialog, cancel) {
+export function containDialogKeyboard(dialog, cancel) {
   dialog.addEventListener("keydown", (event) => {
     if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); cancel(); return; }
     if (event.key !== "Tab") return;

@@ -355,7 +355,7 @@ async function renderCapture() {
     try {
       const submit = sourceForm.querySelector("button[type='submit']");
       submit.disabled = true;
-      const result = await api.import({ items: [item], process: process.checked, research: process.checked && research.checked });
+      const result = await api.import({ items: [item], captureMode: "text", process: process.checked, research: process.checked && research.checked });
       sourceForm.reset();
       toast(`已保存 ${asArray(result.notes).length || 1} 条原始资料`, "success");
       await refreshBootstrap();
@@ -381,7 +381,7 @@ async function renderCapture() {
     try {
       importButton.disabled = true;
       const items = await Promise.all([...fileInput.files].map(async (file) => ({ title: file.name.replace(/\.(md|txt)$/i, ""), body: await file.text(), platform: "本地文件", author: "", url: "", date: "", locator: file.name, privacy: "local" })));
-      const result = await api.import({ items, process: false });
+      const result = await api.import({ items, captureMode: "files", process: false });
       toast(`已导入 ${asArray(result.notes).length || items.length} 个文件`, "success");
       fileInput.value = "";
       clear(fileList);
@@ -2238,11 +2238,13 @@ async function navigateTutorial(step, tutorial) {
     if (step.caseId) return { target: "onboarding-case", message: "请先点击框选的“准备演示案例”，重新准备后再定位案例中的操作。" };
     if (step.noteRole === "createdTopic") return prerequisite("topic-create", "尚未找到对应主题，请先创建并保存一个练习主题。");
     if (step.noteRole === "capturedSource") return prerequisite("capture-save", "尚未找到收集的资料，请先保存练习资料。");
+    if (tutorial?.materialId && step.noteRole === "source") return prerequisite("capture-save", "尚未找到本场景原文，请先保存练习资料。");
+    if (tutorial?.materialId && ["aware", "find", "explain", "apply"].includes(step.noteRole) && !value) return { target: "onboarding-knowledge", message: "请在引导中选择本原文的一条实际候选，再查看内容并设置学习目标；待核验事实先联网加工。" };
     return { target: "onboarding-reset", message: "初始示例已删除或缺失。可点击框选的“重置练习”重新准备；确认后会清理当前练习进度，正式资料不受影响。" };
   };
   const value = tutorial?.roles?.[step.noteRole];
   const id = typeof value === "string" ? value : value?.id;
-  if (step.noteRole && !id) return missingContent();
+  if (step.noteRole && !id && step.noteRole !== 'draft') return missingContent();
   let topic;
   if (step.noteRole === "createdTopic") {
     topic = asArray((await api.topics()).topics).find(item => item.id === id);
@@ -2297,8 +2299,10 @@ async function navigateTutorial(step, tutorial) {
     return;
   }
   if (step.target === "draft-editor" || step.target === "output-result") {
-    if (step.target === "output-result" && state.lastOutput) return;
-    const draft = asArray((await api.drafts()).drafts)[0];
+    const trackedId = tutorial?.roles?.draft;
+    if (step.target === "output-result" && state.lastOutput && (!trackedId && !tutorial?.materialId || state.lastOutput.draftId === trackedId)) return;
+    const drafts = asArray((await api.drafts()).drafts);
+    const draft = trackedId ? drafts.find(item => item.id === trackedId) : tutorial?.materialId ? null : drafts[0];
     if (!draft) {
       closeDrawer();
       return { target: "output-form", message: "还没有已保存的输出，请先在框选区域填写目标并亲自点击“开始生成”。" };

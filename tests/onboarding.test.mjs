@@ -132,6 +132,26 @@ test('restoring an earlier practice also restores its object identities without 
   assert.equal(h.main.store.list().length, 0);
 });
 
+test('restoring a legacy practice backup clears a newer scenario identity', async t => {
+  const h = harness(t), first = h.manager.start(); await h.ready();
+  const backup = h.manager.currentService.backup();
+  const identity = backup.records.find(record => record.namespace === 'onboardingContext' && record.key === 'identity');
+  const context = JSON.parse(identity.json); delete context.materialId;
+  identity.json = JSON.stringify(context);
+  const reset = await h.manager.reset(first.practiceId, 'reading'), service = h.manager.currentService;
+  assert.equal(reset.materialId, 'reading');
+  const preview = service.restore({ backup });
+  const result = service.restore({ backup, preview: false, token: preview.token });
+  h.manager.observe(reset.practiceId, { resource: 'restore', method: 'POST', body: { backup, preview: false }, query: {}, result });
+  const restored = h.manager.state();
+  assert.equal(restored.materialId, null);
+  assert.deepEqual(restored.roles, first.roles);
+  assert.equal(service.store.get('onboardingContext', 'identity').materialId, null);
+  service.promote(restored.roles.explain, { stage: 'learning', depth: 'explain', reason: '受控旧备份测试' });
+  assert.ok(service.startStudy({ noteId: restored.roles.explain }).question.includes(service.getNote(restored.roles.explain).title));
+  assert.equal(h.main.store.list().length, 0);
+});
+
 test('pause waits for active requests; reset invalidates old identities and leaves main intact', async t => {
   const h = harness(t), first = h.manager.start(); await h.ready();
   const mainBefore = h.main.backup();

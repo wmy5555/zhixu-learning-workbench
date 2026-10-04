@@ -1,4 +1,5 @@
 // Shared by the browser and the practice manager. This module has no side effects.
+import { getMaterial, materialSample } from './onboarding-materials.mjs';
 const step = (id, title, instruction, why, expected, view, target, extra = {}) => ({
   id, title, instruction, why, expected, view, target, kind: 'read', ...extra,
 });
@@ -36,7 +37,7 @@ export const chapters = [
   { id: 'process', title: '3. 拆解与核验', steps: [
     action('process-ai', '用真实 AI 拆解原文', '对“小岚的读书分享”点击“AI 拆解”，等待任务完成。不要在等待期间反复提交。', '观察原文如何变成可选择的知识条目。', '同一来源下出现真实模型返回的候选知识；失败保留原文和任务原因。', 'library', 'note-process', 'process-done', { noteRole: 'capturedSource', needs: ['ai'] }),
     step('process-group', '读懂来源和候选知识的关系', '展开来源分组，分别打开原文和拆解出的知识。检查 AI 是否加入了原文没有的事实。', 'AI 的整理和事实核验是不同环节。', '能沿来源回到原文；待核验事实仍显示限制。', 'library', 'library-content'),
-    action('process-manual', '亲手整理一条观点', '对示例原文选择“手动整理为待选学”。标题写“先确定分享的问题”，用自己的话写小岚的个人安排；类型选“仅个人观点或虚构练习”，目标选“能够解释”，保存。不要用这个类型绕过事实核验。', '真实 AI 输出含未核验事实时，仍可整理原文里的个人观点继续主线。', '出现一条关联原文的候选知识，没有伪造研究证据。', 'library', 'note-extract', 'extract', { noteRole: 'capturedSource', sample: { title: '先确定分享的问题', body: '在本次虚构读书任务中，小岚先写下想讨论的问题，再选择对应摘录。这个安排仅用于她的分享，不代表对所有学习者都有效。', topic: '读书与知识整理', claimType: 'opinion' } }),
+    action('process-manual', '亲手整理一条观点', '对示例原文选择“手动整理为待选学”。标题写“先确定分享的问题”，用自己的话写小岚的个人安排；类型选“仅个人观点或虚构练习”，目标选“讲清原理”，保存。不要用这个类型绕过事实核验。', '真实 AI 输出含未核验事实时，仍可整理原文里的个人观点继续主线。', '出现一条关联原文的候选知识，没有伪造研究证据。', 'library', 'note-extract', 'extract', { noteRole: 'capturedSource', sample: { title: '先确定分享的问题', body: '在本次虚构读书任务中，小岚先写下想讨论的问题，再选择对应摘录。这个安排仅用于她的分享，不代表对所有学习者都有效。', topic: '读书与知识整理', claimType: 'opinion' } }),
     external('process-search-config', '配置搜索与正文读取能力', '如要真实联网核验，在能力设置点击“前往正式 API 配置”，填写搜索服务信息，启用公开网页读取，保存后分别测试搜索与读取。暂不配置可把本项保留为“待配置”。', '核验必须有可读取的依据，搜索摘要不能代替正文。', '真实配置测试成功，或本项清楚保留为待配置。', 'system', 'settings-capabilities', { ...settings, needs: ['search'] }),
     action('process-validity', '设置资料的复查期限', '编辑这份原始资料，将“核验有效天数”设为 7 并保存。', '容易变化的信息到期后需要重新检查。', '原始资料保存了 7 天的复查周期。', 'library', 'note-editor', 'research-interval', { noteRole: 'capturedSource' }),
     action('process-research', '主动运行联网核验', '在原始资料中选择联网加工并提交。只对服务实际返回的事实和可读取正文记录结论；若虚构文本没有待核验事实，查看“无事实待核验”的实际结果。', '亲自观察外部能力可用时的完整流程。', '任务确实完成，或明确显示缺少正文、额度不足等原因。', 'library', 'note-process', 'research-done', { noteRole: 'capturedSource', needs: ['ai', 'search', 'fetch'] }),
@@ -46,9 +47,9 @@ export const chapters = [
   { id: 'library', title: '4. 管理知识', steps: [
     action('library-filter', '找到指定类型和阶段', '在知识库搜索“读书”，切换类型、阶段和分组，找到四个带“练习”前缀的学习目标示例。', '资料多时先缩小范围。', '列表随关键词、类型和阶段条件变化。', 'library', 'library-filter', 'library-filter'),
     action('library-edit', '修改一条知识并保存', '编辑“能够解释”示例，在正文末尾补充一句你对虚构任务的观察并保存。', '人工整理的内容应被明确保留。', '详情显示你的修改，历史里保留旧版。', 'library', 'note-editor', 'note-edit', { noteRole: 'explain' }),
-    action('library-aware', '设置“知道存在”目标', '打开“知道存在”示例，编辑页确认学习深度为“知道存在”并保存。回到详情点击“设为仅供查阅”，理由写“知道这张卡片的用途即可”。', '不同材料不必都深入练习。', '这条知识以仅供查阅保存，学习目标是知道存在。', 'library', 'note-lifecycle', 'depth-aware', { noteRole: 'aware' }),
-    action('library-find', '设置“知道去哪找”目标', '打开“知道去哪找”示例，编辑页确认对应学习深度并保存。回到详情点击“设为仅供查阅”，填写保留查找线索的理由。', '有些知识保留查找线索就足够。', '这条知识保留来源位置和查找目标。', 'library', 'note-lifecycle', 'depth-find', { noteRole: 'find' }),
-    action('library-explain', '把解释目标加入学习', '接下来使用练习库预先准备的“能够解释”卡片，体验稳定的学习流程；它是虚构示例，不是刚才的 AI 输出。打开编辑页，确认学习深度为“能够解释”并保存，再点击“加入学习”，理由写“我要用自己的话说明出处的作用”。', '练习目标决定提问方式。', '知识进入正在学习，之后出现解释型问题。', 'library', 'note-lifecycle', 'depth-explain', { noteRole: 'explain' }),
+    action('library-aware', '设置“知道存在”目标', '打开“知道存在”示例，编辑页确认学习目标为“了解用途”并保存。回到详情点击“设为仅供查阅”，理由写“知道这张卡片的用途即可”。', '不同材料不必都深入练习。', '这条知识以仅供查阅保存，学习目标是知道存在。', 'library', 'note-lifecycle', 'depth-aware', { noteRole: 'aware' }),
+    action('library-find', '设置“知道去哪找”目标', '打开“知道去哪找”示例，编辑页确认学习目标为“会查资料”并保存。回到详情点击“设为仅供查阅”，填写保留查找线索的理由。', '有些知识保留查找线索就足够。', '这条知识保留来源位置和查找目标。', 'library', 'note-lifecycle', 'depth-find', { noteRole: 'find' }),
+    action('library-explain', '把解释目标加入学习', '接下来使用练习库预先准备的“能够解释”卡片，体验稳定的学习流程；它是虚构示例，不是刚才的 AI 输出。打开编辑页，确认学习目标为“讲清原理”并保存，再点击“加入学习”，理由写“我要用自己的话说明出处的作用”。', '练习目标决定提问方式。', '知识进入正在学习，之后出现解释型问题。', 'library', 'note-lifecycle', 'depth-explain', { noteRole: 'explain' }),
     action('library-apply', '把应用目标加入学习', '打开“能够迁移应用”示例，编辑页确认对应深度并保存。回到详情点击“加入学习”，理由写“想把方法用于另一种分享”。', '应用练习需要换场景并说明边界。', '另一条独立知识进入学习，保留应用目标。', 'library', 'note-lifecycle', 'depth-apply', { noteRole: 'apply' }),
     step('library-stages', '看懂六个知识阶段', '阅读知识状态：仅供查阅、待选学、正在学习、已整理个人理解、重点知识、不再使用。整理个人理解需要自己的解释；重点知识还应审阅学习和实际使用依据。', '避免把整理完成或时间流逝当成掌握。', '知道调整阶段必须写理由，建议不会自动晋级。', 'library', 'note-lifecycle', { noteRole: 'explain' }),
     preset('library-history', '查看内容历史', '加载“历史、重复与删除”案例，打开“历史恢复专用卡片”的“查看版本”，阅读旧文版本 A 与当前版本 B。', '历史帮助比较修改，防止丢失原意。', '专用卡片显示修改前版本，主线学习知识不受影响。', 'library', 'note-history', 'history-open', 'duplicates', { noteRole: 'versionNote' }),
@@ -194,3 +195,79 @@ const extensionTitles = {
   discover: '语义检索与联系发现', output: '更多输出方式与阶段建议', maintenance: '维护与备份', external: '外部工具与文件协作',
 };
 export const extensionChapters = chapters.map(chapter => ({ ...chapter, title: extensionTitles[chapter.id], steps: flatSteps.filter(item => item.chapterId === chapter.id && item.priority === 'extension') })).filter(chapter => chapter.steps.length);
+
+const scenarioQueries = {
+  course: ['移项', '把加号那一项搬到等号另一边，为什么要减掉？'],
+  reading: ['批评', '能不能先看评论，又不把判断全交给别人？'],
+  work: ['记录', '哪些消息应该留给所有成员查，哪些要私下处理？'],
+  tech: ['finally', '为什么清理已经发生，程序还是失败？'],
+  life: ['资产', '大家一起选图，却不该把所有资料给所有人，该先想什么？'],
+  custom: ['', '怎样把这条知识用于不同于原文的问题？'],
+};
+const goalNames = { aware: '了解用途', find: '会查资料', explain: '讲清原理', apply: '换场景应用' };
+const curriculumCache = new Map();
+export function getCurriculum(materialId) {
+  const material = getMaterial(materialId);
+  if (!material) return { chapters, flatSteps, coreChapters, coreSteps, extensionChapters };
+  if (curriculumCache.has(materialId)) return curriculumCache.get(materialId);
+  const [keyword, semantic] = scenarioQueries[materialId];
+  const overrides = {
+    'setup-welcome': { instruction: `本次选择“${material.label.slice(2)}”。阅读练习空间标识；之后围绕同一原文学习、复习和输出。模拟心得不是你的个人理解，真实摘录也不等于已经核验。` },
+    'capture-save': { sample: materialSample(materialId), expected: materialId === 'custom' ? '保存你粘贴的原文和填写的出处，个人心得尚未确认为理解。' : `保存“${material.source.title}”的原文摘录、来源与模拟心得，尚无学习成绩。` },
+    'capture-source': { expected: '能读到完整选段、明确的省略标记、作者、链接和许可；模拟心得单独标明。' },
+    'process-ai': { instruction: '对刚保存的原文点击“AI 拆解”，等待实际任务完成，再检查候选知识是否忠实于原文。', expected: '当前原文下出现真实模型返回的候选知识；不预先填入 AI 答案。' },
+    'process-group': { instruction: `对照原文检查候选知识，留意这些内容是否被拆开并保留条件：${material.focus.join(' ')} ${material.verification}` },
+    'process-manual': { instruction: '对当前原文点击“手动整理为待选学”，亲自填写标题、正文与出处，学习目标选“讲清原理”。数学、代码行为等事实保持事实类型并继续核验；作者主张和自己的选择应如实标明身份，不能用观点类型掩盖事实。', sample: null, why: '手工整理与 AI 拆解都须保留来源和事实限制。' },
+    'process-research': { instruction: `对原文主动运行联网加工，审阅返回正文、依据与限制。${material.verification}` },
+    'library-filter': { instruction: `搜索“${keyword}”，切换类型、阶段和分组，找到本场景原文与真实拆解条目。` },
+    'library-edit': { instruction: '编辑已选知识，补充你自己的观察并保存；保留 AI 整理与个人补充的身份。' },
+    'library-explain': { instruction: `从本原文的实际候选中选择一条，主线目标：${material.goals[2][1]}。选好后打开编辑页，将“学习目标”设为“讲清原理”并保存，再“加入学习”并填写理由。仍待核验的事实须先联网加工、审阅依据；没有可学条目时不能伪造完成。`, why: '学习使用你选中的真实拆解结果，不切回无关预设卡片。', expected: '当前原文的一条实际知识进入学习，之后沿用同一条知识。' },
+    'study-source-permission': { instruction: '核对本场景原文的外发权限。之前已允许时无需重复授权；仅本地时由你决定是否允许。', expected: '选中知识关联的真实原文允许外发，未授权的其他资料保持本地。' },
+    'study-permission': { instruction: '打开刚选中的解释知识，把隐私改为“允许云端”并保存；核对底层原文也已授权。' },
+    'study-start': { instruction: `对已选的解释知识点击开始学习。主线问题：${material.recall}` },
+    'study-answer': { instruction: `先按学习会话中的题目独立作答：${material.recall} 不填入参考答案。` },
+    'study-followup': { instruction: `回答实际 AI 反馈中的追问，保留你自己的表达。可继续思考：${material.followup} 若上轮已结束，重新开始同一知识的练习。` },
+    'study-confirm': { instruction: `在“确认我的理解”亲自组织解释，不复制模拟心得或 AI 结论。可围绕这些空白整理：${material.confirm}`, sample: null },
+    'review-finish': { instruction: `开始同一知识的到期复习，隐藏材料后回答本次会话中的新问题：${material.review} 等待实际反馈并结束，不把推进日期当成正确作答。` },
+    'topic-create': { title: '建立本场景的学习主题', instruction: '新建主题，选本原文的真实解释与应用知识作为成员，核对目的和顺序后保存。', sample: { title: material.label.slice(2), body: material.goals[2][1] + '\n\n' + material.goals[3][1] } },
+    'topic-copy': { instruction: '复制当前主题，保留成员，另起一个符合你本次目标的名字后保存。' },
+    'topic-split': { instruction: '复制或拆分当前主题，移除暂不需要的成员，用新的任务目标另存。' },
+    'search-keyword': { instruction: `先用“${keyword}”检索，再尝试筛选并打开结果回到原文。${material.retrieval}`, sample: { query: keyword } },
+    'search-semantic': { instruction: `清空筛选，允许本次查询外发，选择语义模式搜索“${semantic}”，核对诊断与来源。`, sample: { query: semantic } },
+    'output-answer': { instruction: '选择回答问题，填入本场景的问题，亲自允许本次查询外发后生成；核对引用与限制。', sample: { question: material.recall } },
+    'output-outline': { instruction: '选择组织提纲，用本场景的输出目标生成提纲；核对哪些部分有原文依据。', sample: { question: `为以下任务组织提纲，不写成已经实践有效的总结：${material.output}` } },
+    'output-draft': { instruction: `${material.output} 选择草稿，亲自允许本次查询外发后生成。`, sample: { question: material.output + '\n\n需要应用的练习情境：' + material.transfer + (material.transferCode ? '\n\n' + material.transferCode : '') } },
+    'output-edit': { instruction: '打开主线刚生成的草稿，按本场景的用途改写，核对引用、假设与限制后保存。' },
+    'output-use': { instruction: '用草稿检查或完善本次练习方案，再只勾选确实采用的知识并保存。不把练习采用说成真实生活已经实施。' },
+    'capture-download': { instruction: '下载本场景的“伴读原文.md”和“应用练习.txt”。原文保留署名与许可，练习问题单独存放，不含参考答案。', downloads: [{ title: '伴读原文.md', material: materialId, companion: true }, { title: '应用练习.txt', material: materialId, exercise: true }] },
+    'capture-batch': { instruction: '批量导入刚下载的伴读原文与练习问题文件，保持仅本地，再核对每份来源。主线仍使用之前选中的原文。' },
+    'relation-local': { instruction: `对解释知识本地寻找联系。${material.companion?.proposal || '可以另存一份相关原文，核对哪些内容构成补充、条件或对照；相似不等于支持。'}` },
+    'relation-ai': { instruction: `仅为参与比较的原文与知识亲自允许外发，再请求 AI 细查联系。${material.companion?.proposal || '核对双方摘录、关系类型与适用边界。'} 返回结果只是待审阅建议。` },
+  };
+  if (materialId === 'custom') {
+    overrides['setup-welcome'].instruction = '本次使用你自行粘贴的材料。内容先保存在独立练习区，不会自动交给外部模型；亲自核对出处、权限与是否含敏感信息。';
+    overrides['capture-save'].instruction = '点击“填入示例”，检查之前粘贴的原文和出处。需要时继续修改，保持“仅本地”，亲自保存。';
+    overrides['capture-source'].expected = '能读到自己粘贴的完整原文、所填出处和单独的个人心得。';
+    overrides['capture-download'] = { instruction: '准备自己的一份补充材料 .md 和一份应用问题 .txt；不含密码或不愿外发的敏感信息。', downloads: [] };
+    overrides['capture-batch'].instruction = '批量导入自己准备的两份练习文件，保持仅本地；主线仍使用之前保存的原文。';
+    overrides['search-keyword'] = { instruction: material.retrieval, sample: null };
+    overrides['library-filter'].instruction = '用自己原文中的核心术语检索，再切换类型、阶段和分组，找到实际原文与拆解条目。';
+  }
+  ['aware', 'find', 'apply'].forEach((role, index) => {
+    const goalIndex = role === 'apply' ? 3 : index;
+    overrides[`library-${role}`] = { title: `设置“${goalNames[role]}”目标`, instruction: `在本原文下选择主线以外的一条实际知识，目标：${material.goals[goalIndex][1]}。编辑“学习目标”为“${goalNames[role]}”后保存，再${role === 'apply' ? '加入学习' : '设为仅供查阅'}并写下理由。这三个扩展目标可按顺序沿用同一条非主线知识，旧操作记录保留；没有可用条目时先手动整理另一项内容，事实仍须核验。`, expected: '保留实际来源与所选目标，没有预设成绩，也不改变主线知识。' };
+  });
+  const rows = flatSteps.map(item => {
+    if (item.caseId) return item;
+    const row = { ...item, ...overrides[item.id] };
+    for (const field of ['title', 'instruction', 'expected']) if (row[field]) row[field] = row[field].replaceAll('学习深度', '学习目标').replaceAll('能够迁移应用', '换场景应用').replaceAll('能够解释', '讲清原理').replaceAll('解释示例', '选中的解释知识').replaceAll('应用示例', '选中的应用知识');
+    if (row.chapterId === 'study' && !['study-defer', 'study-plan', 'study-reason'].includes(row.id)) row.noteRole ||= 'explain';
+    if (['output-edit', 'output-use', 'output-unuse', 'output-capture'].includes(row.id)) row.noteRole = 'draft';
+    return row;
+  });
+  const mapped = chapters.map(chapter => ({ ...chapter, steps: rows.filter(row => row.chapterId === chapter.id) }));
+  const core = coreRoute.map(chapter => ({ id: chapter.id, title: chapter.title, steps: chapter.stepIds.map(id => rows.find(row => row.id === id)) }));
+  const result = { chapters: mapped, flatSteps: rows, coreChapters: core, coreSteps: core.flatMap(chapter => chapter.steps), extensionChapters: mapped.map(chapter => ({ ...chapter, title: extensionTitles[chapter.id], steps: chapter.steps.filter(row => row.priority === 'extension') })).filter(chapter => chapter.steps.length) };
+  curriculumCache.set(materialId, result);
+  return result;
+}
