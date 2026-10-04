@@ -95,10 +95,11 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
         let result;
         if (parts[2] === 'state' && method === 'GET') result = onboarding.state();
         else if (method === 'POST') {
-          if (parts[2] === 'start') result = onboarding.start();
+          if (parts[2] === 'start') result = onboarding.start(body.materialId, body.customMaterial);
           else if (parts[2] === 'resume') result = onboarding.resume(body.practiceId);
           else if (parts[2] === 'pause') result = await onboarding.pause(body.practiceId);
-          else if (parts[2] === 'reset') result = await onboarding.reset(body.practiceId);
+          else if (parts[2] === 'reset') result = await onboarding.reset(body.practiceId, body.materialId, body.customMaterial);
+          else if (parts[2] === 'select-knowledge') result = onboarding.selectKnowledge(body.practiceId, body);
           else if (parts[2] === 'advance') result = onboarding.advance(body.practiceId, body.action);
           else if (parts[2] === 'case') result = onboarding.caseAction(body.practiceId, body.caseId);
           else if (parts[2] === 'abandon') result = onboarding.abandon(body.practiceId, body.sessionId);

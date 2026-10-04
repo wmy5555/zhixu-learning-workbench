@@ -8,7 +8,8 @@ const dateAt = (value, timezone) => new Intl.DateTimeFormat('en-CA', { timeZone:
 const atOffset = (value, days) => new Date(Date.parse(value) + days * 86400000).toISOString();
 
 /** Called only by the manager for its isolated practice service. Never makes API calls. */
-export function seedPractice(service) {
+export function seedPractice(service, materialId) {
+  if (materialId) return { roles: {} };
   const previous = service.store.get('onboardingSeed', 'main');
   if (previous) return { roles: previous.roles };
   const source = service.store.create({

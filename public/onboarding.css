@@ -1,5 +1,19 @@
 .practice-banner { padding: 12px 24px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 12px; background: var(--panel-soft); }
 .practice-banner strong { color: var(--accent); }
+.onboarding-material-dialog { width: min(900px, 100%); max-height: 88dvh; overflow-y: auto; border-radius: 8px; }
+.onboarding-material-layout { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(0, 1.3fr); gap: 24px; }
+.onboarding-material-options { min-width: 0; padding: 0; border: 0; }
+.onboarding-material-options legend { font-size: 13px; margin-bottom: 10px; }
+.onboarding-material-option { display: flex; gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+.onboarding-material-option input { width: 16px; height: 16px; flex: 0 0 16px; margin-top: 3px; }
+.onboarding-material-option strong, .onboarding-material-option .fine-print { display: block; }
+.onboarding-material-option strong { font-size: 14px; margin-bottom: 4px; }
+.onboarding-material-preview { min-width: 0; font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+.onboarding-material-preview h3 { font-size: 16px; }
+.onboarding-material-preview details { margin-top: 16px; }
+.onboarding-material-preview summary { cursor: pointer; }
+.onboarding-material-preview pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+@media (max-width: 650px) { .onboarding-material-layout { grid-template-columns: minmax(0, 1fr); gap: 16px; } }
 .practice-date { display: block; margin-top: 4px; color: var(--muted); }
 .practice-banner[hidden], .onboarding-panel[hidden], .onboarding-content[hidden] { display: none; }
 .onboarding-entry { display: flex; align-items: center; justify-content: space-between; gap: 20px; }

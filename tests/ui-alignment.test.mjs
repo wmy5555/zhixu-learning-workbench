@@ -789,6 +789,31 @@ test('output locating opens saved drafts and citations, preserves edits, and han
   assert.ok(fixture.reads.every(read => read.name === 'drafts'));
 });
 
+test('scenario output locating keeps the tracked draft instead of newer unrelated drafts', async () => {
+  const fixture = tutorialFixture();
+  fixture.roles.draft = fixture.drafts[0].id;
+  fixture.drafts.unshift({ ...fixture.drafts[0], id: 'unrelated-draft', body: '不属于本次材料的较新草稿' });
+  const app = browser(fixture.api); app.state.bootstrap = fixture.bootstrap;
+  const tutorial = { materialId: 'reading', roles: fixture.roles };
+  const editStep = flatSteps.find(step => step.id === 'output-edit');
+  await app.navigateTutorial(editStep, tutorial);
+  assert.equal(app.refs.drawerBody.dataset.tourSubject, fixture.roles.draft);
+  const editor = app.refs.drawerBody.querySelector('[data-tour="draft-body"]');
+  editor.value = '本次草稿尚未保存的修改';
+  await app.navigateTutorial(editStep, tutorial);
+  assert.equal(app.refs.drawerBody.querySelector('[data-tour="draft-body"]'), editor);
+  assert.equal(editor.value, '本次草稿尚未保存的修改');
+  app.state.lastOutput = { draftId: 'unrelated-draft', answer: '其他材料的旧输出' };
+  await app.navigateTutorial(flatSteps.find(step => step.id === 'output-citations'), tutorial);
+  const result = app.refs.main.querySelector('[data-tour="output-result"]').textContent;
+  assert.match(result, /虚构草稿/);
+  assert.doesNotMatch(result, /其他材料的旧输出|不属于本次材料/);
+  fixture.drafts.splice(fixture.drafts.findIndex(draft => draft.id === fixture.roles.draft), 1);
+  assert.equal((await app.navigateTutorial(editStep, tutorial)).target, 'output-form');
+  assert.equal(app.refs.drawer.classList.contains('is-open'), false);
+  assert.ok(fixture.reads.every(read => read.name === 'drafts'));
+});
+
 test('a failed new output request cannot restore a previous successful answer', async () => {
   const fixture = tutorialFixture(); let reject = false;
   const app = browser({ ...fixture.api, ask: async () => { if (reject) throw new Error('受控失败'); return { answer: '上一轮旧答案' }; } });

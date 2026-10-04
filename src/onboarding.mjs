@@ -3,8 +3,9 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createService } from './service.mjs';
 import { atomicWrite, fail, hash } from './store.mjs';
-import { chapters, flatSteps } from '../public/onboarding-curriculum.mjs';
+import { chapters, getCurriculum } from '../public/onboarding-curriculum.mjs';
 import { seedPractice, loadCase, caseIds } from './onboarding-cases.mjs';
+import { getMaterial, customSample } from '../public/onboarding-materials.mjs';
 
 const capabilityGroups = ['ai', 'embedding', 'search', 'fetch'];
 const isId = id => typeof id === 'string' && /^[0-9a-f-]{36}$/.test(id);
@@ -26,6 +27,7 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
   const root = path.resolve(dataDir, 'onboarding');
   const stateFile = path.join(root, 'state.json');
   let record = emptyRecord(), runtime = null, closed = false, transitioning = false;
+  const steps = () => getCurriculum(record.practice?.materialId).flatSteps;
   function safePath(file) {
     const relative = path.relative(path.resolve(dataDir), file);
     if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) fail('练习路径无效。', 'PRACTICE_PATH', 403);
@@ -66,7 +68,7 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
   const persist = () => {
     if (runtime?.anchor && record.practice?.status === 'active') { record.practice.clockAt = learningNow().toISOString(); runtime.anchor = Date.now(); }
     // Object identities travel with their files during restore; completion evidence stays in state.json.
-    if (runtime && record.practice) runtime.service.store.put('onboardingContext', 'identity', { roles: record.practice.roles, cases: record.practice.cases, learningTime: record.practice.clockAt });
+    if (runtime && record.practice) runtime.service.store.put('onboardingContext', 'identity', { roles: record.practice.roles, cases: record.practice.cases, materialId: record.practice.materialId || null, learningTime: record.practice.clockAt });
     safePath(stateFile); atomicWrite(stateFile, JSON.stringify(record));
   };
   const fingerprint = capability => {
@@ -98,7 +100,17 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
     const folder = safePath(path.join(root, p.id));
     const instance = { service: null, requests: 0, anchor: 0, pumping: false };
     instance.service = serviceFactory({ dataDir: safePath(path.join(folder, 'data')), vaultDir: safePath(path.join(folder, 'vault')), practice: true,
-      aiOverride: mainService.ai, getExternalSettings: () => mainService.settings(), learningClock: learningNow });
+      aiOverride: mainService.ai, getExternalSettings: () => mainService.settings(), learningClock: learningNow,
+      getPracticeQuestion: note => {
+        const material = getMaterial(p.materialId);
+        if (!material || note.meta.presetCase) return null;
+        if (p.roles.apply === note.id && note.meta.depth === 'apply') return material.transfer + (material.transferCode ? `\n\n${material.transferCode}` : '');
+        if (p.roles.explain !== note.id) return null;
+        const timezone = instance.service.settings().timezone;
+        const day = date => new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date(date));
+        const previous = instance.service.store.records('sessions').some(session => session.noteId === note.id && !session.presetCase && session.completion?.reviewSettled && day(session.completedAt) !== day(learningNow()));
+        return previous ? material.review : material.recall;
+      } });
     runtime = instance;
     return runtime;
   }
@@ -124,6 +136,7 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
     const p = record.practice, value = p?.events?.[checkId] || record.events?.[checkId];
     const items = Array.isArray(value) ? value : value ? [value] : [];
     const roleId = p?.roles?.[step.noteRole];
+    if (p?.materialId && step.noteRole && !roleId) return [];
     return items.filter(event => {
       if (!step.caseId && event.presetCase) return false;
       if (step.caseId && (!p?.cases?.[step.caseId] || event.at < p.cases[step.caseId].at)) return false;
@@ -133,6 +146,7 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
   }
   function check(checkId, f, step = {}) {
     if (!checkId) return false;
+    if (record.practice?.materialId && step.noteRole && !record.practice.roles[step.noteRole]) return false;
     checkId = checkAliases[checkId] || checkId;
     if (checkId === 'model-test') return ready('model');
     if (checkId.startsWith('test-')) return ready(checkId.slice(5));
@@ -170,7 +184,7 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
   }
   function progress() {
     const p = record.practice, result = {}, f = facts();
-    for (const step of flatSteps) {
+    for (const step of steps()) {
       let status = 'pending';
       const events = matchingEvents(checkAliases[step.check] || step.check, step);
       if (check(step.check, f, step) && (!step.caseId || p?.cases?.[step.caseId])) status = step.kind === 'case' || step.caseId || events.length && events.every(e => e.presetCase) ? 'demonstrated' : 'done';
@@ -190,9 +204,11 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
       mcp: { status: mcpCalls.length ? 'observed' : p?.acknowledged?.['mcp-read'] ? 'reported' : 'pending', lastSeenAt: mcpCalls[0]?.at || null, operations: [...new Set(mcpCalls.map(call => call.operation).filter(op => ['search', 'notes', 'sources', 'related', 'proposals'].includes(op)))] },
       obsidian: { status: p?.acknowledged?.['obsidian-open'] ? 'reported' : 'pending', editReported: Boolean(p?.acknowledged?.['obsidian-edit']) },
     };
-    return { practiceId: p?.id || null, status: p?.status || 'new', currentStepId: p?.currentStepId || flatSteps[0]?.id,
+    const learningCandidates = p?.materialId && exists(p.roles.capturedSource) ? runtime.service.store.list().filter(note => note.kind === 'knowledge' && !note.meta.presetCase && !note.meta.supersededBy && note.meta.sources?.some(ref => ref.id === p.roles.capturedSource && ref.role === 'input')).map(note => ({ id: note.id, title: note.title, stage: note.meta.stage, depth: note.meta.depth, limitations: runtime.service.noteEvidence(note.id).limitations })) : [];
+    const learningStarted = Boolean(p?.roles.explain && runtime?.service.store.records('sessions').some(session => session.noteId === p.roles.explain && !session.presetCase));
+    return { practiceId: p?.id || null, status: p?.status || 'new', materialId: p?.materialId || null, customSample: p?.materialId === 'custom' ? runtime.service.store.get('onboardingMaterials', 'custom') : null, learningCandidates, learningStarted, currentStepId: p?.currentStepId || steps()[0]?.id,
       clock: { now: learningNow().toISOString(), realNow: iso(), paused: p?.status !== 'active', timezone: runtime?.service.settings().timezone || mainService.settings().timezone },
-      progress: states, summary: { ...counts, total: flatSteps.length }, modelReady: ready('model'),
+      progress: states, summary: { ...counts, total: steps().length }, modelReady: ready('model'),
       capabilities: Object.fromEntries(['model', 'embedding', 'search', 'fetch'].map(cap => [cap, ready(cap)])),
       settings: mainService.settings(), roles: p?.roles || {}, cases: p?.cases || {}, dismissed: record.dismissed,
       busy: Boolean(transitioning || runtime?.requests || runtime?.pumping || runtime?.service.hasPendingOperations),
@@ -201,14 +217,21 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
       practiceVault: runtime?.service.store.vaultDir || null, externalConnections,
       notice: '练习资料独立保存；真实 API 请求计入日常调用上限。演示学习日期不改变电脑时间。' };
   }
-  function start() {
+  function start(materialId, customInput) {
     if (closed) fail('服务已关闭。', 'PRACTICE_CLOSED', 503);
-    if (record.practice) return resume(record.practice.id);
+    if (materialId !== undefined && !getMaterial(materialId)) fail('请选择一个可用的练习场景。', 'ONBOARDING_MATERIAL', 400);
+    if (record.practice) {
+      if (materialId !== undefined && materialId !== record.practice.materialId) fail('要换场景，请先确认重置独立练习；已有资料不会静默替换。', 'ONBOARDING_MATERIAL_LOCKED', 409);
+      return resume(record.practice.id);
+    }
     assertIdle();
     assertVaultIsolation();
-    record.practice = { id: randomUUID(), status: 'active', clockAt: iso(), currentStepId: flatSteps[0]?.id, roles: {}, cases: {}, events: {}, acknowledged: {} };
+    let sample;
+    if (materialId === 'custom') { try { sample = customSample(customInput); } catch (error) { fail(error.message, 'ONBOARDING_MATERIAL', 400); } }
+    record.practice = { id: randomUUID(), materialId: materialId || null, status: 'active', clockAt: iso(), currentStepId: steps()[0]?.id, roles: {}, cases: {}, events: {}, acknowledged: {} };
     const instance = open();
-    const seeded = seedPractice(instance.service);
+    if (sample) instance.service.store.put('onboardingMaterials', 'custom', sample);
+    const seeded = seedPractice(instance.service, materialId);
     record.practice.roles = seeded.roles || seeded;
     instance.anchor = Date.now(); persist(); return state();
   }
@@ -230,8 +253,11 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
     } finally { transitioning = false; }
     return state();
   }
-  async function reset(id) {
-    requirePractice(id); assertIdle();
+  async function reset(id, materialId, customInput) {
+    const p = requirePractice(id); assertIdle();
+    materialId ??= p.materialId || undefined;
+    if (materialId !== undefined && !getMaterial(materialId)) fail('请选择一个可用的练习场景。', 'ONBOARDING_MATERIAL', 400);
+    if (materialId === 'custom') { try { customSample(customInput); } catch (error) { fail(error.message, 'ONBOARDING_MATERIAL', 400); } }
     await pause(id); transitioning = true;
     try {
       if (runtime) await runtime.service.close();
@@ -240,7 +266,20 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
       fs.rmSync(folder, { recursive: true, force: true });
       record.practice = null; persist();
     } finally { transitioning = false; }
-    return start();
+    return start(materialId, customInput);
+  }
+  function selectKnowledge(id, { noteId, role = 'explain' }) {
+    const p = requirePractice(id); assertIdle();
+    if (p.status !== 'active') fail('请先继续练习。', 'PRACTICE_PAUSED', 409);
+    if (!p.materialId || !['aware', 'find', 'explain', 'apply'].includes(role)) fail('学习目标无效。', 'INVALID');
+    const service = open().service;
+    const note = service.getNote(noteId);
+    if (note.kind !== 'knowledge' || note.meta.presetCase || note.meta.supersededBy || !note.meta.sources?.some(ref => ref.id === p.roles.capturedSource && ref.role === 'input')) fail('请选择当前原文下的实际候选知识，不能使用预设案例。', 'ONBOARDING_KNOWLEDGE', 409);
+    if (['aware', 'find', 'explain', 'apply'].some(other => other !== role && p.roles[other] === noteId)) fail('请为这个目标选择另一条知识，保留主线知识的目标与学习记录。', 'ONBOARDING_KNOWLEDGE', 409);
+    if (role === 'explain' && p.roles.explain !== noteId && service.store.records('sessions').some(session => session.noteId === p.roles.explain && !session.presetCase)) fail('这条知识已经开始学习，请继续当前知识；换主线需确认重新练习。', 'ONBOARDING_LEARNING_LOCKED', 409);
+    if (service.noteEvidence(noteId).limitations.length) fail('这条知识仍需核验或复查。请先对原文联网加工并审阅依据，再选入主线；不要改成个人观点绕过核验。', 'RESEARCH_REQUIRED', 409);
+    p.roles[role] = noteId; p.roles.source = p.roles.capturedSource;
+    persist(); return state();
   }
   function advance(id, action) {
     const p = requirePractice(id); assertIdle();
@@ -286,7 +325,7 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
     persist(); return state();
   }
   function checkpoint(id, { stepId, mode = 'check' }) {
-    const p = requirePractice(id), step = flatSteps.find(s => s.id === stepId);
+    const p = requirePractice(id), step = steps().find(s => s.id === stepId);
     if (!step) fail('引导步骤不存在。', 'STEP_NOT_FOUND', 404);
     p.currentStepId = step.id;
     if (mode === 'read' && step.kind === 'read') p.acknowledged[step.id] = { at: iso() };
@@ -332,11 +371,14 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
     const observedNoteId = exists(result?.noteId) ? result.noteId : (result?.id && exists(result.id) ? result.id : exists(itemId) ? itemId : null);
     const storedItem = itemId && ['jobs', 'proposals', 'relations'].includes(resource) ? runtime.service.store.get(resource, itemId) : null;
     const presetCase = result?.presetCase || result?.meta?.presetCase || storedItem?.presetCase || (observedNoteId && runtime.service.store.read(observedNoteId).meta.presetCase);
-    const entities = [itemId, result?.id, result?.noteId, body.noteId, body.mistakeId, body.topicId, body.keepId].filter(value => typeof value === 'string');
+    const entities = [itemId, result?.id, result?.draftId, result?.noteId, body.noteId, body.mistakeId, body.topicId, body.keepId].filter(value => typeof value === 'string');
     const event = name => noteEvent(name, { entities, ...(observedNoteId ? { noteId: observedNoteId } : {}), ...(presetCase ? { presetCase } : {}), ...(result?.meta?.depth ? { depth: result.meta.depth, stage: result.meta.stage } : {}) });
     if (resource === 'import' && method === 'POST') {
       event('import'); event(body.items?.length > 1 ? 'import-batch' : 'import-text');
-      if (result.notes?.[0] && !exists(p.roles.capturedSource)) p.roles.capturedSource = result.notes[0].id;
+      if (result.notes?.[0] && !exists(p.roles.capturedSource)) {
+        p.roles.capturedSource = result.notes[0].id;
+        if (p.materialId) p.roles.source = result.notes[0].id;
+      }
     }
     if (resource === 'notes') {
       if (method === 'GET' && itemId && !action) event('note-open');
@@ -372,8 +414,16 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
     }
     if (resource === 'relations' && action === 'action') event(`relation-${body.action}`);
     if (resource === 'search') { if(!['semantic','hybrid'].includes(query.mode)||result.diagnostics?.semanticUsed===true)event(`search-${query.mode || 'keyword'}`); if (!result.results?.length) event('search-empty'); if (Object.keys(query).some(k => ['stage', 'topic', 'kind', 'source', 'from', 'to'].includes(k))) event('search-filter'); }
-    if (resource === 'ask' && method === 'POST' && result.draftId) { if(result.generated===true)event(`output-${body.mode || 'answer'}`); p.roles.draft = result.draftId; }
-    if (resource === 'drafts' && method === 'PUT') { event('draft-save'); if (body.usedIds?.length) event('draft-use'); if (result.removedUseIds?.length) event('draft-unuse'); }
+    const fromMaterial = noteId => exists(noteId) && (noteId === p.roles.capturedSource || runtime.service.getNote(noteId).meta.sources?.some(ref => ref.id === p.roles.capturedSource && ref.role === 'input'));
+    if (resource === 'ask' && method === 'POST' && result.draftId && (!p.materialId || result.generated === true && result.citations?.some(citation => fromMaterial(citation.id)))) {
+      if(result.generated===true)event(`output-${body.mode || 'answer'}`);
+      p.roles.draft = result.draftId;
+    }
+    if (resource === 'drafts' && method === 'PUT') {
+      event('draft-save');
+      if (body.usedIds?.length && (!p.materialId || body.usedIds.some(fromMaterial))) event('draft-use');
+      if (result.removedUseIds?.length) event('draft-unuse');
+    }
     if (resource === 'drafts' && action === 'capture') event('draft-capture');
     if (resource === 'recommendations') { event('recommendations-read'); if (action === 'action') event(`recommendation-${body.action}`); }
     if (resource === 'jobs' && action === 'action') event(`job-${body.action}`);
@@ -385,6 +435,7 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
       if (context && typeof context.roles === 'object' && typeof context.cases === 'object') {
         p.roles = Object.fromEntries(Object.entries(context.roles || {}).filter(([role, value]) => /^[a-zA-Z][a-zA-Z0-9]{0,63}$/.test(role) && typeof value === 'string' && /^[a-zA-Z0-9:_-]{1,160}$/.test(value)));
         p.cases = Object.fromEntries(Object.entries(context.cases || {}).filter(([key, value]) => caseIds.includes(key) && Number.isFinite(Date.parse(value?.at))).map(([key, value]) => [key, { at: new Date(value.at).toISOString() }]));
+        if (context.materialId === null || getMaterial(context.materialId)) p.materialId = context.materialId;
       }
       const restoredTime = body.backup?.learningTime || context?.learningTime;
       if (Number.isFinite(Date.parse(restoredTime))) { p.clockAt = new Date(restoredTime).toISOString(); runtime.anchor = Date.now(); }
@@ -412,10 +463,10 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
     if (record.practice) await pause(record.practice.id);
     if (runtime) { await runtime.service.close(); runtime = null; }
   }
-  return { state, start, resume, pause, reset, advance, caseAction, abandon, checkpoint, settingsChanged, tested, fingerprint, test, acquire, observe, pump, close, assertVaultIsolation,
+  return { state, start, resume, pause, reset, selectKnowledge, advance, caseAction, abandon, checkpoint, settingsChanged, tested, fingerprint, test, acquire, observe, pump, close, assertVaultIsolation,
     clientEvent(id, name) {
       const p = requirePractice(id); if (!clientEvents.has(name)) fail('不能通过界面事件完成这项操作。', 'INVALID_EVENT');
-      const step = flatSteps.find(item => item.id === p.currentStepId), entity = p.roles[step?.noteRole];
+      const step = steps().find(item => item.id === p.currentStepId), entity = p.roles[step?.noteRole];
       noteEvent(checkAliases[name] || name, { ...(entity ? { entities: [entity] } : {}), ...(step?.caseId ? { presetCase: step.caseId } : {}) }); persist(); return state();
     },
     dismiss() { record.dismissed = true; persist(); return state(); },

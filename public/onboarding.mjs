@@ -1,6 +1,7 @@
 import { api } from "./api.mjs";
-import { el, button, badge, clear, toast, confirmAction } from "./ui.mjs";
-import { chapters, flatSteps, coreChapters, coreSteps, extensionChapters } from "./onboarding-curriculum.mjs";
+import { el, button, badge, clear, toast, confirmAction, containDialogKeyboard } from "./ui.mjs";
+import { chapters, getCurriculum } from "./onboarding-curriculum.mjs";
+import { materials, customMaterial, customSample, getMaterial, materialSample } from "./onboarding-materials.mjs";
 
 const DISMISSED = "zhixu.onboarding.welcomeDismissed.v1";
 const STEP_KEY = "zhixu.onboarding.currentStep.v1";
@@ -18,12 +19,64 @@ function dismissWelcome() { try { localStorage.setItem(DISMISSED, "yes"); } catc
 function savedStep() { try { return sessionStorage.getItem(STEP_KEY); } catch { return null; } }
 function rememberStep(id) { try { sessionStorage.setItem(STEP_KEY, id); } catch { /* Optional preference. */ } }
 
+export function chooseMaterial(initialId = "course") {
+  return new Promise(resolve => {
+    const returnFocus = document.activeElement;
+    let selectedId = getMaterial(initialId)?.id || "course";
+    const overlay = el("div", { class: "dialog-backdrop" });
+    const dialog = el("div", { class: "dialog onboarding-material-dialog", role: "dialog", ariaModal: "true", ariaLabel: "选择练习材料" });
+    const options = el("fieldset", { class: "onboarding-material-options" }, [el("legend", { text: "选择贴近自己的场景" })]);
+    const preview = el("section", { class: "onboarding-material-preview", ariaLive: "polite" });
+    const customFields = Object.fromEntries([['title', '材料标题', 240], ['body', '原文', 150000], ['note', '个人心得（可不填）', 10000], ['author', '作者（可不填）', 1000], ['url', '出处链接（可不填）', 2000], ['locator', '章节或位置（可不填）', 2000]].map(([key, label, maxLength]) => [key, { label, control: el(['body', 'note'].includes(key) ? 'textarea' : 'input', { name: `custom-${key}`, ariaLabel: label, rows: key === 'body' ? 8 : 3, maxLength }) }]));
+    const customError = el("p", { class: "notice danger", role: "alert", hidden: true });
+    function showPreview() {
+      const item = getMaterial(selectedId);
+      if (selectedId === "custom") {
+        clear(preview).append(el("h3", { text: "我的练习材料" }), ...Object.values(customFields).map(({ label, control }) => el("label", { class: "field" }, [el("span", { class: "field-label", text: label }), control])),
+          el("p", { class: "fine-print", text: "先在独立练习区本地保存。请核对使用权限，不要填入密码或不愿交给 AI 的敏感内容。" }), customError);
+        return;
+      }
+      clear(preview).append(el("h3", { text: item.source.title }), el("p", { text: item.goals[2][1] + ' ' + item.goals[3][1] }),
+        el("p", { class: "fine-print", text: `作者：${item.source.author} · ${item.body.length} 字选段` }),
+        el("a", { href: item.source.url, target: "_blank", rel: "noopener noreferrer", text: "查看原文" }),
+        el("details", {}, [el("summary", { text: "个人心得（模拟输入）" }), el("p", { text: item.note })]),
+        el("details", {}, [el("summary", { text: "原文摘录" }), el("pre", { text: item.body })]),
+        el("p", { class: "fine-print", text: item.source.license }), el("a", { href: "/tutorial-examples/SOURCE-LICENSES.txt", target: "_blank", rel: "noopener noreferrer", text: "来源与许可说明" }));
+    }
+    [...materials, customMaterial].forEach(item => options.append(el("label", { class: "onboarding-material-option" }, [
+      el("input", { type: "radio", name: "tutorial-material", value: item.id, checked: item.id === selectedId, on: { change: event => { selectedId = event.target.value; showPreview(); } } }),
+      el("span", {}, [el("strong", { text: item.id === 'custom' ? '自行粘贴练习材料' : item.label.slice(2) }), el("span", { class: "fine-print", text: item.audience })]),
+    ])));
+    const finish = value => {
+      if (value?.materialId === 'custom') {
+        try { customSample(value.customMaterial); }
+        catch (error) { customError.hidden = false; customError.textContent = error.message; return; }
+      }
+      overlay.remove(); if (returnFocus?.isConnected) returnFocus.focus(); resolve(value);
+    };
+    dialog.append(el("h2", { text: "选择练习材料" }), el("div", { class: "onboarding-material-layout" }, [options, preview]),
+      el("div", { class: "dialog-actions" }, [button("取消", { onClick: () => finish(null) }), button("使用这份材料", { kind: "primary", onClick: () => finish(selectedId === 'custom' ? { materialId: 'custom', customMaterial: Object.fromEntries(Object.entries(customFields).map(([key, field]) => [key, field.control.value || ''])) } : selectedId) })]));
+    containDialogKeyboard(dialog, () => finish(null));
+    overlay.append(dialog); document.body.append(overlay); showPreview();
+    dialog.querySelector('input:checked')?.focus();
+  });
+}
+
+function downloadMaterial(item) {
+  const material = getMaterial(item.material);
+  const body = item.exercise ? `【原创练习问题，不是原文，也不是你的作答】\n\n${material.transfer}${material.transferCode ? '\n\n' + material.transferCode : ''}\n\n目标：${material.goals[3][1]}` : materialSample(item.material, true).body;
+  const url = URL.createObjectURL(new Blob([body], { type: "text/plain;charset=utf-8" }));
+  const link = el("a", { href: url, download: item.title });
+  document.body.append(link); link.click(); link.remove(); window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 export function getStepProgress(state, step) {
   const progress = state?.progress?.[step.id] || { status: "pending" };
   return { ...progress, label: statusLabel(progress), complete: completed(progress) };
 }
 
 export function createOnboarding(adapter) {
+  let { chapters, flatSteps, coreChapters, coreSteps, extensionChapters } = getCurriculum(null);
   let current = null;
   let proofVersion = 0;
   let selected = savedStep() || "";
@@ -55,7 +108,10 @@ export function createOnboarding(adapter) {
     }
   });
 
-  const step = () => flatSteps.find(item => item.id === selected) || flatSteps.find(item => item.id === current?.currentStepId) || flatSteps[0];
+  const step = () => {
+    const row = flatSteps.find(item => item.id === selected) || flatSteps.find(item => item.id === current?.currentStepId) || flatSteps[0];
+    return current?.materialId === 'custom' && row?.id === 'capture-save' ? { ...row, sample: current.customSample || null } : row;
+  };
   const coreDone = () => coreSteps.filter(item => completed(current?.progress?.[item.id])).length;
   const nextCoreStep = () => coreSteps.find(item => !completed(current?.progress?.[item.id])) || coreSteps.at(-1);
   const routeChapter = target => (target.priority === "core" ? coreChapters : extensionChapters).find(chapter => chapter.steps.some(item => item.id === target.id));
@@ -63,7 +119,7 @@ export function createOnboarding(adapter) {
   const inPractice = () => Boolean(api.getContext().practiceId);
   const busy = () => working || Boolean(current?.busy) || api.getContext().pending > 0;
   const stateBody = extra => ({ practiceId: current?.practiceId || api.getContext().practiceId, ...extra });
-  function adopt(value) { current = value?.onboarding || value; proofVersion++; if (!selected) selected = current?.currentStepId || flatSteps[0]?.id; }
+  function adopt(value) { current = value?.onboarding || value; ({ chapters, flatSteps, coreChapters, coreSteps, extensionChapters } = getCurriculum(current?.materialId)); proofVersion++; if (!selected) selected = current?.currentStepId || flatSteps[0]?.id; }
   function clearHighlight() { highlightPulse?.cancel(); highlightPulse = null; highlight?.classList.remove("tour-target"); highlight = null; restoreTarget?.(); restoreTarget = null; }
   function placePanel() {
     // Keep the floating window outside the drawer's transformed scroll container.
@@ -172,7 +228,9 @@ export function createOnboarding(adapter) {
     render(); locate(true);
   }
   async function start() {
-    adopt(await api.onboarding("start")); visible = true;
+    const choice = await chooseMaterial();
+    if (!choice) return;
+    adopt(await api.onboarding("start", typeof choice === 'string' ? { materialId: choice } : choice)); visible = true;
     selected = flatSteps[0]?.id;
     await goTo(step());
   }
@@ -197,8 +255,10 @@ export function createOnboarding(adapter) {
   }
   async function reset() {
     if (busy()) throw new Error("请先等当前操作完成，或取消练习任务后再重置。");
+    const choice = await chooseMaterial(current?.materialId);
+    if (!choice) return;
     if (!await confirmAction({ title: "重新开始新手练习？", message: "只清理独立练习库及其练习记录。正式知识、正式 API 配置和密钥会保留。", confirmText: "重置练习", danger: true })) return;
-    adopt(await api.onboarding("reset", stateBody({})));
+    adopt(await api.onboarding("reset", stateBody(typeof choice === 'string' ? { materialId: choice } : choice)));
     selected = flatSteps[0]?.id; rememberStep(selected);
     await switchContext(""); visible = true;
     await goTo(step());
@@ -294,6 +354,22 @@ export function createOnboarding(adapter) {
     chapter.steps.forEach(item => choices.append(el("option", { value: item.id, text: `${statusLabel(current?.progress?.[item.id])} · ${item.title}`, selected: item.id === active.id })));
     content.append(choices, el("div", { class: "onboarding-step-head" }, [el("h3", { text: active.title }), badge(progress.label, progress.complete ? "good" : "neutral")]),
       el("p", { class: "onboarding-instruction", text: active.instruction || active.description || "" }));
+    const material = getMaterial(current?.materialId);
+    if (material) content.prepend(el("p", { class: "fine-print", text: `练习材料：${material.id === 'custom' ? current.customSample?.title || '自行粘贴' : material.label.slice(2)}` }));
+    if (material && /^library-(aware|find|explain|apply)$/.test(active.id)) {
+      const role = active.id.slice(8), selectedNote = current.roles?.[role];
+      const select = el("select", { ariaLabel: "选择本原文的实际知识", disabled: working || role === "explain" && current.learningStarted, on: { change: event => run(async () => {
+        if (!event.target.value) return;
+        adopt(await api.onboarding("select-knowledge", stateBody({ noteId: event.target.value, role })));
+        location = await adapter.navigate(step(), current);
+      }) } });
+      select.dataset.tour = "onboarding-knowledge";
+      select.append(el("option", { value: "", text: "选择一条实际候选知识", selected: !selectedNote }));
+      (current.learningCandidates || []).forEach(note => select.append(el("option", { value: note.id, text: `${note.title}${note.limitations?.length ? "（待核验或复查）" : ""}`, selected: note.id === selectedNote, disabled: Boolean(note.limitations?.length || ["aware", "find", "explain", "apply"].some(other => other !== role && current.roles?.[other] === note.id)) })));
+      content.append(select);
+      if (!(current.learningCandidates || []).length) content.append(el("p", { class: "notice", text: "本原文还没有实际候选，请先完成拆解。" }));
+      if ((current.learningCandidates || []).some(note => note.limitations?.length)) content.append(el("div", {}, [el("p", { class: "notice", text: "待核验的事实不能选入主线。请先联网加工并审阅返回依据。" }), button("前往联网核验", { kind: "text compact", disabled: working, onClick: () => run(() => goTo(flatSteps.find(item => item.id === "process-research"))) })]));
+    }
     if (active.why) content.append(el("p", { class: "fine-print", text: active.why }));
     if (["process-done", "research-done"].includes(active.check)) {
       const processing = adapter.processStatus?.(current?.roles?.[active.noteRole]);
@@ -317,7 +393,7 @@ export function createOnboarding(adapter) {
       const obsidianText = obsidian.status === "reported" ? `用户确认已打开${obsidian.editReported ? "；用户确认已体验外部编辑" : "；外部编辑待体验"}` : "尚未接通 / 待体验";
       content.append(el("div", { class: "onboarding-expected" }, [el("strong", { text: "外部工具体验状态" }), el("p", { text: `MCP：${mcpText}` }), el("p", { text: `Obsidian：${obsidianText}` })]));
     }
-    if (active.downloads?.length) content.append(el("div", { class: "onboarding-actions" }, active.downloads.filter(item => item.href?.startsWith("/tutorial-examples/")).map(item => el("a", { href: item.href, download: item.title, class: "quiet-button compact", text: `下载 ${item.title}` }))));
+    if (active.downloads?.length) content.append(el("div", { class: "onboarding-actions" }, active.downloads.map(item => item.material ? button(`下载 ${item.title}`, { kind: "quiet compact", onClick: () => downloadMaterial(item) }) : item.href?.startsWith("/tutorial-examples/") ? el("a", { href: item.href, download: item.title, class: "quiet-button compact", text: `下载 ${item.title}` }) : null)));
     locationNotice = el("p", { class: "notice info", role: "status", hidden: true });
     content.append(locationNotice);
     if (location?.prerequisite) {

@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
-import { chapters, flatSteps, coreChapters, coreSteps, extensionChapters } from '../public/onboarding-curriculum.mjs';
+import { chapters, flatSteps, coreChapters, coreSteps, extensionChapters, getCurriculum } from '../public/onboarding-curriculum.mjs';
+import { materials, customMaterial, customSample, getMaterial, materialSample } from '../public/onboarding-materials.mjs';
 
 const apiSource = await readFile(new URL('../public/api.mjs', import.meta.url), 'utf8');
 const uiSource = await readFile(new URL('../public/ui.mjs', import.meta.url), 'utf8');
@@ -140,6 +141,12 @@ class Element {
 function descend(node) { return [node, ...node.children.flatMap(descend)]; }
 function findButton(root, label) { return descend(root).find(node => node.tagName === 'BUTTON' && node.textContent === label); }
 async function click(node) { assert.ok(node, 'button exists'); assert.equal(node.disabled, false, `button ${node.textContent} is enabled`); await node.events.click({ target: node, preventDefault() {} }); }
+async function startTutorial(ui) {
+  const pending = click(findButton(ui.tutorial.entryCard(), '开始新手引导'));
+  assert.equal(descend(ui.body).filter(node => node.getAttribute('name') === 'tutorial-material').length, 6);
+  await click(findButton(ui.body, '使用这份材料'));
+  await pending;
+}
 
 async function tutorialBrowser({ modelReady = true, exists = true, narrow = false, reducedMotion = false, query = '', checkpoint, advance, resetRequest, stateRead, currentStepId, savedStepId, progress = {} } = {}) {
   const body = new Element('body'), workspace = new Element(), main = new Element('main'), drawer = new Element(), drawerBody = new Element(), launcher = new Element('button'), toasts = new Element();
@@ -156,7 +163,7 @@ async function tutorialBrowser({ modelReady = true, exists = true, narrow = fals
       if (action === 'state' && stateRead) { const read = await stateRead(); if (read) return structuredClone(read); }
       if (action === 'advance' && advance) await advance(data, state);
       if (action === 'reset' && resetRequest) await resetRequest();
-      if (action === 'start' || action === 'resume') state = { ...state, practiceId: 'practice-one', status: 'active' };
+      if (action === 'start' || action === 'resume') state = { ...state, practiceId: 'practice-one', status: 'active', ...(action === 'start' ? { materialId: data.materialId, customSample: data.materialId === 'custom' ? customSample(data.customMaterial) : null } : {}) };
       if (action === 'checkpoint') {
         if (checkpoint) await checkpoint(data, state);
         if (data.mode === 'read') state.progress[data.stepId] = { status: 'demonstrated' };
@@ -166,7 +173,7 @@ async function tutorialBrowser({ modelReady = true, exists = true, narrow = fals
       return structuredClone(state);
     },
   };
-  const context = vm.createContext({ api, chapters, flatSteps, coreChapters, coreSteps, extensionChapters, document, Node: Element, URLSearchParams, localStorage: store(), sessionStorage: store(savedStepId ? { 'zhixu.onboarding.currentStep.v1': savedStepId } : {}), MutationObserver: class { observe() {} disconnect() {} },
+  const context = vm.createContext({ api, chapters, flatSteps, coreChapters, coreSteps, extensionChapters, getCurriculum, materials, customMaterial, customSample, getMaterial, materialSample, document, Node: Element, URLSearchParams, localStorage: store(), sessionStorage: store(savedStepId ? { 'zhixu.onboarding.currentStep.v1': savedStepId } : {}), MutationObserver: class { observe() {} disconnect() {} },
     window: { location: { search: query }, matchMedia: query => ({ matches: query.includes('prefers-reduced-motion') ? reducedMotion : narrow }), addEventListener(type, handler) { windowEvents[type] = handler; }, setTimeout() {}, clearTimeout() {}, setInterval(handler) { intervals.push(handler); }, clearInterval() {} },
   });
   const stripped = onboardingSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '');
@@ -427,7 +434,7 @@ test('guide deep link only displays onboarding and does not create data or call 
 
 test('AI gate prevents chapter two navigation and check cannot manufacture completed progress', async () => {
   const ui = await tutorialBrowser({ exists: false, modelReady: false });
-  await click(findButton(ui.tutorial.entryCard(), '开始新手引导'));
+  await startTutorial(ui);
   const capture = descend(ui.body).find(node => node.tagName === 'BUTTON' && node.textContent.startsWith(coreChapters[1].title));
   await click(capture);
   assert.ok(!ui.navigations.includes('capture-save'));
@@ -437,6 +444,31 @@ test('AI gate prevents chapter two navigation and check cannot manufacture compl
   assert.match(ui.body.textContent, /尚未找到这一步的完成记录/);
   assert.equal(ui.requests.at(-1).data.mode, 'check');
   assert.ok(!('done' in ui.requests.at(-1).data));
+  ui.tutorial.dispose();
+});
+
+test('custom material validates locally, retains typed text across preview choices and only fills capture on request', async () => {
+  const ui = await tutorialBrowser({ exists: false });
+  const pending = click(findButton(ui.tutorial.entryCard(), '开始新手引导'));
+  const radio = descend(ui.body).find(node => node.value === 'custom');
+  radio.events.change({ target: { value: 'custom' } });
+  await click(findButton(ui.body, '使用这份材料'));
+  assert.ok(ui.body.textContent.includes('材料字段为空或过长'));
+  assert.ok(!ui.requests.some(call => call.action === 'start'));
+  const input = name => descend(ui.body).find(node => node.getAttribute('name') === `custom-${name}`);
+  input('title').value = '合成自选输入'; input('body').value = '合成原文第一段。\n第二段保持换行。'; input('note').value = '合成心得，不是确认理解。';
+  descend(ui.body).find(node => node.value === 'reading').events.change({ target: { value: 'reading' } });
+  radio.events.change({ target: { value: 'custom' } });
+  assert.equal(input('body').value, '合成原文第一段。\n第二段保持换行。');
+  await click(findButton(ui.body, '使用这份材料')); await pending;
+  assert.equal(ui.requests.find(call => call.action === 'start').data.materialId, 'custom');
+  const samples = []; ui.adapter.fillSample = async sample => samples.push(sample);
+  await click(descend(ui.body).find(node => node.tagName === 'BUTTON' && node.textContent.startsWith(coreChapters[1].title)));
+  assert.equal(samples.length, 0);
+  await click(findButton(ui.body, '填入示例（不提交）'));
+  assert.ok(samples[0].body.includes('合成原文第一段。\n第二段保持换行。'));
+  assert.ok(samples[0].body.includes('用户填写，尚未确认理解'));
+  assert.ok(!ui.requests.some(call => call.action === 'import'));
   ui.tutorial.dispose();
 });
 
@@ -458,7 +490,7 @@ test('each chapter persists the selected step before navigating, with real and d
 test('first-use next and reading navigation stay on the core route without completing skipped actions', async () => {
   const ui = await tutorialBrowser({ exists: false });
   assert.match(ui.tutorial.entryCard().textContent, /先走通核心学习流程/);
-  await click(findButton(ui.tutorial.entryCard(), '开始新手引导'));
+  await startTutorial(ui);
   assert.equal(descend(ui.body).find(node => node.classList.contains('onboarding-extensions')).open, false);
   for (const [index, step] of coreSteps.entries()) {
     assert.equal(ui.state.currentStepId, step.id);
@@ -802,6 +834,8 @@ test('a reset failure replaces check provenance and survives later completion', 
   const ui = await tutorialBrowser({ currentStepId: 'process-ai', resetRequest: async () => { throw new Error('模拟重置失败'); } });
   await ui.tutorial.open(); await click(findButton(ui.body, '检查这一步'));
   await click(findButton(ui.body, '重置练习'));
+  await click(findButton(ui.body, '使用这份材料'));
+  await new Promise(resolve => setImmediate(resolve));
   const confirm = descend(ui.body).find(node => node.tagName === 'BUTTON' && node.textContent === '重置练习' && node.classList.contains('danger-button'));
   await click(confirm);
   await new Promise(resolve => setImmediate(resolve));
