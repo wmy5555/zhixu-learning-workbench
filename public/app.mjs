@@ -263,7 +263,7 @@ async function renderToday() {
     el("section", { class: "panel soft" }, [
       el("p", { class: "eyebrow", text: "今日原则" }),
       el("h2", { text: "理解优先于数量" }),
-      el("p", { class: "muted", text: "完成一次答题不等于掌握。系统会保留原回答、提示使用和后续修正。" }),
+      el("p", { class: "muted", text: "先用自己的话解释，再结合反馈补充。学习记录会保留回答、提示使用和后续修正，方便回顾。" }),
     ]),
   ]);
 
