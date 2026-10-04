@@ -146,3 +146,36 @@ test('extraction is saved before research; restart resumes untouched claims and 
   service.editNote(source.id, { expectedHash: source.hash, body: '改动后的合成原文。' });
   assert.equal(service.publicJob(service.store.get('jobs', job.id)).extractionSaved, false);
 });
+
+test('later checkpoints supersede partial proposals and preserve the edited note until the latest is accepted', async t => {
+  const root = fs.mkdtempSync(path.resolve('.tmp/proposal-checkpoints-'));
+  const claims = Array.from({ length: 6 }, (_, i) => `Synthetic claim ${i}`), snapshots = [];
+  let service;
+  const ai = { generate: async () => ({ text: JSON.stringify({ candidates: [{ title: '合成多批候选', body: '合成候选正文', claims }] }) }), withBudget: async (_, fn) => fn(),
+    researchBatch: async ({ onBatch }) => {
+      const all = [];
+      for (let offset = 0; offset < claims.length; offset += 3) {
+        const results = claims.slice(offset, offset+3).map(claim => ({ claim, evidence: [{ url: `https://8.8.8.8/${claims.indexOf(claim)}`, title: claim, excerpt: `检查结果：${claim}`, role: 'support', fetchedAt: '2026-10-04T00:00:00Z' }], limitations: [], coverage: 'searched' }));
+        all.push(...results); await onBatch(results);
+        const pending = service.store.records('proposals').filter(p => p.state === 'pending');
+        assert.equal(pending.length, 1); snapshots.push(pending[0]);
+      }
+      return { results: all };
+    } };
+  service = createService({ dataDir: path.join(root,'data'), vaultDir: path.join(root,'vault'), aiOverride: ai });
+  t.after(async () => { await service.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const source = service.importItems({ items: [{ title: '合成修订来源', body: '合成原文', privacy: 'cloud' }], process: true }).notes[0];
+  await service.runJobs();
+  const child = service.readPublicNote(source.id).children[0];
+  service.editNote(child.id, { body: '保留用户修改', expectedHash: child.hash });
+  service.processNote(source.id, { research: true, reuseExtracted: true });
+  while (service.store.records('jobs').some(j => j.state === 'queued')) await service.runJobs();
+  assert.equal(service.getNote(child.id).body, '保留用户修改');
+  assert.equal(service.store.get('proposals', snapshots[0].id).state, 'superseded');
+  assert.throws(() => service.proposalAction(snapshots[0].id, { action: 'accept' }));
+  assert.match(snapshots[1].body, /检查结果：Synthetic claim 5/);
+  assert.equal(snapshots[0].meta.evidence.length, 3);
+  assert.equal(snapshots[1].meta.evidence.length, 6);
+  service.proposalAction(snapshots[1].id, { action: 'accept' });
+  assert.match(service.getNote(child.id).body, /检查结果：Synthetic claim 5/);
+});

@@ -583,8 +583,12 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
         const wasEdited = existing && (existing.meta.userEdited || existing.meta.confirmedAt || existing.meta.stage !== 'candidate' || (existing.meta.generatedBodyHash && hash(existing.body) !== existing.meta.generatedBodyHash));
         if (existing && existing.body === body && JSON.stringify(existing.meta.evidence || []) === JSON.stringify(evidence) && JSON.stringify(existing.meta.researchLimitations || []) === JSON.stringify(limitations)) { continue; }
         if (wasEdited) {
-          const proposalId = hash(`research-update:${existing.id}:${hash(body)}`);
-          if (!store.get('proposals', proposalId)) store.put('proposals', proposalId, { id: proposalId, noteId: existing.id, before: existing.body, body, meta, reason: '重新研究产生修订建议，已有人工内容，未自动覆盖。接受后回到候选阶段，原来的个人理解保留在历史中；请依据新材料再次确认自己的理解。', expectedHash: existing.hash, state:'pending', createdAt:now() });
+          const proposalId = hash(`research-update:${existing.id}:${existing.hash}:${hash(body)}`);
+          for (const previous of store.records('proposals')) if (previous.id !== proposalId && previous.noteId === existing.id && previous.state === 'pending' && previous.meta?.processKey === processKey) {
+            store.put('proposals', previous.id, { ...previous, state: 'superseded', supersededBy: proposalId, updatedAt: now() });
+          }
+          const previous = store.get('proposals', proposalId);
+          if (!previous || previous.state === 'superseded') store.put('proposals', proposalId, { id: proposalId, noteId: existing.id, before: existing.body, body, meta, reason: '重新研究产生修订建议，已有人工内容，未自动覆盖。接受后回到候选阶段，原来的个人理解保留在历史中；请依据新材料再次确认自己的理解。', expectedHash: existing.hash, state:'pending', createdAt:previous?.createdAt || now() });
           continue;
         }
         const note = existing ? store.update(existing.id, { body, meta, expectedHash: existing.hash }) : store.create({ kind:'knowledge', title:candidate.title, body, meta });
@@ -624,11 +628,11 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     async function checkpoint(results) {
       assertCurrent(); changedClaims.clear();
       for (let result of results) {
-        if (!pending.includes(result.claim) || result.coverage === 'unsearched') continue;
+        if (!pending.includes(result.claim) || result.coverage === 'unsearched' && !result.stopCode) continue;
         const key = keyFor(result.claim), previous = store.get('research', key);
         const coverage = result.coverage || 'searched';
         if (previous?.result.evidence?.length && !result.evidence?.length) result = { ...previous.result, claim: result.claim, limitations: [...new Set([...(previous.result.limitations || []), ...(result.limitations || [])])], coverage };
-        store.put('research', key, { result, at: now(), coverage, attempts: (previous?.attempts || 0) + 1 });
+        store.put('research', key, { result, at: now(), coverage, attempts: (previous?.attempts || 0) + (coverage === 'unsearched' ? 0 : 1) });
         shared.set(result.claim, result); changedClaims.add(result.claim);
       }
       await saveResults(true); updateProgress();

@@ -929,6 +929,8 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
       try {
         batch = await researchGroup({ claims: group, topic, privacy, signal, prompts, hints });
         batch.results = batch.results.map(result => ({ coverage: 'searched', ...result }));
+        const stopped = batch.results.find(result => result.stopCode);
+        if (stopped) issues.push({ code: stopped.stopCode, message: stopped.limitations.join(' ') });
       } catch (error) {
         if (['CANCELLED','PRIVACY_LOCAL','CAPABILITY_DISABLED','MISSING_CREDENTIALS','INVALID_CONFIG'].includes(error.code) || signal?.aborted) throw error;
         issues.push({ code: error.code || 'RESEARCH_FAILED', message: error.message });
@@ -993,7 +995,9 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     const claimIndexes = scheduled.flatMap(group => group.indexes);
     const directions = ['support', 'oppose'].flatMap(direction => scheduled.map(group => ({ direction, query: group[direction], claimIndexes: group.indexes, groupIndex: group.groupIndex })));
     const notes = [`共 ${groups.length} 个检索组，本轮安排 ${scheduled.length} 组、${claimIndexes.length} 项主张；每组同时搜索支持与反证，网页读取总上限 ${pageLimit}。`];
-    const uncovered = (claim, claimIndex) => ({ claim, evidence: [], coverage: 'unsearched', limitations: coverageLimitations[claimIndex], conclusion: '本轮未执行该主张的针对检索，暂不能形成证据结论。', notice: notes.join(' ') });
+    const uncovered = (claim, claimIndex) => ({ claim, evidence: [], coverage: 'unsearched',
+      ...(selected.some(group => group.indexes.includes(claimIndex) && (!group.support || !group.oppose)) ? { stopCode: 'SEARCH_QUERY_TOO_LONG' } : {}),
+      limitations: coverageLimitations[claimIndex], conclusion: '本轮未执行该主张的针对检索，暂不能形成证据结论。', notice: notes.join(' ') });
     if (!directions.length) return { results: normalizedClaims.map(uncovered) };
     const searches = await Promise.allSettled(directions.map(({ query }) => search({ query, privacy, signal })));
     const foundByDirection = directions.map(() => []);

@@ -367,6 +367,9 @@ test('task failures explain stored error codes and retain original diagnostics b
     assert.match(value.title, expected); assert.ok(value.reason); assert.ok(value.next);
   }
   assert.match(describeJobError({ state: 'cancelled', code: 'BUDGET_EXCEEDED' }).title, /已取消/);
+  const template = describeJobError({ type: 'process', code: 'RESEARCH_INCOMPLETE', stopCode: 'SEARCH_QUERY_TOO_LONG' });
+  assert.match(template.title, /拆解已保存/);
+  assert.match(template.reason, /350.*缩短搜索模板/);
   const embedding = describeJobError({ type: 'index', code: 'INVALID_RESPONSE', error: '嵌入响应包含无效向量。' });
   assert.match(embedding.title, /索引/); assert.match(embedding.next, /嵌入服务.*测试连接/);
   assert.doesNotMatch(embedding.next, /材料长度|提示词/);

@@ -97,7 +97,9 @@ test('insufficient budget and oversized custom search templates return explicit 
   const custom = harness({ allClaims: claims, prompts: { researchSearchSupport: `${'模板前缀'.repeat(100)} {{context}}` } });
   const omitted = await custom.ai.researchBatch({ claims, privacy: 'cloud' });
   assert.equal(custom.requests.length, 0);
-  assert.ok(omitted.results.every(item => item.limitations.some(message => message.includes('350'))));
+  assert.ok(omitted.results.slice(0, 3).every(item => item.limitations.some(message => message.includes('350'))));
+  assert.ok(omitted.results.every(item => item.coverage === 'unsearched'));
+  assert.equal(omitted.issues[0].code, 'SEARCH_QUERY_TOO_LONG');
   await assert.rejects(() => custom.ai.researchBatch({ claims, privacy: 'local' }), { code: 'PRIVACY_LOCAL' });
   assert.equal(custom.requests.length, 0);
 });
@@ -107,6 +109,22 @@ test('a failed search direction remains a coverage limitation despite a confiden
   const result = await h.ai.researchBatch({ claims, privacy: 'cloud' });
   assert.ok(result.results.every(item => item.limitations.some(message => message.includes('反证方向检索失败'))));
   assert.ok(result.results.every(item => item.evidence.every(evidence => evidence.excerpt === 'SYNTHETIC EVIDENCE')));
+});
+
+test('unsearchable templates persist actionable diagnostics without marking claims covered or repeating extraction', async t => {
+  const root = fs.mkdtempSync(path.resolve('.tmp/unsearchable-template-'));
+  const claims = claimsFor(3), h = harness({ allClaims: claims });
+  const service = createService({ dataDir: path.join(root,'data'), vaultDir: path.join(root,'vault'), aiOverride: h.ai });
+  t.after(async () => { await service.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  service.updatePrompts({ prompts: { researchSearchSupport: `${'模板前缀'.repeat(100)} {{context}}` } });
+  const imported = service.importItems({ items: [{ title: '合成模板错误', body: '合成原文', privacy: 'cloud' }], process: true, research: true });
+  await service.runJobs();
+  const job = service.store.get('jobs', imported.jobs[0].id), child = service.readPublicNote(imported.notes[0].id).children[0];
+  assert.equal(job.stopCode, 'SEARCH_QUERY_TOO_LONG'); assert.equal(job.researchProgress.covered, 0);
+  assert.match(child.meta.researchLimitations.join(' '), /350/);
+  assert.ok(service.store.records('research').every(r => r.coverage === 'unsearched' && r.attempts === 0));
+  service.jobAction(job.id, { action: 'retry' }); await service.runJobs();
+  assert.equal(h.requests.length, 1); assert.equal(service.getNote(child.id).hash, child.hash);
 });
 
 test('source retries reuse completed research and advance through the remaining groups without new extraction', async t => {
