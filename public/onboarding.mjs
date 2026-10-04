@@ -39,7 +39,7 @@ export function chooseMaterial(initialId = "course") {
       clear(preview).append(el("h3", { text: item.source.title }), el("p", { text: item.goals[2][1] + ' ' + item.goals[3][1] }),
         el("p", { class: "fine-print", text: `作者：${item.source.author} · ${item.body.length} 字选段` }),
         el("a", { href: item.source.url, target: "_blank", rel: "noopener noreferrer", text: "查看原文" }),
-        el("details", {}, [el("summary", { text: "个人心得（模拟输入）" }), el("p", { text: item.note })]),
+        el("details", {}, [el("summary", { text: "心得示例" }), el("p", { text: item.note })]),
         el("details", {}, [el("summary", { text: "原文摘录" }), el("pre", { text: item.body })]),
         el("p", { class: "fine-print", text: item.source.license }), el("a", { href: "/tutorial-examples/SOURCE-LICENSES.txt", target: "_blank", rel: "noopener noreferrer", text: "来源与许可说明" }));
     }
@@ -64,7 +64,7 @@ export function chooseMaterial(initialId = "course") {
 
 function downloadMaterial(item) {
   const material = getMaterial(item.material);
-  const body = item.exercise ? `【原创练习问题，不是原文，也不是你的作答】\n\n${material.transfer}${material.transferCode ? '\n\n' + material.transferCode : ''}\n\n目标：${material.goals[3][1]}` : materialSample(item.material, true).body;
+  const body = item.exercise ? `【应用练习题】\n\n${material.transfer}${material.transferCode ? '\n\n' + material.transferCode : ''}\n\n目标：${material.goals[3][1]}` : materialSample(item.material, true).body;
   const url = URL.createObjectURL(new Blob([body], { type: "text/plain;charset=utf-8" }));
   const link = el("a", { href: url, download: item.title });
   document.body.append(link); link.click(); link.remove(); window.setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -286,7 +286,7 @@ export function createOnboarding(adapter) {
     adopt(await api.onboarding("case", stateBody({ caseId: target.caseId })));
     await adapter.refresh?.();
     location = await adapter.navigate(target, current);
-    toast("演示案例已准备；后续记录会标为演练。", "success");
+    toast("演示案例已准备，可以跟着提示操作了。", "success");
   }
   async function checkpoint(target) {
     try { adopt(await api.onboarding("checkpoint", stateBody({ stepId: target.id, mode: target.kind === "read" ? "read" : target.kind === "external" ? "external" : "check" }))); }
@@ -301,7 +301,7 @@ export function createOnboarding(adapter) {
       const next = route[route.findIndex(item => item.id === target.id) + 1];
       if (next) await goTo(next);
     } else {
-      const message = target.kind === "external" ? "已记录你的外部体验确认；不代表系统验证连接成功。" : result.status === "demonstrated" ? "检查已通过：已找到演示案例记录。" : "检查已通过：已找到这一步的完成记录。";
+      const message = target.kind === "external" ? "体验进度已记录，可以继续下一步。" : result.status === "demonstrated" ? "这一步已完成，进度已记为“已看案例”。" : "这一步已完成，可以继续了。";
       toast(message, "success");
     }
   }
@@ -354,6 +354,7 @@ export function createOnboarding(adapter) {
     chapter.steps.forEach(item => choices.append(el("option", { value: item.id, text: `${statusLabel(current?.progress?.[item.id])} · ${item.title}`, selected: item.id === active.id })));
     content.append(choices, el("div", { class: "onboarding-step-head" }, [el("h3", { text: active.title }), badge(progress.label, progress.complete ? "good" : "neutral")]),
       el("p", { class: "onboarding-instruction", text: active.instruction || active.description || "" }));
+    if (active.overview?.length) content.append(el("ul", { class: "onboarding-overview", ariaLabel: "首页功能" }, active.overview.map(item => el("li", {}, [el("strong", { text: item.title }), el("p", { text: item.body })]))));
     const material = getMaterial(current?.materialId);
     if (material) content.prepend(el("p", { class: "fine-print", text: `练习材料：${material.id === 'custom' ? current.customSample?.title || '自行粘贴' : material.label.slice(2)}` }));
     if (material && /^library-(aware|find|explain|apply)$/.test(active.id)) {
@@ -385,13 +386,13 @@ export function createOnboarding(adapter) {
       el("p", { text: "若反馈存在争议，本轮只保留记录，不会创建或更新复习安排。可以重新练习这条知识，核对材料并提交新回答；收到明确反馈并结束后，再继续复习步骤。" }),
       button("重新练习这条知识", { kind: "text compact", disabled: busy() || !practice || !current?.modelReady, onClick: () => run(() => goTo(flatSteps.find(item => item.id === "study-start"))) }),
     ]));
-    if (active.kind === "case" || active.caseId) content.append(el("p", { class: "notice", text: "这一步使用预设演示案例，不代表你的真实经历、成绩或外部连接结果。" }));
-    if (active.kind === "external") content.append(el("p", { class: "fine-print", text: "外部应用需要你自行连接。标记体验只记录你的确认，不代表系统验证连接成功。" }));
+    if (active.kind === "case" || active.caseId) content.append(el("p", { class: "notice", text: "预设演示案例：点击“准备演示案例”，跟着提示看看这项功能如何使用。" }));
+    if (active.kind === "external") content.append(el("p", { class: "fine-print", text: "按本步说明完成配置或操作后，可以记录体验进度；暂时用不到，也可以以后再来。" }));
     if (!core && chapter.id === "external") {
       const connections = current?.externalConnections || {};
       const mcp = connections.mcp || {};
       const obsidian = connections.obsidian || {};
-      const mcpText = mcp.status === "observed" ? `发现正式通道调用记录${mcp.lastSeenAt ? `（${practiceDate(mcp.lastSeenAt, current?.settings?.timezone)}）` : ""}；不等于此刻在线` : mcp.status === "reported" ? "你已确认体验，未发现调用记录" : "尚未接通 / 待体验";
+      const mcpText = mcp.status === "observed" ? `已找到调用记录${mcp.lastSeenAt ? `（${practiceDate(mcp.lastSeenAt, current?.settings?.timezone)}）` : ""}；可在诊断页查看详情` : mcp.status === "reported" ? "体验已记录，尚未找到调用记录" : "待配置或体验";
       const obsidianText = obsidian.status === "reported" ? `用户确认已打开${obsidian.editReported ? "；用户确认已体验外部编辑" : "；外部编辑待体验"}` : "尚未接通 / 待体验";
       content.append(el("div", { class: "onboarding-expected" }, [el("strong", { text: "外部工具体验状态" }), el("p", { text: `MCP：${mcpText}` }), el("p", { text: `Obsidian：${obsidianText}` })]));
     }

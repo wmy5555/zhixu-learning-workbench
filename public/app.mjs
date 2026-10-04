@@ -245,7 +245,7 @@ async function renderToday() {
   const statsRow = el("section", { class: "stats" }, [
     statCard("已存内容", stats.notes ?? stats.totalNotes ?? 0, "包含原始资料、知识、主题学习包与 AI 整理建议"),
     statCard("今日待学习", items.filter((item) => item.state === "pending").length, "受每日预算约束"),
-    statCard("待确认", stats.pending ?? stats.proposals ?? 0, "关系、笔记或提案"),
+    statCard("待处理任务", stats.pending ?? stats.proposals ?? 0, "等待继续或失败的任务"),
     statCard("异常任务", jobs.filter((x) => x.state === "failed").length, "保留失败原因"),
   ]);
 
@@ -263,7 +263,7 @@ async function renderToday() {
     el("section", { class: "panel soft" }, [
       el("p", { class: "eyebrow", text: "今日原则" }),
       el("h2", { text: "理解优先于数量" }),
-      el("p", { class: "muted", text: "完成一次答题不等于掌握。系统会保留原回答、提示使用和后续修正。" }),
+      el("p", { class: "muted", text: "先用自己的话解释，再结合反馈补充。学习记录会保留回答、提示使用和后续修正，方便回顾。" }),
     ]),
   ]);
 

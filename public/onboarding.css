@@ -36,6 +36,8 @@
 .onboarding-step-head h3 { margin: 3px 0; font-size: 17px; }
 .onboarding-step-head .badge { flex-shrink: 0; }
 .onboarding-instruction { line-height: 1.85; font-size: 13px; white-space: pre-line; overflow-wrap: anywhere; }
+.onboarding-overview { display: grid; gap: 14px; margin: 0; padding: 0; list-style: none; font-size: 13px; line-height: 1.85; overflow-wrap: anywhere; }
+.onboarding-overview strong { display: block; margin-bottom: 3px; }
 .onboarding-expected { padding: 12px; border-left: 3px solid var(--accent); background: var(--panel-soft); font-size: 12px; line-height: 1.7; }
 .onboarding-expected strong { display: block; margin-bottom: 4px; }
 .onboarding-actions, .onboarding-controls { display: flex; gap: 8px; flex-wrap: wrap; }
