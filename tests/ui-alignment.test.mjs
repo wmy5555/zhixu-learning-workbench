@@ -292,21 +292,59 @@ test('task failures explain stored error codes and retain original diagnostics b
     assert.match(value.title, expected); assert.ok(value.reason); assert.ok(value.next);
   }
   assert.match(describeJobError({ state: 'cancelled', code: 'BUDGET_EXCEEDED' }).title, /已取消/);
+  const embedding = describeJobError({ type: 'index', code: 'INVALID_RESPONSE', error: '嵌入响应包含无效向量。' });
+  assert.match(embedding.title, /索引/); assert.match(embedding.next, /嵌入服务.*测试连接/);
+  assert.doesNotMatch(embedding.next, /材料长度|提示词/);
+  const citation = describeJobError({ type: 'topics', code: 'INVALID_CITATION', error: '学习包包含不存在的材料。' });
+  assert.match(citation.reason, /学习包.*清单以外.*未保存/); assert.doesNotMatch(citation.reason, /无法确定/);
+  assert.match(describeJobError({ code: 'PRACTICE_PAUSED' }).title, /练习已暂停/);
+  assert.match(describeJobError({ code: 'NOT_FOUND' }).next, /知识库.*冲突/);
+  const readable = '当前材料不满足整理条件，请先补充原文。';
+  assert.equal(describeJobError({ code: 'INVALID', error: readable }).reason, readable);
   const raw = 'connect ETIMEDOUT 203.0.113.10:443 <script>untrusted()</script>';
-  const job = { id: 'failed-structure', type: 'structure', state: 'failed', code: 'ETIMEDOUT', error: raw };
+  const job = { id: 'failed-structure', type: 'structure', state: 'failed', code: 'ETIMEDOUT', error: raw, payload: { noteId: 'source-a' } };
   let retries = 0;
-  const app = browser({ jobs: async () => ({ jobs: [job] }), jobAction: async () => { retries++; }, bootstrap: async () => ({}) });
+  const app = browser({ jobs: async () => ({ jobs: [job] }), note: async () => ({ kind: 'source', title: '对应的合成资料' }), jobAction: async () => { retries++; }, bootstrap: async () => ({}) });
   app.state.systemTab = 'jobs';
   const panel = await app.jobsPanel();
   assert.match(panel.querySelector('.job-error-title').textContent, /连接 AI 服务超时/);
   assert.match(panel.querySelector('.call-error').textContent, /网络或代理.*连接恢复后/);
+  assert.match(panel.querySelector('.call-error').textContent, /本次失败不会删除原文/);
+  assert.doesNotMatch(panel.querySelector('.call-error').textContent, /已有结构建议可继续查看/);
   const technical = panel.querySelector('.job-technical');
   assert.equal(technical.open, false); assert.match(technical.textContent, /ETIMEDOUT.*203\.0\.113/s);
   assert.equal(panel.querySelector('script'), null);
   let pending = click(findButton(panel, '重试')); assert.equal(retries, 0);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(app.dialogs.textContent, /对应的合成资料/);
   await click(findButton(app.dialogs, '取消')); await pending; assert.equal(retries, 0);
   pending = click(findButton(panel, '重试'));
+  await new Promise(resolve => setImmediate(resolve));
   await click(findButton(app.dialogs, '确认重新分析')); await pending; assert.equal(retries, 1);
+});
+
+test('structure retries resolve the correct source and discard delayed titles or errors after switching libraries', async () => {
+  const jobs = ['first', 'second'].map(id => ({ id, type: 'structure', state: 'failed', code: 'MODEL_FORMAT', payload: { noteId: `source-${id}` } }));
+  let reads = 0, retries = 0, resolveNote, rejectNote, practiceId = 'practice-a', version = 0;
+  const app = browser({ jobs: async () => ({ jobs }), getContext: () => ({ practiceId, version }),
+    note: (id, options) => { reads++; assert.equal(options.background, true); return new Promise((resolve, reject) => { resolveNote = title => resolve({ id, kind: 'source', title }); rejectNote = reject; }); },
+    jobAction: async () => { retries++; } });
+  const panel = await app.jobsPanel();
+  const retryButtons = descendants(panel).filter(node => node.tagName === 'button' && node.textContent === '重试');
+  for (let i = 0; i < retryButtons.length; i++) {
+    const pending = click(retryButtons[i]); await click(retryButtons[i]);
+    assert.equal(reads, i + 1, 'duplicate click does not start a second source read');
+    resolveNote(`第 ${i + 1} 份新示例标题`); await new Promise(resolve => setImmediate(resolve));
+    assert.match(app.dialogs.textContent, new RegExp(`第 ${i + 1} 份新示例标题`));
+    await click(findButton(app.dialogs, '取消')); await pending;
+  }
+  let pending = click(retryButtons[0]); practiceId = ''; version++; resolveNote('旧练习库标题'); await pending;
+  assert.equal(app.dialogs.children.length, 0); assert.equal(retries, 0);
+  pending = click(retryButtons[0]); rejectNote(new Error('资料已删除，请在知识库核对。')); await pending;
+  assert.equal(app.dialogs.children.length, 0); assert.equal(retries, 0); assert.match(app.toasts.textContent, /资料已删除/);
+  const messages = app.toasts.textContent;
+  pending = click(retryButtons[1]); practiceId = 'practice-b'; version++; rejectNote(new Error('旧知识库错误')); await pending;
+  assert.equal(app.toasts.textContent, messages); assert.equal(app.dialogs.children.length, 0); assert.equal(retries, 0);
 });
 
 test('a successful process submit remains locked when the following bootstrap refresh fails', async () => {

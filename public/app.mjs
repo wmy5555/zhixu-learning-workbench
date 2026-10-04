@@ -669,15 +669,17 @@ async function runConfirmedStructure(key, title, run) {
   const context = api.getContext(), scopedKey = `${context.practiceId || ''}:${key}`;
   if (structureConfirmations.has(scopedKey)) return;
   structureConfirmations.add(scopedKey);
+  const contextChanged = () => { const current = api.getContext(); return current.practiceId !== context.practiceId || current.version !== context.version; };
   try {
+    if (typeof title === 'function') title = await title();
+    if (contextChanged()) return;
     if (!await confirmAction({ title: '重新分析资料结构？', confirmText: '确认重新分析',
       message: `${title ? `《${title}》：` : ''}将把获准外发的原文和当前拆解条目发送给已配置的 AI 服务，重新分析逻辑关系和分支层级，可能产生调用费用。原文与条目正文保留，成功后更新结构建议。` })) return;
-    const current = api.getContext();
-    if (current.practiceId !== context.practiceId || current.version !== context.version) {
+    if (contextChanged()) {
       toast('知识库已切换，本次分析未提交。请在当前资料中重新操作。', 'info'); return;
     }
     await run();
-  } catch (error) { handleError(error); }
+  } catch (error) { if (!contextChanged()) handleError(error); }
   finally { structureConfirmations.delete(scopedKey); }
 }
 
@@ -2001,7 +2003,7 @@ async function jobsPanel() {
             el('summary', { text: '查看详情' }),
             el('p', { class: 'job-error-help', text: explanation.reason }),
             el('p', { class: 'job-error-help', text: `可以这样处理：${explanation.next}` }),
-            job.type === 'structure' ? el('p', { class: 'job-error-help', text: '原文和拆解条目保留，已有结构建议可继续查看。' }) : null,
+            job.type === 'structure' ? el('p', { class: 'job-error-help', text: '本次失败不会删除原文、拆解条目或覆盖已保存的结构建议。' }) : null,
             el('details', { class: 'job-technical' }, [el('summary', { text: '技术信息（供排查）' }),
               el('pre', { text: `错误代码：${job.code || '未提供'}\n原始信息：${job.error || '未提供'}` })]),
           ]));
@@ -2031,7 +2033,12 @@ async function jobsPanel() {
 }
 
 async function actJob(id, action, job) {
-  if (action === 'retry' && job?.type === 'structure') return runConfirmedStructure(`job:${id}`, '', () => actJob(id, action));
+  if (action === 'retry' && job?.type === 'structure') return runConfirmedStructure(`job:${id}`, async () => {
+    if (!job.payload?.noteId) throw new Error('无法确认这项任务对应的资料，请从知识库打开原文后重新分析。');
+    const source = await api.note(job.payload.noteId, { background: true });
+    if (source.kind !== 'source' || !source.title) throw new Error('无法确认这项任务对应的原文，请在知识库核对资料后重新分析。');
+    return source.title;
+  }, () => actJob(id, action));
   try { await api.jobAction(id, { action }); toast(action === "retry" ? "已重新排队" : "任务已取消", "success"); await refreshBootstrap(); await renderSystem(); }
   catch (error) { handleError(error); }
 }
