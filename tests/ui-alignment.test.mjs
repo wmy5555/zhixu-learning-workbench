@@ -17,6 +17,7 @@ const sourceMapSource = (await readFile(new URL('../public/source-map.mjs', impo
 class Element {
   constructor(tag = 'div') {
     this.tagName = tag; this.children = []; this.events = {}; this.attributes = {};
+    this.tabIndex = -1;
     this.value = ''; this.type = ''; this.name = ''; this.disabled = false; this.checked = false; this.selected = false;
     this.open = false; this.dataset = {}; this.style = { setProperty() {} }; this._text = '';
     this.classList = { add: name => { this.className = (this.className || '') + ' ' + name; }, remove: name => { this.className = (this.className || '').split(' ').filter(item => item !== name).join(' '); }, contains: name => (this.className || '').split(' ').includes(name), toggle() {} };
@@ -95,6 +96,35 @@ function browser(api = {}) {
   context.app.jobsPanel = vm.runInContext('jobsPanel', context);
   return context.app;
 }
+
+test('recommendations keep complete evidence folded and leave actions outside the details', async () => {
+  const reason = '合成说明。'.repeat(80);
+  const signals = Array.from({ length: 20 }, (_, index) => `依据 ${index}：${'合成依据。'.repeat(30)}`);
+  const app = browser({ recommendations: async () => ({ suggestions: [
+    { id: 'long', noteId: 'synthetic', title: '合成知识', type: 'research', targetStage: 'candidate', reason, signals },
+    { id: 'brief', title: '简短建议', reason: '短说明', signals: [] },
+    { id: 'reason-only', title: '只有长说明', reason },
+  ] }) });
+  const panel = await app.recommendationsPanel();
+  const cards = panel.querySelectorAll('.recommendation-card');
+  assert.equal(cards.length, 3);
+  const details = cards[0].querySelector('details');
+  assert.equal(details.open, false);
+  assert.match(details.querySelector('summary').textContent, /20 条/);
+  assert.equal(cards[0].querySelector('p').textContent.length, 161);
+  assert.equal(details.querySelector('p').textContent, reason);
+  assert.deepEqual(details.querySelectorAll('li').map(item => item.textContent), signals);
+  assert.equal(details.querySelector('.recommendation-evidence').tabIndex, 0);
+  for (const label of ['查看知识', '打开待核验资料', '暂不采用']) {
+    assert.ok(findButton(cards[0], label));
+    assert.equal(findButton(details, label), undefined);
+  }
+  assert.equal(cards[1].querySelector('details'), null);
+  const reasonOnly = cards[2].querySelector('details');
+  assert.equal(reasonOnly.open, false);
+  assert.equal(reasonOnly.querySelector('summary').textContent, '查看完整说明');
+  assert.equal(reasonOnly.querySelector('p').textContent, reason);
+});
 
 test('source maps switch layouts and selection locally, collapse branches, keep all reading actions and separate library state', async () => {
   let external = 0, practiceId = '';
