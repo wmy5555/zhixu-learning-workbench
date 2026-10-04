@@ -109,7 +109,11 @@ export function createLearning(dependencies) {
     let used = fixed.filter(p => p.state === 'done').reduce((sum, p) => sum + p.minutes, 0);
     const pending = [], scheduledIds = new Set();
     for (const note of ordered) {
-      if (dependenciesFor(note).some(id => !done.has(id) && !scheduledIds.has(id))) continue;
+      const prerequisiteId = dependenciesFor(note).find(id => !done.has(id) && !scheduledIds.has(id));
+      if (prerequisiteId) {
+        blocked.push({ noteId: note.id, prerequisiteId, reason: '前置知识尚未进入今日安排，请先查看前置知识的未安排原因；可调整预算或改天学习。' });
+        continue;
+      }
       const minutes = goals[depthOf(note)].minutes;
       if (used + minutes > config.dailyMinutes) continue;
       const review = reviews.get(note.id), mistake = mistakes.get(note.id), bundle = bundleFor.get(note.id);
@@ -127,7 +131,9 @@ export function createLearning(dependencies) {
     const unavailable = all.filter(n => n.kind === 'knowledge' && !scheduledIds.has(n.id)).map(note => {
       const materialIssues = dependencies.limitationsFor?.(note) || note.meta.researchLimitations || [];
       const result = (code, reason) => {
-        const sourceId = code === 'material' && materialIssues.length ? textList(note.meta.sources?.filter(ref => ref.role === 'input').map(ref => ref.id)).find(id => byId.get(id)?.kind === 'source') : null;
+        const inputs = uniqueStrings(textList(note.meta.sources?.filter(ref => ref.role === 'input').map(ref => ref.id)));
+        const targetId = note.meta.processKey ? note.meta.processKey.split(':')[0] : inputs.length === 1 ? inputs[0] : null;
+        const sourceId = code === 'material' && materialIssues.length && byId.get(targetId)?.kind === 'source' ? targetId : null;
         return { noteId: note.id, title: note.title, code, reason, ...(sourceId ? { sourceId } : {}) };
       };
       if (note.meta.supersededBy) return result('superseded', '这条知识已被合并或替代，请查看保留的知识；重新加工不能恢复旧条目的学习状态。');

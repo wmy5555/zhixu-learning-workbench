@@ -507,6 +507,30 @@ test('learning goals preserve saved depth values and update the concrete require
   }
 });
 
+test('legacy knowledge editors display the effective explain goal while unchanged saves omit defaults', async () => {
+  const writes = [], note = { id: 'legacy-goal', kind: 'knowledge', title: '合成缺省目标', body: '合成正文', hash: 'legacy', meta: {} };
+  const app = browser({ updateNote: async (id, body) => { writes.push(plain(body)); return note; }, bootstrap: async () => ({}) });
+  for (const depth of [undefined, 'unsupported']) {
+    app.renderNoteEditor({ ...note, meta: depth ? { depth } : {} });
+    const form = app.refs.drawerBody.children[0];
+    assert.equal(control(form, 'depth').children.find(option => option.selected).value, 'explain');
+    assert.match(descendants(form).find(node => node.attributes.id === 'learning-goal-hint').textContent, /不看原文/);
+    await form.events.submit({ preventDefault() {} });
+    assert.deepEqual(writes.at(-1).meta, {});
+  }
+  app.renderNoteEditor(note);
+  const changedTitle = app.refs.drawerBody.children[0];
+  control(changedTitle, 'title').value = '合成修改后的标题';
+  await changedTitle.events.submit({ preventDefault() {} });
+  assert.equal(writes.at(-1).title, '合成修改后的标题');
+  assert.deepEqual(writes.at(-1).meta, {});
+  app.renderNoteEditor(note);
+  const changedGoal = app.refs.drawerBody.children[0];
+  control(changedGoal, 'depth').children.forEach(option => { option.selected = option.value === 'aware'; });
+  await changedGoal.events.submit({ preventDefault() {} });
+  assert.deepEqual(writes.at(-1).meta, { depth: 'aware' });
+});
+
 test('manual extraction and saved study sessions show the same goal requirements', async () => {
   const app = browser();
   app.manualExtract({ id: 'synthetic-source' });
@@ -793,7 +817,7 @@ test('state shortcut cancellation retains every unsaved field and explicit disca
   const note = { id: 'synthetic-draft', kind: 'knowledge', title: '标题', body: '正文', meta: {} };
   app.renderNoteEditor(note);
   const form = app.refs.drawerBody.children[0];
-  for (const [name, value] of [['title', '未保存标题'], ['body', '未保存正文'], ['privacy', 'cloud'], ['topic', '未保存主题'], ['depth', 'explain']]) {
+  for (const [name, value] of [['title', '未保存标题'], ['body', '未保存正文'], ['privacy', 'cloud'], ['topic', '未保存主题'], ['depth', 'aware']]) {
     const input = control(form, name), original = input.value;
     if (name === 'body') input.textContent = value; else input.value = value;
     const before = JSON.stringify(app.serializeForm(form));

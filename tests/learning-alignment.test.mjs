@@ -104,6 +104,27 @@ test('unavailable prerequisites stay identifiable while retired and superseded n
   assert.equal(h.calls.length, 0);
 });
 
+test('a prerequisite omitted by the budget pass identifies the actual blocker instead of teaching its dependent', t => {
+  const h = harness(t), prerequisite = h.knowledge('合成预算前置', { depth: 'apply' });
+  const dependent = h.knowledge('合成后续', { depth: 'aware', prerequisites: [prerequisite.id] });
+  h.configure({ dailyMinutes: 5 });
+  const result = h.learning.today(), reasons = new Map(result.unavailable.map(item => [item.noteId, item]));
+  assert.equal(result.items.length, 0);
+  assert.equal(reasons.get(prerequisite.id).code, 'budget');
+  assert.equal(reasons.get(dependent.id).code, 'prerequisite');
+  assert.equal(reasons.get(dependent.id).prerequisiteId, prerequisite.id);
+  assert.equal(reasons.get(dependent.id).prerequisiteTitle, prerequisite.title);
+  assert.equal(result.blocked.find(item => item.noteId === dependent.id).prerequisiteId, prerequisite.id);
+  h.configure({ dailyMinutes: 10 });
+  assert.deepEqual(h.learning.today().items.map(item => item.noteId), [prerequisite.id, dependent.id]);
+  const legacy = h.store.create({ kind: 'knowledge', title: '合成缺省目标', body: '合成正文', meta: { stage: 'learning' } });
+  h.configure({ dailyMinutes: 15 });
+  const legacyPlan = h.learning.today().items.find(item => item.noteId === legacy.id);
+  assert.equal(legacyPlan.depth, 'explain');
+  assert.equal(legacyPlan.minutes, 5);
+  assert.equal(h.calls.length, 0);
+});
+
 test('topic membership order and explicit prerequisite ids determine the daily learning path', t => {
   const h = harness(t), a = h.knowledge('后创建也可先学'), b = h.knowledge('最后学习'), c = h.knowledge('主题首项'), p = h.knowledge('主题前置'), q = h.knowledge('条目前置');
   h.store.update(b.id, { expectedHash: b.hash, meta: { prerequisites: [q.id] } });

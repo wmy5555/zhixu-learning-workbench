@@ -890,7 +890,7 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
       ]),
       tour(field("隐私", selectControl([["local", "仅本地"], ["cloud", "允许云端"]], meta.privacy || "local", "privacy"), "此项控制模型、搜索与向量服务；系统中授予 ChatGPT 的独立读取权限仍有效。"), "note-privacy"),
       field("知识主题", el("input", { name: "topic", value: meta.topic || "", placeholder: "可留空" })),
-      learningGoalField(meta.depth || "aware"),
+      learningGoalField(meta.depth),
     ]),
     el("div", { class: "form-actions" }, [button("保存修改", { kind: "primary", type: "submit" }), button("取消", { onClick: () => returnToSourceId ? refreshSourceGroup(returnToSourceId).catch(handleError) : renderNoteDrawer(note) })]),
   );
@@ -1119,7 +1119,7 @@ function depthLabel(value) {
   return Object.hasOwn(learningGoals, value) ? learningGoals[value].label : value;
 }
 function learningGoalField(value) {
-  const selected = Object.hasOwn(learningGoals, value) ? value : "aware";
+  const selected = Object.hasOwn(learningGoals, value) ? value : "explain";
   const select = selectControl(Object.entries(learningGoals).map(([key, goal]) => [key, `${goal.label} · ${goal.summary}`]), selected, "depth");
   const hint = el("small", { class: "field-hint", id: "learning-goal-hint", ariaLive: "polite" });
   select.setAttribute("aria-describedby", "learning-goal-hint");
