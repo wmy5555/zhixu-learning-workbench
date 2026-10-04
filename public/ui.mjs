@@ -90,6 +90,35 @@ export function stateTone(value) {
   return "neutral";
 }
 
+// Explain stored failures at read time so older task records benefit as well.
+export function describeJobError(job = {}) {
+  const code = String(job.code || '').toUpperCase(), raw = String(job.error || '');
+  const evidence = `${code} ${raw}`;
+  const service = job.type === 'structure' ? 'AI 服务' : '外部服务';
+  const result = (title, reason, next) => ({ title, reason, next });
+  if (code === 'CANCELLED' || job.state === 'cancelled') return result('任务已取消', '本次任务已停止。', '需要继续时可手动重试；涉及外部服务的重试可能产生费用。');
+  if (['PRIVACY_LOCAL'].includes(code)) return result('资料尚未允许外发', '任务已暂停，资料的外发设置不允许这次分析。', '如需使用 AI，请先核对原文及条目的外发设置，再决定是否重试。');
+  if (/今日外部(?:调用|请求)次数已达到上限|daily.*limit.*exceeded/i.test(raw)) return result('今日外部请求次数已用完', '任务已保存，当前不能继续调用外部服务。', '等待每日额度恢复后，再点击“重试”。');
+  if (['BUDGET_EXCEEDED', 'SOURCE_BUDGET', 'BUDGET_UNKNOWN'].includes(code)) return result('调用预算暂不允许继续', code === 'BUDGET_UNKNOWN' ? '费用尚无法确定，预算保护已暂停调用。' : '已达到任务或本月的调用预算。', '到“系统 → 用量与费用”核对预算、单价和用量，再决定是否重试。');
+  if (['DISABLED', 'AI_DISABLED', 'CAPABILITY_DISABLED', 'NOT_CONFIGURED', 'MISSING_KEY', 'MISSING_CREDENTIALS', 'INVALID_CONFIG'].includes(code)) return result('所需能力尚未准备好', '外部能力未启用，或地址、模型、凭据配置不完整。', '到“系统 → 能力设置”检查相关能力，并完成连接测试后重试。');
+  if (code === 'SOURCE_CHANGED') return result('资料内容已经变化', '本次任务依据的资料已修改或删除，无法继续沿用旧版本。', '确认当前资料后重新发起任务，系统将使用当前版本。');
+  if (code === 'INVALID_CITATION') return result('AI 引用的材料不符合要求', job.type === 'topics' ? '学习包建议引用了本次材料清单以外的条目，未保存这份建议。' : '结果中的引用与实际材料不一致，未保存这份结果。', '核对参与整理的材料是否齐全，以及模型和自定义提示词设置，再决定是否重试；不要直接采用无效引用。');
+  if (code === 'PRACTICE_PAUSED') return result('练习已暂停', '当前任务已停止，已保存的输入和回答保留。', '继续对应的新手练习后，再手动重试需要完成的任务。');
+  if (code === 'NOT_FOUND') return result('任务所需内容已不可用', '相关内容可能已删除，或存在文件冲突。', '先到知识库确认资料是否还在，并在系统中检查冲突，处理后再发起任务。');
+  if (/\b(?:ETIMEDOUT|ESOCKETTIMEDOUT|REQUEST_TIMEOUT|UND_ERR_\w*TIMEOUT|TimeoutError)\b|连接.*超时|请求超时/i.test(evidence)) return result(job.type === 'structure' ? '连接 AI 服务超时' : '连接外部服务超时', '服务未在等待时间内回应，本次任务未完成。', '先检查网络或代理是否可用，再到“系统 → 能力设置”测试连接。连接恢复后点击“重试”，重试可能产生调用费用。');
+  if (/\b(?:ENOTFOUND|EAI_AGAIN|DNS_FAILED)\b/i.test(evidence)) return result('无法找到外部服务地址', '服务地址未能解析，可能与地址填写或网络有关。', '核对能力设置中的服务地址，并检查网络，连接测试成功后重试。');
+  if (/\b(?:ECONNRESET|ECONNREFUSED|EPIPE|ENETUNREACH|EHOSTUNREACH|NETWORK_ERROR)\b|fetch failed/i.test(evidence)) return result(`${service}连接中断或无法建立`, '未能通过网络完成这次请求。', '检查网络、代理和服务是否可用，完成连接测试后再重试。');
+  if (/\b(?:CERT_HAS_EXPIRED|UNABLE_TO_VERIFY_LEAF_SIGNATURE|DEPTH_ZERO_SELF_SIGNED_CERT|ERR_TLS_CERT_ALTNAME_INVALID)\b/i.test(evidence)) return result('服务的安全证书无法验证', '连接未通过安全检查。', '核对服务地址、系统时间或联系服务商修复证书，再进行连接测试。');
+  if (['INVALID_URL', 'SSRF_BLOCKED', 'UNSAFE_REDIRECT'].includes(code)) return result('服务地址未通过安全检查', '当前地址或跳转不满足外部访问要求。', '检查相关能力的服务地址，使用可信的公网 HTTPS 地址。');
+  if (/(?:\bHTTP(?: status)?|状态码|外部服务返回)[^\d]{0,15}(?:401|403)\b|^\s*(?:401|403)\b|unauthorized|invalid[\s_]api[\s_]key/i.test(raw)) return result('外部服务拒绝了访问', '凭据可能无效、已过期，或没有相应模型的访问权限。', '到能力设置核对凭据、模型及账户权限，连接测试成功后重试。');
+  if (/(?:\bHTTP(?: status)?|状态码|外部服务返回)[^\d]{0,15}429\b|^\s*429\b|rate.limit|too many requests/i.test(raw)) return result('外部服务暂时限制了请求', '服务方可能正在限流，或账户额度不足。', '稍后重试；若仍失败，请检查服务方的账户额度与请求限制。');
+  if (job.type === 'index' && (['INVALID_RESPONSE', 'RESPONSE_TOO_LARGE'].includes(code) || /向量结果与检索片段不一致/.test(raw))) return result('检索索引服务返回的结果无法使用', '嵌入服务未返回与资料片段对应的有效检索向量，本次索引更新未完成。', '到“系统 → 能力设置”检查嵌入服务的地址、模型和配置，并测试连接后再重试。此次请求可能已计费。');
+  if (['MODEL_FORMAT', 'INVALID_RESPONSE', 'MODEL_TRUNCATED', 'MODEL_REFUSAL', 'RESPONSE_TOO_LARGE'].includes(code)) return result('AI 返回的结果暂时无法使用', code === 'MODEL_TRUNCATED' ? '结果达到长度限制，尚未完整返回。' : '结果缺少所需内容、格式不正确，或模型拒绝了本次请求。', '检查材料长度、模型和自定义提示词，再决定是否重试。此次请求可能已计费。');
+  if (code === 'RESEARCH_INCOMPLETE') return result('拆解已保存，部分事实仍待核验', '联网核验尚未满足完成条件。', '可以先阅读已保存的拆解，再检查搜索、网页读取与预算设置，按需重试。');
+  if (raw.trim().length <= 300 && /[\u3400-\u9fff]/.test(raw) && !/[{}\[\]<>]|\n\s*at\s|https?:\/\/|\b[A-Z_]{4,}\b/.test(raw)) return result('任务暂未完成', raw.trim(), '请先按上述原因检查相关内容或设置，处理后再决定是否重试。');
+  return result('任务暂未完成', '暂时无法确定具体原因，系统保留了原始错误信息。', '展开“技术信息”查看错误代码，供排查使用；确认原因后再决定是否重试。');
+}
+
 export function field(labelText, control, hint = "") {
   return el("label", { class: "field" }, [
     el("span", { class: "field-label", text: labelText }), control,
@@ -123,7 +152,7 @@ export function confirmAction({ title, message, confirmText = "确认", danger =
   return new Promise((resolve) => {
     const returnFocus = document.activeElement;
     const overlay = el("div", { class: "dialog-backdrop" });
-    const dialog = el("div", { class: "dialog", role: "dialog", ariaModal: "true" }, [
+    const dialog = el("div", { class: "dialog", role: "dialog", ariaModal: "true", ariaLabel: title }, [
       el("h2", { text: title }),
       el("p", { text: message }),
     ]);

@@ -258,8 +258,8 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     if (signal.aborted) fail('任务已取消。', 'CANCELLED');
     assertCurrent();
     const record = structureRecord(source, notes, parseJSON(result.text).structure);
-    store.put('sourceStructures', source.id, record);
     if (record.state === 'missing') fail(record.message, 'MODEL_FORMAT');
+    store.put('sourceStructures', source.id, record);
   }
   function library(filters = {}) {
     const all = listNotes().filter(n=>!n.meta.excerptOnly).map(publicNote), matching = new Set(listNotes(filters).filter(n=>!n.meta.excerptOnly).map(n => n.id)), grouped = new Set();
