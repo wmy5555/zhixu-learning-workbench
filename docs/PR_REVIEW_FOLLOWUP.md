@@ -10,6 +10,8 @@
 
 2026-10-04 PR #37 首轮五项意见已采纳：[主线理解确认匹配](https://github.com/wmy5555/zhixu-learning-workbench/pull/37#discussion_r4175659712)、[主线收集身份](https://github.com/wmy5555/zhixu-learning-workbench/pull/37#discussion_r4175659716)、[自贴标题保存上限](https://github.com/wmy5555/zhixu-learning-workbench/pull/37#discussion_r4175659717)、[旧备份清除场景](https://github.com/wmy5555/zhixu-learning-workbench/pull/37#discussion_r4175659719)、[少量候选的目标练习](https://github.com/wmy5555/zhixu-learning-workbench/pull/37#discussion_r4175659723)。主线只在指定单条收集步骤绑定且完成证据匹配实际来源；标题上下游统一 200；缺少场景字段的旧备份恢复为旧流程；三个扩展目标可顺序复用非主线知识，只有主线时提供手动补充入口并保留核验限制，不要求模型一次返回四条，也不制造预设知识。对应负向和正向回归覆盖这五项，最新 #36 文案更新已读取且无新具体意见。
 
+定向复核新增的[单文件导入仍可占用主线](https://github.com/wmy5555/zhixu-learning-workbench/pull/37#discussion_r4175712410)已处理：粘贴表单发送 `captureMode: text`，文件导入发送 `files`，新场景绑定同时要求表单标识、当前收集步骤和单条资料。六场景回归覆盖同页单文件、两文件以及未标明入口的导入均不占用主线，真正粘贴保存才绑定；旧 API 的无场景流程保持兼容。此标识只用于教程对象归属，不作为外发许可或学习成绩。
+
 2026-10-03 结构图阅读优化：修改前核对已合并 #32、#33 的普通评论、行内审阅及 Code/Security 总结，均已完成且无新增具体意见。保留 #31 的任务登记与后台切库修复。本次处理用户关于同次生成结构、展开/适应相互干扰、图形可读性的反馈；示例内容由另一任务维护，本分支不修改案例文本或身份。
 
 2026-10-03 资料结构实施：基于已合并 #31 的 main `618afbdf` 承接其最后一轮修复，重新核对普通评论、行内意见与 Code/Security 审阅总结。补充关系任务沿用提交响应立即登记、局部快照防倒退、后台完成读取允许切库与终止状态刷新，回归覆盖结构任务及正式/练习库隔离。现有学习目标教程文案、案例重建等独立后续事项仍按原记录处理，本次不扩大到无关模块。

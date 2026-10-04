@@ -355,7 +355,7 @@ async function renderCapture() {
     try {
       const submit = sourceForm.querySelector("button[type='submit']");
       submit.disabled = true;
-      const result = await api.import({ items: [item], process: process.checked, research: process.checked && research.checked });
+      const result = await api.import({ items: [item], captureMode: "text", process: process.checked, research: process.checked && research.checked });
       sourceForm.reset();
       toast(`已保存 ${asArray(result.notes).length || 1} 条原始资料`, "success");
       await refreshBootstrap();
@@ -381,7 +381,7 @@ async function renderCapture() {
     try {
       importButton.disabled = true;
       const items = await Promise.all([...fileInput.files].map(async (file) => ({ title: file.name.replace(/\.(md|txt)$/i, ""), body: await file.text(), platform: "本地文件", author: "", url: "", date: "", locator: file.name, privacy: "local" })));
-      const result = await api.import({ items, process: false });
+      const result = await api.import({ items, captureMode: "files", process: false });
       toast(`已导入 ${asArray(result.notes).length || items.length} 个文件`, "success");
       fileInput.value = "";
       clear(fileList);

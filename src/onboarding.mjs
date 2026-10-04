@@ -377,7 +377,7 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
     const event = name => noteEvent(name, { entities, ...(observedNoteId ? { noteId: observedNoteId } : {}), ...(presetCase ? { presetCase } : {}), ...(result?.meta?.depth ? { depth: result.meta.depth, stage: result.meta.stage } : {}) });
     if (resource === 'import' && method === 'POST') {
       event('import'); event(body.items?.length > 1 ? 'import-batch' : 'import-text');
-      const mainCapture = !p.materialId || p.currentStepId === 'capture-save' && body.items?.length === 1;
+      const mainCapture = !p.materialId || p.currentStepId === 'capture-save' && body.captureMode === 'text' && body.items?.length === 1;
       if (mainCapture && result.notes?.[0] && !exists(p.roles.capturedSource)) {
         p.roles.capturedSource = result.notes[0].id;
         if (p.materialId) p.roles.source = result.notes[0].id;

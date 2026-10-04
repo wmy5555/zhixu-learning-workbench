@@ -538,6 +538,7 @@ test('capture research requires AI processing and clears on deselection, clear, 
   await form.events.submit({ preventDefault() {} });
   assert.equal(writes[0].process, true);
   assert.equal(writes[0].research, true);
+  assert.equal(writes[0].captureMode, 'text');
   assert.equal(process.checked, false);
   assert.equal(research.disabled, true);
   assert.equal(research.checked, false);
@@ -546,6 +547,13 @@ test('capture research requires AI processing and clears on deselection, clear, 
   await form.events.submit({ preventDefault() {} });
   assert.equal(writes[1].process, false);
   assert.equal(writes[1].research, false);
+  const fileInput = descendants(app.refs.main).find(node => node.type === 'file');
+  fileInput.files = [{ name: '合成伴读.txt', size: 20, text: async () => '仅测试单文件导入的入口标识。' }];
+  fileInput.events.change();
+  await click(findButton(app.refs.main, '导入所选文件'));
+  assert.equal(writes[2].captureMode, 'files');
+  assert.equal(writes[2].items.length, 1);
+  assert.equal(writes[2].process, false);
 });
 
 test('evidence expands on demand, retains roles and locators, and rejects executable URLs', async () => {
