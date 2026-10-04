@@ -147,7 +147,7 @@ test('extraction is saved before research; restart resumes untouched claims and 
   assert.equal(service.publicJob(service.store.get('jobs', job.id)).extractionSaved, false);
 });
 
-test('later checkpoints supersede partial proposals and preserve the edited note until the latest is accepted', async t => {
+for (const acceptDuringRun of [false, true]) test(`later checkpoints preserve user choices and supersede only pending proposals (accept during run: ${acceptDuringRun})`, async t => {
   const root = fs.mkdtempSync(path.resolve('.tmp/proposal-checkpoints-'));
   const claims = Array.from({ length: 6 }, (_, i) => `Synthetic claim ${i}`), snapshots = [];
   let service;
@@ -159,6 +159,7 @@ test('later checkpoints supersede partial proposals and preserve the edited note
         all.push(...results); await onBatch(results);
         const pending = service.store.records('proposals').filter(p => p.state === 'pending');
         assert.equal(pending.length, 1); snapshots.push(pending[0]);
+        if (acceptDuringRun && offset === 0) service.proposalAction(pending[0].id, { action: 'accept' });
       }
       return { results: all };
     } };
@@ -170,12 +171,35 @@ test('later checkpoints supersede partial proposals and preserve the edited note
   service.editNote(child.id, { body: '保留用户修改', expectedHash: child.hash });
   service.processNote(source.id, { research: true, reuseExtracted: true });
   while (service.store.records('jobs').some(j => j.state === 'queued')) await service.runJobs();
-  assert.equal(service.getNote(child.id).body, '保留用户修改');
-  assert.equal(service.store.get('proposals', snapshots[0].id).state, 'superseded');
+  assert.equal(service.getNote(child.id).body, acceptDuringRun ? snapshots[0].body : '保留用户修改');
+  assert.equal(service.store.get('proposals', snapshots[0].id).state, acceptDuringRun ? 'accepted' : 'superseded');
   assert.throws(() => service.proposalAction(snapshots[0].id, { action: 'accept' }));
   assert.match(snapshots[1].body, /检查结果：Synthetic claim 5/);
   assert.equal(snapshots[0].meta.evidence.length, 3);
   assert.equal(snapshots[1].meta.evidence.length, 6);
   service.proposalAction(snapshots[1].id, { action: 'accept' });
   assert.match(service.getNote(child.id).body, /检查结果：Synthetic claim 5/);
+});
+
+test('a deleted checkpoint candidate stays deleted across the next batch and restart retry', async t => {
+  const root = fs.mkdtempSync(path.resolve('.tmp/deleted-checkpoint-'));
+  let service, entered, release, extractions = 0, researchCalls = 0;
+  const ready = new Promise(resolve => { entered = resolve; }), gate = new Promise(resolve => { release = resolve; });
+  const candidates = [0,1].map(i => ({ title: `合成候选 ${i}`, body: `合成正文 ${i}`, claims: [`合成主张 ${i}`] }));
+  const ai = { generate: async () => { extractions++; return { text: JSON.stringify({ candidates }) }; }, withBudget: async (_, fn) => fn(),
+    researchBatch: async ({ claims, onBatch }) => { researchCalls++; entered(); await gate; const results = claims.map(claim => ({ claim, evidence: [], limitations: ['合成未核验'] })); await onBatch(results); return { results }; } };
+  const open = () => createService({ dataDir: path.join(root,'data'), vaultDir: path.join(root,'vault'), aiOverride: ai });
+  service = open();
+  t.after(async () => { release(); await service.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const source = service.importItems({ items: [{ title: '合成删除检查点', body: '合成原文', privacy: 'cloud' }] }).notes[0];
+  const job = service.processNote(source.id, { research: true }), running = service.runJobs(); await ready;
+  const children = service.readPublicNote(source.id).children;
+  service.store.delete(children[0].id, children[0].hash); release(); await running;
+  assert.equal(service.store.get('jobs', job.id).code, 'CANDIDATE_REMOVED');
+  assert.deepEqual(service.readPublicNote(source.id).children.map(n => n.id), [children[1].id]);
+  await service.close(); service = open();
+  service.jobAction(job.id, { action: 'retry' }); await service.runJobs();
+  assert.equal(service.store.get('jobs', job.id).code, 'CANDIDATE_REMOVED');
+  assert.deepEqual(service.readPublicNote(source.id).children.map(n => n.id), [children[1].id]);
+  assert.equal(extractions, 1); assert.equal(researchCalls, 1);
 });

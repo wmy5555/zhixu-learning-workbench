@@ -114,6 +114,7 @@ export function describeJobError(job = {}) {
   if (/(?:\bHTTP(?: status)?|状态码|外部服务返回)[^\d]{0,15}429\b|^\s*429\b|rate.limit|too many requests/i.test(raw)) return result('外部服务暂时限制了请求', '服务方可能正在限流，或账户额度不足。', '稍后重试；若仍失败，请检查服务方的账户额度与请求限制。');
   if (job.type === 'index' && (['INVALID_RESPONSE', 'RESPONSE_TOO_LARGE'].includes(code) || /向量结果与检索片段不一致/.test(raw))) return result('检索索引服务返回的结果无法使用', '嵌入服务未返回与资料片段对应的有效检索向量，本次索引更新未完成。', '到“系统 → 能力设置”检查嵌入服务的地址、模型和配置，并测试连接后再重试。此次请求可能已计费。');
   if (['MODEL_FORMAT', 'INVALID_RESPONSE', 'MODEL_TRUNCATED', 'MODEL_REFUSAL', 'RESPONSE_TOO_LARGE'].includes(code)) return result('AI 返回的结果暂时无法使用', code === 'MODEL_TRUNCATED' ? '结果达到长度限制，尚未完整返回。' : '结果缺少所需内容、格式不正确，或模型拒绝了本次请求。', '检查材料长度、模型和自定义提示词，再决定是否重试。此次请求可能已计费。');
+  if (code === 'CANDIDATE_REMOVED') return result('拆解条目已删除，核验已停止', '任务保存过的候选已不存在，系统保留其他结果，不会自动重建已删除内容。', '先检查仍保留的条目，按需要另行整理原文；直接重试不会恢复已删除候选。');
   if (code === 'RESEARCH_INCOMPLETE') return result('拆解已保存，部分事实仍待核验', job.stopCode === 'SEARCH_QUERY_TOO_LONG' ? '自定义搜索提示词与主张合并后超过 350 字符，请先到“系统 → 能力设置 → AI 与联网提示词”缩短搜索模板。' : job.stopCode === 'SOURCE_BUDGET' ? '本次请求额度已用完，已保存各项核验进度。' : job.stopCode ? '本轮联网核验遇到阻碍，已取得的结果保留。' : '本轮仍有证据不足的事实；未发现反例本身不代表核验失败。', '可以先阅读拆解；“继续核验”会优先处理尚未检索的内容，沿用已有拆解，可能产生外部服务费用。');
   if (raw.trim().length <= 300 && /[\u3400-\u9fff]/.test(raw) && !/[{}\[\]<>]|\n\s*at\s|https?:\/\/|\b[A-Z_]{4,}\b/.test(raw)) return result('任务暂未完成', raw.trim(), '请先按上述原因检查相关内容或设置，处理后再决定是否重试。');
   return result('任务暂未完成', '暂时无法确定具体原因，系统保留了原始错误信息。', '展开“技术信息”查看错误代码，供排查使用；确认原因后再决定是否重试。');

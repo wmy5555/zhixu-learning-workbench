@@ -520,7 +520,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   }
   function proposalAction(id, { action }) {
     const p = store.get('proposals', id); if (!p || p.state !== 'pending') fail('提案不可操作。');
-    if (action === 'accept') store.update(p.noteId, { body: p.body, expectedHash: p.expectedHash, ...(p.meta ? { meta: { ...p.meta, userEdited: false, personalUnderstanding: null, confirmedAt: null, confirmedBy: null } } : {}) }); else if (action !== 'reject') fail('提案操作无效。');
+    if (action === 'accept') store.update(p.noteId, { body: p.body, expectedHash: p.expectedHash, ...(p.meta ? { meta: { ...p.meta, userEdited: false, ...(p.meta.processKey ? { acceptedResearchProposal: p.id } : {}), personalUnderstanding: null, confirmedAt: null, confirmedBy: null } } : {}) }); else if (action !== 'reject') fail('提案操作无效。');
     return store.put('proposals', id, { ...p, state: action === 'accept' ? 'accepted' : 'rejected', updatedAt: now() });
   }
   async function processSource(job, signal) {
@@ -533,6 +533,8 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
       if (!Array.isArray(extracted.candidates) || !extracted.candidates.length || extracted.candidates.length > 8) fail('拆解结果格式不正确。', 'MODEL_FORMAT');
     }
     for (const candidate of extracted.candidates) if (typeof candidate.title !== 'string' || typeof candidate.body !== 'string' || !Array.isArray(candidate.claims) || candidate.claims.some(x => typeof x !== 'string')) fail('待选学知识格式不正确。', 'MODEL_FORMAT');
+    const retained = [job, ...processJobs(source.id, source.hash)].find(previous => previous.payload?.savedCandidates?.hash === source.hash)?.payload.savedCandidates;
+    job.payload.savedCandidates = retained ? structuredClone(retained) : { hash: source.hash, ids: extracted.candidates.map((_, i) => store.list().find(n => n.meta.processKey === `${source.id}:${source.hash}:${i}`)?.id || null) };
     job.payload.extracted = structuredClone(extracted); putJob(job);
     for (const candidate of extracted.candidates) candidate.claims = [...new Set(candidate.claims.map(c=>c.trim()).filter(Boolean))];
     const requestedResearch = job.payload.research === true;
@@ -544,6 +546,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
       const current = getNote(source.id);
       if (current.hash !== source.hash) fail('资料已修改，请对新版本重新加工。', 'SOURCE_CHANGED');
       if (privacyFor(current) !== 'cloud') fail('资料已改为仅限本地，后续处理已停止。', 'PRIVACY_LOCAL');
+      if (job.payload.savedCandidates.ids.some(id => id && !store.row(id))) fail('拆解条目已删除，核验已停止；不会自动重建已删除内容。', 'CANDIDATE_REMOVED');
     }
     function updateProgress() {
       const cached = claims.map(claim => store.get('research', keyFor(claim)));
@@ -576,11 +579,12 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
           const e = existing || store.create({ kind: 'source', title: ev.title || ev.url, body: ev.excerpt, meta: { url: ev.url, locator: ev.locator, fetchedAt: ev.fetchedAt, privacy: source.meta.privacy, excerptHash: hash(ev.excerpt), excerptOnly: true } });
           sourceRefs.push({ id: e.id, role: ['support','oppose','limit'].includes(ev.role) ? ev.role : 'support', locator: ev.locator });
         }
-        const processKey = `${source.id}:${source.hash}:${i}`, existing = store.list().find(n => n.meta.processKey === processKey);
+        const processKey = `${source.id}:${source.hash}:${i}`, savedId = job.payload.savedCandidates.ids[i];
+        const existing = store.list().find(n => savedId ? n.id === savedId : n.meta.processKey === processKey);
         const body = `## 原资料拆解（AI 整理）\n\n${candidate.body}\n\n## 证据与适用范围\n\n${conclusions.join('\n\n')}\n\n${evidence.map(e => `- [${e.title || e.url}](${e.url})（${e.role}，读取于 ${e.fetchedAt}）\n  ${e.excerpt}${e.rationale ? '\n  对应关系：'+e.rationale : ''}`).join('\n\n') || '此条未取得可引用的外部正文。'}${notices.length ? '\n\n### 研究范围\n'+notices.join('\n') : ''}${limitations.length ? '\n\n## 尚需补充的研究\n'+limitations.map(l=>`- ${l}`).join('\n') : ''}`;
         const meta = { stage: 'candidate', privacy: source.meta.privacy, sources: sourceRefs, topic: candidate.topic || '', prerequisites: candidate.prerequisites || [], promotionReason: candidate.reason || '', depth: depths.includes(candidate.depth) ? candidate.depth : 'explain', claims: candidate.claims, evidence, researchConclusions: conclusions.join('\n\n'), researchLimitations: limitations, researchedAt: research ? now() : null, reviewAfter: research && candidate.claims.length ? new Date(learningDate().getTime()+(Number.isInteger(source.meta.researchIntervalDays)&&source.meta.researchIntervalDays>=1&&source.meta.researchIntervalDays<=365?source.meta.researchIntervalDays:30)*86400000).toISOString() : null, processKey, generatedBodyHash: hash(body) };
         if (existing && !research) continue;
-        const wasEdited = existing && (existing.meta.userEdited || existing.meta.confirmedAt || existing.meta.stage !== 'candidate' || (existing.meta.generatedBodyHash && hash(existing.body) !== existing.meta.generatedBodyHash));
+        const wasEdited = existing && (existing.meta.userEdited || existing.meta.acceptedResearchProposal || existing.meta.confirmedAt || existing.meta.stage !== 'candidate' || (existing.meta.generatedBodyHash && hash(existing.body) !== existing.meta.generatedBodyHash));
         if (existing && existing.body === body && JSON.stringify(existing.meta.evidence || []) === JSON.stringify(evidence) && JSON.stringify(existing.meta.researchLimitations || []) === JSON.stringify(limitations)) { continue; }
         if (wasEdited) {
           const proposalId = hash(`research-update:${existing.id}:${existing.hash}:${hash(body)}`);
@@ -592,6 +596,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
           continue;
         }
         const note = existing ? store.update(existing.id, { body, meta, expectedHash: existing.hash }) : store.create({ kind:'knowledge', title:candidate.title, body, meta });
+        if (!job.payload.savedCandidates.ids[i]) { job.payload.savedCandidates.ids[i] = note.id; putJob(job); }
         if (eligible(note)) requestRelations(note.id);
       }
       // Structure is a derived view: never rewrite the source or user-edited knowledge to save it.
@@ -653,7 +658,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
         await checkpoint([{ ...await ai.research({ claim, privacy: privacyFor(source), signal, prompts: settings().prompts }), claim }]);
       }
     } catch (error) {
-      if (signal.aborted || ['PRIVACY_LOCAL','SOURCE_CHANGED'].includes(error.code)) throw error;
+      if (signal.aborted || ['PRIVACY_LOCAL','SOURCE_CHANGED','CANDIDATE_REMOVED'].includes(error.code)) throw error;
       runtimeIssues.push({ code: error.code || 'RESEARCH_FAILED', message: error.message });
     }
     job.runtimeIssues = runtimeIssues; job.stopCode = runtimeIssues[0]?.code || null;

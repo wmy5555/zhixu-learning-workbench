@@ -8,6 +8,8 @@
 
 人工编辑候选的待确认核验建议以笔记版本和建议正文识别；新检查点将旧 pending 建议标为 superseded，只留最新建议可接受，旧记录保留。无法执行的搜索规划仍保存具体诊断和停止代码，unsearched 不计覆盖也不增加检索尝试次数。
 
+任务按原文版本保存实际候选 ID；候选被删除后在后续批次或重试前停止，不把缺失条目当作尚未创建。接受核验建议会保留 `acceptedResearchProposal` 标记，此后的检查点仍通过新建议更新，不能因接受操作清除了 `userEdited` 就直接覆盖；该标记不授予学习确认资格。
+
 claims 继续为字符串数组；可选 claimChecks 使用 claimIndex、kind（formal/empirical/attribution）、subject 提供检索线索，不赋予核验通过资格。旧的默认反证搜索模板在渲染时映射为中性边界模板；自定义模板保持原文，模型评价附加一致的证据规则。
 
 2026-10-02 补充：新增 `src/chatgpt.mjs` 与 `src/mcp-chatgpt.mjs`，通过独立凭据和开关提供第一层会话收集、以及用户单独授权的 ChatGPT 知识库读取。原同机 MCP 的默认只读/提案规则不变。ChatGPT 授权可包含仅本地资料，但不修改模型/搜索/向量的外发许可；详见 [接口与权限](CHATGPT_MCP.md)。
