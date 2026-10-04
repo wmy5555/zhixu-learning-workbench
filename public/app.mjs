@@ -977,11 +977,14 @@ function manualExtract(source, returnToSourceId = "") {
 
 async function promoteNote(note, stage, returnToSourceId = "") {
   const reason = await promptAction({
-    title: `调整为${labels.stage(stage)}`,
-    message: "请写下这次分流或晋级的真实理由，便于以后回顾。已整理个人理解和重点知识需要先确认个人理解。",
-    label: "调整理由",
-    initialValue: "与当前学习目标相关",
-    submitText: "确认调整",
+    title: stage === "retired" ? "标记为不再使用" : `调整为${labels.stage(stage)}`,
+    message: stage === "retired"
+      ? "请说明这条知识为何不再使用，例如内容过时、被替代或不再适用。标记后不再安排学习，也不用于默认答案引用；内容和已有记录仍保留。"
+      : "请写下这次分流或晋级的真实理由，便于以后回顾。已整理个人理解和重点知识需要先确认个人理解。",
+    label: stage === "retired" ? "不再使用的理由" : "调整理由",
+    initialValue: stage === "retired" ? "" : "与当前学习目标相关",
+    placeholder: stage === "retired" ? "例如：内容已被新版资料替代。" : "",
+    submitText: stage === "retired" ? "确认不再使用" : "确认调整",
     danger: stage === "retired",
     required: true,
   });
