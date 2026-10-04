@@ -521,10 +521,16 @@ async function recommendationsPanel() {
     const data = await api.recommendations();
     recordTourEvent("recommendations-open");
     const suggestions = asArray(data.suggestions);
-    panel.append(suggestions.length ? el("div", { class: "list" }, suggestions.map(suggestion => el("article", { class: "list-item no-icon" }, [
-      el("div", { class: "item-copy" }, [el("h3", { text: suggestion.title || "知识建议" }), el("p", { text: suggestion.reason }),
+    panel.append(suggestions.length ? el("div", { class: "list" }, suggestions.map(suggestion => el("article", { class: "list-item no-icon recommendation-card" }, [
+      el("div", { class: "item-copy" }, [el("h3", { text: suggestion.title || "知识建议", title: suggestion.title || "知识建议" }), el("p", { text: truncate(suggestion.reason, 160) }),
         el("div", { class: "item-meta" }, [badge(({ promotion: "调整学习阶段", relearn: "重新学习", reference: "转为查阅", merge: "检查重复", research: "补充研究" })[suggestion.type] || "建议"), suggestion.targetStage ? badge(labels.stage(suggestion.targetStage)) : null]),
-        asArray(suggestion.signals).length ? el("ul", {}, suggestion.signals.map(signal => el("li", { text: signal }))) : null]),
+        asArray(suggestion.signals).length || String(suggestion.reason || "").length > 160 ? el("details", { class: "recommendation-details" }, [
+          el("summary", { text: asArray(suggestion.signals).length ? `查看依据（${suggestion.signals.length} 条）` : "查看完整说明" }),
+          el("div", { class: "recommendation-evidence", tabIndex: 0, ariaLabel: "建议完整说明与依据" }, [
+            el("p", { text: suggestion.reason }),
+            asArray(suggestion.signals).length ? el("ul", {}, suggestion.signals.map(signal => el("li", { text: signal }))) : null,
+          ]),
+        ]) : null]),
       el("div", { class: "item-actions wrap" }, [
         button("查看知识", { kind: "text compact", onClick: () => openNote(suggestion.noteId) }),
         button(suggestion.type === "merge" ? "预览合并" : suggestion.type === "research" ? "打开待核验资料" : "采用建议", { kind: "primary compact", onClick: async () => {
