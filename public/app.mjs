@@ -245,7 +245,7 @@ async function renderToday() {
   const statsRow = el("section", { class: "stats" }, [
     statCard("已存内容", stats.notes ?? stats.totalNotes ?? 0, "包含原始资料、知识、主题学习包与 AI 整理建议"),
     statCard("今日待学习", items.filter((item) => item.state === "pending").length, "受每日预算约束"),
-    statCard("待确认", stats.pending ?? stats.proposals ?? 0, "关系、笔记或提案"),
+    statCard("待处理任务", stats.pending ?? stats.proposals ?? 0, "等待继续或失败的任务"),
     statCard("异常任务", jobs.filter((x) => x.state === "failed").length, "保留失败原因"),
   ]);
 
