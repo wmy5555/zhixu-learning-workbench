@@ -38,6 +38,10 @@ public final class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::handleBack);
+        }
         try {
             draftFile = new AtomicFile(new File(getFilesDir(), "editor-draft.json"));
             store = LibraryStore.open(getFilesDir());
@@ -53,12 +57,35 @@ public final class MainActivity extends Activity {
     }
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
     private LinearLayout page(String heading) {
-        root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setPadding(dp(16), dp(16), dp(16), dp(16));
-        root.setFitsSystemWindows(true); setContentView(root);
+        root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(16), dp(16), dp(16), dp(16));
+        root.setOnApplyWindowInsetsListener((view, insets) -> {
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                var bars = insets.getInsets(android.view.WindowInsets.Type.systemBars()
+                    | android.view.WindowInsets.Type.displayCutout() | android.view.WindowInsets.Type.ime());
+                view.setPadding(dp(16) + bars.left, dp(16) + bars.top, dp(16) + bars.right, dp(16) + bars.bottom);
+                var controller = view.getWindowInsetsController();
+                if (controller != null) {
+                    int appearance = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                        | android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+                    controller.setSystemBarsAppearance(appearance, appearance);
+                }
+            } else view.setPadding(dp(16) + insets.getSystemWindowInsetLeft(), dp(16) + insets.getSystemWindowInsetTop(),
+                dp(16) + insets.getSystemWindowInsetRight(), dp(16) + insets.getSystemWindowInsetBottom());
+            return insets;
+        });
+        setContentView(root);
+        if (android.os.Build.VERSION.SDK_INT < 30) getWindow().getDecorView().setSystemUiVisibility(
+            View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
         TextView label = text(heading); label.setTextSize(24); root.addView(label);
         return root;
     }
     private TextView text(String value) { TextView v = new TextView(this); v.setText(value); v.setTextSize(16); v.setPadding(0, dp(8), 0, dp(8)); return v; }
+    static void makeReadOnly(EditText title, EditText body) {
+        title.setEnabled(false);
+        // Text selection restores focusability; removing the key listener also blocks IME/hardware edits.
+        body.setKeyListener(null); body.setTextIsSelectable(true);
+    }
     private Button button(String label, Runnable action) {
         Button button = new Button(this); button.setText(label); button.setAllCaps(false);
         button.setOnClickListener(v -> { if (!busy) action.run(); }); return button;
@@ -69,7 +96,7 @@ public final class MainActivity extends Activity {
         editing = false; editingId = null;
         if (draftFile != null) draftFile.delete();
         page("知序 · 手机资料库");
-        root.addView(text("资料保存在此手机。当前准备版支持阅读、收集与文件交换；网络同步尚未启用。学习计划、回答及 AI 加工在电脑端使用。"));
+        root.addView(text("资料保存在此手机。当前测试版支持阅读、收集与文件交换；网络同步尚未启用。学习计划、回答及 AI 加工在电脑端使用。"));
         LinearLayout actions = new LinearLayout(this);
         actions.addView(button("收集", () -> edit(null))); actions.addView(button("导入文本", () -> pick(IMPORT_TEXT)));
         root.addView(actions);
@@ -114,7 +141,7 @@ public final class MainActivity extends Activity {
             root.addView(body, new LinearLayout.LayoutParams(-1, 0, 1));
             boolean readOnly = n != null && (!n.getString("kind").equals("source") || n.has("conflict"));
             if (n != null && n.has("syncIssue")) root.addView(text("交换提醒：" + n.getString("syncIssue")));
-            title.setEnabled(!readOnly); body.setFocusable(!readOnly); body.setTextIsSelectable(readOnly);
+            if (readOnly) makeReadOnly(title, body);
             if (n != null && n.has("conflict")) {
                 root.addView(text("电脑与手机都改过此资料。当前显示手机版本；原版本在处理前保留。"));
                 root.addView(button("查看电脑版本并处理", () -> resolve(id)));
@@ -187,7 +214,8 @@ public final class MainActivity extends Activity {
             } catch (Exception error) { runOnUiThread(() -> { busy = false; if (!isFinishing() && !isDestroyed()) message(error.getMessage() == null ? "文件操作失败，已有资料保留。" : error.getMessage()); }); }
         });
     }
-    @Override public void onBackPressed() { if (busy) { message("文件操作进行中，请稍候。"); } else if (editing) leaveEditor(); else super.onBackPressed(); }
+    private void handleBack() { if (busy) { message("文件操作进行中，请稍候。"); } else if (editing) leaveEditor(); else finish(); }
+    @Override public void onBackPressed() { handleBack(); }
     @Override protected void onPause() {
         if (editing && title != null && body != null) {
             FileOutputStream stream = null;

@@ -1,10 +1,16 @@
 # 测试结果与当前边界
 
-## Android 本地资料与交换准备（2026-10-05）
+## Android 个人测试 APK（2026-10-05）
 
-本分支 `pnpm verify`：150 个跟踪文件规则检查通过；530 项测试中 526 通过、4 项 Windows 平台限定测试在 Linux 跳过、0 失败；20 条合成检索质量通过。9 项新增交换/CLI 回归使用随机临时 HTTP 服务和合成库，覆盖重复发送、版本冲突、删除不重建、错误知识库、只读知识、重复正文及竞态、中断、预览不写入、回执落盘与输入保护。`pnpm mobile:check` 使用官方 JDK 21 通过 5 项 Java 合并决策，不使用 Android SDK。
+本分支 aa97467 的 `pnpm verify`：150 个跟踪文件规则检查通过；530 项测试中 526 通过、4 项 Windows 平台限定测试在 Linux 跳过、0 失败；20 条合成检索质量通过。后续仅 Android 构建、设备测试和文档更新；9 项随机临时 HTTP/交换/CLI 回归与 5 项 JDK Java 合并决策复验通过，最新源码 `pnpm check` 检查 154 个跟踪文件通过；默认沙箱首次报 `spawnSync git EPERM`，使用环境执行权限重跑成功。完整 PR CI 以 #47 对应提交结果为准。
 
-SDK 新协议未获准，尚未编译 Android UI 或持久库、运行 Lint、生成或签名 APK；没有 apksigner/模拟器/Huawei Mate 60 Pro/HarmonyOS 4.2 验收。当前只实现人工文件交换，不代表跨网直同步已实现；新网络入口、账号与常驻授权尚未执行。临时签名身份已获准并在隔离目录生成，私钥和口令不进入公共提交。仅 JDK/Gradle 官方 SHA256 及 Wrapper 校验、许可和 NOTICE 已核对。最新 PR CI 仍须单独核对，不把本地合成结果当成真机、供应商或 Android 构建成功。
+正式 Google SDK 协议已获单独批准。实际使用 JDK 21.0.12.1+1、Gradle 8.13、AGP 8.9.2、Platform 35、Build Tools 35.0.0；`assembleRelease lintRelease` 成功，Debug/Release Lint 均无问题。任务专用 RSA 3072 签名的 `apksigner verify --verbose --print-certs` v2/v3 通过，`zipalign -c -P 16 4` 通过；私钥与口令只留隔离目录，未提交、未上传。APK/证书 SHA256、命令和安装说明见 [ANDROID](ANDROID.md)。
+
+无 GMS 的 AOSP API 35 x86_64 软件模拟器安装、启动与同签名覆盖安装成功。自定义框架 Instrumentation 的 9 项实际 Android 存储/控件回归通过：私有目录落盘重开、手机脏修改不覆盖、冲突阻断与另存、回执确认与身份保留、知识只读、错误知识库/重复身份/部分无效文件原子拒绝、电脑删除回执、100 条限制；另含 Android 原生控件键盘事件回归，证明只读正文保持原文、可写正文接受字符。测试仅创建随机私有 cache 子目录；不读取 App 已有资料库。该 Runner 不依赖 JUnit 或外部设备测试库，源码位于 `android/app/src/androidTest/`，`assembleDebugAndroidTest` 构建后使用与目标 APK 相同测试签名执行 `adb shell am instrument -w io.github.wmy5555.zhixu.test.test/io.github.wmy5555.zhixu.test.StoreInstrumentation`；不将测试 APK 交给用户安装。
+
+模拟器无 `/dev/kvm`，使用软件 CPU 与 `-no-metrics`；启动慢并出现 System UI 无响应，不能据此评估真机性能。初次未启动完安装报 `Can't find service: package`，待系统完成后安装成功。工具 v23 初次查询自动启动 Android CLI 并提示默认统计，无法证明该次未发匿名统计；立即隔离改用 v16。错误细节如实记录在 ANDROID 文档和交付报告。
+
+尚未验收 Huawei Mate 60 Pro / HarmonyOS 4.2、最低 API 26、真实跨网与 Tailscale 或真实 AI。当前人工明文文件交换**不满足跨网络直接同步**；没有新公网监听、账号登录、常驻授权或部署。UI 已确认本地保存、搜索、覆盖安装/强制结束后的资料保留、离开后恢复草稿、未保存返回提示和键盘出现时保存按钮可见；系统文件选择器实际完成 UTF-8 文本/两条电脑快照导入、手机 JSON 导出，取回文件 schema 与本地隐私校验通过；Library 上传状态以交付报告为准，不将模拟器、合成 HTTP 或源码存在当成真机或直接同步达标。
 
 ## 窄窗口引导浮窗（2026-10-02）
 
