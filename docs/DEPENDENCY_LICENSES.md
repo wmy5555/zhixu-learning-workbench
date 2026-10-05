@@ -18,6 +18,10 @@
 
 ## 当前运行依赖（包含间接依赖）
 
+### Android 个人测试版构建（2026-10-05）
+
+原生代码只使用系统 API，无第三方 App 运行依赖、GMS、字体或媒体。Gradle Wrapper 8.13 JAR 来自官方发行包，SHA256 `81a82aaea5abcc8ff68b3dfcb58b3c3c429378efd98e7433460610fecd7ae45f` 已匹配 [官方校验值](https://services.gradle.org/distributions/gradle-8.13-wrapper.jar.sha256)，来源为 [Gradle v8.13.0](https://github.com/gradle/gradle/tree/v8.13.0)。Apache-2.0 与官方 NOTICE 保留在 `android/third-party/`，不为项目选择许可证。Temurin JDK、完整 Gradle 仅用于隔离构建，不再分发。实际构建使用 AGP 8.9.2（Apache-2.0，仅构建工具）、正式 SDK Platform 35 / Build Tools 35.0.0；SDK 许可已单独获用户批准，不接受预览条款。编译与签名工具不随 APK 或 Git 分发。已检查 APK 条目：只有项目自身 DEX、资源、Manifest 和构建/签名元数据，无第三方运行库或 native ABI 库；没有随包第三方运行库 notice。新增书本矢量图标由本任务原创绘制，不含外部素材。独立 AOSP API 35 模拟器与框架 Instrumentation 仅用于合成测试，不分发系统镜像或测试 APK。此段不代表对构建工具全部传递组件进行逐项权利链审计。
+
 ### 新手教程原文（2026-10-04）
 
 新增素材不是运行依赖。来源与完整附属许可见 [SOURCE-LICENSES](../public/tutorial-examples/SOURCE-LICENSES.txt)：维基教科书 CC BY-SA 4.0（仅相关摘录及其改编）、GitHub 与 EFF CC BY 4.0、Python PSF License 2 与示例代码 0BSD、鲁迅原作公有领域。摘录原文、作者、许可、编辑说明与固定修订位置随导入及下载保留；Python 完整附属许可也进入练习文件。不改变知序本身的许可证，未增加依赖或媒体资产。用户自行粘贴的正文是本地运行数据，不纳入公共素材。
@@ -139,7 +143,7 @@
 
 ## 非软件资产
 
-- 仓库未包含图片、SVG 文件、字体文件、音视频、PDF、训练模型或外部数据集。界面标记使用文字/Unicode 和 CSS。
+- Android 新增原创 XML 矢量书本图标；未引入第三方图片、字体或媒体。既有网页界面标记使用文字/Unicode 和 CSS。
 - CSS 中 Inter、PingFang SC、Microsoft YaHei、Georgia、Songti SC、Consolas 等只是本机字体名称回退；没有 @font-face、外链字体下载或字体二进制再分发。
 - README 的 GitHub CI 状态图片是远程生成的仓库状态，不是随包图片资源。
 - 设计与接口文档包含 MDN、Obsidian、PubMed、Microsoft、MCP、OWASP、OpenAI 和 Tavily 的来源链接；未打包其网页、课程、论文或书籍全文。供应商接口兼容不等于获得商标背书或外部服务使用权。

@@ -32,6 +32,8 @@ jobs:
         shell: bash
         run: node -e "const key = require('node:crypto').randomBytes(32).toString('hex'); console.log('::add-mask::' + key); require('node:fs').appendFileSync(process.env.GITHUB_ENV, 'LEARNING_MASTER_KEY=' + key + '\n')"
       - run: pnpm verify
+      - name: Check transport-independent mobile merge rules with runner JDK
+        run: pnpm mobile:check
   secrets:
     name: Secrets
     runs-on: ubuntu-latest

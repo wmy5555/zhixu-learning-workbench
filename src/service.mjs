@@ -200,13 +200,14 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     if (extracted) payload.extracted = structuredClone(extracted);
     return processReply(queue('process', payload, `process:${id}:${source.hash}${payload.research ? ':research' : ''}`));
   }
-  function importItems({ items, process = false, research = false }) {
+  function importItems({ items, process = false, research = false, rejectDuplicates = false }) {
     if (!Array.isArray(items) || !items.length || items.length > 100) fail('每次请导入 1–100 份文本。');
     const result = [], jobs = [];
     for (const item of items) {
       if (typeof item.body !== 'string' || !item.body.trim() || item.body.length > 500000) fail('每份文本须为 1–500000 字符。');
       const fingerprint = hash(item.body.replaceAll('\r\n','\n').trim());
       const existing = store.list().find(n => n.kind === 'source' && n.meta.fingerprint === fingerprint);
+      if (rejectDuplicates && existing) fail('电脑已有相同正文，请先人工确认资料身份。', 'CONFLICT', 409);
       const origin = { platform: item.platform || '', author: item.author || '', url: item.url || '', date: item.date || '', locator: item.locator || '', acquiredAt: now() };
       let note;
       if (existing) note = store.update(existing.id, { expectedHash: existing.hash, meta: { origins: [...(existing.meta.origins || []), origin] } });
