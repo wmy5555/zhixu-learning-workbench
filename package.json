@@ -14,7 +14,8 @@
     "mcp:chatgpt": "node src/mcp-chatgpt.mjs",
     "check": "node scripts/check-project.mjs",
     "quality": "node scripts/quality-check.mjs",
-    "verify": "pnpm check && pnpm test && pnpm quality"
+    "verify": "pnpm check && pnpm test && pnpm quality",
+    "mobile:check": "node scripts/check-mobile-java.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",

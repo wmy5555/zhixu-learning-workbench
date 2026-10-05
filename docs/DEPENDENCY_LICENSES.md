@@ -18,6 +18,10 @@
 
 ## 当前运行依赖（包含间接依赖）
 
+### Android 构建准备（2026-10-05）
+
+原生代码只使用系统 API，无第三方 App 运行依赖、GMS、字体或媒体。Gradle Wrapper 8.13 JAR 来自官方发行包，SHA256 `81a82aaea5abcc8ff68b3dfcb58b3c3c429378efd98e7433460610fecd7ae45f` 已匹配 [官方校验值](https://services.gradle.org/distributions/gradle-8.13-wrapper.jar.sha256)，来源为 [Gradle v8.13.0](https://github.com/gradle/gradle/tree/v8.13.0)。Apache-2.0 与官方 NOTICE 保留在 `android/third-party/`，不为项目选择许可证。Temurin JDK、完整 Gradle 仅用于隔离构建，不再分发。AGP 8.9.2 固定为拟用构建插件，SDK/AGP 尚未用于 Android 构建，后续须核对实际构建依赖与产物 notices。
+
 ### 新手教程原文（2026-10-04）
 
 新增素材不是运行依赖。来源与完整附属许可见 [SOURCE-LICENSES](../public/tutorial-examples/SOURCE-LICENSES.txt)：维基教科书 CC BY-SA 4.0（仅相关摘录及其改编）、GitHub 与 EFF CC BY 4.0、Python PSF License 2 与示例代码 0BSD、鲁迅原作公有领域。摘录原文、作者、许可、编辑说明与固定修订位置随导入及下载保留；Python 完整附属许可也进入练习文件。不改变知序本身的许可证，未增加依赖或媒体资产。用户自行粘贴的正文是本地运行数据，不纳入公共素材。
