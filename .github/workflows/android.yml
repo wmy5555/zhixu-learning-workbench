@@ -28,7 +28,7 @@ jobs:
       - run: pnpm android:sync
       - name: Build prototype and storage tests
         working-directory: apps/android/android
-        run: bash gradlew --no-daemon assembleDebug assembleDebugAndroidTest lintDebug
+        run: bash gradlew --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: android-shared-ui-prototype

@@ -51,6 +51,8 @@ Android 工程位于 `apps/android/`，采用固定版本 Capacitor 8.5.2，将 
 
 本批资料保存在应用私有空间，不读电脑的正式 Vault、数据库、备份或凭据，不配置模型、不外发资料。清除应用数据或卸载可能丢失样机资料；由于导出与完整备份尚未接入，验收只使用可丢弃的合成原文。
 
+样机最多保存 100 份原文，每份正文最多 128 KiB、标题最多 200 个字符。其 Markdown 使用原型版本的 JSON/YAML 头部，不能直接当成电脑端 Vault 文件导入。正式迁移和格式兼容属于第二阶段。安装包使用独立标识 `io.github.wmy5555.zhixu.sharedtest`，不会覆盖 PR #47 的交换试验 App。
+
 实现和后续验收应遵守以下规则：
 
 - 原文拥有稳定身份和内容版本；旧页面的保存不能静默覆盖较新的修改。
@@ -88,6 +90,19 @@ Capacitor 负责网页与 Android 能力之间的调用，不会直接运行现�
 每个阶段都保留共用界面原则。视觉重构可以独立进行，不要求先完成全部 Android 业务迁移；但发布时必须同时检查宽屏与手机布局。
 
 ## 验证如何记录
+
+### 构建样机
+
+电脑网页服务仍按原有方式运行，不需要 Android 工具链。生成 Android 样机则需要 Node 24、项目指定 pnpm、JDK 21 和 Android SDK 36；Gradle Wrapper 固定为 8.14.3 并校验官方 SHA-256。
+
+1. 在项目根目录执行 `pnpm install --frozen-lockfile`。
+2. 执行 `pnpm android:sync`，将 Git 已跟踪的 `public/` 文件复制到临时构建目录，并同步原生工程；新网页资源应先加入版本管理。
+3. 进入 `apps/android/android`，Windows 执行 `./gradlew.bat :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug`，Linux/macOS 执行 `bash gradlew :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug`。
+4. 应用 APK 位于 `app/build/outputs/apk/debug/`，设备测试 APK 位于 `app/build/outputs/apk/androidTest/debug/`。开发签名仅适合样机，正式发布签名另行管理。
+
+GitHub 的 **Android prototype** 工作流执行相同构建与静态检查，并保留 7 天的 `android-shared-ui-prototype` 产物。构建产物包含应用、设备测试安装包与 lint 报告，不包含用户资料或签名密钥。构建成功不代表设备测试已运行。
+
+### 验收证据的含义
 
 | 证据 | 能证明什么 | 不能代替什么 |
 |---|---|---|
