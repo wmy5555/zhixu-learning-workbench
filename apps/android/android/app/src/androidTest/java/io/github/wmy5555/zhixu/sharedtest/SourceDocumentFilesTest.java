@@ -16,6 +16,35 @@ import org.json.JSONObject;
 /** Exercises synthetic streams only, without opening a picker or touching installed source data. */
 @SuppressWarnings("deprecation")
 public class SourceDocumentFilesTest extends AndroidTestCase {
+    public void testActualExportIntentRequestsSingleDocumentTemporaryWriteGrant() {
+        for (boolean backup : new boolean[] { true, false }) {
+            String name = backup ? "zhixu-backup.json" : "zhixu-source.md";
+            Intent intent = SourceDocumentFiles.documentIntent(true, backup, name);
+            assertEquals(Intent.ACTION_CREATE_DOCUMENT, intent.getAction());
+            assertTrue(intent.hasCategory(Intent.CATEGORY_OPENABLE));
+            assertEquals(backup ? "application/json" : "text/markdown", intent.getType());
+            assertEquals(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION, intent.getFlags());
+            assertEquals(name, intent.getStringExtra(Intent.EXTRA_TITLE));
+            assertFalse(intent.getBooleanExtra(Intent.EXTRA_ALLOW_MULTIPLE, true));
+            assertNull(intent.getData());
+            assertNull(intent.getClipData());
+        }
+    }
+
+    public void testActualImportIntentRequestsReadWithoutWriteOrDurableOrPrefixAccess() {
+        for (boolean backup : new boolean[] { true, false }) {
+            Intent intent = SourceDocumentFiles.documentIntent(false, backup, null);
+            assertEquals(Intent.ACTION_OPEN_DOCUMENT, intent.getAction());
+            assertTrue(intent.hasCategory(Intent.CATEGORY_OPENABLE));
+            assertEquals(backup ? "application/json" : "*/*", intent.getType());
+            assertEquals(Intent.FLAG_GRANT_READ_URI_PERMISSION, intent.getFlags());
+            assertFalse(intent.getBooleanExtra(Intent.EXTRA_ALLOW_MULTIPLE, true));
+            assertFalse(intent.hasExtra(Intent.EXTRA_TITLE));
+            assertNull(intent.getData());
+            assertNull(intent.getClipData());
+        }
+    }
+
     public void testUtf8BomAndShortReadsPreserveOriginalText() throws Exception {
         String text = "# 合成资料\n\n原文  \n第二行😀\n";
         byte[] bytes = ("\ufeff" + text).getBytes(StandardCharsets.UTF_8);
@@ -171,6 +200,79 @@ public class SourceDocumentFilesTest extends AndroidTestCase {
         catch (SourceDocumentFiles.DocumentWriteException exception) { assertEquals("write", exception.stage); }
         assertEquals(1, partial.size());
         assertTrue(closed[0]);
+    }
+
+    public void testStreamCopyPreservesBytesAcrossShortAndZeroReads() throws Exception {
+        byte[] expected = new byte[20001];
+        for (int index = 0; index < expected.length; index++) expected[index] = (byte) (index % 251);
+        final int[] largestRead = { 0 };
+        InputStream input = new ByteArrayInputStream(expected) {
+            boolean first = true;
+            @Override public synchronized int read(byte[] buffer, int offset, int length) {
+                largestRead[0] = Math.max(largestRead[0], length);
+                if (first) { first = false; return 0; }
+                return super.read(buffer, offset, Math.min(length, 13));
+            }
+        };
+        TrackingOutput output = new TrackingOutput(false, false);
+        SourceDocumentFiles.copyDocument(() -> output, input, expected.length, () -> true);
+        assertTrue(Arrays.equals(expected, output.toByteArray()));
+        assertTrue(largestRead[0] <= 8192);
+        assertTrue(output.flushed);
+        assertTrue(output.closed);
+    }
+
+    public void testEmptyOrCancelledStreamCopyNeverOpensUserDocument() throws Exception {
+        final int[] opens = { 0 };
+        SourceDocumentFiles.OutputOpener opener = () -> { opens[0]++; return new TrackingOutput(false, false); };
+        try { SourceDocumentFiles.copyDocument(opener, new ByteArrayInputStream(new byte[0]), 10, () -> true); fail("Empty copy opened output"); }
+        catch (SourceDocumentFiles.DocumentWriteException exception) { assertEquals("read-input", exception.stage); }
+        try { SourceDocumentFiles.copyDocument(opener, new ByteArrayInputStream(new byte[] { 'x' }), 10, () -> false); fail("Cancelled copy opened output"); }
+        catch (SourceDocumentFiles.DocumentWriteException exception) { assertEquals("before-open", exception.stage); }
+        assertEquals(0, opens[0]);
+    }
+
+    public void testStreamReadFailureAfterPartialCopyClosesOutputWithoutSuccess() throws Exception {
+        InputStream input = new InputStream() {
+            boolean first = true;
+            @Override public int read() throws IOException { throw new IOException("Synthetic read failure"); }
+            @Override public int read(byte[] buffer, int offset, int length) throws IOException {
+                if (!first) throw new IOException("Synthetic read failure");
+                first = false;
+                buffer[offset] = 'x';
+                return 1;
+            }
+        };
+        TrackingOutput output = new TrackingOutput(false, false);
+        try { SourceDocumentFiles.copyDocument(() -> output, input, 10, () -> true); fail("Partial copy reported success"); }
+        catch (SourceDocumentFiles.DocumentWriteException exception) { assertEquals("read-input", exception.stage); }
+        assertEquals(1, output.size());
+        assertFalse(output.flushed);
+        assertTrue(output.closed);
+    }
+
+    public void testStreamCopyEnforcesActualByteLimitAndCloseSuccess() throws Exception {
+        byte[] exact = new byte[] { 'a', 'b', 'c', 'd', 'e', 'f', 'g' };
+        TrackingOutput output = new TrackingOutput(false, false);
+        SourceDocumentFiles.copyDocument(() -> output, new ByteArrayInputStream(exact), exact.length, () -> true);
+        assertTrue(Arrays.equals(exact, output.toByteArray()));
+        final int[] consumed = { 0 };
+        InputStream infinite = new InputStream() {
+            @Override public int read() { consumed[0]++; return 'x'; }
+            @Override public int read(byte[] buffer, int offset, int length) {
+                Arrays.fill(buffer, offset, offset + length, (byte) 'x');
+                consumed[0] += length;
+                return length;
+            }
+        };
+        try { SourceDocumentFiles.copyDocument(() -> new TrackingOutput(false, false), infinite, exact.length, () -> true); fail("Unbounded copy accepted"); }
+        catch (SourceDocumentFiles.DocumentWriteException exception) { assertEquals("read-input", exception.stage); }
+        assertEquals(exact.length + 1, consumed[0]);
+        for (TrackingOutput broken : new TrackingOutput[] { new TrackingOutput(true, false), new TrackingOutput(false, true) }) {
+            try { SourceDocumentFiles.copyDocument(() -> broken, new ByteArrayInputStream(exact), exact.length, () -> true); fail("Failed copy finalization accepted"); }
+            catch (SourceDocumentFiles.DocumentWriteException exception) { assertEquals(broken.failFlush ? "flush" : "close", exception.stage); }
+            assertTrue(broken.closed);
+        }
     }
 
     public void testExchangeAcceptsCommonWebUrlsAndRetainsEverySourceField() throws Exception {

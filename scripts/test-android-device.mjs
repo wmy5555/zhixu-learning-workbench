@@ -42,7 +42,7 @@ const result = spawnSync(options.adb, [
   'io.github.wmy5555.zhixu.sharedtest.test/android.test.InstrumentationTestRunner',
 ], {
   encoding: 'utf8',
-  timeout: 120_000,
+  timeout: 300_000,
   maxBuffer: 16 * 1024 * 1024,
   windowsHide: true,
 });

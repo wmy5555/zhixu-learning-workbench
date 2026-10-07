@@ -4,8 +4,10 @@ import android.app.Activity;
 import android.content.ContentResolver;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.Process;
 import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
 import android.util.Log;
@@ -16,8 +18,11 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.Arrays;
 import java.util.Date;
@@ -42,6 +47,7 @@ public class ZhixuLocalPlugin extends Plugin {
         final PluginCall call;
         final String kind;
         byte[] bytes;
+        File backupFile;
         String name;
         boolean resultReceived;
         PendingDocument(PluginCall call, String kind) { this.call = call; this.kind = kind; }
@@ -111,23 +117,16 @@ public class ZhixuLocalPlugin extends Plugin {
                         if (!current(task)) return;
                         onlyFields(call, "exportSource".equals(kind) ? new String[] { "id" } : new String[0]);
                         if ("exportBackup".equals(kind)) {
-                            task.bytes = getStore().backup().toString().getBytes(StandardCharsets.UTF_8);
-                            if (task.bytes.length > SourceDocumentFiles.MAX_BACKUP_BYTES) {
-                                throw new LocalSourceStore.StoreException("FILE_TOO_LARGE", "手机备份超过允许的大小。");
-                            }
+                            prepareBackup(task);
                             task.name = "zhixu-android-backup-" + new SimpleDateFormat("yyyy-MM-dd", Locale.ROOT).format(new Date()) + ".json";
                         } else if ("exportSource".equals(kind)) {
                             task.bytes = SourceDocumentFiles.sourceExchange(getStore().read(string(call, "id")));
                             task.name = "zhixu-source.md";
                         }
-                        Intent intent = new Intent(task.writing() ? Intent.ACTION_CREATE_DOCUMENT : Intent.ACTION_OPEN_DOCUMENT);
-                        intent.addCategory(Intent.CATEGORY_OPENABLE);
-                        intent.setType(kind.endsWith("Backup") ? "application/json" : task.writing() ? "text/markdown" : "*/*");
-                        if (task.writing()) intent.putExtra(Intent.EXTRA_TITLE, task.name);
-                        else intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, false);
+                        Intent intent = SourceDocumentFiles.documentIntent(task.writing(), kind.endsWith("Backup"), task.name);
                         getActivity().runOnUiThread(() -> {
                             synchronized (stateLock) {
-                                if (!current(task)) { task.bytes = null; return; }
+                                if (!current(task)) { cleanupPayload(task); return; }
                                 try { startActivityForResult(call, intent, "documentResult"); }
                                 catch (Exception exception) { fail(task, "无法打开系统文件选择器，请重试。", "FILE_ERROR"); }
                             }
@@ -136,6 +135,26 @@ public class ZhixuLocalPlugin extends Plugin {
                     catch (Exception exception) { fail(task, "无法准备文件，请保留输入后重试。", "FILE_ERROR"); }
                 });
             } catch (RejectedExecutionException exception) { fail(task, "应用正在关闭，请重新打开后重试。", "UNAVAILABLE"); }
+        }
+    }
+
+    private void prepareBackup(PendingDocument task) throws Exception {
+        // cacheDir is app-private and excluded from Android backup; no WebView asset or arbitrary path access.
+        File temporary = File.createTempFile("zhixu-export-", ".json", getContext().getCacheDir());
+        boolean retained = false;
+        try {
+            try (FileOutputStream output = new FileOutputStream(temporary)) {
+                synchronized (stateLock) {
+                    if (!current(task)) throw new IOException("Operation interrupted");
+                    // Attach only after opening, so destruction cannot delete then accidentally recreate this file.
+                    task.backupFile = temporary;
+                }
+                LocalSourceBackup.writePackage(getStore().backup(), output);
+            }
+            synchronized (stateLock) { retained = current(task); }
+            if (!retained) throw new IOException("Operation interrupted");
+        } finally {
+            if (!retained) temporary.delete();
         }
     }
 
@@ -167,6 +186,7 @@ public class ZhixuLocalPlugin extends Plugin {
         Uri uri;
         try { uri = SourceDocumentFiles.selectedDocument(result.getData()); }
         catch (LocalSourceStore.StoreException exception) { fail(task, exception.getMessage(), exception.code); return; }
+        debugResultPermissions(result.getData(), uri);
         try { serial.execute(() -> completeDocument(task, uri)); }
         catch (RejectedExecutionException exception) {
             if (task.writing()) deleteCreatedDocument(uri);
@@ -192,21 +212,37 @@ public class ZhixuLocalPlugin extends Plugin {
             if (task.writing()) {
                 stage = "name";
                 SourceDocumentFiles.validateName(name, "exportBackup".equals(task.kind));
-                byte[] bytes = task.bytes;
                 final ContentResolver targetResolver = resolver;
                 stage = "export";
-                SourceDocumentFiles.writeDocument(() -> targetResolver.openOutputStream(uri, "wt"), bytes, () -> current(task));
+                if ("exportBackup".equals(task.kind)) {
+                    File temporary;
+                    synchronized (stateLock) { temporary = task.backupFile; }
+                    if (temporary == null) throw new IOException("Missing private backup file");
+                    try (InputStream input = new FileInputStream(temporary)) {
+                        SourceDocumentFiles.copyDocument(() -> targetResolver.openOutputStream(uri, "wt"), input,
+                            SourceDocumentFiles.MAX_BACKUP_BYTES, () -> current(task));
+                    }
+                } else {
+                    SourceDocumentFiles.writeDocument(() -> targetResolver.openOutputStream(uri, "wt"), task.bytes, () -> current(task));
+                }
                 response = new JSObject().put("saved", true).put("name", name);
             } else {
                 boolean backup = "previewBackup".equals(task.kind);
                 SourceDocumentFiles.validateName(name, backup);
-                String text;
                 try (InputStream input = resolver.openInputStream(uri)) {
-                    text = SourceDocumentFiles.readUtf8(input, backup ? SourceDocumentFiles.MAX_BACKUP_BYTES : SourceDocumentFiles.MAX_SOURCE_BYTES);
+                    if (backup) {
+                        stage = "read-package";
+                        JSONObject pack = LocalSourceBackup.readPackage(input);
+                        if (!current(task)) return;
+                        stage = "preview-restore";
+                        response = JSObject.fromJSONObject(getStore().previewRestore(pack));
+                    } else {
+                        stage = "read-source";
+                        String text = SourceDocumentFiles.readUtf8(input, SourceDocumentFiles.MAX_SOURCE_BYTES);
+                        if (!current(task)) return;
+                        response = new JSObject().put("name", name).put("text", text);
+                    }
                 }
-                if (!current(task)) return;
-                response = backup ? JSObject.fromJSONObject(getStore().previewRestore(new JSONObject(text)))
-                    : new JSObject().put("name", name).put("text", text);
             }
             stage = "response";
             synchronized (stateLock) {
@@ -223,7 +259,7 @@ public class ZhixuLocalPlugin extends Plugin {
             debugFailure(stage, exception);
             fail(task, task.writing() ? incompleteMessage() : "无法读取所选文件，请确认文件格式并重试。", "FILE_ERROR");
         } finally {
-            task.bytes = null;
+            cleanupPayload(task);
             if (task.writing() && !written && resolver != null) {
                 // Providers may reject deletion; never claim an incomplete document is a valid backup.
                 try { DocumentsContract.deleteDocument(resolver, uri); }
@@ -236,6 +272,17 @@ public class ZhixuLocalPlugin extends Plugin {
         if ((getContext().getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
             Log.w("ZhixuSaf", SourceDocumentFiles.failureDiagnostic(stage, exception));
         }
+    }
+
+    private void debugResultPermissions(Intent data, Uri uri) {
+        if ((getContext().getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) == 0) return;
+        try {
+            boolean read = getContext().checkUriPermission(uri, Process.myPid(), Process.myUid(),
+                Intent.FLAG_GRANT_READ_URI_PERMISSION) == PackageManager.PERMISSION_GRANTED;
+            boolean write = getContext().checkUriPermission(uri, Process.myPid(), Process.myUid(),
+                Intent.FLAG_GRANT_WRITE_URI_PERMISSION) == PackageManager.PERMISSION_GRANTED;
+            Log.d("ZhixuSaf", "stage=result-grants flags=" + data.getFlags() + " read=" + read + " write=" + write);
+        } catch (Exception exception) { debugFailure("result-grants", exception); }
     }
 
     private static String displayName(ContentResolver resolver, Uri uri) throws Exception {
@@ -253,16 +300,26 @@ public class ZhixuLocalPlugin extends Plugin {
 
     private void fail(PendingDocument task, String message, String code) {
         synchronized (stateLock) {
-            if (pending != task) { task.bytes = null; return; }
+            if (pending != task) { cleanupPayload(task); return; }
             task.call.reject(message, code);
             clear(task);
         }
     }
 
     private void clear(PendingDocument task) {
-        task.bytes = null;
+        cleanupPayload(task);
         pending = null;
         task.call.release(bridge);
+    }
+
+    private void cleanupPayload(PendingDocument task) {
+        synchronized (stateLock) {
+            task.bytes = null;
+            if (task.backupFile != null) {
+                task.backupFile.delete();
+                task.backupFile = null;
+            }
+        }
     }
 
     private LocalSourceStore getStore() throws LocalSourceStore.StoreException {

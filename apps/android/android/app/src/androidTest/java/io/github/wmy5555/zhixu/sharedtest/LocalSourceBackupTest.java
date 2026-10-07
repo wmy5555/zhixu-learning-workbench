@@ -7,7 +7,12 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.UUID;
@@ -338,6 +343,135 @@ public class LocalSourceBackupTest extends AndroidTestCase {
         assertEquals(historyBefore, new File(sourceRoot, "history/" + id).listFiles().length);
         assertTrue(extra.isFile());
         assertEquals(note.getString("current"), raw(new File(sourceRoot, "notes/" + id + ".md")));
+    }
+
+    public void testNearLimitPublicFileWriteReadPreviewAndRestorePreservesAllSnapshots() throws Exception {
+        JSONObject expected = fillExportableBudget();
+        File exportedFile = new File(root, "near-limit-backup.json");
+        try (FileOutputStream output = new FileOutputStream(exportedFile)) {
+            LocalSourceBackup.writePackage(store.backup(), output);
+        }
+        assertTrue(exportedFile.length() > LocalSourceBackup.MAX_BACKUP_BYTES - 256 * 1024);
+        assertTrue(exportedFile.length() <= LocalSourceBackup.MAX_BACKUP_BYTES);
+        JSONObject parsed;
+        try (FileInputStream input = new FileInputStream(exportedFile)) { parsed = LocalSourceBackup.readPackage(input); }
+        assertTrue(parsed.get("version") instanceof Integer);
+        try (LocalSourceStore destination = destination()) {
+            JSONObject preview = destination.previewRestore(parsed);
+            JSONObject result = destination.restoreBackup(preview.getString("token"), "keep-current");
+            assertEquals(1, result.getInt("imported"));
+            JSONObject original = expected.getJSONArray("notes").getJSONObject(0);
+            JSONObject actual = destination.backup().getJSONArray("notes").getJSONObject(0);
+            assertEquals(original.getString("current"), actual.getString("current"));
+            assertEquals(original.getString("original"), actual.getString("original"));
+            JSONArray histories = parsed.getJSONArray("notes").getJSONObject(0).getJSONArray("history");
+            JSONArray restoredHistories = actual.getJSONArray("history");
+            assertEquals(histories.length(), result.getInt("versionsImported"));
+            assertEquals(histories.length(), restoredHistories.length());
+            for (int index = 0; index < histories.length(); index++) {
+                assertEquals(histories.getJSONObject(index).getString("id"), restoredHistories.getJSONObject(index).getString("id"));
+                assertEquals(histories.getJSONObject(index).getString("raw"), restoredHistories.getJSONObject(index).getString("raw"));
+            }
+        }
+    }
+
+    public void testStreamingReaderRejectsDuplicateKeysMalformedUtf8DepthAndTrailingData() throws Exception {
+        JSONObject first = save("严格文件解析", "小型合成正文");
+        store.save(edit(first, "带历史解析", "新的合成正文"));
+        String json = store.backup().toString(); // Deliberately small syntax fixtures only.
+        String escapedCurrent = "\"cur" + '\\' + "u0072ent\":\"ignored\",\"current\":";
+        String[] bad = {
+            json.replace("\"version\":1", "\"version\":1,\"version\":1"),
+            json.replace("\"current\":", "\"current\":\"ignored\",\"current\":"),
+            json.replace("\"current\":", escapedCurrent),
+            json.replace("\"id\":", "\"id\":\"ignored\",\"id\":"),
+            "{\"attachments\":[]," + json.substring(1),
+            json.replace("\"version\":1", "\"version\":1.0"),
+            json.replace("\"version\":1", "\"version\":\"1\""),
+            json.replace("\"version\":1", "\"version\":" + repeat('1', 1024)),
+            json.replace("\"current\":", "\"current\":\"" + '\\' + "q\",\"ignored\":"),
+            json.replace("\"current\":", "\"current\":\"unescaped\nnewline\",\"ignored\":"),
+            json.replace("\"current\":", "\"current\":\"" + repeat('x', 6 * 160 * 1024 + 3) + "\",\"ignored\":"),
+            json.substring(0, json.length() - 1),
+            json + "{}",
+            json + "/* trailing comment */",
+            "{\"format\":\"zhixu-android-source-backup\",\"version\":1,\"createdAt\":\"2026-01-01T00:00:00.000Z\",\"notes\":[[[[[[]]]]]]}"
+        };
+        for (String value : bad) {
+            expect("VALIDATION", () -> LocalSourceBackup.readPackage(new ByteArrayInputStream(value.getBytes(StandardCharsets.UTF_8))));
+        }
+        byte[] valid = json.getBytes(StandardCharsets.UTF_8);
+        byte[] malformed = Arrays.copyOf(valid, valid.length + 1);
+        malformed[valid.length] = (byte) 0xc3; // Incomplete UTF-8, after otherwise complete JSON.
+        expect("VALIDATION", () -> LocalSourceBackup.readPackage(new ByteArrayInputStream(malformed)));
+        assertEquals(1, store.list("").length());
+    }
+
+    public void testStreamingReaderCountsActualWhitespaceBytesAtExactAndOversizeLimit() throws Exception {
+        JSONObject empty = new JSONObject().put("format", "zhixu-android-source-backup").put("version", 1)
+            .put("createdAt", "2026-01-01T00:00:00.000Z").put("notes", new JSONArray());
+        byte[] prefix = empty.toString().getBytes(StandardCharsets.UTF_8);
+        try (InputStream exact = new PaddedInput(prefix, LocalSourceBackup.MAX_BACKUP_BYTES)) {
+            assertEquals(0, LocalSourceBackup.readPackage(exact).getJSONArray("notes").length());
+        }
+        try (InputStream oversized = new PaddedInput(prefix, (long) LocalSourceBackup.MAX_BACKUP_BYTES + 1)) {
+            expect("VALIDATION", () -> LocalSourceBackup.readPackage(oversized));
+        }
+    }
+
+    public void testStreamingWriterMatchesBudgetEscapingFlushesAndNeverClosesCallerStreams() throws Exception {
+        save("调用者持有文件", "引号\"、反斜杠\\、换行\n制表\t、/、</、😀、\u2028、\u2029");
+        JSONObject valid = store.backup();
+        TrackingOutput output = new TrackingOutput();
+        LocalSourceBackup.writePackage(valid, output);
+        assertFalse(output.closed);
+        assertTrue(output.flushes > 0);
+        assertTrue(Arrays.equals(valid.toString().getBytes(StandardCharsets.UTF_8), output.toByteArray()));
+        TrackingInput input = new TrackingInput(output.toByteArray());
+        assertEquals(valid.getJSONArray("notes").getJSONObject(0).getString("current"),
+            LocalSourceBackup.readPackage(input).getJSONArray("notes").getJSONObject(0).getString("current"));
+        assertFalse(input.closed);
+        JSONObject invalid = copy(valid).put("unknown", true);
+        TrackingOutput rejected = new TrackingOutput();
+        expect("VALIDATION", () -> LocalSourceBackup.writePackage(invalid, rejected));
+        assertEquals(0, rejected.size());
+        assertFalse(rejected.closed);
+    }
+
+    private static final class TrackingInput extends ByteArrayInputStream {
+        boolean closed;
+        TrackingInput(byte[] bytes) { super(bytes); }
+        @Override public void close() throws IOException { closed = true; super.close(); }
+    }
+
+    private static final class TrackingOutput extends ByteArrayOutputStream {
+        boolean closed;
+        int flushes;
+        @Override public void flush() throws IOException { flushes++; super.flush(); }
+        @Override public void close() throws IOException { closed = true; super.close(); }
+    }
+
+    /** Emits real bytes up to the boundary without allocating another complete 32 MiB test buffer. */
+    private static final class PaddedInput extends InputStream {
+        final byte[] prefix;
+        final long length;
+        long position;
+        PaddedInput(byte[] prefix, long length) { this.prefix = prefix; this.length = length; }
+        @Override public int read() {
+            if (position >= length) return -1;
+            return position < prefix.length ? prefix[(int) position++] & 0xff : advanceSpace();
+        }
+        private int advanceSpace() { position++; return ' '; }
+        @Override public int read(byte[] buffer, int offset, int requested) {
+            if (requested == 0) return 0;
+            if (position >= length) return -1;
+            int count = (int) Math.min(requested, length - position);
+            int copied = (int) Math.min(count, Math.max(0, prefix.length - position));
+            if (copied > 0) System.arraycopy(prefix, (int) position, buffer, offset, copied);
+            Arrays.fill(buffer, offset + copied, offset + count, (byte) ' ');
+            position += count;
+            return count;
+        }
     }
 
     /** Fill to less than one large escaped history entry below the REAL serialized backup envelope. */

@@ -5,6 +5,8 @@ import android.system.ErrnoException;
 import android.system.Os;
 import android.system.OsConstants;
 import android.util.AtomicFile;
+import android.util.JsonReader;
+import android.util.JsonToken;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -14,6 +16,12 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileDescriptor;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.io.PushbackReader;
+import java.io.Writer;
 import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
@@ -40,6 +48,7 @@ final class LocalSourceBackup {
     private static final String TRANSACTION_FORMAT = "zhixu-android-source-restore";
     private static final int MAX_MANIFEST_BYTES = 512 * 1024;
     private static final int MAX_DOCUMENT_BYTES = 160 * 1024;
+    private static final int MAX_JSON_DEPTH = 5;
     private static final long PREVIEW_LIFETIME_MS = 5 * 60 * 1000;
     private static final Pattern VERSION_ID = Pattern.compile(
         "\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}\\.\\d{3}Z-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\.md");
@@ -115,6 +124,234 @@ final class LocalSourceBackup {
             this.bytes = bytes;
             this.hash = hash;
         }
+    }
+
+    private static final class PackageLimitException extends IOException {
+        private static final long serialVersionUID = 1L;
+    }
+
+    private static final class PackageSyntaxException extends IOException {
+        private static final long serialVersionUID = 1L;
+    }
+
+    /** Bounds individual tokens before JsonReader can accumulate an attacker-sized String. */
+    private static final class PackageJsonReader extends java.io.FilterReader {
+        private boolean quoted;
+        private boolean escaped;
+        private int unicodeDigits;
+        private int quotedChars;
+        private int literalChars;
+
+        PackageJsonReader(java.io.Reader input) { super(input); }
+
+        @Override public int read() throws IOException {
+            int value = in.read();
+            if (value != -1) accept((char) value);
+            return value;
+        }
+
+        @Override public int read(char[] buffer, int offset, int length) throws IOException {
+            int count = in.read(buffer, offset, length);
+            for (int index = offset; index < offset + count; index++) accept(buffer[index]);
+            return count;
+        }
+
+        private void accept(char value) throws PackageSyntaxException {
+            if (quoted) {
+                if (++quotedChars > 6 * MAX_DOCUMENT_BYTES + 2) throw new PackageSyntaxException();
+                if (unicodeDigits > 0) {
+                    if (!(value >= '0' && value <= '9') && !(value >= 'a' && value <= 'f')
+                        && !(value >= 'A' && value <= 'F')) throw new PackageSyntaxException();
+                    unicodeDigits--;
+                } else if (escaped) {
+                    escaped = false;
+                    if (value == 'u') unicodeDigits = 4;
+                    else if ("\"\\/bfnrt".indexOf(value) < 0) throw new PackageSyntaxException();
+                } else if (value == '\\') escaped = true;
+                else if (value == '"') quoted = false;
+                else if (value < 0x20) throw new PackageSyntaxException();
+            } else if (value == '"') {
+                quoted = true;
+                quotedChars = 0;
+                literalChars = 0;
+            } else if ("{}[],: \t\r\n".indexOf(value) >= 0) literalChars = 0;
+            else {
+                if (value < 0x20 || value == '\ufeff' || ++literalChars > 128) throw new PackageSyntaxException();
+            }
+        }
+    }
+
+    private static final class PackageInput extends InputStream {
+        private final InputStream input;
+        private long count;
+
+        PackageInput(InputStream input) { this.input = input; }
+
+        @Override public int read() throws IOException {
+            int value = input.read();
+            if (value != -1 && ++count > MAX_BACKUP_BYTES) throw new PackageLimitException();
+            return value;
+        }
+
+        @Override public int read(byte[] buffer, int offset, int length) throws IOException {
+            if (length == 0) return 0;
+            int allowed = (int) Math.min(length, MAX_BACKUP_BYTES - count + 1);
+            int read = input.read(buffer, offset, allowed);
+            if (read == 0) {
+                int value = read();
+                if (value == -1) return -1;
+                buffer[offset] = (byte) value;
+                return 1;
+            }
+            if (read > 0 && (count += read) > MAX_BACKUP_BYTES) throw new PackageLimitException();
+            return read;
+        }
+    }
+
+    private static final class PackageOutput extends OutputStream {
+        private final OutputStream output;
+        private long count;
+
+        PackageOutput(OutputStream output) { this.output = output; }
+
+        @Override public void write(int value) throws IOException {
+            if (++count > MAX_BACKUP_BYTES) throw new PackageLimitException();
+            output.write(value);
+        }
+
+        @Override public void write(byte[] buffer, int offset, int length) throws IOException {
+            if ((count += length) > MAX_BACKUP_BYTES) throw new PackageLimitException();
+            output.write(buffer, offset, length);
+        }
+
+        @Override public void flush() throws IOException { output.flush(); }
+    }
+
+    /** File boundary: no whole-file byte array or JSON text; stream ownership stays with the caller. */
+    static JSONObject readPackage(InputStream input) throws IOException, LocalSourceStore.StoreException {
+        if (input == null) throw new IOException("No backup input stream");
+        PackageInput bounded = new PackageInput(input);
+        PushbackReader text = new PushbackReader(new InputStreamReader(bounded, StandardCharsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)), 1);
+        try {
+            int first = text.read();
+            if (first != -1 && first != '\ufeff') text.unread(first);
+            JsonReader reader = new JsonReader(new PackageJsonReader(text));
+            reader.setLenient(false);
+            JSONObject result = readBackupObject(reader, "package", 1, new int[1]);
+            if (reader.peek() != JsonToken.END_DOCUMENT) throw invalid("备份 JSON 后还有多余内容。");
+            validatePackage(result);
+            return result;
+        } catch (PackageLimitException exception) { throw invalid("备份整体最多 32 MiB。"); }
+        catch (PackageSyntaxException exception) { throw invalid("备份 JSON 格式或字段长度不正确。"); }
+        catch (CharacterCodingException exception) { throw invalid("备份不是有效的 UTF-8 文本。"); }
+        catch (android.util.MalformedJsonException | java.io.EOFException | JSONException | IllegalStateException exception) {
+            throw invalid("备份 JSON 格式不正确。");
+        }
+    }
+
+    /** Uses the same per-string escaping as the size budget, without a complete String/byte[] copy. */
+    static void writePackage(JSONObject input, OutputStream output) throws IOException, LocalSourceStore.StoreException {
+        if (output == null) throw new IOException("No backup output stream");
+        validatePackage(input); // Nothing reaches the output until the whole package is valid.
+        Writer writer = new OutputStreamWriter(new PackageOutput(output), StandardCharsets.UTF_8.newEncoder()
+            .onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT));
+        try {
+            writeJson(writer, input, 1);
+            writer.flush();
+        } catch (PackageLimitException exception) { throw invalid("备份整体最多 32 MiB。"); }
+        catch (JSONException exception) { throw invalid("备份字段格式不正确。"); }
+    }
+
+    private static JSONObject readBackupObject(JsonReader reader, String kind, int depth, int[] versions)
+        throws IOException, JSONException, LocalSourceStore.StoreException {
+        requireDepth(depth);
+        requireToken(reader, JsonToken.BEGIN_OBJECT);
+        reader.beginObject();
+        String[] expected = "package".equals(kind) ? new String[] { "format", "version", "createdAt", "notes" }
+            : "note".equals(kind) ? new String[] { "current", "original", "history" } : new String[] { "id", "raw" };
+        Set<String> allowed = new HashSet<>(Arrays.asList(expected));
+        Set<String> seen = new HashSet<>();
+        JSONObject result = new JSONObject();
+        while (reader.hasNext()) {
+            String name = reader.nextName();
+            if (!seen.add(name)) throw invalid("备份包含重复字段。");
+            if (!allowed.contains(name)) throw invalid("备份包含不支持的字段。");
+            if ("notes".equals(name) || "history".equals(name)) {
+                result.put(name, readBackupArray(reader, name, depth + 1, versions));
+            } else if ("version".equals(name)) {
+                requireToken(reader, JsonToken.NUMBER);
+                if (!"1".equals(reader.nextString())) throw invalid("备份格式或版本不受支持。");
+                result.put(name, 1); // Keep the existing exact Integer schema contract.
+            } else {
+                requireToken(reader, JsonToken.STRING);
+                String value = reader.nextString();
+                int limit = "current".equals(name) || "original".equals(name) || "raw".equals(name)
+                    ? MAX_DOCUMENT_BYTES : "id".equals(name) || "createdAt".equals(name) ? 64 : 128;
+                if (LocalSourceStore.validateUtf8(value) > limit) throw invalid("备份字段超出长度限制。");
+                result.put(name, value);
+            }
+        }
+        reader.endObject();
+        fields(result, expected);
+        return result;
+    }
+
+    private static JSONArray readBackupArray(JsonReader reader, String kind, int depth, int[] versions)
+        throws IOException, JSONException, LocalSourceStore.StoreException {
+        requireDepth(depth);
+        requireToken(reader, JsonToken.BEGIN_ARRAY);
+        reader.beginArray();
+        JSONArray result = new JSONArray();
+        while (reader.hasNext()) {
+            if ("notes".equals(kind)) {
+                if (result.length() >= 100) throw invalid("备份最多包含 100 份资料。");
+                result.put(readBackupObject(reader, "note", depth + 1, versions));
+            } else {
+                if (++versions[0] > MAX_VERSIONS) throw invalid("备份最多包含 1000 个历史版本。");
+                result.put(readBackupObject(reader, "history", depth + 1, versions));
+            }
+        }
+        reader.endArray();
+        return result;
+    }
+
+    private static void requireToken(JsonReader reader, JsonToken expected) throws IOException, LocalSourceStore.StoreException {
+        if (reader.peek() != expected) throw invalid("备份字段类型不正确。");
+    }
+
+    private static void requireDepth(int depth) throws LocalSourceStore.StoreException {
+        if (depth > MAX_JSON_DEPTH) throw invalid("备份 JSON 层级超出限制。");
+    }
+
+    private static void writeJson(Writer writer, Object value, int depth)
+        throws IOException, JSONException, LocalSourceStore.StoreException {
+        if (value instanceof JSONObject) {
+            requireDepth(depth);
+            JSONObject object = (JSONObject) value;
+            writer.write('{');
+            boolean first = true;
+            for (java.util.Iterator<String> keys = object.keys(); keys.hasNext();) {
+                String key = keys.next();
+                if (!first) writer.write(',');
+                first = false;
+                writer.write(JSONObject.quote(key));
+                writer.write(':');
+                writeJson(writer, object.get(key), depth + 1);
+            }
+            writer.write('}');
+        } else if (value instanceof JSONArray) {
+            requireDepth(depth);
+            JSONArray array = (JSONArray) value;
+            writer.write('[');
+            for (int index = 0; index < array.length(); index++) {
+                if (index != 0) writer.write(',');
+                writeJson(writer, array.get(index), depth + 1);
+            }
+            writer.write(']');
+        } else if (value instanceof String) writer.write(JSONObject.quote((String) value));
+        else if (value instanceof Number) writer.write(JSONObject.numberToString((Number) value));
+        else throw invalid("备份字段类型不正确。");
     }
 
     /** Counts the exact serializer envelope, escaping and UTF-8, without materializing the whole backup. */
@@ -515,12 +752,12 @@ final class LocalSourceBackup {
         return ordered;
     }
 
-    private Map<String, Note> validatePackage(JSONObject input) throws LocalSourceStore.StoreException {
+    private static Map<String, Note> validatePackage(JSONObject input) throws LocalSourceStore.StoreException {
         try { return validatePackageJson(input); }
         catch (JSONException exception) { throw invalid("备份中的快照格式不正确。"); }
     }
 
-    private Map<String, Note> validatePackageJson(JSONObject input) throws JSONException, LocalSourceStore.StoreException {
+    private static Map<String, Note> validatePackageJson(JSONObject input) throws JSONException, LocalSourceStore.StoreException {
         fields(input, "format", "version", "createdAt", "notes");
         requirePackageSize(input);
         if (!FORMAT.equals(input.opt("format")) || !(input.opt("version") instanceof Integer) || input.getInt("version") != 1)

@@ -22,6 +22,17 @@ final class SourceDocumentFiles {
     static final int MAX_BACKUP_BYTES = 32 * 1024 * 1024;
     private static final String[] SOURCE_FIELDS = { "platform", "author", "url", "date", "locator", "topic" };
 
+    static Intent documentIntent(boolean writing, boolean backup, String name) {
+        Intent intent = new Intent(writing ? Intent.ACTION_CREATE_DOCUMENT : Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType(backup ? "application/json" : writing ? "text/markdown" : "*/*");
+        // Ask for access only to the single URI returned by the user's picker, never a prefix or durable grant.
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | (writing ? Intent.FLAG_GRANT_WRITE_URI_PERMISSION : 0));
+        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, false);
+        if (writing) intent.putExtra(Intent.EXTRA_TITLE, name);
+        return intent;
+    }
+
     static Uri selectedDocument(Intent data) throws LocalSourceStore.StoreException {
         Uri uri = data == null ? null : data.getData();
         if (uri == null || !"content".equals(uri.getScheme()) || (data.getClipData() != null
@@ -72,6 +83,50 @@ final class SourceDocumentFiles {
         } catch (IOException | RuntimeException exception) {
             throw new DocumentWriteException(stage, exception);
         }
+    }
+
+    static void copyDocument(OutputOpener opener, InputStream input, int limit, BooleanSupplier active) throws IOException {
+        if (input == null) throw new DocumentWriteException("read-input", new IOException("Missing document input"));
+        String stage = "before-open";
+        try {
+            if (!active.getAsBoolean()) throw new IOException("Operation interrupted");
+            byte[] buffer = new byte[8192];
+            stage = "read-input";
+            int count = readChunk(input, buffer, Math.min(buffer.length, limit + 1));
+            if (count < 1) throw new IOException("Empty document input");
+            if (count > limit) throw new IOException("Document exceeds byte limit");
+            if (!active.getAsBoolean()) throw new IOException("Operation interrupted");
+            stage = "open-output";
+            OutputStream stream = opener.open();
+            if (stream == null) throw new IOException("No output stream");
+            try (OutputStream output = stream) {
+                int total = 0;
+                while (count != -1) {
+                    if (!active.getAsBoolean()) throw new IOException("Operation interrupted");
+                    if (count > limit - total) throw new IOException("Document exceeds byte limit");
+                    stage = "write";
+                    output.write(buffer, 0, count);
+                    total += count;
+                    stage = "read-input";
+                    count = readChunk(input, buffer, Math.min(buffer.length, limit - total + 1));
+                }
+                if (!active.getAsBoolean()) throw new IOException("Operation interrupted");
+                stage = "flush";
+                output.flush();
+                stage = "close";
+            }
+        } catch (IOException | RuntimeException exception) {
+            throw new DocumentWriteException(stage, exception);
+        }
+    }
+
+    private static int readChunk(InputStream input, byte[] buffer, int count) throws IOException {
+        int result = input.read(buffer, 0, count);
+        if (result != 0) return result;
+        int one = input.read();
+        if (one == -1) return -1;
+        buffer[0] = (byte) one;
+        return 1;
     }
 
     static String failureDiagnostic(String stage, Exception exception) {
