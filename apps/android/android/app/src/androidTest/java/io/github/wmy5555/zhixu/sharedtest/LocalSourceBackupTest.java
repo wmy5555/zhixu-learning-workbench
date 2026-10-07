@@ -611,7 +611,7 @@ public class LocalSourceBackupTest extends AndroidTestCase {
             expect("STORE_ERROR", () -> { try (LocalSourceStore rejected = new LocalSourceStore(sourceRoot)) { fail("Linked stage must be rejected"); } });
             assertTrue(safe.isFile());
             assertEquals("固定私有目录之外不能删除", raw(outsideFile));
-        } finally { Os.unlink(linked.getPath()); }
+        } finally { assertTrue(linked.delete()); } // Unlinks the test symlink itself, never its target.
         assertTrue(linked.mkdir());
         try {
             expect("STORE_ERROR", () -> { try (LocalSourceStore rejected = new LocalSourceStore(sourceRoot)) { fail("Stage directory must be rejected"); } });
@@ -624,7 +624,7 @@ public class LocalSourceBackupTest extends AndroidTestCase {
             expect("STORE_ERROR", () -> { try (LocalSourceStore rejected = new LocalSourceStore(sourceRoot)) { fail("Linked staging directory must be rejected"); } });
             assertEquals("固定私有目录之外不能删除", raw(outsideFile));
         } finally {
-            Os.unlink(directory.getPath());
+            assertTrue(directory.delete()); // Unlinks the test symlink itself, never its target.
             assertTrue(heldDirectory.renameTo(directory));
         }
         store = new LocalSourceStore(sourceRoot);
