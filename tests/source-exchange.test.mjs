@@ -86,6 +86,13 @@ test("both exchange parsers match native URL acceptance without rewriting source
     "http://0x7f.0.0.1/path",
     "https://example.com\\path",
     "https://bad_host.example/path",
+    "http://[fe80::1%25eth0]/",
+    "http://[fe80::1%eth0]/",
+    "https://[fe80::1%251]:443/",
+    "http://[::ffff:192.168.001.1]/",
+    "http://[::ffff:192.168.0.01]/",
+    "http://[::ffff:192.168.1]/",
+    "http://[::ffff:192.168.0.256]/",
   ];
   for (const parse of parsers) for (const url of rejected) {
     assert.throws(() => parse({ name: "网址.md", text: exchange(url) }), { code: "SOURCE_FILE_INVALID" }, url);
@@ -95,6 +102,10 @@ test("both exchange parsers match native URL acceptance without rewriting source
     "http://192.168.1.10:8080/资料",
     "https://中文.中国/路径",
     "http://[2001:db8::1]/path",
+    "http://[::ffff:192.168.0.1]:8080/",
+    "https://[::192.0.2.1]/",
+    "http://[::ffff:0.0.0.0]/",
+    "http://[::ffff:255.255.255.255]/",
   ];
   for (const parse of parsers) for (const url of accepted) {
     assert.equal(parse({ name: "网址.md", text: exchange(url) }).url, url, `source URL should remain unchanged: ${url}`);

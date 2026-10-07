@@ -359,6 +359,26 @@ public class SourceDocumentFilesTest extends AndroidTestCase {
         }
     }
 
+    public void testExchangeRejectsScopedIpv6AndNonCanonicalDottedIpv4Tails() throws Exception {
+        for (String url : new String[] { "http://[fe80::1%25eth0]/", "http://[fe80::1%eth0]/",
+            "https://[fe80::1%251]:443/", "http://[::ffff:192.168.001.1]/", "http://[::ffff:192.168.0.01]/",
+            "http://[::ffff:192.168.1]/", "http://[::ffff:192.168.0.256]/" }) {
+            JSONObject note = exchangeNote(new JSONObject().put("url", url).put("author", "保留作者"));
+            try { SourceDocumentFiles.sourceExchange(note); fail("Non-importable IPv6 produced an exchange document"); }
+            catch (LocalSourceStore.StoreException exception) { assertEquals("VALIDATION", exception.code); }
+            assertEquals(url, note.getJSONObject("meta").getString("url"));
+            assertEquals("保留作者", note.getJSONObject("meta").getString("author"));
+        }
+    }
+
+    public void testExchangePreservesOrdinaryIpv6AndIpv4MappedAddresses() throws Exception {
+        for (String url : new String[] { "http://[::1]/", "https://[2001:db8::1]/资料", "http://[::ffff:192.168.0.1]:8080/",
+            "https://[::192.0.2.1]/", "http://[::ffff:0.0.0.0]/", "http://[::ffff:255.255.255.255]/" }) {
+            assertEquals(url, exchangeHeader(SourceDocumentFiles.sourceExchange(exchangeNote(new JSONObject().put("url", url))))
+                .getJSONObject("source").getString("url"));
+        }
+    }
+
     public void testAbandonedQueuedExportDeletesCreatedDocumentBeforeOpeningOutput() throws Exception {
         RecordingDocumentProvider provider = new RecordingDocumentProvider(null);
         ZhixuLocalPlugin plugin = pluginFor(provider);

@@ -225,20 +225,32 @@ final class SourceDocumentFiles {
             // WHATWG allows an empty port, but no sign, decimal point, exponent or radix prefix.
             if (port != null && !port.matches("[0-9]*")) throw new IllegalArgumentException();
             String host = parsed.getHost();
+            if (host.startsWith("[")) {
+                // Java accepts scoped IPv6 (%eth0 / %25eth0), but WHATWG URL cannot import it.
+                if (host.indexOf('%') != -1) throw new IllegalArgumentException();
+                if (host.indexOf('.') != -1) {
+                    // Embedded IPv4 follows stricter IPv6 grammar: four decimal parts without leading zeros.
+                    validateDottedIpv4(host.substring(host.lastIndexOf(':') + 1, host.length() - 1));
+                }
+            }
             String asciiHost = host.startsWith("[") ? host : IDN.toASCII(host);
             if (new URI("http://" + asciiHost).getHost() == null) throw new IllegalArgumentException();
             // WHATWG treats a host ending in a number as IPv4; reject malformed numeric hosts.
             String numericHost = asciiHost.endsWith(".") ? asciiHost.substring(0, asciiHost.length() - 1) : asciiHost;
             String lastLabel = numericHost.substring(numericHost.lastIndexOf('.') + 1);
             if (lastLabel.matches("[0-9]+") || lastLabel.matches("(?i)0x[0-9a-f]*")) {
-                String[] parts = numericHost.split("\\.", -1);
-                if (parts.length != 4) throw new IllegalArgumentException();
-                for (String part : parts) {
-                    if (!part.matches("0|[1-9][0-9]{0,2}") || Integer.parseInt(part) > 255) throw new IllegalArgumentException();
-                }
+                validateDottedIpv4(numericHost);
             }
         } catch (Exception exception) {
             throw invalid("来源链接无法用于原文交换。请在资料编辑中改为含有效主机的 HTTP 或 HTTPS 完整网址（最多 2048 个字符），或清空链接后重新导出；其他来源信息会保留。");
+        }
+    }
+
+    private static void validateDottedIpv4(String value) {
+        String[] parts = value.split("\\.", -1);
+        if (parts.length != 4) throw new IllegalArgumentException();
+        for (String part : parts) {
+            if (!part.matches("0|[1-9][0-9]{0,2}") || Integer.parseInt(part) > 255) throw new IllegalArgumentException();
         }
     }
 
