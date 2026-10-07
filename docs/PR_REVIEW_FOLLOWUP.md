@@ -114,4 +114,4 @@ PR #23 采纳「引导定位隐藏导航」意见：通过引导目标的进入�
 
 2026-10-03 采纳 [#27：完成证据刷新后清除旧检查错误](https://github.com/wmy5555/zhixu-learning-workbench/pull/27#discussion_r4167518148)：仅在同一步的检查未完成提示已经失效时清除，后台刷新不重复通知或自动导航；其他操作错误仍保留。回归通过排队任务完成后的实际轮询路径验证清除，并验证仍未完成及推进日期失败的提示不会被误清。此处仅修改显示状态，不改完成证据或学习规则。
 
-2026-10-07 PR #48：已读取本 PR 的普通评论、行内审阅与总结。Codex Code/Security 对 848bd3c 的审阅均完成，未返回具体缺陷；后续 b129246 仅限定应用构建目标及补充构建说明。模拟器验收与实际证据见 ANDROID_SHARED_UI.md；AGENTS.md 未增加未经用户审阅的子智能体规范。
+2026-10-07 PR #48：已读取本 PR 的普通评论、行内审阅与总结。首轮 848bd3c 未返回具体缺陷；后续自动审阅指出 `root` 域不覆盖 `getFilesDir()` 的换机迁移（[意见](https://github.com/wmy5555/zhixu-learning-workbench/pull/48#discussion_r4202612442)）。核对 Android 官方备份文档后采纳：在云备份和设备迁移中逐个排除 file、database、sharedpref、external 及对应设备保护域，保留 allowBackup=false；增加读取已安装 APK 的权限与已编译排除规则的设备回归。此修复不改变存储目录或数据格式。模拟器证据见 ANDROID_SHARED_UI.md；AGENTS.md 未增加未经用户审阅的子智能体规范。
