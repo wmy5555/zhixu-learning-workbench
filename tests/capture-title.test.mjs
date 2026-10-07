@@ -313,6 +313,54 @@ test('automatic title migration preserves active reading, feedback and pending g
   assert.equal(s.session(reading.id).status, 'reading');
 });
 
+test('title migration preserves confirmed understanding while grading is pending', async t => {
+  const { s, title, child } = await sourceAwaitingTitle(t);
+  s.promote(child.id, { stage: 'learning', reason: '合成回归中明确加入学习' });
+  const study = s.startStudy({ noteId: child.id });
+  s.jobAction(title.id, { action: 'retry' });
+  s.answerStudy(study.id, { answer: '等待批改期间的完整合成回答', requestId: 'synthetic-confirm-pending' });
+  const confirmed = s.confirmStudy(study.id, { body: '用户明确确认的个人理解，合成回归专用。' });
+  const before = s.store.get('sessions', study.id), grade = s.store.get('jobs', before.pendingJobId);
+  assert.equal(before.sourceHash, confirmed.hash);
+  assert.equal(before.material, study.material);
+  assert.notEqual(before.material, confirmed.body);
+  assert.equal(before.status, 'awaiting_feedback');
+  const evidence = s.store.records('studyEvidence'), reviews = s.store.records('reviews');
+  await s.runJobs();
+  const migrated = s.getNote(child.id);
+  assert.notEqual(migrated.hash, confirmed.hash);
+  assert.equal(migrated.body, confirmed.body);
+  assert.equal(migrated.meta.personalUnderstanding, confirmed.meta.personalUnderstanding);
+  assert.equal(migrated.meta.stage, confirmed.meta.stage);
+  assert.deepEqual(s.store.get('sessions', study.id), { ...before, sourceHash: migrated.hash });
+  assert.deepEqual(s.store.get('jobs', grade.id), grade);
+  assert.deepEqual(s.store.records('studyEvidence'), evidence);
+  assert.deepEqual(s.store.records('reviews'), reviews);
+  await s.runJobs();
+  assert.equal(s.store.get('jobs', grade.id).state, 'done');
+  assert.equal(s.session(study.id).material, before.material);
+  assert.equal(s.session(study.id).turns[0].answer, before.turns[0].answer);
+  assert.deepEqual(s.session(study.id).turns[0].feedback, syntheticFeedback);
+  assert.equal(s.finishStudy(study.id).status, 'completed');
+});
+
+test('title migration rejects body changes after pending confirmation', async t => {
+  const { s, title, child } = await sourceAwaitingTitle(t);
+  s.promote(child.id, { stage: 'learning', reason: '合成回归中明确加入学习' });
+  const study = s.startStudy({ noteId: child.id });
+  s.jobAction(title.id, { action: 'retry' });
+  s.answerStudy(study.id, { answer: '随后材料变化前的合成回答', requestId: 'synthetic-confirm-body' });
+  const confirmed = s.confirmStudy(study.id, { body: '用户确认的合成个人理解。' });
+  s.editNote(child.id, { expectedHash: confirmed.hash, body: confirmed.body + '\n确认后真实修改正文。' });
+  const before = s.store.get('sessions', study.id), grade = s.store.get('jobs', before.pendingJobId);
+  await s.runJobs();
+  assert.deepEqual(s.store.get('sessions', study.id), before);
+  await s.runJobs();
+  assert.equal(s.store.get('jobs', grade.id).code, 'SOURCE_CHANGED');
+  assert.equal(s.session(study.id).turns[0].feedback, undefined);
+  assert.throws(() => s.finishStudy(study.id), { code: 'FEEDBACK_PENDING' });
+});
+
 test('automatic title migration rebinds both current pending relation endpoints but never stale suggestions', async t => {
   const { s, title, child } = await sourceAwaitingTitle(t, true);
   const sibling = s.listNotes({ kind: 'knowledge' }).find(note => note.id !== child.id);

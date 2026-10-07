@@ -224,9 +224,10 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
       const processKey = child.meta.processKey.replace(prefix, `${source.id}:${saved.hash}:`);
       const updated = store.update(child.id, { expectedHash: child.hash, meta: { processKey } });
       bindings.set(child.id, { beforeHash: child.hash, afterHash: updated.hash });
-      // Rebind only active sessions still teaching this exact unchanged body/version.
+      // An explicit confirmation may append personal understanding while retaining the teaching snapshot.
       for (const study of store.records('sessions')) if (study.noteId === child.id && study.status !== 'completed'
-        && study.sourceHash === child.hash && study.material === child.body) {
+        && study.sourceHash === child.hash) {
+        if (study.material !== child.body && study.confirmedNoteId !== child.id) continue;
         store.put('sessions', study.id, { ...study, sourceHash: updated.hash });
       }
       for (const proposal of store.records('proposals')) if (proposal.noteId === child.id && proposal.expectedHash === child.hash && proposal.meta?.processKey === child.meta.processKey) {
