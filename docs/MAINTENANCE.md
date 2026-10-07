@@ -6,7 +6,9 @@
 
 `pnpm-workspace.yaml` 禁止 pnpm 在运行脚本前隐式重装依赖。安装始终显式执行 `pnpm install --frozen-lockfile`；CI 使用干净环境重新安装，而本机验证不会擅自替换正在使用的依赖目录。
 
-必需检查名称：`Quality (ubuntu-latest)`、`Quality (windows-latest)`、`Secrets`、`Dependencies`。Quality 使用 Node 24、固定 pnpm、锁定依赖，运行仓库检查、全部 Node 测试和小型中文检索质量检查。Linux 临时加密密钥仅用于合成测试。无构建/类型系统，因此不设置虚假的构建/类型检查。
+必需检查名称：`Quality (ubuntu-latest)`、`Quality (windows-latest)`、`Secrets`、`Dependencies`。Quality 使用 Node 24、固定 pnpm、锁定依赖，运行仓库检查、全部 Node 测试和小型中文检索质量检查。Linux 临时加密密钥仅用于合成测试。电脑端没有构建/类型系统，因此不设置虚假的构建/类型检查。
+
+Android 共用界面样机另有 `Android build and lint` 检查，使用 JDK 21、Android SDK 36 和固定 Gradle Wrapper，构建应用及本项目设备测试 APK 并执行 lint。涉及样机的 PR 还需此项通过；设备测试 APK 构建成功不等于已在模拟器执行。首次功能交付的视觉和真实点击结果须单独记录，参见 [Android 共用界面](ANDROID_SHARED_UI.md)。
 
 CI 文件不等于服务器端合并保护。Branch protection 是否可用取决于 GitHub 套餐和仓库可见性；不为启用功能擅自变更可见性或付费升级。若服务器不支持，维护 Agent 仍须等待四项检查全部通过，且明确说明不是强制阻断。
 

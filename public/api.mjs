@@ -9,6 +9,13 @@ export class ApiError extends Error {
 }
 
 let csrfToken = "";
+let localTransport = null;
+// Called only by the bundled Android entry before the shared app starts.
+export function configureLocalTransport(transport) {
+  if (localTransport || inFlight || csrfToken) throw new Error("Transport already initialized");
+  if (transport?.runtime?.kind !== "android-prototype" || typeof transport.request !== "function" || typeof transport.startSession !== "function") throw new Error("Invalid local transport");
+  localTransport = transport;
+}
 const CONTEXT_KEY = "zhixu.practiceContext.v1";
 let practiceId = "";
 let contextVersion = 0;
@@ -48,6 +55,7 @@ async function parseResponse(response) {
 }
 
 export async function startSession() {
+  if (localTransport) return localTransport.startSession();
   const response = await fetch("/api/session", { credentials: "same-origin" });
   const data = await parseResponse(response);
   if (!response.ok || !data.csrf) {
@@ -80,6 +88,10 @@ export async function request(path, options = {}) {
 }
 
 async function performRequest(path, options = {}) {
+  if (localTransport) {
+    try { return await localTransport.request(path, options); }
+    catch (error) { throw new ApiError(error.message || "无法读取手机资料", { code: error.code || "LOCAL_STORAGE_FAILED" }); }
+  }
   const method = options.method || "GET";
   const headers = new Headers(options.headers || {});
   const init = { method, headers, credentials: "same-origin" };
@@ -116,6 +128,7 @@ async function performRequest(path, options = {}) {
 }
 
 export const api = {
+  get runtime() { return localTransport?.runtime; },
   getContext: getApiContext,
   setContext: setApiContext,
   onboarding: (action = "state", body = {}, options = {}) => request(`/api/onboarding/${action}${action === "state" ? toQuery(body) : ""}`, action === "state" ? { scope: "main", background: options.background === true } : { method: "POST", body, scope: "main" }),

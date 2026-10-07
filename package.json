@@ -14,11 +14,18 @@
     "mcp:chatgpt": "node src/mcp-chatgpt.mjs",
     "check": "node scripts/check-project.mjs",
     "quality": "node scripts/quality-check.mjs",
-    "verify": "pnpm check && pnpm test && pnpm quality"
+    "verify": "pnpm check && pnpm test && pnpm quality",
+    "android:prepare": "node scripts/prepare-android.mjs",
+    "android:sync": "node scripts/prepare-android.mjs && node node_modules/@capacitor/cli/bin/capacitor sync android"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.30.0",
+    "@capacitor/android": "8.5.2",
+    "@capacitor/core": "8.5.2",
+    "@modelcontextprotocol/sdk": "1.31.0",
     "yaml": "2.9.1",
     "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.5.2"
   }
 }

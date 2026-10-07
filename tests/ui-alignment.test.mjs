@@ -49,6 +49,8 @@ class Element {
 }
 function descendants(node) { return [node, ...node.children.flatMap(child => child instanceof Element ? descendants(child) : [])]; }
 function matches(node, selector) {
+  const named = selector.match(/^\[name=["']([^"']+)["']\]$/);
+  if (named) return node.name === named[1];
   const dataPresent = selector.match(/^\[data-([\w-]+)\]$/);
   if (dataPresent) return Object.hasOwn(node.dataset, dataPresent[1].replace(/-([a-z])/g, (_, c) => c.toUpperCase()));
   const dataTour = selector.match(/^\[data-tour=["']([^"']+)["']\]$/);
@@ -154,6 +156,51 @@ test('source maps switch layouts and selection locally, collapse branches, keep 
   app.renderSourceGroupDrawer(source); assert.equal(node('c').attributes['aria-pressed'], 'true');
   practiceId = 'practice-only'; app.renderSourceGroupDrawer(source);
   assert.equal(node('a').attributes['aria-pressed'], 'true');
+});
+
+test('Android capture remains local and never starts processing or research, including after reset', async () => {
+  const imports = [];
+  const app = browser({ runtime: { kind: 'android-prototype' }, import: async payload => { imports.push(plain(payload)); return { notes: [{}] }; }, bootstrap: async () => ({}) });
+  app.renderCapture();
+  const form = app.refs.main.querySelector('[data-tour="capture-form"]');
+  const localOnly = control(form, 'localOnly');
+  const process = control(form, 'process');
+  const research = control(form, 'research');
+  assert.equal(localOnly.checked, true);
+  assert.equal(localOnly.disabled, true);
+  assert.equal(process.disabled, true);
+  assert.equal(research.disabled, true);
+
+  form.reset();
+  await Promise.resolve();
+  assert.equal(localOnly.checked, true, 'reset must preserve the local-only choice');
+  assert.equal(process.disabled, true);
+  assert.equal(research.disabled, true);
+  await form.events.submit({ preventDefault() {} });
+  assert.equal(imports.length, 1);
+  assert.equal(imports[0].items[0].privacy, 'local');
+  assert.equal(imports[0].process, false);
+  assert.equal(imports[0].research, false);
+});
+
+test('Android source editing omits disabled privacy, depth, and research interval fields', async () => {
+  const updates = [];
+  const app = browser({ runtime: { kind: 'android-prototype' }, updateNote: async (id, payload) => { updates.push({ id, payload: plain(payload) }); return { id, hash: 'new-hash' }; }, bootstrap: async () => ({}) });
+  app.renderNoteEditor({ id: 'synthetic-source', kind: 'source', title: '原始资料', body: '原文', hash: 'old-hash', meta: { privacy: 'cloud', depth: 'advanced', researchIntervalDays: 14 } });
+  const form = app.refs.drawerBody.querySelector('form');
+  for (const name of ['privacy', 'depth', 'researchIntervalDays']) assert.equal(control(form, name).disabled, true, `${name} should be disabled`);
+  control(form, 'title').value = '更新标题';
+  await form.events.submit({ preventDefault() {} });
+  assert.equal(updates.length, 1);
+  for (const name of ['privacy', 'depth', 'researchIntervalDays']) assert.equal(Object.hasOwn(updates[0].payload.meta, name), false);
+});
+
+test('Android source drawer disables version history entry', () => {
+  const app = browser({ runtime: { kind: 'android-prototype' } });
+  app.renderSourceGroupDrawer({ id: 'synthetic-source', kind: 'source', title: '原始资料', body: '原文', meta: {}, children: [] });
+  const history = findButton(app.refs.drawerBody, '查看版本');
+  assert.ok(history);
+  assert.equal(history.disabled, true);
 });
 
 test('AI decomposition shows pending progress, prevents repeat submission, and releases controls after completion or failure', async () => {

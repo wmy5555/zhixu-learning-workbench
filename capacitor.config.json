@@ -1,0 +1,8 @@
+{
+  "appId": "io.github.wmy5555.zhixu.sharedtest",
+  "appName": "知序·共用界面样机",
+  "webDir": "dist/android-web",
+  "android": { "path": "apps/android/android", "allowMixedContent": false },
+  "server": { "hostname": "localhost", "androidScheme": "https", "cleartext": false },
+  "loggingBehavior": "none"
+}
