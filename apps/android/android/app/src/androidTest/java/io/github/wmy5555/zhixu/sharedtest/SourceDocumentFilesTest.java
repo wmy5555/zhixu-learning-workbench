@@ -8,6 +8,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import org.json.JSONObject;
@@ -119,7 +120,9 @@ public class SourceDocumentFilesTest extends AndroidTestCase {
         assertTrue(output.closed);
         for (TrackingOutput failed : new TrackingOutput[] { new TrackingOutput(true, false), new TrackingOutput(false, true) }) {
             try { SourceDocumentFiles.writeBytes(failed, bytes, () -> true); fail("Failed export reported success"); }
-            catch (IOException expected) {}
+            catch (SourceDocumentFiles.DocumentWriteException expected) {
+                assertEquals(failed.failFlush ? "flush" : "close", expected.stage);
+            }
             assertTrue(failed.closed);
         }
         TrackingOutput cancelled = new TrackingOutput(false, false);
@@ -127,6 +130,47 @@ public class SourceDocumentFilesTest extends AndroidTestCase {
         catch (IOException expected) {}
         assertEquals(0, cancelled.size());
         assertTrue(cancelled.closed);
+    }
+
+    public void testLostPayloadOrCancellationNeverOpensAndTruncatesDocument() throws Exception {
+        final int[] opens = { 0 };
+        SourceDocumentFiles.OutputOpener opener = () -> { opens[0]++; return new TrackingOutput(false, false); };
+        try { SourceDocumentFiles.writeDocument(opener, null, () -> true); fail("Lost payload opened a document"); }
+        catch (SourceDocumentFiles.DocumentWriteException exception) { assertEquals("payload", exception.stage); }
+        try { SourceDocumentFiles.writeDocument(opener, new byte[] { 'x' }, () -> false); fail("Cancelled export opened a document"); }
+        catch (SourceDocumentFiles.DocumentWriteException exception) { assertEquals("before-open", exception.stage); }
+        assertEquals(0, opens[0]);
+    }
+
+    public void testOpenFailureDiagnosticContainsOnlyStageAndExceptionClasses() throws Exception {
+        String privateMessage = "synthetic-content://provider/private-path?private-body";
+        try {
+            SourceDocumentFiles.writeDocument(() -> {
+                throw new IOException(privateMessage, new SecurityException(privateMessage));
+            }, new byte[] { 'x' }, () -> true);
+            fail("Provider open failure reported success");
+        } catch (SourceDocumentFiles.DocumentWriteException exception) {
+            assertEquals("open-output", exception.stage);
+            String diagnostic = SourceDocumentFiles.failureDiagnostic("export", exception);
+            assertEquals("stage=open-output exception=IOException cause=SecurityException", diagnostic);
+            assertFalse(diagnostic.contains(privateMessage));
+        }
+    }
+
+    public void testProviderPartialWriteFailureClosesOutputAndReportsWriteStage() throws Exception {
+        final boolean[] closed = { false };
+        ByteArrayOutputStream partial = new ByteArrayOutputStream();
+        OutputStream broken = new OutputStream() {
+            @Override public void write(int value) throws IOException {
+                partial.write(value);
+                throw new IOException("Synthetic provider write failure");
+            }
+            @Override public void close() { closed[0] = true; }
+        };
+        try { SourceDocumentFiles.writeDocument(() -> broken, new byte[] { 'x', 'y' }, () -> true); fail("Partial write accepted"); }
+        catch (SourceDocumentFiles.DocumentWriteException exception) { assertEquals("write", exception.stage); }
+        assertEquals(1, partial.size());
+        assertTrue(closed[0]);
     }
 
     public void testExchangeAcceptsCommonWebUrlsAndRetainsEverySourceField() throws Exception {

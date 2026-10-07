@@ -3,10 +3,12 @@ package io.github.wmy5555.zhixu.sharedtest;
 import android.app.Activity;
 import android.content.ContentResolver;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
 import android.database.Cursor;
 import android.net.Uri;
 import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
+import android.util.Log;
 import androidx.activity.result.ActivityResult;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -173,21 +175,27 @@ public class ZhixuLocalPlugin extends Plugin {
     }
 
     private void deleteCreatedDocument(Uri uri) {
-        try { DocumentsContract.deleteDocument(getContext().getContentResolver(), uri); } catch (Exception ignored) {}
+        try { DocumentsContract.deleteDocument(getContext().getContentResolver(), uri); }
+        catch (Exception exception) { debugFailure("cleanup", exception); }
     }
 
     private void completeDocument(PendingDocument task, Uri uri) {
         ContentResolver resolver = null;
         boolean written = false;
+        String stage = "resolver";
         try {
             if (!current(task)) return;
             resolver = getContext().getContentResolver();
+            stage = "metadata";
             String name = displayName(resolver, uri);
             JSObject response;
             if (task.writing()) {
+                stage = "name";
                 SourceDocumentFiles.validateName(name, "exportBackup".equals(task.kind));
                 byte[] bytes = task.bytes;
-                SourceDocumentFiles.writeBytes(resolver.openOutputStream(uri, "wt"), bytes, () -> current(task));
+                final ContentResolver targetResolver = resolver;
+                stage = "export";
+                SourceDocumentFiles.writeDocument(() -> targetResolver.openOutputStream(uri, "wt"), bytes, () -> current(task));
                 response = new JSObject().put("saved", true).put("name", name);
             } else {
                 boolean backup = "previewBackup".equals(task.kind);
@@ -200,6 +208,7 @@ public class ZhixuLocalPlugin extends Plugin {
                 response = backup ? JSObject.fromJSONObject(getStore().previewRestore(new JSONObject(text)))
                     : new JSObject().put("name", name).put("text", text);
             }
+            stage = "response";
             synchronized (stateLock) {
                 if (current(task)) {
                     task.call.resolve(response);
@@ -208,15 +217,24 @@ public class ZhixuLocalPlugin extends Plugin {
                 }
             }
         } catch (LocalSourceStore.StoreException exception) {
+            debugFailure(stage, exception);
             fail(task, task.writing() ? incompleteMessage() : exception.getMessage(), task.writing() ? "FILE_ERROR" : exception.code);
         } catch (Exception exception) {
+            debugFailure(stage, exception);
             fail(task, task.writing() ? incompleteMessage() : "无法读取所选文件，请确认文件格式并重试。", "FILE_ERROR");
         } finally {
             task.bytes = null;
             if (task.writing() && !written && resolver != null) {
                 // Providers may reject deletion; never claim an incomplete document is a valid backup.
-                try { DocumentsContract.deleteDocument(resolver, uri); } catch (Exception ignored) {}
+                try { DocumentsContract.deleteDocument(resolver, uri); }
+                catch (Exception exception) { debugFailure("cleanup", exception); }
             }
+        }
+    }
+
+    private void debugFailure(String stage, Exception exception) {
+        if ((getContext().getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            Log.w("ZhixuSaf", SourceDocumentFiles.failureDiagnostic(stage, exception));
         }
     }
 

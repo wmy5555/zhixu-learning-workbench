@@ -31,17 +31,59 @@ final class SourceDocumentFiles {
         return uri;
     }
 
+    interface OutputOpener { OutputStream open() throws IOException; }
+
+    static final class DocumentWriteException extends IOException {
+        final String stage;
+        DocumentWriteException(String stage, Exception cause) {
+            super("Document export failed", cause);
+            this.stage = stage;
+        }
+    }
+
+    static void writeDocument(OutputOpener opener, byte[] bytes, BooleanSupplier active) throws IOException {
+        // Validate before opening: a provider's truncate mode must never erase a file for a cancelled/lost payload.
+        if (bytes == null) throw new DocumentWriteException("payload", new IOException("Missing document bytes"));
+        if (!active.getAsBoolean()) throw new DocumentWriteException("before-open", new IOException("Operation interrupted"));
+        OutputStream stream;
+        try {
+            stream = opener.open();
+            if (stream == null) throw new IOException("No output stream");
+        } catch (IOException | RuntimeException exception) {
+            throw new DocumentWriteException("open-output", exception);
+        }
+        writeBytes(stream, bytes, active);
+    }
+
     static void writeBytes(OutputStream stream, byte[] bytes, BooleanSupplier active) throws IOException {
-        if (stream == null) throw new IOException("No output stream");
+        if (stream == null) throw new DocumentWriteException("open-output", new IOException("No output stream"));
+        String stage = "payload";
         try (OutputStream output = stream) {
             if (bytes == null) throw new IOException("Missing document bytes");
+            stage = "write";
             for (int offset = 0; offset < bytes.length; offset += 8192) {
                 if (!active.getAsBoolean()) throw new IOException("Operation interrupted");
                 output.write(bytes, offset, Math.min(8192, bytes.length - offset));
             }
             if (!active.getAsBoolean()) throw new IOException("Operation interrupted");
+            stage = "flush";
             output.flush();
+            stage = "close";
+        } catch (IOException | RuntimeException exception) {
+            throw new DocumentWriteException(stage, exception);
         }
+    }
+
+    static String failureDiagnostic(String stage, Exception exception) {
+        Throwable failure = exception;
+        if (exception instanceof DocumentWriteException) {
+            stage = ((DocumentWriteException) exception).stage;
+            failure = exception.getCause();
+        }
+        Throwable cause = failure.getCause();
+        // Fixed operation stage and class names only: never include provider messages, paths, text or stack traces.
+        return "stage=" + stage + " exception=" + failure.getClass().getSimpleName()
+            + " cause=" + (cause == null ? "none" : cause.getClass().getSimpleName());
     }
 
     static String validateName(String name, boolean backup) throws LocalSourceStore.StoreException {
