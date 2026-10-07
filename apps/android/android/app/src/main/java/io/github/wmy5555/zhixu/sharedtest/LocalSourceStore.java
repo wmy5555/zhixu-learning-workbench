@@ -49,6 +49,7 @@ public class LocalSourceStore implements AutoCloseable {
     private final File historyDirectory;
     private SQLiteDatabase database;
     private boolean indexReady;
+    private final LocalSourceBackup backups;
 
     public static class StoreException extends Exception {
         public final String code;
@@ -75,6 +76,8 @@ public class LocalSourceStore implements AutoCloseable {
                 ensureDirectory(notesDirectory);
                 ensureDirectory(originalsDirectory);
                 ensureDirectory(historyDirectory);
+                backups = new LocalSourceBackup(this, root);
+                backups.recover();
                 rebuildIndex(readAll());
             } catch (IOException | JSONException exception) {
                 throw new StoreException("STORE_ERROR", "无法打开手机本地资料，请保留应用数据后重试。");
@@ -125,6 +128,7 @@ public class LocalSourceStore implements AutoCloseable {
         synchronized (LOCK) {
             validateId(id);
             try {
+                backups.recover();
                 return readNote(id);
             } catch (IOException | JSONException exception) {
                 throw new StoreException("STORE_ERROR", "无法读取这份资料，请保留应用数据后重试。");
@@ -172,6 +176,7 @@ public class LocalSourceStore implements AutoCloseable {
                 JSONObject meta = sanitizeMeta(mergedMeta);
                 String hash = contentHash(title, body, meta);
                 if (previous != null && hash.equals(previous.getString("hash"))) return previous;
+                if (previous != null) backups.requireHistoryCapacity();
                 String updatedAt = timestamp();
                 JSONObject note = new JSONObject().put("id", id).put("kind", "source").put("title", title)
                     .put("body", body).put("hash", hash).put("path", "notes/" + id + ".md")
@@ -200,6 +205,7 @@ public class LocalSourceStore implements AutoCloseable {
     }
 
     private Map<String, JSONObject> readAll() throws IOException, JSONException, StoreException {
+        backups.recover();
         File[] files = notesDirectory.listFiles();
         if (files == null) throw new IOException("Cannot enumerate source directory");
         Set<String> ids = new HashSet<>();
@@ -231,11 +237,19 @@ public class LocalSourceStore implements AutoCloseable {
         } catch (CharacterCodingException exception) {
             throw corrupt();
         }
+        return parseMarkdown(id, document);
+    }
+
+    // Shared by current, original and historical snapshot validation. No files are written here.
+    static JSONObject parseMarkdown(String id, String document) throws JSONException, StoreException {
+        validateId(id);
+        if (validateUtf8(document) > MAX_DOCUMENT_BYTES) throw corrupt();
         int end = document.indexOf("\n---\n", 4);
         if (!document.startsWith("---\n") || end < 4) throw corrupt();
         try {
             JSONObject header = new JSONObject(document.substring(4, end));
-            if (header.optInt("schema") != 1 || !id.equals(header.optString("id"))
+            rejectUnknown(header, new HashSet<>(Arrays.asList("schema", "id", "kind", "title", "hash", "updatedAt", "meta")));
+            if (!(header.opt("schema") instanceof Integer) || header.getInt("schema") != 1 || !id.equals(header.optString("id"))
                 || !"source".equals(header.optString("kind"))) throw corrupt();
             String title = requireString(header, "title");
             String body = document.substring(end + 5);
@@ -244,13 +258,52 @@ public class LocalSourceStore implements AutoCloseable {
             String hash = contentHash(title, body, meta);
             if (!hash.equals(header.optString("hash"))) throw corrupt();
             String updatedAt = requireString(header, "updatedAt");
-            if (!updatedAt.matches("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z")) throw corrupt();
+            if (!validTimestamp(updatedAt)) throw corrupt();
             return new JSONObject().put("id", id).put("kind", "source").put("title", title).put("body", body)
                 .put("hash", hash).put("path", "notes/" + id + ".md").put("updatedAt", updatedAt).put("meta", meta);
         } catch (JSONException | StoreException exception) {
             throw corrupt();
         }
     }
+
+    public JSONArray history(String id) throws StoreException {
+        synchronized (LOCK) { return backups.history(id); }
+    }
+
+    public JSONObject restoreVersion(String id, String versionId, String expectedHash) throws StoreException {
+        synchronized (LOCK) {
+            JSONObject version = backups.version(id, versionId);
+            try {
+                // Supply every source field, including explicit clearing; restoring must not inherit newer attribution.
+                JSONObject meta = new JSONObject(version.getJSONObject("meta").toString());
+                for (String field : SOURCE_FIELDS) if (!meta.has(field)) meta.put(field, "");
+                return save(new JSONObject().put("id", id).put("expectedHash", expectedHash)
+                    .put("title", version.getString("title")).put("body", version.getString("body")).put("meta", meta));
+            } catch (JSONException exception) { throw corrupt(); }
+        }
+    }
+
+    public JSONObject backup() throws StoreException {
+        synchronized (LOCK) { return backups.backup(); }
+    }
+
+    public JSONObject previewRestore(JSONObject backup) throws StoreException {
+        synchronized (LOCK) { return backups.preview(backup); }
+    }
+
+    public JSONObject restoreBackup(String token, String conflictPolicy) throws StoreException {
+        synchronized (LOCK) {
+            JSONObject result = backups.restore(token, conflictPolicy);
+            try { rebuildIndex(readAll()); }
+            catch (IOException | JSONException exception) { throw new StoreException("STORE_ERROR", "恢复已提交，索引将在重新打开时重建。"); }
+            return result;
+        }
+    }
+
+    File notesDirectory() { return notesDirectory; }
+    File originalsDirectory() { return originalsDirectory; }
+    File historyDirectory() { return historyDirectory; }
+    Map<String, JSONObject> documents() throws IOException, JSONException, StoreException { return readAll(); }
 
     private static byte[] markdown(JSONObject note) throws JSONException {
         JSONObject header = new JSONObject().put("schema", 1).put("id", note.getString("id"))
@@ -260,7 +313,7 @@ public class LocalSourceStore implements AutoCloseable {
         return ("---\n" + header + "\n---\n" + note.getString("body")).getBytes(StandardCharsets.UTF_8);
     }
 
-    private byte[] readBytes(File file) throws IOException, StoreException {
+    byte[] readBytes(File file) throws IOException, StoreException {
         AtomicFile atomic = new AtomicFile(file);
         // openRead performs AtomicFile recovery before the bounded read.
         try (java.io.FileInputStream input = atomic.openRead()) {
@@ -372,7 +425,7 @@ public class LocalSourceStore implements AutoCloseable {
         return true;
     }
 
-    private static int validateUtf8(String value) throws StoreException {
+    static int validateUtf8(String value) throws StoreException {
         try {
             return StandardCharsets.UTF_8.newEncoder().onMalformedInput(CodingErrorAction.REPORT)
                 .onUnmappableCharacter(CodingErrorAction.REPORT).encode(java.nio.CharBuffer.wrap(value)).remaining();
@@ -381,20 +434,20 @@ public class LocalSourceStore implements AutoCloseable {
         }
     }
 
-    private static void rejectUnknown(JSONObject input, Set<String> allowed) throws StoreException {
+    static void rejectUnknown(JSONObject input, Set<String> allowed) throws StoreException {
         if (input == null) throw validation("保存内容不能为空。");
         for (Iterator<String> keys = input.keys(); keys.hasNext();) {
             if (!allowed.contains(keys.next())) throw validation("请求包含样机不支持的字段。");
         }
     }
 
-    private static String requireString(JSONObject input, String field) throws StoreException {
+    static String requireString(JSONObject input, String field) throws StoreException {
         Object value = input.opt(field);
         if (!(value instanceof String)) throw validation("必需字段缺失或格式不正确。");
         return (String) value;
     }
 
-    private static void validateId(String id) throws StoreException {
+    static void validateId(String id) throws StoreException {
         if (id == null || !ID.matcher(id).matches()) throw validation("资料标识不正确。");
     }
 
@@ -412,19 +465,28 @@ public class LocalSourceStore implements AutoCloseable {
         }
     }
 
-    private static String timestamp() {
+    static String timestamp() {
         SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.ROOT);
         format.setTimeZone(TimeZone.getTimeZone("UTC"));
         return format.format(new Date());
     }
 
-    private static File child(File parent, String name) throws IOException {
+    static boolean validTimestamp(String value) {
+        if (!value.matches("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z")) return false;
+        SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.ROOT);
+        format.setTimeZone(TimeZone.getTimeZone("UTC"));
+        format.setLenient(false);
+        try { return format.format(format.parse(value)).equals(value); }
+        catch (java.text.ParseException exception) { return false; }
+    }
+
+    static File child(File parent, String name) throws IOException {
         File file = new File(parent, name);
         if (!file.getCanonicalFile().getParentFile().equals(parent.getCanonicalFile())) throw new IOException("Invalid internal path");
         return file;
     }
 
-    private static void ensureDirectory(File directory) throws IOException {
+    static void ensureDirectory(File directory) throws IOException {
         if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("Cannot create private directory");
     }
 

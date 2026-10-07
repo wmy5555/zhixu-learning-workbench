@@ -207,7 +207,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
       if (typeof item.body !== 'string' || !item.body.trim() || item.body.length > 500000) fail('每份文本须为 1–500000 字符。');
       const fingerprint = hash(item.body.replaceAll('\r\n','\n').trim());
       const existing = store.list().find(n => n.kind === 'source' && n.meta.fingerprint === fingerprint);
-      const origin = { platform: item.platform || '', author: item.author || '', url: item.url || '', date: item.date || '', locator: item.locator || '', acquiredAt: now() };
+      const origin = { platform: item.platform || '', author: item.author || '', url: item.url || '', date: item.date || '', locator: item.locator || '', ...(item.topic ? { topic: item.topic } : {}), acquiredAt: now() };
       let note;
       if (existing) note = store.update(existing.id, { expectedHash: existing.hash, meta: { origins: [...(existing.meta.origins || []), origin] } });
       else note = store.create({ kind: 'source', title: item.title || item.body.slice(0, 36), body: item.body, meta: { privacy: item.privacy === 'cloud' ? 'cloud' : 'local', fingerprint, origins: [origin], ...origin, stage: 'reference' } });

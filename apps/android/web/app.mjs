@@ -1,8 +1,9 @@
 import { api, ApiError, startSession } from "./api.mjs";
-import { parseSourceFile } from "./source-exchange.mjs";
 import { createProcessFeedback } from "./process-feedback.mjs";
 import { createSourceMap } from "./source-map.mjs";
 import { initSidebar } from "./sidebar.mjs";
+import { parseSourceFile } from "./source-exchange.mjs";
+import { createAndroidDataPanel } from "./android-data.mjs";
 import {
   el, clear, button, badge, emptyState, formatDate, truncate, safeExternalUrl,
   labels, stateTone, field, toast, confirmAction, promptAction, serializeForm, describeJobError,
@@ -58,7 +59,7 @@ const state = {
 };
 let onboarding = null;
 function isMobilePrototype() { return api.runtime?.kind === "android-prototype"; }
-function mobileNotice() { return el("div", { class: "notice info", text: "Android 共用界面样机：可在手机保存、搜索、查看和编辑原文。资料仅存本机；学习、AI、同步和备份尚未接入，请只使用可丢弃的试用资料。" }); }
+function mobileNotice() { return el("div", { class: "notice info", text: "Android 原文工作台：支持文件收集、来源编辑、版本和手机备份。学习、AI 与自动同步尚未接入。重要修改前请在系统页导出备份。" }); }
 const processFeedback = createProcessFeedback({
   getContext: () => api.getContext(), readJobs: () => api.jobStatuses(), notify: toast,
   onChange: changed => {
@@ -111,7 +112,7 @@ function renderFailure(error, retry) {
   clear(refs.main).append(emptyState("暂时无法读取", errorMessage(error), actions));
 }
 
-function handleError(error) { toast(errorMessage(error), "error", 6500); }
+function handleError(error) { if (error?.code !== "CANCELLED") toast(errorMessage(error), "error", 6500); }
 
 function sectionHeading(title, description = "", action = null) {
   return el("div", { class: "section-heading" }, [
@@ -359,6 +360,7 @@ async function renderCapture() {
         el("input", { name: "url", type: "url", placeholder: "https://…" }),
         el("input", { name: "date", type: "date" }),
         el("input", { name: "locator", class: "span-2", placeholder: "页码、时间点、段落等定位" }),
+        el("input", { name: "topic", class: "span-2", placeholder: "来源主题（可选）" }),
       ])),
     ]),
     el("label", { class: "check-field" }, [localOnly, el("span", { text: "仅本地，不发送给配置的模型或联网服务；ChatGPT 的独立读取授权另行管理" })]),
@@ -371,7 +373,7 @@ async function renderCapture() {
     const data = serializeForm(sourceForm);
     const item = {
       title: data.title, body: data.body, platform: data.platform, author: data.author,
-      url: data.url, date: data.date, locator: data.locator, privacy: isMobilePrototype() || localOnly.checked ? "local" : "cloud",
+      url: data.url, date: data.date, locator: data.locator, topic: data.topic, privacy: isMobilePrototype() || localOnly.checked ? "local" : "cloud",
     };
     try {
       const submit = sourceForm.querySelector("button[type='submit']");
@@ -394,8 +396,24 @@ async function renderCapture() {
   ]);
   const importButton = batchPanel.querySelector(".primary-button");
   if (isMobilePrototype()) {
-    fileInput.disabled = true;
-    batchPanel.append(el("p", { class: "muted", text: "样机暂不支持文件导入，请先粘贴文本。" }));
+    const chooseFile = button("选择文件填入草稿", { kind: "primary", onClick: async () => {
+      chooseFile.disabled = true;
+      try {
+        const picked = await api.pickSourceFile();
+        const draft = parseSourceFile(picked);
+        if ((title.value || body.value) && !await confirmAction({ title: "替换当前未保存草稿？", message: "所选文件将填入表单。请先保存需要保留的当前输入。", confirmText: "填入文件" })) return;
+        for (const key of ["title", "body", "platform", "author", "url", "date", "locator", "topic"]) {
+          const input = sourceForm.querySelector(`[name="${key}"]`);
+          if (input) input.value = draft[key] || "";
+        }
+        localOnly.checked = true; syncResearchOption();
+        toast("已填入文件，请核对正文和来源后保存", "success");
+        title.focus(); sourceForm.scrollIntoView({ block: "start" });
+      } catch (error) { handleError(error); }
+      finally { chooseFile.disabled = false; }
+    } });
+    clear(batchPanel).append(sectionHeading("从文件收集", "选择一份 UTF-8 .txt 或 .md 文件，先核对草稿再保存"), chooseFile,
+      el("p", { class: "fine-print", text: "仅访问你在系统窗口中选择的文件。支持知序原文交换格式；普通 Markdown 的来源头部作为原文保留。" }));
   }
   fileInput.addEventListener("change", () => {
     clear(fileList);
@@ -405,15 +423,7 @@ async function renderCapture() {
   importButton.addEventListener("click", async () => {
     try {
       importButton.disabled = true;
-      const items = await Promise.all([...fileInput.files].map(async (file) => {
-        if (file.size > 160 * 1024) throw new Error(`${file.name} 超过 160 KiB。`);
-        let text;
-        try {
-          text = new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer());
-        }
-        catch { throw new Error(`${file.name} 不是有效的 UTF-8 文件。`); }
-        return parseSourceFile({ name: file.name, text });
-      }));
+      const items = await Promise.all([...fileInput.files].map(async (file) => ({ title: file.name.replace(/\.(md|txt)$/i, ""), body: await file.text(), platform: "本地文件", author: "", url: "", date: "", locator: file.name, privacy: "local" })));
       const result = await api.import({ items, captureMode: "files", process: false });
       toast(`已导入 ${asArray(result.notes).length || items.length} 个文件`, "success");
       fileInput.value = "";
@@ -646,7 +656,8 @@ function renderSourceGroupDrawer(source) {
   const content = el("div", { class: "page-stack source-group-drawer", dataset: { sourceId: source.id } });
   const headActions = el("div", { class: "form-actions" }, [
     button("编辑原始资料", { kind: "primary", onClick: () => renderNoteEditor(source, { returnToSourceId: source.id }) }),
-    button("查看版本", { disabled: isMobilePrototype(), title: isMobilePrototype() ? "样机暂不支持查看版本" : "", onClick: () => renderHistory(source, { returnToSourceId: source.id }) }),
+    button("查看版本", { onClick: () => renderHistory(source, { returnToSourceId: source.id }) }),
+    isMobilePrototype() ? button("导出原文", { onClick: async () => { try { await api.exportSource(source.id); toast("原文和来源已导出", "success"); } catch (error) { handleError(error); } } }) : null,
     button("删除", { kind: "danger", disabled: isMobilePrototype(), title: isMobilePrototype() ? "样机暂不支持删除" : "", onClick: () => deleteNote(source) }),
   ]);
   content.append(noteMeta(source), headActions);
@@ -1121,7 +1132,7 @@ async function renderHistory(note, { returnToSourceId = "" } = {}) {
       versions.length ? el("div", { class: "list" }, versions.map((version) => el("div", { class: "list-item no-icon" }, [
         el("div", { class: "item-copy" }, [
           el("h3", { text: formatDate(version.createdAt || version.updatedAt, true) }),
-          el("p", { text: version.reason || version.hash || "历史版本" }),
+          el("p", { text: isMobilePrototype() ? version.id === "original" ? "最初收集的原文" : "修改前保留的版本" : version.reason || version.hash || "历史版本" }),
           el("details", {}, [el("summary", { text: "审阅旧版本正文" }), el("pre", { class: "mono-block", text: version.raw || version.body || "此版本没有可显示的正文快照" })]),
         ]),
         button("恢复此版本", { onClick: () => restoreVersion(note, version, returnToSourceId) }),
@@ -1791,6 +1802,11 @@ function systemTabButton(value, label) {
 
 async function renderSystem() {
   const wrapper = el("div", { class: "page-stack" });
+  if (isMobilePrototype()) {
+    wrapper.append(createAndroidDataPanel({ api, onRestored: refreshBootstrap, onError: handleError }));
+    clear(refs.main).append(wrapper);
+    return;
+  }
   wrapper.append(el("div", { class: "tabs" }, [
     systemTabButton("settings", "能力设置"), systemTabButton("usage", "用量与费用"), systemTabButton("appearance", "外观"), systemTabButton("jobs", "任务"), systemTabButton("data", "备份与恢复"),
     systemTabButton("diagnostics", "诊断与 MCP"), systemTabButton("proposals", "写入提案"), systemTabButton("conflicts", "冲突"),
@@ -2446,7 +2462,7 @@ async function init() {
   if (isMobilePrototype()) {
     document.documentElement.classList.add("android-prototype");
     refs.nav.querySelectorAll("[data-view]").forEach(item => {
-      item.disabled = !["capture", "library"].includes(item.dataset.view);
+      item.disabled = !["capture", "library", "system"].includes(item.dataset.view);
       if (item.disabled) item.title = "后续版本接入";
     });
     for (const id of ["onboarding-launcher", "onboarding-reset"]) { const control = document.querySelector(`#${id}`); if (control) { control.disabled = true; control.title = "新手引导尚未迁移到手机"; } }
