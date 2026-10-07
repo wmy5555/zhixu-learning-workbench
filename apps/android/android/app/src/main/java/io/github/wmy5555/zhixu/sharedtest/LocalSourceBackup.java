@@ -37,6 +37,9 @@ final class LocalSourceBackup {
     static final int MAX_BACKUP_BYTES = 32 * 1024 * 1024;
     static final int MAX_VERSIONS = 1000;
     private static final String FORMAT = "zhixu-android-source-backup";
+    private static final String TRANSACTION_FORMAT = "zhixu-android-source-restore";
+    private static final int MAX_MANIFEST_BYTES = 512 * 1024;
+    private static final int MAX_DOCUMENT_BYTES = 160 * 1024;
     private static final long PREVIEW_LIFETIME_MS = 5 * 60 * 1000;
     private static final Pattern VERSION_ID = Pattern.compile(
         "\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}\\.\\d{3}Z-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\.md");
@@ -55,7 +58,12 @@ final class LocalSourceBackup {
             this.id = document.optString("id");
             this.current = current;
             this.original = original;
-            this.document = document;
+            // Comparison needs only small metadata; retaining parsed bodies duplicates every current raw snapshot.
+            this.document = new JSONObject();
+            try {
+                for (String field : new String[] { "id", "title", "hash", "updatedAt" })
+                    this.document.put(field, document.optString(field));
+            } catch (JSONException exception) { throw new IllegalStateException(exception); }
             this.history = history;
         }
 
@@ -86,6 +94,27 @@ final class LocalSourceBackup {
         int imported;
         int unchanged;
         int versionsImported;
+    }
+
+    /** The journal retains paths and digests, never another complete set of Markdown strings. */
+    private static final class StagedFile {
+        final String area;
+        final String id;
+        final String versionId;
+        final File staged;
+        final File target;
+        final int bytes;
+        final String hash;
+
+        StagedFile(String area, String id, String versionId, File staged, File target, int bytes, String hash) {
+            this.area = area;
+            this.id = id;
+            this.versionId = versionId;
+            this.staged = staged;
+            this.target = target;
+            this.bytes = bytes;
+            this.hash = hash;
+        }
     }
 
     /** Counts the exact serializer envelope, escaping and UTF-8, without materializing the whole backup. */
@@ -200,21 +229,17 @@ final class LocalSourceBackup {
             Map<String, Note> current = snapshot();
             if (!preview.fingerprint.equals(fingerprint(current))) throw expired();
             Plan plan = plan(preview.incoming, current);
+            JSONObject result = new JSONObject().put("imported", plan.imported).put("unchanged", plan.unchanged)
+                .put("conflictsSkipped", plan.conflicts.length()).put("versionsImported", plan.versionsImported);
             if (plan.imported != 0 || plan.versionsImported != 0) {
-                // Stage the WHOLE validated package before committing. Existing sources are never removed.
-                JSONObject transaction = packageNotes(plan.accepted);
-                requirePackageSize(transaction);
-                byte[] bytes = transaction.toString().getBytes(StandardCharsets.UTF_8);
-                LocalSourceStore.ensureDirectory(transactionDirectory);
-                syncDirectory(transactionDirectory.getParentFile());
-                store.writeAtomically(LocalSourceStore.child(transactionDirectory, "plan.json"), bytes);
-                syncDirectory(transactionDirectory);
-                store.writeAtomically(LocalSourceStore.child(transactionDirectory, "committed"), digest(bytes).getBytes(StandardCharsets.US_ASCII));
-                syncDirectory(transactionDirectory);
+                stageTransaction(plan.accepted);
+                // The caller can retain its input object. Release our duplicate current snapshots before replay.
+                current.clear();
+                plan.accepted.clear();
+                preview.incoming.clear();
                 recover();
             }
-            return new JSONObject().put("imported", plan.imported).put("unchanged", plan.unchanged)
-                .put("conflictsSkipped", plan.conflicts.length()).put("versionsImported", plan.versionsImported);
+            return result;
         } catch (IOException | JSONException exception) {
             throw new LocalSourceStore.StoreException("STORE_ERROR", "恢复未能完成；已提交的恢复计划会在重新打开后继续，现有资料已保留。");
         }
@@ -224,28 +249,158 @@ final class LocalSourceBackup {
     void recover() throws IOException, JSONException, LocalSourceStore.StoreException {
         File marker = LocalSourceStore.child(transactionDirectory, "committed");
         if (!exists(marker)) return;
-        byte[] bytes = readBounded(LocalSourceStore.child(transactionDirectory, "plan.json"), MAX_BACKUP_BYTES);
+        byte[] bytes = readBounded(LocalSourceStore.child(transactionDirectory, "plan.json"), MAX_MANIFEST_BYTES);
         String committedHash = decode(readBounded(marker, 64));
         if (!committedHash.equals(digest(bytes))) throw corrupt();
-        Map<String, Note> notes = validatePackage(new JSONObject(decode(bytes)));
-        Map<File, String> writes = destinations(notes);
-        // Check every destination before replaying any file, even after a partly finished earlier replay.
-        for (Map.Entry<File, String> entry : writes.entrySet()) {
-            if (exists(entry.getKey()) && !entry.getValue().equals(readRaw(entry.getKey()))) throw corrupt();
-        }
+        Map<File, StagedFile> writes = validateManifest(new JSONObject(decode(bytes)));
+        validateStagedFiles(writes);
         validateReplayCapacity(writes);
-        requireMergedCapacity(snapshot(store.documentsForRecovery()), notes);
-        for (Map.Entry<File, String> entry : writes.entrySet()) {
-            if (exists(entry.getKey())) continue;
-            LocalSourceStore.ensureDirectory(entry.getKey().getParentFile());
-            syncDirectory(entry.getKey().getParentFile().getParentFile());
-            store.writeAtomically(entry.getKey(), entry.getValue().getBytes(StandardCharsets.UTF_8));
-            syncDirectory(entry.getKey().getParentFile());
+        requireStagedDatasetCapacity(writes);
+        for (StagedFile file : writes.values()) {
+            if (exists(file.target)) continue;
+            LocalSourceStore.ensureDirectory(file.target.getParentFile());
+            syncDirectory(file.target.getParentFile().getParentFile());
+            store.writeAtomically(file.target, stagedBytes(file));
+            syncDirectory(file.target.getParentFile());
         }
         // Deleting the commit marker LAST makes interrupted replay idempotent. Leave harmless plan for diagnostics.
         new AtomicFile(marker).delete();
         syncDirectory(transactionDirectory);
         if (exists(marker)) throw new IOException("Cannot finish restore transaction");
+        // Temporary snapshots are no longer recovery points after every destination is durable.
+        for (StagedFile file : writes.values()) new AtomicFile(file.staged).delete();
+    }
+
+    private void stageTransaction(Map<String, Note> accepted)
+        throws IOException, JSONException, LocalSourceStore.StoreException {
+        LocalSourceStore.ensureDirectory(transactionDirectory);
+        syncDirectory(transactionDirectory.getParentFile());
+        File filesDirectory = LocalSourceStore.child(transactionDirectory, "files");
+        LocalSourceStore.ensureDirectory(filesDirectory);
+        syncDirectory(transactionDirectory);
+        JSONArray files = new JSONArray();
+        // Original and historical files always precede new current files in the durable manifest.
+        for (Note note : accepted.values()) {
+            stageFile(files, filesDirectory, "originals", note.id, "", note.original);
+            for (Map.Entry<String, String> version : note.history.entrySet())
+                stageFile(files, filesDirectory, "history", note.id, version.getKey(), version.getValue());
+        }
+        for (Note note : accepted.values()) stageFile(files, filesDirectory, "notes", note.id, "", note.current);
+        syncDirectory(filesDirectory);
+        JSONObject manifest = new JSONObject().put("format", TRANSACTION_FORMAT).put("version", 2).put("files", files);
+        byte[] bytes = manifest.toString().getBytes(StandardCharsets.UTF_8);
+        if (bytes.length > MAX_MANIFEST_BYTES) throw corrupt();
+        Map<File, StagedFile> staged = validateManifest(manifest);
+        // Read back and validate ALL snapshots and the final budget before creating the commit marker.
+        validateStagedFiles(staged);
+        requireStagedDatasetCapacity(staged);
+        store.writeAtomically(LocalSourceStore.child(transactionDirectory, "plan.json"), bytes);
+        syncDirectory(transactionDirectory);
+        store.writeAtomically(LocalSourceStore.child(transactionDirectory, "committed"), digest(bytes).getBytes(StandardCharsets.US_ASCII));
+        syncDirectory(transactionDirectory);
+    }
+
+    private void stageFile(JSONArray files, File directory, String area, String id, String versionId, String raw)
+        throws IOException, JSONException {
+        String name = String.format(Locale.ROOT, "%04d.md", files.length());
+        byte[] bytes = raw.getBytes(StandardCharsets.UTF_8);
+        store.writeAtomically(LocalSourceStore.child(directory, name), bytes);
+        files.put(new JSONObject().put("area", area).put("id", id).put("versionId", versionId)
+            .put("stage", name).put("bytes", bytes.length).put("sha256", digest(bytes)));
+    }
+
+    private Map<File, StagedFile> validateManifest(JSONObject manifest)
+        throws IOException, JSONException, LocalSourceStore.StoreException {
+        fields(manifest, "format", "version", "files");
+        if (!TRANSACTION_FORMAT.equals(manifest.opt("format")) || !(manifest.opt("version") instanceof Integer)
+            || manifest.getInt("version") != 2 || !(manifest.opt("files") instanceof JSONArray)) throw corrupt();
+        JSONArray files = manifest.getJSONArray("files");
+        if (files.length() > 2 * 100 + MAX_VERSIONS) throw corrupt();
+        Map<File, StagedFile> result = new LinkedHashMap<>();
+        Set<String> stages = new HashSet<>();
+        Set<String> currentIds = new HashSet<>();
+        Set<String> originalIds = new HashSet<>();
+        Set<String> historyIds = new HashSet<>();
+        boolean currentStarted = false;
+        int versions = 0;
+        File directory = LocalSourceStore.child(transactionDirectory, "files");
+        for (int index = 0; index < files.length(); index++) {
+            if (!(files.opt(index) instanceof JSONObject)) throw corrupt();
+            JSONObject item = files.getJSONObject(index);
+            fields(item, "area", "id", "versionId", "stage", "bytes", "sha256");
+            String area = LocalSourceStore.requireString(item, "area");
+            String id = LocalSourceStore.requireString(item, "id");
+            LocalSourceStore.validateId(id);
+            String versionId = LocalSourceStore.requireString(item, "versionId");
+            String stage = LocalSourceStore.requireString(item, "stage");
+            String hash = LocalSourceStore.requireString(item, "sha256");
+            if (!stage.matches("\\d{4}\\.md") || !stages.add(stage) || !hash.matches("[0-9a-f]{64}")
+                || !(item.opt("bytes") instanceof Integer)) throw corrupt();
+            int byteCount = item.getInt("bytes");
+            if (byteCount <= 0 || byteCount > MAX_DOCUMENT_BYTES) throw corrupt();
+            File target;
+            if ("history".equals(area)) {
+                if (currentStarted || ++versions > MAX_VERSIONS) throw corrupt();
+                validateVersionId(versionId);
+                historyIds.add(id);
+                target = LocalSourceStore.child(LocalSourceStore.child(store.historyDirectory(), id), versionId);
+            } else if ("originals".equals(area)) {
+                if (currentStarted || !versionId.isEmpty() || !originalIds.add(id)) throw corrupt();
+                target = LocalSourceStore.child(store.originalsDirectory(), id + ".md");
+            } else if ("notes".equals(area)) {
+                currentStarted = true;
+                if (!versionId.isEmpty() || !currentIds.add(id)) throw corrupt();
+                target = LocalSourceStore.child(store.notesDirectory(), id + ".md");
+            } else throw corrupt();
+            StagedFile file = new StagedFile(area, id, versionId, LocalSourceStore.child(directory, stage), target, byteCount, hash);
+            if (result.put(target, file) != null) throw corrupt();
+        }
+        if (currentIds.size() > 100 || !currentIds.equals(originalIds) || !currentIds.containsAll(historyIds)) throw corrupt();
+        return result;
+    }
+
+    private byte[] stagedBytes(StagedFile file) throws IOException, LocalSourceStore.StoreException {
+        byte[] bytes = store.readBytes(file.staged);
+        if (bytes.length != file.bytes || !file.hash.equals(digest(bytes))) throw corrupt();
+        return bytes;
+    }
+
+    private void validateStagedFiles(Map<File, StagedFile> files)
+        throws IOException, JSONException, LocalSourceStore.StoreException {
+        for (StagedFile file : files.values()) {
+            String raw = decode(stagedBytes(file));
+            if ("history".equals(file.area)) validateVersionSnapshot(file.id, file.versionId, raw);
+            else LocalSourceStore.parseMarkdown(file.id, raw);
+            if (exists(file.target) && !raw.equals(readRaw(file.target))) throw corrupt();
+        }
+    }
+
+    private void requireStagedDatasetCapacity(Map<File, StagedFile> files)
+        throws IOException, JSONException, LocalSourceStore.StoreException {
+        Set<String> ids = new java.util.TreeSet<>(store.documentsForRecovery().keySet());
+        for (StagedFile file : files.values()) if ("notes".equals(file.area)) ids.add(file.id);
+        BackupBudget budget = new BackupBudget();
+        for (String id : ids) {
+            String current = finalRaw(LocalSourceStore.child(store.notesDirectory(), id + ".md"), files);
+            String original = finalRaw(LocalSourceStore.child(store.originalsDirectory(), id + ".md"), files);
+            LocalSourceStore.parseMarkdown(id, current);
+            LocalSourceStore.parseMarkdown(id, original);
+            budget.note(current, original);
+            File directory = LocalSourceStore.child(store.historyDirectory(), id);
+            Set<String> versions = new java.util.TreeSet<>();
+            if (directory.exists()) versions.addAll(fileNames(directory, true));
+            for (StagedFile file : files.values()) if ("history".equals(file.area) && id.equals(file.id)) versions.add(file.versionId);
+            for (String versionId : versions) {
+                String raw = finalRaw(LocalSourceStore.child(directory, versionId), files);
+                validateVersionSnapshot(id, versionId, raw);
+                budget.version(versionId, raw);
+            }
+        }
+    }
+
+    private String finalRaw(File target, Map<File, StagedFile> files) throws IOException, LocalSourceStore.StoreException {
+        StagedFile file = files.get(target);
+        return file == null ? readRaw(target) : decode(stagedBytes(file));
     }
 
     private Map<File, String> destinations(Map<String, Note> notes) throws IOException {
@@ -261,7 +416,7 @@ final class LocalSourceBackup {
         return writes;
     }
 
-    private void validateReplayCapacity(Map<File, String> writes) throws IOException, LocalSourceStore.StoreException {
+    private void validateReplayCapacity(Map<File, ?> writes) throws IOException, LocalSourceStore.StoreException {
         Set<String> currentIds = new HashSet<>(fileNames(store.notesDirectory(), false));
         Set<String> versions = historyPaths();
         for (File target : writes.keySet()) {

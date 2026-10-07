@@ -358,6 +358,17 @@ public class LocalSourceBackupTest extends AndroidTestCase {
         for (int index = 0; index < count; index++) history.put(versionEntry(raw, saved.getString("id")));
         JSONObject full = backupEnvelope(raw, note.getString("original"), history);
         assertEquals(count, restore(store, full).getInt("versionsImported"));
+        File plan = new File(sourceRoot, "restore-transaction-v1/plan.json");
+        assertTrue("Near-32MiB recovery must keep only a small manifest", plan.length() < 512 * 1024);
+        JSONObject manifest = new JSONObject(raw(plan));
+        assertEquals("zhixu-android-source-restore", manifest.getString("format"));
+        assertEquals(2, manifest.getInt("version"));
+        assertEquals(count + 2, manifest.getJSONArray("files").length());
+        for (int index = 0; index < manifest.getJSONArray("files").length(); index++) {
+            JSONObject file = manifest.getJSONArray("files").getJSONObject(index);
+            assertFalse(file.has("raw"));
+            assertTrue(file.getInt("bytes") <= 160 * 1024);
+        }
         return full;
     }
 
@@ -448,6 +459,63 @@ public class LocalSourceBackupTest extends AndroidTestCase {
         assertEquals(before, raw(old));
         assertEquals(1, new File(destinationRoot, "notes").listFiles().length);
         assertTrue(new File(destinationRoot, "restore-transaction-v1/committed").isFile());
+    }
+
+    public void testTamperedStagedSnapshotBlocksEntireReplayAndKeepsOldDocuments() throws Exception {
+        JSONObject existing = save("完整保留旧资料", "原文不可覆盖");
+        JSONObject base = store.backup();
+        save("暂存新资料", "中断后验证暂存字节");
+        JSONObject exported = store.backup();
+        try (LocalSourceStore destination = destination()) { restore(destination, base); }
+        File destinationRoot = new File(root, "destination");
+        try (LocalSourceStore interrupted = new LocalSourceStore(destinationRoot) {
+            @Override void writeAtomically(File file, byte[] bytes) throws IOException {
+                if ("notes".equals(file.getParentFile().getName())) throw new IOException("Synthetic replay interruption");
+                super.writeAtomically(file, bytes);
+            }
+        }) {
+            JSONObject preview = interrupted.previewRestore(exported);
+            expect("STORE_ERROR", () -> interrupted.restoreBackup(preview.getString("token"), "keep-current"));
+        }
+        JSONObject manifest = new JSONObject(raw(new File(destinationRoot, "restore-transaction-v1/plan.json")));
+        String stageName = manifest.getJSONArray("files").getJSONObject(0).getString("stage");
+        File staged = new File(destinationRoot, "restore-transaction-v1/files/" + stageName);
+        File old = new File(destinationRoot, "notes/" + existing.getString("id") + ".md");
+        String before = raw(old);
+        try (java.io.FileOutputStream output = new java.io.FileOutputStream(staged)) {
+            output.write("corrupt staged snapshot".getBytes(StandardCharsets.UTF_8));
+            output.getFD().sync();
+        }
+        expect("CORRUPT", () -> {
+            try (LocalSourceStore rejected = destination()) { fail("All staged snapshots must validate before replay"); }
+        });
+        assertEquals(before, raw(old));
+        assertEquals(1, new File(destinationRoot, "notes").listFiles().length);
+        assertTrue(new File(destinationRoot, "restore-transaction-v1/committed").isFile());
+    }
+
+    public void testCorruptStagingReadbackRejectsBeforeCommitOrAuthoritativeWrites() throws Exception {
+        save("写回检查", "暂存损坏时保留当前库");
+        JSONObject exported = store.backup();
+        File destinationRoot = new File(root, "destination");
+        try (LocalSourceStore failed = new LocalSourceStore(destinationRoot) {
+            @Override void writeAtomically(File file, byte[] bytes) throws IOException {
+                super.writeAtomically(file, bytes);
+                if ("files".equals(file.getParentFile().getName())) {
+                    try (java.io.FileOutputStream output = new java.io.FileOutputStream(file, true)) {
+                        output.write('x');
+                        output.getFD().sync();
+                    }
+                }
+            }
+        }) {
+            JSONObject preview = failed.previewRestore(exported);
+            expect("CORRUPT", () -> failed.restoreBackup(preview.getString("token"), "keep-current"));
+            assertFalse(new File(destinationRoot, "restore-transaction-v1/committed").exists());
+            assertEquals(0, new File(destinationRoot, "notes").listFiles().length);
+            assertEquals(0, new File(destinationRoot, "originals").listFiles().length);
+        }
+        try (LocalSourceStore reopened = destination()) { assertEquals(0, reopened.list("").length()); }
     }
 
     public void testProcessInterruptionReplaysRemainingNotesAndRebuildsIndex() throws Exception {

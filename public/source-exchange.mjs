@@ -71,6 +71,43 @@ function rejectDuplicateJsonKeys(source) {
   if (index !== source.length) throw invalid();
 }
 
+function validateExchangeUrl(value) {
+  if (!value) return;
+  if (/[\p{Cc}]/u.test(value)) throw invalid("来源网址无效。");
+  let url;
+  try { url = new URL(value); } catch { throw invalid("来源网址无效。"); }
+  if (!new Set(["http:", "https:"]).has(url.protocol) || !url.hostname) throw invalid("来源网址只允许含有效主机的 HTTP 或 HTTPS。");
+
+  const authority = value.match(/^https?:\/\/([^/?#]*)/i)?.[1];
+  if (!authority) throw invalid("来源网址无效。");
+  const hostPort = authority.slice(authority.lastIndexOf("@") + 1);
+  let rawHost;
+  if (hostPort.startsWith("[")) {
+    const end = hostPort.indexOf("]");
+    if (end < 0) throw invalid("来源网址无效。");
+    rawHost = hostPort.slice(0, end + 1);
+  } else {
+    if ((hostPort.match(/:/g) || []).length > 1) throw invalid("来源网址无效。");
+    rawHost = hostPort.split(":", 1)[0];
+  }
+  if (!rawHost || /\s/u.test(rawHost) || rawHost.includes("\\") || rawHost.includes("%")) throw invalid("来源网址无效。");
+  const asciiHost = url.hostname.toLowerCase();
+  if (asciiHost.startsWith("[") && asciiHost.endsWith("]")) return;
+
+  const numericHost = rawHost.endsWith(".") ? rawHost.slice(0, -1) : rawHost;
+  const labels = numericHost.split(".");
+  const canonicalIpv4 = labels.length === 4 && labels.every(label => /^(?:0|[1-9][0-9]{0,2})$/.test(label) && Number(label) <= 255);
+  const lastLabel = labels.at(-1) || "";
+  const numericEnding = /^[0-9]+$/.test(lastLabel) || /^0x[0-9a-f]*$/i.test(lastLabel);
+  if (numericEnding && !canonicalIpv4) throw invalid("来源网址包含无法兼容的数字主机。");
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(asciiHost) && !canonicalIpv4) throw invalid("来源网址包含无法兼容的数字主机。");
+  if (/^\d+(?:\.\d+){0,3}\.?$/.test(rawHost) && !canonicalIpv4) throw invalid("来源网址包含无法兼容的数字主机。");
+
+  const dnsHost = asciiHost.endsWith(".") ? asciiHost.slice(0, -1) : asciiHost;
+  if (dnsHost.length > 253 || dnsHost.split(".").some(label => label.length > 63
+    || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(label))) throw invalid("来源网址主机名无效。");
+}
+
 function exchangeItem(name, text, header, body) {
   if (/"format"\s*:\s*"zhixu-source-exchange"/.test(header)) {
     if (utf8Length(header) > MAX_EXCHANGE_HEADER_BYTES) throw invalid("交换文件头部超过限制。");
@@ -96,11 +133,7 @@ function exchangeItem(name, text, header, body) {
         throw invalid("交换文件来源信息无效。");
       }
     }
-    if (data.source.url) {
-      let url;
-      try { url = new URL(data.source.url); } catch { throw invalid("来源网址无效。"); }
-      if (!new Set(["http:", "https:"]).has(url.protocol)) throw invalid("来源网址只允许 HTTP 或 HTTPS。");
-    }
+    validateExchangeUrl(data.source.url);
     if (!body.trim() || body.includes(String.fromCharCode(0)) || body.length > MAX_DESKTOP_BODY_CHARS) throw invalid("交换文件正文为空、含无效字符或超过 500000 个字符。");
     return { title, body, ...data.source, privacy: "local" };
   }

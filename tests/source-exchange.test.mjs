@@ -74,6 +74,33 @@ test("recognized exchange rejects unsupported versions, fields, and source value
   assert.throws(() => parseSourceFile({ name: "x.md", text: fixture("正".repeat(500001)) }), { code: "SOURCE_FILE_INVALID" });
 });
 
+test("both exchange parsers match native URL acceptance without rewriting source values", () => {
+  const parsers = [parseSourceFile, parseAndroidSourceFile];
+  const exchange = url => `---\n${JSON.stringify({
+    format: "zhixu-source-exchange", version: 1, title: "网址样例", source: { url },
+  })}\n---\n正文`;
+  const rejected = [
+    "https://exa\tmple.com/path",
+    "http://127.1/path",
+    "http://0177.0.0.1/path",
+    "http://0x7f.0.0.1/path",
+    "https://example.com\\path",
+    "https://bad_host.example/path",
+  ];
+  for (const parse of parsers) for (const url of rejected) {
+    assert.throws(() => parse({ name: "网址.md", text: exchange(url) }), { code: "SOURCE_FILE_INVALID" }, url);
+  }
+  const accepted = [
+    "https://example.com/path?q=a%20b",
+    "http://192.168.1.10:8080/资料",
+    "https://中文.中国/路径",
+    "http://[2001:db8::1]/path",
+  ];
+  for (const parse of parsers) for (const url of accepted) {
+    assert.equal(parse({ name: "网址.md", text: exchange(url) }).url, url, `source URL should remain unchanged: ${url}`);
+  }
+});
+
 test("duplicate JSON keys and malformed recognized formats are rejected", () => {
   assert.throws(() => parseSourceFile({ name: "x.md", text: '---\n{"format":"zhixu-source-exchange","format":"zhixu-source-exchange"}\n---\n正文' }), { code: "SOURCE_FILE_INVALID" });
   assert.throws(() => parseSourceFile({ name: "x.md", text: '---\n{"format":"zhixu-source-exchange",}\n---\n正文' }), { code: "SOURCE_FILE_INVALID" });
