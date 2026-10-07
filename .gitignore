@@ -18,5 +18,12 @@ backups/
 exports/
 coverage/
 dist/
+**/build/
+**/.gradle/
+**/local.properties
+*.jks
+*.keystore
+*.apk
+*.aab
 .DS_Store
 Thumbs.db
