@@ -482,7 +482,8 @@ final class LocalSourceBackup {
     private static void syncDirectory(File directory) throws IOException {
         FileDescriptor descriptor = null;
         try {
-            descriptor = Os.open(directory.getPath(), OsConstants.O_RDONLY | OsConstants.O_DIRECTORY, 0);
+            if (!directory.isDirectory()) throw new IOException("Missing private restore directory");
+            descriptor = Os.open(directory.getPath(), OsConstants.O_RDONLY, 0);
             Os.fsync(descriptor);
         } catch (ErrnoException exception) { throw new IOException("Cannot sync private restore directory", exception); }
         finally {
