@@ -1191,3 +1191,24 @@ test('study confirmation reuses only the matching session form', async () => {
   await app.navigateTutorial(step, { roles: fixture.roles });
   assert.equal(app.refs.drawer.classList.contains('is-open'), false, 'direct confirmation is not session confirmation');
 });
+
+
+test('capture accepts blank titles independently of decomposition and explains local placeholders', async () => {
+  {
+    const writes = [];
+    const app = browser({ import: async payload => { writes.push(plain(payload)); return { notes: [{}] }; }, bootstrap: async () => ({}) });
+    await app.renderCapture();
+    const form = descendants(app.refs.main).find(node => node.tagName === 'form');
+    const title = control(form, 'title');
+    assert.notEqual(title.required, true);
+    assert.match(form.textContent, /标题（可选）/);
+    assert.match(form.textContent, /无需勾选 AI 拆解.*调用费用/);
+    title.value = '';
+    control(form, 'body').textContent = '合成无标题正文';
+    await form.events.submit({ preventDefault() {} });
+    assert.equal(writes[0].items[0].title, '');
+    assert.equal(writes[0].items[0].body, '合成无标题正文');
+    assert.equal(writes[0].process, false);
+    assert.equal(writes[0].research, false);
+  }
+});

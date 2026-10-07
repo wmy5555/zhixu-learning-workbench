@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { Store, now, hash, fail } from './store.mjs';
 import { createSecrets } from './secrets.mjs';
 import { createAI } from './ai.mjs';
-import { promptDefaults, renderPrompt, validatePromptOverrides, sourceExtractionStructure, extractionResearchContract, effectivePromptTemplate } from './prompts.mjs';
+import { promptDefaults, renderPrompt, validatePromptOverrides, sourceExtractionStructure, sourceTitleContract, extractionResearchContract, effectivePromptTemplate } from './prompts.mjs';
 import { createLearning } from './learning.mjs';
 import { createLifecycle } from './knowledge-lifecycle.mjs';
 import { createChatgptBridge } from './chatgpt.mjs';
@@ -186,7 +186,8 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   function processNote(id, { research = false, reuseExtracted = false } = {}) {
     const source = getNote(id);
     if (source.kind !== 'source') fail('请选择原始资料重新加工。');
-    const payload = { noteId: id, hash: source.hash, research: research === true };
+    const payload = { noteId: id, hash: source.hash, research: research === true, ...(needsTitle(source) ? { titleRequested: true } : {}) };
+    for (const task of store.records('jobs')) if (task.type === 'title' && task.payload.noteId === id && ['queued','waiting'].includes(task.state)) putJob({ ...task, state: 'cancelled', code: 'CANCELLED', error: '标题将与资料拆解一同生成。' });
     const previous = processJobs(id, source.hash);
     const pending = previous.find(job => ['queued','running','waiting'].includes(job.state));
     if (pending) return processReply(pending, true);
@@ -200,6 +201,54 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     if (extracted) payload.extracted = structuredClone(extracted);
     return processReply(queue('process', payload, `process:${id}:${source.hash}${payload.research ? ':research' : ''}`));
   }
+  const needsTitle = source => source.meta.titlePending === true && source.title === source.meta.titlePlaceholder;
+  const validSourceTitle = value => typeof value === 'string' && value.trim().length > 0 && value.trim().length <= 80 && !/[\r\n\u0000-\u001f\u007f\u2028\u2029]/u.test(value) && !/^[#>*\x60]|\x60/u.test(value.trim());
+  function titleJob(source, failure = false) {
+    const task = queue('title', { noteId: source.id, hash: source.hash }, `title:${source.id}:${source.hash}`);
+    return failure ? putJob({ ...task, state: 'failed', code: 'MODEL_FORMAT', error: '标题结果缺失或格式不正确；暂用原文片段，拆解结果已保留。' }) : task;
+  }
+  function saveSourceTitle(source, value, signal) {
+    if (signal.aborted) fail('任务已取消。', 'CANCELLED');
+    const current = getNote(source.id);
+    if (current.hash !== source.hash) fail('资料已修改，旧标题未写入。', 'SOURCE_CHANGED');
+    if (privacyFor(current) !== 'cloud') fail('资料已改为仅本地，旧标题未写入。', 'PRIVACY_LOCAL');
+    if (!needsTitle(current)) fail('标题已经填写，保留当前标题。', 'TITLE_ALREADY_SET');
+    if (!validSourceTitle(value)) fail('标题结果缺失或格式不正确；原文与临时标题已保留。', 'MODEL_FORMAT');
+    const structure = store.get('sourceStructures', source.id), children = sourceChildren(source.id);
+    const structureCurrent = structure && JSON.stringify(structure.basis) === JSON.stringify(structureBasis(source, children));
+    const saved = store.update(source.id, { title: value.trim(), expectedHash: source.hash, meta: { titlePending: false, titleOrigin: 'ai' } });
+    // Only this strictly checked automatic title change can carry body-derived evidence forward.
+    const prefix = `${source.id}:${source.hash}:`, claims = new Set();
+    for (const child of children.filter(note => note.meta.processKey?.startsWith(prefix))) {
+      for (const claim of child.meta.claims || []) claims.add(claim);
+      const processKey = child.meta.processKey.replace(prefix, `${source.id}:${saved.hash}:`);
+      const updated = store.update(child.id, { expectedHash: child.hash, meta: { processKey } });
+      for (const proposal of store.records('proposals')) if (proposal.noteId === child.id && proposal.expectedHash === child.hash && proposal.meta?.processKey === child.meta.processKey) {
+        store.put('proposals', proposal.id, { ...proposal, expectedHash: updated.hash, meta: { ...proposal.meta, processKey } });
+      }
+    }
+    for (const task of processJobs(source.id, source.hash)) {
+      task.payload.hash = saved.hash;
+      if (task.payload.savedCandidates?.hash === source.hash) task.payload.savedCandidates.hash = saved.hash;
+      task.dedupKey = `process:${source.id}:${saved.hash}${task.payload.research ? ':research' : ''}`;
+      putJob(task);
+    }
+    for (const claim of claims) {
+      const cached = store.get('research', hash(claim + ':' + source.hash));
+      if (cached) store.put('research', hash(claim + ':' + saved.hash), cached);
+    }
+    if (structureCurrent) store.put('sourceStructures', source.id, { ...structure, basis: structureBasis(saved, sourceChildren(source.id)) });
+    return saved;
+  }
+  async function generateSourceTitle(job, signal) {
+    const source = getNote(job.payload.noteId);
+    if (source.hash !== job.payload.hash) fail('资料已修改，请重试当前版本。', 'SOURCE_CHANGED');
+    if (!needsTitle(source)) fail('标题已经填写，保留当前标题。', 'TITLE_ALREADY_SET');
+    const result = parseJSON((await ai.generate({ system: promptText('serviceSystem'), privacy: privacyFor(source), signal, json: true, prompt: promptText('sourceTitle', { source: source.body }) })).text);
+    const saved = saveSourceTitle(source, result?.sourceTitle, signal);
+    job.payload.resultHash = saved.hash;
+    putJob(job);
+  }
   function importItems({ items, process = false, research = false }) {
     if (!Array.isArray(items) || !items.length || items.length > 100) fail('每次请导入 1–100 份文本。');
     const result = [], jobs = [];
@@ -209,9 +258,19 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
       const existing = store.list().find(n => n.kind === 'source' && n.meta.fingerprint === fingerprint);
       const origin = { platform: item.platform || '', author: item.author || '', url: item.url || '', date: item.date || '', locator: item.locator || '', acquiredAt: now() };
       let note;
-      if (existing) note = store.update(existing.id, { expectedHash: existing.hash, meta: { origins: [...(existing.meta.origins || []), origin] } });
-      else note = store.create({ kind: 'source', title: item.title || item.body.slice(0, 36), body: item.body, meta: { privacy: item.privacy === 'cloud' ? 'cloud' : 'local', fingerprint, origins: [origin], ...origin, stage: 'reference' } });
+      if (existing) {
+        note = store.update(existing.id, { expectedHash: existing.hash, meta: { origins: [...(existing.meta.origins || []), origin] } });
+        // A duplicate only appends provenance; pending requests use its resulting version.
+        if (needsTitle(note)) for (const task of store.records('jobs')) if (task.payload?.noteId === note.id && task.payload.hash === existing.hash && ['queued','waiting','failed'].includes(task.state)
+          && (task.type === 'title' || task.type === 'process' && !task.payload.extracted)) {
+          task.payload.hash = note.hash;
+          task.dedupKey = `${task.type}:${note.id}:${note.hash}${task.payload.research ? ':research' : ''}`;
+          putJob(task);
+        }
+      }
+      else note = store.create({ kind: 'source', title: typeof item.title === 'string' && item.title.trim() ? item.title.trim() : item.body.replace(/\s+/gu, ' ').trim().slice(0, 36), body: item.body, meta: { ...(!(typeof item.title === 'string' && item.title.trim()) ? { titlePlaceholder: item.body.replace(/\s+/gu, ' ').trim().slice(0, 36) } : {}), titlePending: !(typeof item.title === 'string' && item.title.trim()), titleOrigin: typeof item.title === 'string' && item.title.trim() ? 'manual' : 'temporary', privacy: item.privacy === 'cloud' ? 'cloud' : 'local', fingerprint, origins: [origin], ...origin, stage: 'reference' } });
       result.push(note); if (process) jobs.push(processNote(note.id, { research }));
+      else if (!existing && needsTitle(note)) jobs.push(publicJob(titleJob(note)));
     }
     return { notes: result, jobs };
   }
@@ -223,6 +282,11 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     const n = structuredClone(note);
     n.meta.effectivePrivacy=privacyFor(note);
     delete n.meta.evidence;
+    if (n.kind === 'source' && n.meta.titlePending) n.meta.titlePending = needsTitle(note);
+    if (n.kind === 'source' && needsTitle(n)) {
+      const job = store.records('jobs').find(j => j.payload?.noteId === n.id && (j.type === 'title' || j.type === 'process' && j.payload.titleRequested));
+      n.titleGeneration = { state: job?.state || 'waiting', code: job?.code || null };
+    } else if (n.meta.titleOrigin === 'ai') n.titleGeneration = { state: 'done' };
     n.meta.sources = (n.meta.sources || []).filter(s => s.role === 'input' || !store.row(s.id) || !store.read(s.id).meta.excerptOnly);
     n.meta.researchLimitations = [...new Set((n.meta.researchLimitations || []).map(l => operationalIssue(l) ? (l.match(/^“[^”]+”/)?.[0] || '该事实')+'尚待核验。' : l))];
     if (n.meta.processKey && !n.meta.userEdited && (!n.meta.generatedBodyHash || hash(n.body) === n.meta.generatedBodyHash)) {
@@ -324,7 +388,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
         AND substr(json_extract(c.json,'$.meta.processKey'),1,length(json_extract(j.json,'$.payload.noteId') || ':' || json_extract(j.json,'$.payload.hash') || ':')) =
         json_extract(j.json,'$.payload.noteId') || ':' || json_extract(j.json,'$.payload.hash') || ':') AS savedCount
       FROM records j LEFT JOIN notes n ON n.id=json_extract(j.json,'$.payload.noteId')
-      WHERE j.namespace='jobs' AND json_extract(j.json,'$.type') IN ('process','structure')
+      WHERE j.namespace='jobs' AND json_extract(j.json,'$.type') IN ('process','structure','title')
       ORDER BY j.rowid DESC`).all().map(({ expectedCount, currentSource, researchProgress, ...job }) => ({ ...job,
       research: job.research === 1, researchProgress: researchProgress ? JSON.parse(researchProgress) : null,
       extractionSaved: Boolean(job.type === 'process' && currentSource && expectedCount && job.savedCount === expectedCount && !job.presetCase) }));
@@ -333,7 +397,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   function editNote(id, input) {
     const old = getNote(id), meta = { ...(input.meta || {}) };
     // Content edits cannot impersonate a completed learning/confirmation action.
-    for (const k of ['confirmedAt','confirmedBy','personalUnderstanding','researchLimitations','evidence','supersededBy','generatedBodyHash','userEdited','learningEvidence']) delete meta[k];
+    for (const k of ['titlePending','titlePlaceholder','titleOrigin','confirmedAt','confirmedBy','personalUnderstanding','researchLimitations','evidence','supersededBy','generatedBodyHash','userEdited','learningEvidence']) delete meta[k];
     if (meta.stage && meta.stage !== old.meta.stage) fail('请通过晋级操作调整阶段。');
     if (meta.privacy && !['local','cloud'].includes(meta.privacy)) fail('隐私范围无效。');
     if(meta.researchIntervalDays!==undefined && (!Number.isInteger(Number(meta.researchIntervalDays)) || Number(meta.researchIntervalDays)<1 || Number(meta.researchIntervalDays)>365))fail('核验有效天数应为1–365。');
@@ -342,7 +406,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     // Reconfirming unchanged fields must not create a new source version.
     if ((input.title === undefined || input.title === old.title) && (input.body === undefined || input.body === old.body)
       && Object.entries(meta).every(([key, value]) => JSON.stringify(value) === JSON.stringify(old.meta[key]))) return old;
-    const result = store.update(id, { ...input, meta: { ...meta, ...(old.kind === 'knowledge' ? { userEdited: true } : {}) } });
+    const result = store.update(id, { ...input, meta: { ...meta, ...(old.kind === 'source' && input.title !== undefined && input.title !== old.title ? { titlePending: false, titleOrigin: 'manual' } : {}), ...(old.kind === 'knowledge' ? { userEdited: true } : {}) } });
     if (old.kind === 'knowledge') requestRelations(id);
     return result;
   }
@@ -528,15 +592,30 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     return store.put('proposals', id, { ...p, state: action === 'accept' ? 'accepted' : 'rejected', updatedAt: now() });
   }
   async function processSource(job, signal) {
-    const source = getNote(job.payload.noteId); if (source.hash !== job.payload.hash) fail('资料已修改，请对新版本重新加工。', 'SOURCE_CHANGED');
+    let source = getNote(job.payload.noteId);
+    // A preceding title-only task may have updated this version while processing was queued.
+    if (source.hash !== job.payload.hash && store.records('jobs').some(task => task.type === 'title' && task.state === 'done' && task.payload.noteId === source.id && task.payload.hash === job.payload.hash && task.payload.resultHash === source.hash)) {
+      job.payload.hash = source.hash; job.dedupKey = `process:${source.id}:${source.hash}${job.payload.research ? ':research' : ''}`; putJob(job);
+    }
+    if (source.hash !== job.payload.hash) fail('资料已修改，请对新版本重新加工。', 'SOURCE_CHANGED');
     // Also cover retained jobs queued before another task saved the same source extraction.
     let extracted = validExtraction(job.payload.extracted) ? job.payload.extracted
       : processJobs(source.id, source.hash).find(previous => previous.id !== job.id && validExtraction(previous.payload.extracted))?.payload.extracted;
     if (!extracted) {
-      extracted = parseJSON((await ai.generate({ system: `${promptText('serviceSystem')}\n${sourceExtractionStructure}\n${extractionResearchContract}`, privacy: privacyFor(source), signal, json: true, prompt: promptText('sourceExtract',{source:source.body}) })).text);
+      extracted = parseJSON((await ai.generate({ system: `${promptText('serviceSystem')}\n${sourceExtractionStructure}\n${extractionResearchContract}${needsTitle(source) ? '\n'+sourceTitleContract : ''}`, privacy: privacyFor(source), signal, json: true, prompt: promptText('sourceExtract',{source:source.body}) })).text);
       if (!Array.isArray(extracted.candidates) || !extracted.candidates.length || extracted.candidates.length > 8) fail('拆解结果格式不正确。', 'MODEL_FORMAT');
     }
+    if (signal.aborted) fail('任务已取消。', 'CANCELLED');
+    if (getNote(source.id).hash !== source.hash) fail('资料已修改，请对新版本重新加工。', 'SOURCE_CHANGED');
     for (const candidate of extracted.candidates) if (typeof candidate.title !== 'string' || typeof candidate.body !== 'string' || !Array.isArray(candidate.claims) || candidate.claims.some(x => typeof x !== 'string')) fail('待选学知识格式不正确。', 'MODEL_FORMAT');
+    if (needsTitle(source)) {
+      // Older custom extraction templates remain usable even if they omit sourceTitle.
+      if (validSourceTitle(extracted.sourceTitle) && !job.payload.savedCandidates?.ids?.some(Boolean)) {
+        source = saveSourceTitle(source, extracted.sourceTitle, signal);
+        job.payload.hash = source.hash;
+        job.dedupKey = `process:${source.id}:${source.hash}${job.payload.research ? ':research' : ''}`;
+      } else if (!store.records('jobs').some(task => task.type === 'title' && task.payload.noteId === source.id && task.state !== 'cancelled')) titleJob(source, true);
+    }
     const retained = [job, ...processJobs(source.id, source.hash)].find(previous => previous.payload?.savedCandidates?.hash === source.hash)?.payload.savedCandidates;
     job.payload.savedCandidates = retained ? structuredClone(retained) : { hash: source.hash, ids: extracted.candidates.map((_, i) => store.list().find(n => n.meta.processKey === `${source.id}:${source.hash}:${i}`)?.id || null) };
     job.payload.extracted = structuredClone(extracted); putJob(job);
@@ -780,11 +859,11 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     if(processing||stopped||pausing)return;
     const job=store.records('jobs').reverse().find(j=>j.state==='queued');if(!job)return;
     processing=true;currentJob=job.id;controller=new AbortController();job.state='running';job.attempts++;job.error='';job.code=null;job.runtimeIssues=[];job.stopCode=null;putJob(job);
-    try{if(job.type==='process')await (ai.withBudget ? ai.withBudget({limit:settings().ai.sourceCallLimit,sourceId:job.payload.noteId},()=>processSource(job,controller.signal)) : processSource(job,controller.signal));else if(job.type==='structure')await (ai.withBudget ? ai.withBudget({limit:settings().ai.sourceCallLimit,sourceId:job.payload.noteId},()=>analyzeSourceStructure(job,controller.signal)) : analyzeSourceStructure(job,controller.signal));else if(job.type==='grade')await grade(job,controller.signal);else if(job.type==='relate')await (ai.withBudget ? ai.withBudget({limit:settings().ai.sourceCallLimit,sourceId:job.payload.noteId},()=>relate(job,controller.signal)) : relate(job,controller.signal));else if(job.type==='discover')await (ai.withBudget ? ai.withBudget({limit:settings().ai.sourceCallLimit,sourceId:'discovery'},()=>discover(job,controller.signal)) : discover(job,controller.signal));else if(job.type==='index')await rebuildIndex(job,controller.signal);else if(job.type==='topics')await suggestTopics(job,controller.signal);else fail('未知任务类型。');if(store.get('jobs',job.id)?.state!=='cancelled')putJob({...job,state:'done',progress:100});}
+    try{if(job.type==='process')await (ai.withBudget ? ai.withBudget({limit:settings().ai.sourceCallLimit,sourceId:job.payload.noteId},()=>processSource(job,controller.signal)) : processSource(job,controller.signal));else if(job.type==='title')await (ai.withBudget ? ai.withBudget({limit:settings().ai.sourceCallLimit,sourceId:job.payload.noteId},()=>generateSourceTitle(job,controller.signal)) : generateSourceTitle(job,controller.signal));else if(job.type==='structure')await (ai.withBudget ? ai.withBudget({limit:settings().ai.sourceCallLimit,sourceId:job.payload.noteId},()=>analyzeSourceStructure(job,controller.signal)) : analyzeSourceStructure(job,controller.signal));else if(job.type==='grade')await grade(job,controller.signal);else if(job.type==='relate')await (ai.withBudget ? ai.withBudget({limit:settings().ai.sourceCallLimit,sourceId:job.payload.noteId},()=>relate(job,controller.signal)) : relate(job,controller.signal));else if(job.type==='discover')await (ai.withBudget ? ai.withBudget({limit:settings().ai.sourceCallLimit,sourceId:'discovery'},()=>discover(job,controller.signal)) : discover(job,controller.signal));else if(job.type==='index')await rebuildIndex(job,controller.signal);else if(job.type==='topics')await suggestTopics(job,controller.signal);else fail('未知任务类型。');if(store.get('jobs',job.id)?.state!=='cancelled')putJob({...job,state:'done',progress:100});}
     catch(error){if(store.get('jobs',job.id)?.state!=='cancelled')putJob({...job,state:['PRIVACY_LOCAL','DISABLED','NOT_CONFIGURED','BUDGET_EXCEEDED','SOURCE_BUDGET','BUDGET_UNKNOWN','RESEARCH_INCOMPLETE','AI_DISABLED','MISSING_KEY','CAPABILITY_DISABLED','MISSING_CREDENTIALS'].includes(error.code)?'waiting':'failed',error:String(error.message).slice(0,800),code:error.code||'TASK_FAILED'});}
     finally{processing=false;controller=null;currentJob=null;}
   }
-  function jobAction(id,{action}){if(pausing||stopped)fail('任务正在暂停，请稍后继续。','BUSY',409);const job=store.get('jobs',id);if(!job)fail('任务不存在。','NOT_FOUND',404);if(action==='cancel'){if(currentJob===id)controller?.abort();return putJob({...job,state:'cancelled',error:'用户取消；已保存的输入和回答保留。'});}if(action==='retry'){if(job.type==='structure'&&!['running','done'].includes(job.state)){const source=getNote(job.payload.noteId);job.payload.basis=structureBasis(source,sourceChildren(source.id));job.dedupKey=`structure:${source.id}:${hash(JSON.stringify(job.payload.basis))}`;const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}if(['running','done'].includes(job.state))fail('该任务当前不可重试。');if(job.type==='process'){const source=getNote(job.payload.noteId);if(source.hash!==job.payload.hash){job.payload={noteId:source.id,hash:source.hash,research:job.payload.research===true};job.dedupKey=`process:${source.id}:${source.hash}${job.payload.research ? ':research' : ''}`;job.progress=0;}const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}return putJob({...job,state:'queued',error:'',code:null});}fail('任务操作无效。');}
+  function jobAction(id,{action}){if(pausing||stopped)fail('任务正在暂停，请稍后继续。','BUSY',409);const job=store.get('jobs',id);if(!job)fail('任务不存在。','NOT_FOUND',404);if(action==='cancel'){if(currentJob===id)controller?.abort();return putJob({...job,state:'cancelled',error:'用户取消；已保存的输入和回答保留。'});}if(action==='retry'){if(job.type==='structure'&&!['running','done'].includes(job.state)){const source=getNote(job.payload.noteId);job.payload.basis=structureBasis(source,sourceChildren(source.id));job.dedupKey=`structure:${source.id}:${hash(JSON.stringify(job.payload.basis))}`;const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}if(['running','done'].includes(job.state))fail('该任务当前不可重试。');if(job.type==='title'){const source=getNote(job.payload.noteId);if(!needsTitle(source))fail('标题已经填写，保留当前标题。','TITLE_ALREADY_SET');job.payload={noteId:source.id,hash:source.hash};job.dedupKey=`title:${source.id}:${source.hash}`;const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}if(job.type==='process'){const source=getNote(job.payload.noteId);if(source.hash!==job.payload.hash){job.payload={noteId:source.id,hash:source.hash,research:job.payload.research===true,...(needsTitle(source)?{titleRequested:true}:{})};job.dedupKey=`process:${source.id}:${source.hash}${job.payload.research ? ':research' : ''}`;job.progress=0;}const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}return putJob({...job,state:'queued',error:'',code:null});}fail('任务操作无效。');}
   function pauseJobs() {
     if (pausePromise) return pausePromise;
     pausing = true;
