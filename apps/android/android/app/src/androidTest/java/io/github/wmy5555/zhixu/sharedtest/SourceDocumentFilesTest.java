@@ -129,6 +129,59 @@ public class SourceDocumentFilesTest extends AndroidTestCase {
         assertTrue(cancelled.closed);
     }
 
+    public void testExchangeAcceptsCommonWebUrlsAndRetainsEverySourceField() throws Exception {
+        for (String url : new String[] { "https://example.invalid/article?q=one%20two#段落", "http://127.0.0.1:4318/source",
+            "HTTPS://EXAMPLE.INVALID/中文路径", "https://例子.测试/资料", "http://[::1]:4318/source", "" }) {
+            JSONObject meta = new JSONObject().put("platform", "原平台").put("author", "原作者").put("url", url)
+                .put("date", "2026-10-07").put("locator", "第 3 段").put("topic", "原主题");
+            JSONObject note = exchangeNote(meta);
+            JSONObject header = exchangeHeader(SourceDocumentFiles.sourceExchange(note));
+            assertEquals(meta.toString(), header.getJSONObject("source").toString());
+            assertEquals(meta.toString(), note.getJSONObject("meta").toString());
+        }
+    }
+
+    public void testExchangeRejectsLegacyInvalidUrlsBeforeProducingDocument() throws Exception {
+        for (String url : new String[] { "ftp://example.invalid/source", "javascript:alert(1)", "旧版任意来源字符串",
+            "https://", "https:///source", "http://:4318/source", "http://example.invalid:65536/",
+            "http://999.1.1.1/", "http://example.123/", "https://bad host.invalid/", "https://example.invalid/\0" }) {
+            JSONObject meta = new JSONObject().put("url", url).put("author", "需保留的作者");
+            JSONObject note = exchangeNote(meta);
+            try { SourceDocumentFiles.sourceExchange(note); fail("Invalid URL produced an exchange document"); }
+            catch (LocalSourceStore.StoreException exception) {
+                assertEquals("VALIDATION", exception.code);
+                assertTrue(exception.getMessage().contains("资料编辑"));
+                assertTrue(exception.getMessage().contains("HTTP 或 HTTPS"));
+            }
+            assertEquals(url, note.getJSONObject("meta").getString("url"));
+            assertEquals("需保留的作者", note.getJSONObject("meta").getString("author"));
+        }
+    }
+
+    public void testExchangeUrlLengthUsesStoredCodePointLimit() throws Exception {
+        String prefix = "https://example.invalid/";
+        StringBuilder url = new StringBuilder(prefix);
+        while (url.length() < 2048) url.append('x');
+        assertEquals(url.toString(), exchangeHeader(SourceDocumentFiles.sourceExchange(
+            exchangeNote(new JSONObject().put("url", url.toString())))).getJSONObject("source").getString("url"));
+        url.append('x');
+        try { SourceDocumentFiles.sourceExchange(exchangeNote(new JSONObject().put("url", url.toString()))); fail("Overlong URL accepted"); }
+        catch (LocalSourceStore.StoreException exception) { assertEquals("VALIDATION", exception.code); }
+        StringBuilder unicodeUrl = new StringBuilder(prefix);
+        while (unicodeUrl.codePointCount(0, unicodeUrl.length()) < 2048) unicodeUrl.append("😀");
+        assertEquals(unicodeUrl.toString(), exchangeHeader(SourceDocumentFiles.sourceExchange(
+            exchangeNote(new JSONObject().put("url", unicodeUrl.toString())))).getJSONObject("source").getString("url"));
+    }
+
+    private static JSONObject exchangeNote(JSONObject meta) throws Exception {
+        return new JSONObject().put("title", "合成导出资料").put("body", "原正文保持不变。\n").put("meta", meta);
+    }
+
+    private static JSONObject exchangeHeader(byte[] bytes) throws Exception {
+        String text = new String(bytes, StandardCharsets.UTF_8);
+        return new JSONObject(text.substring(4, text.indexOf("\n---\n", 4)));
+    }
+
     private static final class TrackingOutput extends ByteArrayOutputStream {
         boolean flushed;
         boolean closed;

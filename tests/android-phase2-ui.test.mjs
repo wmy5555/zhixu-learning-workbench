@@ -93,7 +93,7 @@ test("Android backup preview requires review, clears stale previews, preserves c
     bootstrap: async () => ({ notes: [] }),
   } });
   appFixture.context.confirmAction = async () => confirmation;
-  await appFixture.app.renderSystem();
+  await appFixture.app.navigate("system");
   const panel = appFixture.app.refs.main;
   const choose = findButton(panel, "选择备份并预览");
   const acknowledge = control(panel, "restoreReviewed");

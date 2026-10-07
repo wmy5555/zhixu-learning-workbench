@@ -42,6 +42,15 @@ export function initSidebar({ document, media, storage }) {
   }
   menu.addEventListener('click', toggle);
   collapse.addEventListener('click', toggle);
+  document.addEventListener('click', event => {
+    if (!media.matches || (!mobileOpen && !temporaryOpen)) return;
+    const target = event.target;
+    if (sidebar.contains(target) || menu === target || menu.contains(target)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation?.();
+    event.stopPropagation?.();
+    closeMobile();
+  }, true);
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape' && media.matches && (mobileOpen || temporaryOpen)) {
       event.preventDefault();

@@ -32,6 +32,22 @@ test("ordinary Markdown frontmatter remains part of the imported body", () => {
   assert.equal(item.privacy, "local");
 });
 
+test("desktop ordinary files retain the 500000-character import allowance while Android keeps its prototype limit", t => {
+  const body = "原".repeat(200000);
+  const parsed = parseSourceFile({ name: "大篇幅.txt", text: body });
+  assert.equal(parsed.body.length, 200000);
+  assert.equal(Buffer.byteLength(parsed.body, "utf8") > 128 * 1024, true);
+  assert.throws(() => parseAndroidSourceFile({ name: "大篇幅.txt", text: body }), { code: "SOURCE_FILE_INVALID" });
+  assert.throws(() => parseSourceFile({ name: "超额.txt", text: "x".repeat(500001) }), { code: "SOURCE_FILE_INVALID" });
+
+  const root = fs.mkdtempSync(path.join(path.resolve(import.meta.dirname, "../.tmp"), "source-exchange-large-"));
+  const service = createService({ dataDir: path.join(root, "data"), vaultDir: path.join(root, "vault") });
+  t.after(() => { service.store.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const result = service.importItems({ items: [parsed], process: false, research: false });
+  assert.equal(result.notes[0].body.length, 200000);
+  assert.equal(result.notes[0].body, body);
+});
+
 test("Android exchange fixture keeps exact body and all six source fields", () => {
   const body = "正文首行\r\n\r\n末尾空白  \n";
   const item = parseSourceFile({ name: "交换.md", text: `\uFEFF${fixture(body)}` });
@@ -55,7 +71,7 @@ test("recognized exchange rejects unsupported versions, fields, and source value
     const data = structuredClone(base); change(data);
     assert.throws(() => parseSourceFile({ name: "x.md", text: `---\n${JSON.stringify(data)}\n---\n正文` }), { code: "SOURCE_FILE_INVALID" });
   }
-  assert.throws(() => parseSourceFile({ name: "x.md", text: `${fixture("正文").slice(0, -2)}${"正".repeat(128 * 1024)}` }), { code: "SOURCE_FILE_INVALID" });
+  assert.throws(() => parseSourceFile({ name: "x.md", text: fixture("正".repeat(500001)) }), { code: "SOURCE_FILE_INVALID" });
 });
 
 test("duplicate JSON keys and malformed recognized formats are rejected", () => {

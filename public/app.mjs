@@ -406,7 +406,7 @@ async function renderCapture() {
     try {
       importButton.disabled = true;
       const items = await Promise.all([...fileInput.files].map(async (file) => {
-        if (file.size > 160 * 1024) throw new Error(`${file.name} 超过 160 KiB。`);
+        if (file.size > 2 * 1024 * 1024) throw new Error(`${file.name} 过大；每份原文最多 500000 个字符。`);
         let text;
         try {
           text = new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer());

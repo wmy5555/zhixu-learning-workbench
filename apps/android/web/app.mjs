@@ -1142,7 +1142,7 @@ async function renderHistory(note, { returnToSourceId = "" } = {}) {
 }
 
 async function restoreVersion(note, version, returnToSourceId = "") {
-  const ok = await confirmAction({ title: "恢复这个版本？", message: "恢复前会检查当前内容哈希，并保留覆盖前版本。", confirmText: "恢复" });
+  const ok = await confirmAction({ title: "恢复这个版本？", message: "恢复前会检查资料是否又有修改，并保留当前版本。", confirmText: "恢复" });
   if (!ok) return;
   try {
     const restored = await api.restoreVersion(note.id, { versionId: version.versionId || version.id, expectedHash: note.hash });
@@ -2313,7 +2313,7 @@ function conflictsPanel() {
 }
 
 async function renderCurrent() {
-  if (isMobilePrototype() && !["capture", "library"].includes(state.view)) {
+  if (isMobilePrototype() && !["capture", "library", "system"].includes(state.view)) {
     clear(refs.main).append(emptyState("这项功能尚未迁移到手机", "当前样机支持原文收集、查看、搜索和编辑。", button("打开知识库", { onClick: () => navigate("library") })));
     return;
   }

@@ -88,6 +88,41 @@ final class LocalSourceBackup {
         int versionsImported;
     }
 
+    /** Counts the exact serializer envelope, escaping and UTF-8, without materializing the whole backup. */
+    private static final class BackupBudget {
+        private static final int NOTE_ENVELOPE_BYTES = "{\"current\":\"\",\"original\":\"\",\"history\":[]}".length() - 4;
+        private static final int VERSION_ENVELOPE_BYTES = "{\"id\":\"\",\"raw\":\"\"}".length() - 4;
+        private long bytes;
+        private int notes;
+        private int versions;
+
+        BackupBudget() throws JSONException {
+            bytes = new JSONObject().put("format", FORMAT).put("version", 1)
+                .put("createdAt", "2000-01-01T00:00:00.000Z").put("notes", new JSONArray())
+                .toString().getBytes(StandardCharsets.UTF_8).length;
+        }
+
+        void note(String current, String original) throws LocalSourceStore.StoreException {
+            add(NOTE_ENVELOPE_BYTES + (long) quotedBytes(current) + quotedBytes(original) + (notes++ == 0 ? 0 : 1));
+            versions = 0;
+        }
+
+        void version(String id, String raw) throws LocalSourceStore.StoreException {
+            add(VERSION_ENVELOPE_BYTES + (long) quotedBytes(id) + quotedBytes(raw) + (versions++ == 0 ? 0 : 1));
+        }
+
+        private void add(long count) throws LocalSourceStore.StoreException {
+            bytes += count;
+            if (bytes > MAX_BACKUP_BYTES) throw new LocalSourceStore.StoreException("LIMIT_REACHED",
+                "保存后的完整备份将超过 32 MiB；本次修改尚未写入，请保留现有资料和当前输入。");
+        }
+
+        private static int quotedBytes(String raw) throws LocalSourceStore.StoreException {
+            // Android's own quote handles slash/control escaping; individual snapshots are bounded to 160 KiB.
+            return LocalSourceStore.validateUtf8(JSONObject.quote(raw));
+        }
+    }
+
     LocalSourceBackup(LocalSourceStore store, File root) throws IOException {
         this.store = store;
         transactionDirectory = LocalSourceStore.child(root, "restore-transaction-v1");
@@ -133,7 +168,9 @@ final class LocalSourceBackup {
 
     JSONObject backup() throws LocalSourceStore.StoreException {
         try {
-            JSONObject result = packageNotes(snapshot());
+            Map<String, Note> notes = snapshot();
+            requireDatasetCapacity(notes);
+            JSONObject result = packageNotes(notes);
             requirePackageSize(result);
             return result;
         } catch (IOException | JSONException exception) { throw storageError(); }
@@ -197,6 +234,7 @@ final class LocalSourceBackup {
             if (exists(entry.getKey()) && !entry.getValue().equals(readRaw(entry.getKey()))) throw corrupt();
         }
         validateReplayCapacity(writes);
+        requireMergedCapacity(snapshot(store.documentsForRecovery()), notes);
         for (Map.Entry<File, String> entry : writes.entrySet()) {
             if (exists(entry.getKey())) continue;
             LocalSourceStore.ensureDirectory(entry.getKey().getParentFile());
@@ -237,6 +275,27 @@ final class LocalSourceBackup {
         if (historyPaths().size() >= MAX_VERSIONS) throw new LocalSourceStore.StoreException("LIMIT_REACHED", "手机最多保留 1000 个历史版本，请先导出备份。");
     }
 
+    void requireSaveCapacity(Map<String, JSONObject> documents, JSONObject next, String nextRaw, String versionId)
+        throws IOException, JSONException, LocalSourceStore.StoreException {
+        BackupBudget budget = new BackupBudget();
+        String nextId = next.getString("id");
+        for (String id : new TreeMap<>(documents).keySet()) {
+            String current = readRaw(LocalSourceStore.child(store.notesDirectory(), id + ".md"));
+            String original = readRaw(LocalSourceStore.child(store.originalsDirectory(), id + ".md"));
+            LocalSourceStore.parseMarkdown(id, original);
+            budget.note(nextId.equals(id) ? nextRaw : current, original);
+            File directory = LocalSourceStore.child(store.historyDirectory(), id);
+            if (directory.exists()) for (String name : fileNames(directory, true)) {
+                String raw = readRaw(LocalSourceStore.child(directory, name));
+                validateVersionSnapshot(id, name, raw);
+                budget.version(name, raw);
+            }
+            if (nextId.equals(id)) budget.version(versionId, current);
+        }
+        // A new note is represented twice: immutable original and current Markdown.
+        if (!documents.containsKey(nextId)) budget.note(nextRaw, nextRaw);
+    }
+
     private Set<String> historyPaths() throws IOException, LocalSourceStore.StoreException {
         Set<String> paths = new HashSet<>();
         File[] directories = store.historyDirectory().listFiles();
@@ -251,7 +310,10 @@ final class LocalSourceBackup {
     }
 
     private Map<String, Note> snapshot() throws IOException, JSONException, LocalSourceStore.StoreException {
-        Map<String, JSONObject> documents = store.documents();
+        return snapshot(store.documents());
+    }
+
+    private Map<String, Note> snapshot(Map<String, JSONObject> documents) throws IOException, JSONException, LocalSourceStore.StoreException {
         Map<String, Note> notes = new TreeMap<>();
         for (Map.Entry<String, JSONObject> entry : documents.entrySet()) {
             String id = entry.getKey();
@@ -375,7 +437,30 @@ final class LocalSourceBackup {
         if (current.size() + plan.imported > 100 || totalVersions + plan.versionsImported > MAX_VERSIONS)
             throw invalid("恢复后资料或版本数量超过手机保存上限。");
         validateReplayCapacity(destinations(plan.accepted));
+        requireMergedCapacity(current, plan.accepted);
         return plan;
+    }
+
+    private void requireMergedCapacity(Map<String, Note> current, Map<String, Note> accepted)
+        throws IOException, JSONException, LocalSourceStore.StoreException {
+        Map<String, Note> merged = new TreeMap<>(current);
+        for (Note incoming : accepted.values()) {
+            Note existing = current.get(incoming.id);
+            Map<String, String> history = new TreeMap<>(existing == null ? readHistory(incoming.id) : existing.history);
+            history.putAll(incoming.history);
+            merged.put(incoming.id, new Note(existing == null ? incoming.current : existing.current,
+                existing == null ? incoming.original : existing.original,
+                existing == null ? incoming.document : existing.document, history));
+        }
+        requireDatasetCapacity(merged);
+    }
+
+    private static void requireDatasetCapacity(Map<String, Note> notes) throws JSONException, LocalSourceStore.StoreException {
+        BackupBudget budget = new BackupBudget();
+        for (Note note : notes.values()) {
+            budget.note(note.current, note.original);
+            for (Map.Entry<String, String> version : note.history.entrySet()) budget.version(version.getKey(), version.getValue());
+        }
     }
 
     private JSONObject packageNotes(Map<String, Note> notes) throws JSONException {
@@ -414,9 +499,47 @@ final class LocalSourceBackup {
     }
 
     private static void requirePackageSize(JSONObject input) throws LocalSourceStore.StoreException {
-        String text = input.toString();
-        if (text.length() > MAX_BACKUP_BYTES || LocalSourceStore.validateUtf8(text) > MAX_BACKUP_BYTES)
-            throw invalid("备份整体最多 32 MiB。");
+        jsonBytes(input);
+    }
+
+    // Incoming validation and journal replay use the same serializer sizing without another 32 MiB string.
+    private static long jsonBytes(Object value) throws LocalSourceStore.StoreException {
+        if (value == null || value == JSONObject.NULL) return 4;
+        if (value instanceof String) {
+            String text = (String) value;
+            if (text.length() > MAX_BACKUP_BYTES) throw invalid("备份整体最多 32 MiB。");
+            return boundedPackageBytes(BackupBudget.quotedBytes(text));
+        }
+        if (value instanceof JSONObject) {
+            JSONObject object = (JSONObject) value;
+            long bytes = 2;
+            int count = 0;
+            for (java.util.Iterator<String> keys = object.keys(); keys.hasNext();) {
+                String key = keys.next();
+                bytes = boundedPackageBytes(bytes + BackupBudget.quotedBytes(key) + 1 + jsonBytes(object.opt(key))
+                    + (count++ == 0 ? 0 : 1));
+            }
+            return bytes;
+        }
+        if (value instanceof JSONArray) {
+            JSONArray array = (JSONArray) value;
+            long bytes = 2;
+            for (int index = 0; index < array.length(); index++) {
+                bytes = boundedPackageBytes(bytes + jsonBytes(array.opt(index)) + (index == 0 ? 0 : 1));
+            }
+            return bytes;
+        }
+        if (value instanceof Boolean) return Boolean.TRUE.equals(value) ? 4 : 5;
+        if (value instanceof Number) {
+            try { return JSONObject.numberToString((Number) value).length(); }
+            catch (JSONException exception) { throw invalid("备份包含无效数值。"); }
+        }
+        throw invalid("备份字段格式不正确。");
+    }
+
+    private static long boundedPackageBytes(long bytes) throws LocalSourceStore.StoreException {
+        if (bytes > MAX_BACKUP_BYTES) throw invalid("备份整体最多 32 MiB。");
+        return bytes;
     }
 
     private static void fields(JSONObject input, String... allowed) throws LocalSourceStore.StoreException {

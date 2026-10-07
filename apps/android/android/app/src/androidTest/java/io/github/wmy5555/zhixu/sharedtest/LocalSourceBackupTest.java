@@ -245,6 +245,133 @@ public class LocalSourceBackupTest extends AndroidTestCase {
         }
     }
 
+    public void testSaveBudgetCountsEscapingUtf8OriginalAndNewHistoryBeforeAnyWrite() throws Exception {
+        JSONObject nearLimit = fillExportableBudget();
+        JSONObject note = store.list("").getJSONObject(0);
+        String id = note.getString("id");
+        File current = new File(sourceRoot, "notes/" + id + ".md");
+        File original = new File(sourceRoot, "originals/" + id + ".md");
+        String currentBefore = raw(current);
+        String originalBefore = raw(original);
+        int historyBefore = new File(sourceRoot, "history/" + id).listFiles().length;
+        JSONObject fixtureNote = nearLimit.getJSONArray("notes").getJSONObject(0);
+        int baseBytes = backupEnvelope(currentBefore, originalBefore, new JSONArray()).toString().getBytes(StandardCharsets.UTF_8).length;
+        int versionBytes = fixtureNote.getJSONArray("history").getJSONObject(0).toString().getBytes(StandardCharsets.UTF_8).length;
+        int remaining = LocalSourceBackup.MAX_BACKUP_BYTES - baseBytes - historyBefore * versionBytes - historyBefore + 1;
+        String newTitle = "新资料必须计算两份快照";
+        String newBody = repeat('x', remaining / 2);
+        try (LocalSourceStore probe = new LocalSourceStore(new File(root, "budget-probe"))) {
+            probe.save(new JSONObject().put("title", newTitle).put("body", newBody));
+            JSONObject probeNote = probe.backup().getJSONArray("notes").getJSONObject(0);
+            int twoSnapshots = probeNote.toString().getBytes(StandardCharsets.UTF_8).length + 1;
+            int oneSnapshot = twoSnapshots - JSONObject.quote(probeNote.getString("original")).getBytes(StandardCharsets.UTF_8).length + 2;
+            assertTrue("Single current would fit; both snapshots must exceed remaining budget", oneSnapshot <= remaining && twoSnapshots > remaining);
+        }
+        store.close();
+        store = new LocalSourceStore(sourceRoot) {
+            @Override void writeAtomically(File file, byte[] bytes) throws IOException {
+                fail("Over-budget save must reject before any write: " + file.getName());
+            }
+        };
+        expect("LIMIT_REACHED", () -> store.save(edit(note, "更换标题会新增历史", note.getString("body"))));
+        expect("LIMIT_REACHED", () -> save(newTitle, newBody));
+        assertEquals(currentBefore, raw(current));
+        assertEquals(originalBefore, raw(original));
+        assertEquals(historyBefore, new File(sourceRoot, "history/" + id).listFiles().length);
+        assertEquals(1, new File(sourceRoot, "notes").listFiles().length);
+        assertEquals(1, new File(sourceRoot, "originals").listFiles().length);
+        JSONObject stillExportable = store.backup();
+        assertEquals(nearLimit.getJSONArray("notes").getJSONObject(0).getJSONArray("history").length(),
+            stillExportable.getJSONArray("notes").getJSONObject(0).getJSONArray("history").length());
+        assertEquals(currentBefore, stillExportable.getJSONArray("notes").getJSONObject(0).getString("current"));
+        assertEquals(originalBefore, stillExportable.getJSONArray("notes").getJSONObject(0).getString("original"));
+    }
+
+    public void testRestoreHistoryUnionOverBudgetRejectsPreviewWithoutStagingOrChangingFiles() throws Exception {
+        JSONObject nearLimit = fillExportableBudget();
+        JSONObject note = nearLimit.getJSONArray("notes").getJSONObject(0);
+        String id = LocalSourceStore.parseMarkdown(store.list("").getJSONObject(0).getString("id"),
+            note.getString("current")).getString("id");
+        String currentBefore = raw(new File(sourceRoot, "notes/" + id + ".md"));
+        String originalBefore = raw(new File(sourceRoot, "originals/" + id + ".md"));
+        int historyBefore = new File(sourceRoot, "history/" + id).listFiles().length;
+        File plan = new File(sourceRoot, "restore-transaction-v1/plan.json");
+        long planLength = plan.length();
+        long planModified = plan.lastModified();
+        JSONArray incomingHistory = new JSONArray().put(versionEntry(note.getString("current"), id));
+        JSONObject incoming = backupEnvelope(note.getString("current"), note.getString("original"), incomingHistory);
+        assertTrue(incoming.toString().getBytes(StandardCharsets.UTF_8).length < LocalSourceBackup.MAX_BACKUP_BYTES);
+        store.close();
+        store = new LocalSourceStore(sourceRoot) {
+            @Override void writeAtomically(File file, byte[] bytes) throws IOException {
+                fail("Over-budget restore must reject before staging or data writes: " + file.getName());
+            }
+        };
+        expect("LIMIT_REACHED", () -> store.previewRestore(incoming));
+        assertEquals(currentBefore, raw(new File(sourceRoot, "notes/" + id + ".md")));
+        assertEquals(originalBefore, raw(new File(sourceRoot, "originals/" + id + ".md")));
+        assertEquals(historyBefore, new File(sourceRoot, "history/" + id).listFiles().length);
+        assertEquals(planLength, plan.length());
+        assertEquals(planModified, plan.lastModified());
+        assertFalse(new File(sourceRoot, "restore-transaction-v1/committed").exists());
+        assertEquals(historyBefore, store.backup().getJSONArray("notes").getJSONObject(0).getJSONArray("history").length());
+    }
+
+    public void testLegacyOverBudgetV1StillReopensAndReadsWithoutDeletingHistory() throws Exception {
+        JSONObject nearLimit = fillExportableBudget();
+        JSONObject note = nearLimit.getJSONArray("notes").getJSONObject(0);
+        String id = store.list("").getJSONObject(0).getString("id");
+        JSONObject extraVersion = versionEntry(note.getString("current"), id);
+        File extra = new File(sourceRoot, "history/" + id + "/" + extraVersion.getString("id"));
+        store.close();
+        // Synthesize a pre-budget v1 library directly; this is still only the randomized cache fixture.
+        try (java.io.FileOutputStream output = new java.io.FileOutputStream(extra)) {
+            output.write(extraVersion.getString("raw").getBytes(StandardCharsets.UTF_8));
+            output.getFD().sync();
+        }
+        store = new LocalSourceStore(sourceRoot);
+        assertEquals(1, store.list("").length());
+        JSONObject current = store.read(id);
+        assertEquals(LocalSourceStore.parseMarkdown(id, note.getString("current")).getString("hash"), current.getString("hash"));
+        int historyBefore = new File(sourceRoot, "history/" + id).listFiles().length;
+        expect("LIMIT_REACHED", () -> store.save(edit(current, "旧资料不能继续超限增长", current.getString("body"))));
+        assertEquals(historyBefore, new File(sourceRoot, "history/" + id).listFiles().length);
+        assertTrue(extra.isFile());
+        assertEquals(note.getString("current"), raw(new File(sourceRoot, "notes/" + id + ".md")));
+    }
+
+    /** Fill to less than one large escaped history entry below the REAL serialized backup envelope. */
+    private JSONObject fillExportableBudget() throws Exception {
+        JSONObject saved = save("容量合成资料", repeat('"', 110 * 1024) + repeat('文', 5 * 1024) + "\n\\\t\r😀");
+        JSONObject base = store.backup();
+        JSONObject note = base.getJSONArray("notes").getJSONObject(0);
+        String raw = note.getString("current");
+        JSONObject sample = versionEntry(raw, saved.getString("id"));
+        int baseBytes = base.toString().getBytes(StandardCharsets.UTF_8).length;
+        int entryBytes = sample.toString().getBytes(StandardCharsets.UTF_8).length;
+        int count = (LocalSourceBackup.MAX_BACKUP_BYTES - baseBytes + 1) / (entryBytes + 1);
+        assertTrue(count > 1 && count < LocalSourceBackup.MAX_VERSIONS);
+        long actualEnvelopeBytes = baseBytes + (long) count * entryBytes + count - 1;
+        assertTrue(actualEnvelopeBytes <= LocalSourceBackup.MAX_BACKUP_BYTES);
+        assertTrue(actualEnvelopeBytes + entryBytes + 1 > LocalSourceBackup.MAX_BACKUP_BYTES);
+        JSONArray history = new JSONArray();
+        for (int index = 0; index < count; index++) history.put(versionEntry(raw, saved.getString("id")));
+        JSONObject full = backupEnvelope(raw, note.getString("original"), history);
+        assertEquals(count, restore(store, full).getInt("versionsImported"));
+        return full;
+    }
+
+    private JSONObject versionEntry(String raw, String id) throws Exception {
+        String createdAt = LocalSourceStore.parseMarkdown(id, raw).getString("updatedAt");
+        return new JSONObject().put("id", createdAt.replace(':', '-') + "-" + UUID.randomUUID() + ".md").put("raw", raw);
+    }
+
+    private JSONObject backupEnvelope(String current, String original, JSONArray history) throws Exception {
+        return new JSONObject().put("format", "zhixu-android-source-backup").put("version", 1)
+            .put("createdAt", LocalSourceStore.timestamp()).put("notes", new JSONArray().put(
+                new JSONObject().put("current", current).put("original", original).put("history", history)));
+    }
+
     public void testCommittedWriteFailureReopensWithoutLosingExistingNote() throws Exception {
         JSONObject existing = save("已有资料", "保留这份资料");
         JSONObject base = store.backup();

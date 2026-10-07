@@ -1,7 +1,7 @@
 const FORMAT = "zhixu-source-exchange";
 const SOURCE_FIELDS = ["platform", "author", "url", "date", "locator", "topic"];
-const MAX_FILE_BYTES = 160 * 1024;
-const MAX_BODY_BYTES = 128 * 1024;
+const MAX_DESKTOP_BODY_CHARS = 500000;
+const MAX_EXCHANGE_HEADER_BYTES = 32 * 1024;
 
 function invalid(message = "文件不是有效的 UTF-8 原文交换文件。") {
   const error = new Error(message);
@@ -73,6 +73,7 @@ function rejectDuplicateJsonKeys(source) {
 
 function exchangeItem(name, text, header, body) {
   if (/"format"\s*:\s*"zhixu-source-exchange"/.test(header)) {
+    if (utf8Length(header) > MAX_EXCHANGE_HEADER_BYTES) throw invalid("交换文件头部超过限制。");
     let data;
     try {
       rejectDuplicateJsonKeys(header);
@@ -100,19 +101,19 @@ function exchangeItem(name, text, header, body) {
       try { url = new URL(data.source.url); } catch { throw invalid("来源网址无效。"); }
       if (!new Set(["http:", "https:"]).has(url.protocol)) throw invalid("来源网址只允许 HTTP 或 HTTPS。");
     }
-    if (!body.trim() || body.includes(String.fromCharCode(0)) || utf8Length(body) > MAX_BODY_BYTES) throw invalid("交换文件正文为空、含无效字符或超过 128 KiB。");
+    if (!body.trim() || body.includes(String.fromCharCode(0)) || body.length > MAX_DESKTOP_BODY_CHARS) throw invalid("交换文件正文为空、含无效字符或超过 500000 个字符。");
     return { title, body, ...data.source, privacy: "local" };
   }
 
   const title = String(name || "").replace(/\.(?:md|txt)$/i, "").trim();
   if (!title || [...title].length > 200 || /[\p{Cc}]/u.test(title)) throw invalid("文件名标题无效。");
-  if (!text.trim() || text.includes(String.fromCharCode(0)) || utf8Length(text) > MAX_BODY_BYTES) throw invalid("文件正文为空、含无效字符或超过 128 KiB。");
+  if (!text.trim() || text.includes(String.fromCharCode(0)) || text.length > MAX_DESKTOP_BODY_CHARS) throw invalid("文件正文为空、含无效字符或超过 500000 个字符。");
   return { title, body: text, platform: "本地文件", author: "", url: "", date: "", locator: name, topic: "", privacy: "local" };
 }
 
 export function parseSourceFile({ name, text } = {}) {
   if (typeof name !== "string" || !/\.(?:md|txt)$/i.test(name) || typeof text !== "string") throw invalid();
-  if (utf8Length(text) > MAX_FILE_BYTES) throw invalid("文件超过 160 KiB。");
+  utf8Length(text);
   const normalized = text.startsWith("\uFEFF") ? text.slice(1) : text;
   const opening = normalized.match(/^---\r?\n/);
   if (!opening) return exchangeItem(name, normalized, "", normalized);

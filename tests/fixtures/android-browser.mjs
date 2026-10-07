@@ -107,7 +107,7 @@ export async function createAndroidBrowser({ api = {}, confirmations = [] } = {}
   };
   context.confirmPrompts = [];
   const appCode = stripImports(app).replace(/^init\(\);\s*$/m, "")
-    + "\nthis.androidApp = { renderCapture, renderSourceGroupDrawer, renderHistory, renderSystem, state, refs };";
+    + "\nthis.androidApp = { navigate, renderCapture, renderSourceGroupDrawer, renderHistory, renderSystem, state, refs };";
   vm.runInContext(appCode, context);
   return { app: context.androidApp, document, context, Element, descendants };
 }

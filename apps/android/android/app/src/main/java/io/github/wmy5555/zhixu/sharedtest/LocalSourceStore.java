@@ -183,14 +183,16 @@ public class LocalSourceStore implements AutoCloseable {
                     .put("updatedAt", updatedAt).put("meta", meta);
                 byte[] next = markdown(note);
                 File target = child(notesDirectory, id + ".md");
+                String versionId = previous == null ? null : previous.getString("updatedAt").replace(':', '-')
+                    + "-" + UUID.randomUUID() + ".md";
+                backups.requireSaveCapacity(documents, note, new String(next, StandardCharsets.UTF_8), versionId);
                 if (previous == null) {
                     writeAtomically(child(originalsDirectory, id + ".md"), next);
                 } else {
                     // Archive the exact previous Markdown before replacing it, including original whitespace.
                     File versions = child(historyDirectory, id);
                     ensureDirectory(versions);
-                    File snapshot = child(versions, previous.getString("updatedAt").replace(':', '-')
-                        + "-" + UUID.randomUUID() + ".md");
+                    File snapshot = child(versions, versionId);
                     writeAtomically(snapshot, readBytes(target));
                 }
                 writeAtomically(target, next);
@@ -205,7 +207,11 @@ public class LocalSourceStore implements AutoCloseable {
     }
 
     private Map<String, JSONObject> readAll() throws IOException, JSONException, StoreException {
-        backups.recover();
+        return readAll(true);
+    }
+
+    private Map<String, JSONObject> readAll(boolean recover) throws IOException, JSONException, StoreException {
+        if (recover) backups.recover();
         File[] files = notesDirectory.listFiles();
         if (files == null) throw new IOException("Cannot enumerate source directory");
         Set<String> ids = new HashSet<>();
@@ -304,6 +310,7 @@ public class LocalSourceStore implements AutoCloseable {
     File originalsDirectory() { return originalsDirectory; }
     File historyDirectory() { return historyDirectory; }
     Map<String, JSONObject> documents() throws IOException, JSONException, StoreException { return readAll(); }
+    Map<String, JSONObject> documentsForRecovery() throws IOException, JSONException, StoreException { return readAll(false); }
 
     private static byte[] markdown(JSONObject note) throws JSONException {
         JSONObject header = new JSONObject().put("schema", 1).put("id", note.getString("id"))

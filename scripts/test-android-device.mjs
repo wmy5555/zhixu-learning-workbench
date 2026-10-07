@@ -39,7 +39,7 @@ try {
 const result = spawnSync(options.adb, [
   '-s', options.serial,
   'shell', 'am', 'instrument', '-w',
-  'io.github.wmy5555.zhixu.sharedtest.test/androidx.test.runner.AndroidJUnitRunner',
+  'io.github.wmy5555.zhixu.sharedtest.test/android.test.InstrumentationTestRunner',
 ], {
   encoding: 'utf8',
   timeout: 120_000,

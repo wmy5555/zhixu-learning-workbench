@@ -6,6 +6,9 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.IDN;
+import java.net.URI;
+import java.net.URL;
 import java.nio.ByteBuffer;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
@@ -85,11 +88,44 @@ final class SourceDocumentFiles {
         JSONObject meta = note.optJSONObject("meta");
         for (String field : SOURCE_FIELDS) {
             Object value = meta == null ? null : meta.opt(field);
-            if (value instanceof String) source.put(field, value);
+            if (value instanceof String) {
+                if ("url".equals(field)) validateExchangeUrl((String) value);
+                source.put(field, value);
+            }
         }
         JSONObject header = new JSONObject().put("format", "zhixu-source-exchange").put("version", 1)
             .put("title", note.getString("title")).put("source", source);
         return ("---\n" + header.toString() + "\n---\n" + note.getString("body")).getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static void validateExchangeUrl(String value) throws LocalSourceStore.StoreException {
+        if (value.isEmpty()) return;
+        try {
+            // Match the stored/exchange field limit; never truncate or silently drop a source.
+            if (value.codePointCount(0, value.length()) > 2048 || value.indexOf('\0') >= 0) throw new IllegalArgumentException();
+            for (int index = 0; index < value.length(); index++) {
+                if (Character.isISOControl(value.charAt(index))) throw new IllegalArgumentException();
+            }
+            // Parsing only: URL/URI/IDN perform no network request or DNS lookup here.
+            URL parsed = new URL(value);
+            if (!("http".equalsIgnoreCase(parsed.getProtocol()) || "https".equalsIgnoreCase(parsed.getProtocol()))
+                || parsed.getHost().isEmpty() || parsed.getPort() > 65535) throw new IllegalArgumentException();
+            String host = parsed.getHost();
+            String asciiHost = host.startsWith("[") ? host : IDN.toASCII(host);
+            if (new URI("http://" + asciiHost).getHost() == null) throw new IllegalArgumentException();
+            // WHATWG treats a host ending in a number as IPv4; reject malformed numeric hosts.
+            String numericHost = asciiHost.endsWith(".") ? asciiHost.substring(0, asciiHost.length() - 1) : asciiHost;
+            String lastLabel = numericHost.substring(numericHost.lastIndexOf('.') + 1);
+            if (lastLabel.matches("[0-9]+") || lastLabel.matches("(?i)0x[0-9a-f]*")) {
+                String[] parts = numericHost.split("\\.", -1);
+                if (parts.length != 4) throw new IllegalArgumentException();
+                for (String part : parts) {
+                    if (!part.matches("0|[1-9][0-9]{0,2}") || Integer.parseInt(part) > 255) throw new IllegalArgumentException();
+                }
+            }
+        } catch (Exception exception) {
+            throw invalid("来源链接无法用于原文交换。请在资料编辑中改为含有效主机的 HTTP 或 HTTPS 完整网址（最多 2048 个字符），或清空链接后重新导出；其他来源信息会保留。");
+        }
     }
 
     private static LocalSourceStore.StoreException invalid(String message) {
