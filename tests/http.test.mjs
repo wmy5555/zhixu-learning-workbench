@@ -462,3 +462,25 @@ test('prompt settings API requires CSRF and persists edited templates', async t 
   assert.equal(invalid.status,400);
   assert.equal(app.service.getPrompts().prompts.find(p=>p.key==='sourceExtract').template,body.prompts.sourceExtract);
 });
+
+
+test('HTTP blank-title capture preserves text with no model config and exposes title waiting in safe status', async t => {
+  const app = await startApp(t), session = await webSession(app);
+  const body = '合成标题验收原文，不可通过任务轮询暴露。';
+  const captured = await request(app.baseUrl, '/api/import', { method: 'POST', headers: session.headers, body: { items: [{ title: '   ', body, privacy: 'local' }], process: false } });
+  assert.equal(captured.status, 200);
+  const [source] = captured.body.notes, [job] = captured.body.jobs;
+  assert.equal(source.body, body);
+  assert.equal(source.meta.titlePending, true);
+  assert.equal(job.type, 'title');
+  assert.equal(app.service.listNotes({ kind: 'knowledge' }).length, 0);
+  await app.service.runJobs();
+  const detail = await request(app.baseUrl, '/api/notes/' + source.id, { headers: session.headers });
+  assert.equal(detail.body.body, body);
+  assert.equal(detail.body.titleGeneration.state, 'waiting');
+  assert.equal(detail.body.titleGeneration.code, 'PRIVACY_LOCAL');
+  const status = await request(app.baseUrl, '/api/jobs?view=status', { headers: session.headers });
+  assert.equal(status.body.jobs.find(item => item.id === job.id).type, 'title');
+  assert.doesNotMatch(status.text, /"body"|"prompt"|"payload"/);
+  assert.equal(app.service.store.records('calls').length, 0);
+});

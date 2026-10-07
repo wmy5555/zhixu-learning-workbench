@@ -300,7 +300,7 @@ function jobRow(job) {
   progressBar.firstChild.style.width = `${Math.max(0, Math.min(100, progress))}%`;
   return el("div", { class: "list-item no-icon" }, [
     el("div", { class: "item-copy" }, [
-      el("h3", { text: ({process:"资料加工",structure:"逻辑关系分析",relate:"知识关联",discover:"知识发现",grade:"学习反馈",index:"更新索引",topics:"主题整理"})[job.type] || "后台任务" }),
+      el("h3", { text: ({process:"资料加工",title:"原文标题生成",structure:"逻辑关系分析",relate:"知识关联",discover:"知识发现",grade:"学习反馈",index:"更新索引",topics:"主题整理"})[job.type] || "后台任务" }),
       el("p", { text: jobSummary(job) }),
       progress > 0 ? progressBar : null,
       el("div", { class: "item-meta" }, [badge(labels.state(displayState), stateTone(displayState))]),
@@ -327,7 +327,7 @@ function groupJobSummary(job) {
 
 async function renderCapture() {
   const sourceForm = el("form", { class: "panel capture-form", dataset: { tour: "capture-form" } });
-  const title = el("input", { name: "title", placeholder: "例如：关于检索增强生成的一段资料", required: true });
+  const title = el("input", { name: "title", placeholder: "可留空，根据原文生成便于检索的标题" });
   const body = el("textarea", { name: "body", placeholder: "粘贴原文。系统会保留这份原始快照，不用摘要替代。", required: true, rows: 12 });
   const process = el("input", { name: "process", type: "checkbox" });
   const research = el("input", { name: "research", type: "checkbox", disabled: true });
@@ -346,7 +346,7 @@ async function renderCapture() {
     sourceForm.addEventListener("reset", () => queueMicrotask(() => { localOnly.checked = true; syncResearchOption(); }));
     syncResearchOption();
   }
-  const titleField = field("标题", title);
+  const titleField = field("标题（可选）", title, "留空会先保存原文，再用资料拆解的模型生成标题；无需勾选 AI 拆解。仅本地或模型未配置时暂用原文片段，可手动填写；生成可能产生调用费用。");
   titleField.classList.add("span-2");
   sourceForm.append(
     sectionHeading("快速收集", "来源不完整可以留空，系统不会编造"),
@@ -378,7 +378,7 @@ async function renderCapture() {
       submit.disabled = true;
       const result = await api.import({ items: [item], captureMode: "text", process: process.checked, research: process.checked && research.checked });
       sourceForm.reset();
-      toast(`已保存 ${asArray(result.notes).length || 1} 条原始资料`, "success");
+      toast(`已保存 ${asArray(result.notes).length || 1} 条原始资料${!String(item.title || "").trim() ? "，标题待生成；暂用原文片段，可在系统任务查看进度" : ""}`, "success");
       await refreshBootstrap();
     } catch (error) { handleError(error); }
     finally { sourceForm.querySelector("button[type='submit']").disabled = false; }
@@ -650,6 +650,7 @@ function renderSourceGroupDrawer(source) {
     button("删除", { kind: "danger", disabled: isMobilePrototype(), title: isMobilePrototype() ? "样机暂不支持删除" : "", onClick: () => deleteNote(source) }),
   ]);
   content.append(noteMeta(source), headActions);
+  if (source.meta?.titlePending) content.append(el('p', { class: 'muted', text: '暂用原文片段作为标题，标题尚未生成。可手动编辑，或到“系统 → 任务”查看标题生成进度及重试。' }));
 
   if (children.length) {
     const key = `${api.getContext().practiceId || ''}:${source.id}`;
@@ -2052,7 +2053,7 @@ const jobTableState = { type: "", status: "", size: "10", page: 1 };
 async function jobsPanel() {
   const data = await api.jobs();
   const jobs = asArray(data.jobs).sort((a,b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")));
-  const names = {process:"资料加工",structure:"逻辑关系分析",relate:"知识关联",discover:"知识发现",grade:"学习反馈",index:"更新索引",topics:"主题学习包整理"};
+  const names = {process:"资料加工",title:"原文标题生成",structure:"逻辑关系分析",relate:"知识关联",discover:"知识发现",grade:"学习反馈",index:"更新索引",topics:"主题学习包整理"};
   const panel = el("section", {class:"panel call-history", dataset: { tour: "system-jobs" }});
   const type = selectControl([["","全部类型"],...Object.entries(names)], jobTableState.type, "jobType");
   type.setAttribute("aria-label", "筛选任务类型");
@@ -2081,7 +2082,7 @@ async function jobsPanel() {
             el('summary', { text: '查看详情' }),
             el('p', { class: 'job-error-help', text: explanation.reason }),
             el('p', { class: 'job-error-help', text: `可以这样处理：${explanation.next}` }),
-            job.type === 'structure' ? el('p', { class: 'job-error-help', text: '本次失败不会删除原文、拆解条目或覆盖已保存的结构建议。' }) : null,
+            ['structure','title'].includes(job.type) ? el('p', { class: 'job-error-help', text: job.type === 'title' ? '原文和临时标题已保留；重试仅生成标题，不重新拆解。' : '本次失败不会删除原文、拆解条目或覆盖已保存的结构建议。' }) : null,
             el('details', { class: 'job-technical' }, [el('summary', { text: '技术信息（供排查）' }),
               el('pre', { text: `错误代码：${job.code || '未提供'}\n原始信息：${job.error || '未提供'}` })]),
           ]));

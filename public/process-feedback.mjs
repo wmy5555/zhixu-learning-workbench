@@ -1,4 +1,4 @@
-const observedTypes = new Set(['process', 'structure']);
+const observedTypes = new Set(['process', 'structure', 'title']);
 const activeStates = new Set(['queued', 'running']);
 const list = value => Array.isArray(value) ? value : [];
 
@@ -49,7 +49,7 @@ export function createProcessFeedback({ getContext, readJobs, notify, onChange =
       changed.push(record);
       if (!state.initialized || record.presetCase) continue;
       const title = String(job.title || note?.title || '资料').slice(0, 70);
-      const task = record.type === 'structure' ? '逻辑关系分析' : 'AI 拆解';
+      const task = record.type === 'title' ? '标题生成' : record.type === 'structure' ? '逻辑关系分析' : 'AI 拆解';
       if (record.extractionSaved && !previous?.extractionSaved && record.state === 'running') notify(`《${title}》的拆解已保存，可以先阅读；正在继续联网核验。`, 'success');
       if (previous?.state === record.state) continue;
       if (record.state === 'done') notify(`《${title}》的 ${task}已完成${record.research ? '（含联网核验）' : ''}`, 'success');
@@ -75,6 +75,7 @@ export function createProcessFeedback({ getContext, readJobs, notify, onChange =
       failed: 'AI 拆解未完成，请到「系统 → 任务」查看原因并重试。',
       cancelled: '拆解任务已取消，原文已保留。', done: 'AI 拆解已完成。' };
     let message = messages[job.state] || '';
+    if (job.type === 'title') message = ({ queued: '标题生成已排队，原文已保存。', running: '正在根据原文生成标题…', waiting: '暂用原文片段作为标题，请到“系统 → 任务”查看原因并重试。', failed: '标题尚未生成，原文与临时标题已保留，请到“系统 → 任务”查看原因并重试。', cancelled: '标题生成已取消，当前标题与原文保留。', done: '标题已生成。' })[job.state] || '';
     if (job.type === 'process' && job.extractionSaved) {
       const progress = job.researchProgress;
       const detail = progress?.total ? `已检索 ${progress.covered}/${progress.total} 项，证据充分 ${progress.verified} 项。` : '';
