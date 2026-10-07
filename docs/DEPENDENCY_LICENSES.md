@@ -159,3 +159,5 @@
 | Android Gradle Plugin | `com.android.tools.build:gradle:8.13.0` | 构建工具，不是应用运行时依赖。此处记录坐标但未展开其传递组件许可证。 |
 
 Capacitor 生成的默认图标和启动图属于模板资源，其许可范围随上述 Capacitor MIT 许可说明；本次未重绘、替换或另行引入媒体。APK 预览若随包分发，必须把 [android-third-party-notices.txt](../public/android-third-party-notices.txt) 实际打入 APK；本记录本身不宣称已完成 APK 构建或检查最终 APK 收录结果。
+
+2026-10-07 依赖安全修复：MCP SDK 从 1.30.0 升至 1.31.0（MIT，许可文件保持存在），修复 GHSA-6qxp-vccf-f47h。旧清单版本不代表当前锁文件。
