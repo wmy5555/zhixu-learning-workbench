@@ -258,3 +258,106 @@ for (const [label, value] of [['null JSON', null], ['missing title', {}], ['empt
     assert.equal(s.getNote(source.id).meta.titlePending, true);
   });
 }
+
+
+const syntheticFeedback = { assessment: 'correct', feedback: '合成反馈，仅验证任务衔接。', nextQuestion: '合成后续问题' };
+async function sourceAwaitingTitle(t, multiple = false) {
+  const events = [];
+  const s = await harness(t, async request => {
+    if (request.system.includes('资料拆解输出约定')) {
+      events.push('extract');
+      const result = extraction(undefined);
+      if (multiple) result.candidates.push({ title: '另一合成知识', body: '另一合成知识的正文，条件和用途明确。', claims: [] });
+      return { text: JSON.stringify(result) };
+    }
+    if (request.prompt.includes('依据材料评价理解')) { events.push('grade'); return { text: JSON.stringify(syntheticFeedback) }; }
+    events.push('title'); return { text: JSON.stringify({ sourceTitle: '不会打断学习的补充标题' }) };
+  });
+  const { notes: [source] } = s.importItems({ items: [input()], process: true });
+  await drain(s);
+  const title = s.store.records('jobs').find(job => job.type === 'title');
+  const child = s.listNotes({ kind: 'knowledge' })[0];
+  return { s, source, title, child, events };
+}
+
+test('automatic title migration preserves active reading, feedback and pending grading sessions exactly', async t => {
+  const { s, title, child, events } = await sourceAwaitingTitle(t);
+  const learning = s.promote(child.id, { stage: 'learning', reason: '合成回归中明确加入学习' });
+  const reading = s.startStudy({ noteId: child.id });
+  const feedback = s.startStudy({ noteId: child.id });
+  s.answerStudy(feedback.id, { answer: '已经得到合成反馈的原始回答', requestId: 'synthetic-feedback' });
+  await drain(s);
+  s.jobAction(title.id, { action: 'retry' });
+  const waiting = s.startStudy({ noteId: child.id });
+  s.answerStudy(waiting.id, { answer: '仍在等待批改的完整原始回答', requestId: 'synthetic-waiting' });
+  const before = [reading, feedback, waiting].map(session => s.store.get('sessions', session.id));
+  const grade = s.store.get('jobs', before[2].pendingJobId);
+  const evidenceBefore = s.store.records('studyEvidence'), reviewsBefore = s.store.records('reviews');
+  await s.runJobs(); // The earlier queued title runs before the pending grading task.
+  const migrated = s.getNote(child.id);
+  assert.notEqual(migrated.hash, learning.hash);
+  assert.equal(migrated.body, learning.body);
+  assert.equal(migrated.title, learning.title);
+  assert.equal(migrated.meta.stage, 'learning');
+  for (const session of before) assert.deepEqual(s.store.get('sessions', session.id), { ...session, sourceHash: migrated.hash });
+  assert.deepEqual(s.store.get('jobs', grade.id), grade);
+  assert.deepEqual(s.store.records('studyEvidence'), evidenceBefore);
+  assert.deepEqual(s.store.records('reviews'), reviewsBefore);
+  assert.deepEqual(events, ['extract', 'grade', 'title']);
+  await s.runJobs();
+  assert.equal(s.store.get('jobs', grade.id).state, 'done');
+  assert.equal(s.session(waiting.id).turns[0].answer, '仍在等待批改的完整原始回答');
+  assert.deepEqual(s.session(waiting.id).turns[0].feedback, syntheticFeedback);
+  assert.equal(s.finishStudy(waiting.id).status, 'completed');
+  assert.equal(s.finishStudy(feedback.id).status, 'completed');
+  assert.equal(s.session(reading.id).status, 'reading');
+});
+
+test('automatic title migration rebinds both current pending relation endpoints but never stale suggestions', async t => {
+  const { s, title, child } = await sourceAwaitingTitle(t, true);
+  const sibling = s.listNotes({ kind: 'knowledge' }).find(note => note.id !== child.id);
+  const other = s.store.create({ kind: 'knowledge', title: '另一份独立知识', body: '独立知识的合成正文，可比较条件和用途。', meta: { privacy: 'cloud', stage: 'candidate' } });
+  const relation = (id, from, to, overrides = {}) => ({ id, fromId: from.id, toId: to.id, fromHash: from.hash, toHash: to.hash, state: 'suggested', type: 'application', highValue: true, valueScore: 90, explanation: '合成关系说明', use: '比较条件', boundary: '合成测试范围', sourceExcerpt: from.body.slice(0, 12), targetExcerpt: to.body.slice(0, 12), ...overrides });
+  const records = [relation('forward-current', child, other), relation('reverse-current', other, child, { state: 'candidate' }), relation('both-current', child, sibling, { state: 'candidate' }), relation('stale-child', child, other, { fromHash: 'obsolete-child-version' }), relation('stale-other', child, other, { toHash: 'obsolete-other-version' })];
+  for (const record of records) s.store.put('relations', record.id, record);
+  s.jobAction(title.id, { action: 'retry' }); await s.runJobs();
+  const current = s.getNote(child.id), currentSibling = s.getNote(sibling.id);
+  assert.deepEqual(s.store.get('relations', 'forward-current'), { ...records[0], fromHash: current.hash });
+  assert.deepEqual(s.store.get('relations', 'reverse-current'), { ...records[1], toHash: current.hash });
+  assert.deepEqual(s.store.get('relations', 'both-current'), { ...records[2], fromHash: current.hash, toHash: currentSibling.hash });
+  assert.deepEqual(s.store.get('relations', 'stale-child'), records[3]);
+  assert.deepEqual(s.store.get('relations', 'stale-other'), records[4]);
+  const review = s.relationReview();
+  assert.ok(review.relations.some(record => record.id === 'forward-current'));
+  assert.ok(review.candidates.some(record => record.id === 'reverse-current'));
+  assert.ok(review.candidates.some(record => record.id === 'both-current'));
+  assert.ok(!review.relations.some(record => record.id.startsWith('stale-')));
+  assert.throws(() => s.relationAction('stale-other', { action: 'accept' }), { code: 'CONFLICT' });
+  assert.equal(s.relationAction('forward-current', { action: 'accept' }).state, 'accepted');
+});
+
+test('title migration keeps obsolete teaching snapshots and completed history untouched', async t => {
+  const { s, title, child } = await sourceAwaitingTitle(t);
+  let note = s.promote(child.id, { stage: 'learning', reason: '合成回归中明确加入学习' });
+  const finished = s.startStudy({ noteId: child.id });
+  s.answerStudy(finished.id, { answer: '用于历史保留的合成回答', requestId: 'synthetic-history' });
+  await drain(s); s.finishStudy(finished.id);
+  const stale = s.startStudy({ noteId: child.id });
+  s.answerStudy(stale.id, { answer: '原正文对应的旧回答', requestId: 'synthetic-stale' });
+  const staleJob = s.store.get('jobs', s.session(stale.id).pendingJobId);
+  note = s.editNote(child.id, { expectedHash: note.hash, body: note.body + '\n用户后来确实改动了正文。' });
+  const mismatch = s.startStudy({ noteId: child.id });
+  const mismatchedSnapshot = { ...s.store.get('sessions', mismatch.id), material: '另一份不能冒充当前材料的教学快照' };
+  s.store.put('sessions', mismatch.id, mismatchedSnapshot);
+  // Run the obsolete grade once; title retry is explicit and remains separately queued.
+  await s.runJobs();
+  assert.equal(s.store.get('jobs', staleJob.id).code, 'SOURCE_CHANGED');
+  const before = [finished, stale, mismatch].map(session => s.store.get('sessions', session.id));
+  s.jobAction(title.id, { action: 'retry' }); await s.runJobs();
+  for (const session of before) assert.deepEqual(s.store.get('sessions', session.id), session);
+  assert.notEqual(s.getNote(child.id).hash, note.hash);
+  s.jobAction(staleJob.id, { action: 'retry' }); await s.runJobs();
+  assert.equal(s.store.get('jobs', staleJob.id).code, 'SOURCE_CHANGED');
+  assert.equal(s.session(stale.id).turns[0].answer, '原正文对应的旧回答');
+  assert.equal(s.session(stale.id).turns[0].feedback, undefined);
+});
