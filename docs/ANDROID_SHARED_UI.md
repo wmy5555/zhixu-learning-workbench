@@ -119,7 +119,7 @@ GitHub 的 **Android prototype** 工作流执行相同构建与静态检查，�
 
 ### 2026-10-07 实际验证记录
 
-安装包来自 [Android 构建 37560910871](https://github.com/wmy5555/zhixu-learning-workbench/actions/runs/37560910871)，源码提交 `b1292465c869196fbc446e538b7574d271f2b360`。应用 APK SHA-256：`512cfe9cd65bf772f75359bb5553ec5ebdb02d3a101e74aa076c342053734561`。已检查 APK 实际包含共用 app/styles、Android 入口和第三方 notices。
+首次完整点击验收使用 [Android 构建 37560910871](https://github.com/wmy5555/zhixu-learning-workbench/actions/runs/37560910871)，源码提交 `b1292465c869196fbc446e538b7574d271f2b360`。该次应用 APK SHA-256：`512cfe9cd65bf772f75359bb5553ec5ebdb02d3a101e74aa076c342053734561`。已检查 APK 实际包含共用 app/styles、Android 入口和第三方 notices。此包已被下述修正版替代，不作为最终交付包。
 
 | 检查 | 实际结果 |
 |---|---|
@@ -135,6 +135,10 @@ GitHub 的 **Android prototype** 工作流执行相同构建与静态检查，�
 | 模拟器整机重启后的读取 | 通过；保持飞行模式整机重启，重新打开后仍有标题 a、正文 b2，浅色主题选择也保留 |
 
 模拟器分辨率为 1440×2560、密度 640（约 360 dp 宽）。输入使用宿主物理键盘；软件键盘遮挡、横屏、真实手机和正式签名升级尚未验收。进入飞行模式会使本机 MuMu 的 ADB 通道离线，因此离线闭环改用实际窗口点击及按键完成。所有输入均为可丢弃合成文本，未接触正式资料或供应商服务。
+
+最终交付包来自 [Android 构建 37564636968](https://github.com/wmy5555/zhixu-learning-workbench/actions/runs/37564636968)，源码提交 `34a76a98b8e9f671c82a11bb4cd8f4cac786b27e`，APK SHA-256 为 `66f2590309a49a5514ae59adbd56ff03e268a4627af37fb618c0edc4599c0aaa`。修正版补齐所有独立存储域的云备份和换机迁移排除规则；在同一 Android 15 模拟器重新安装后，**11 项设备测试全部通过**（9 项存储、2 项权限及编译后备份规则检查，3.261 秒），并实际启动查看了共用页面。
+
+该提交的 Windows/Linux Quality、Secrets、Dependencies 及 Android 构建/lint 均通过。两个 APK 中的共用 app、styles、Android 请求适配文件哈希完全一致，存储实现未变，因此复用上表完整断网点击和重启证据。设备测试检查已安装包的配置，不代表执行过实际云恢复或厂商换机流程。最终验收后已恢复模拟器原有网络、键盘设置并关闭本次启动的测试设备。
 
 ## 与现有试验的关系
 
