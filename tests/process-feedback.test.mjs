@@ -164,3 +164,19 @@ test('the monitor slows down when idle, promptly watches active work, and stops 
   assert.equal([...ui.timers.values()][0].delay, 15000);
   ui.feedback.stop(); assert.equal(ui.timers.size, 0);
 });
+
+
+test('title-only jobs poll and notify with title wording, without claiming decomposition', () => {
+  const ui = monitor();
+  ui.feedback.observe({ jobs: [job('title-only', 'queued', { type: 'title' })] });
+  assert.match(ui.feedback.status('source').message, /标题生成已排队/);
+  ui.feedback.observe({ jobs: [job('title-only', 'running', { type: 'title' })] });
+  assert.match(ui.feedback.status('source').message, /生成标题/);
+  ui.feedback.observe({ jobs: [job('title-only', 'failed', { type: 'title', code: 'MODEL_FORMAT' })] });
+  assert.match(ui.feedback.status('source').message, /临时标题已保留/);
+  assert.doesNotMatch(ui.messages[0].text, /拆解/);
+  ui.feedback.observe({ jobs: [job('title-only', 'queued', { type: 'title' })] });
+  ui.feedback.observe({ jobs: [job('title-only', 'done', { type: 'title' })] });
+  assert.match(ui.messages[1].text, /标题生成已完成/);
+  assert.doesNotMatch(ui.messages[1].text, /拆解/);
+});
