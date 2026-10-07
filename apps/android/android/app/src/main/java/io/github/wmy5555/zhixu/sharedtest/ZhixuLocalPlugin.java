@@ -43,7 +43,8 @@ public class ZhixuLocalPlugin extends Plugin {
     private boolean destroyed;
     private String abandonedCreateCallId;
 
-    private static final class PendingDocument {
+    // Package-private so device regressions can exercise a queued task abandoned by destruction.
+    static final class PendingDocument {
         final PluginCall call;
         final String kind;
         byte[] bytes;
@@ -199,7 +200,7 @@ public class ZhixuLocalPlugin extends Plugin {
         catch (Exception exception) { debugFailure("cleanup", exception); }
     }
 
-    private void completeDocument(PendingDocument task, Uri uri) {
+    void completeDocument(PendingDocument task, Uri uri) {
         ContentResolver resolver = null;
         boolean written = false;
         String stage = "resolver";
@@ -260,10 +261,10 @@ public class ZhixuLocalPlugin extends Plugin {
             fail(task, task.writing() ? incompleteMessage() : "无法读取所选文件，请确认文件格式并重试。", "FILE_ERROR");
         } finally {
             cleanupPayload(task);
-            if (task.writing() && !written && resolver != null) {
+            if (task.writing() && !written) {
                 // Providers may reject deletion; never claim an incomplete document is a valid backup.
-                try { DocumentsContract.deleteDocument(resolver, uri); }
-                catch (Exception exception) { debugFailure("cleanup", exception); }
+                // This also covers a queued task destroyed before it acquired its working resolver.
+                deleteCreatedDocument(uri);
             }
         }
     }

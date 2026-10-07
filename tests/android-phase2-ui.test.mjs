@@ -4,7 +4,7 @@ import { click, control, createAndroidBrowser, descendants, findButton } from ".
 
 const picked = {
   name: "换机资料.md",
-  text: `---\n{"format":"zhixu-source-exchange","version":1,"title":"导入标题","source":{"platform":"网页","author":"合成作者","url":"https://example.test/","date":"2026-10-07","locator":"第 3 段","topic":"离线学习"}}\n---\n导入正文`,
+  text: `---\n{"format":"zhixu-source-exchange","version":1,"title":"导入标题","source":{"platform":"网页","author":"合成作者","url":"https://example.test/","date":"2024年春","locator":"第 3 段","topic":"离线学习"}}\n---\n导入正文`,
 };
 
 test("Android file selection only fills a draft; cancel preserves it and confirmed selection carries all source fields", async () => {
@@ -37,7 +37,8 @@ test("Android file selection only fills a draft; cancel preserves it and confirm
   assert.equal(control(form, "platform").value, "网页");
   assert.equal(control(form, "author").value, "合成作者");
   assert.equal(control(form, "url").value, "https://example.test/");
-  assert.equal(control(form, "date").value, "2026-10-07");
+  assert.equal(control(form, "date").type, "text");
+  assert.equal(control(form, "date").value, "2024年春");
   assert.equal(control(form, "locator").value, "第 3 段");
   assert.equal(topic.value, "离线学习");
   assert.equal(localOnly.checked, true);
@@ -49,6 +50,36 @@ test("Android file selection only fills a draft; cancel preserves it and confirm
   assert.equal(imports[0].research, false);
   assert.equal(imports[0].items[0].privacy, "local");
   assert.equal(imports[0].items[0].topic, "离线学习");
+});
+
+test("Android file selection confirms metadata-only drafts but not the untouched blank form", async () => {
+  const appFixture = await createAndroidBrowser({ api: { pickSourceFile: async () => picked }, confirmations: Array(6).fill(false) });
+  await appFixture.app.renderCapture();
+  const form = appFixture.app.refs.main.querySelector(".capture-form");
+  const choose = findButton(appFixture.app.refs.main, "选择文件填入草稿");
+
+  await click(choose);
+  assert.equal(appFixture.context.confirmPrompts.length, 0, "an untouched form should not ask to replace a draft");
+  let promptCount = 0;
+  for (const [key, value] of [["platform", "手工来源"], ["author", "草稿作者"], ["url", "https://draft.example/"], ["date", "2024年春"], ["locator", "草稿定位"], ["topic", "草稿主题"]]) {
+    for (const name of ["title", "body", "platform", "author", "url", "date", "locator", "topic"]) control(form, name).value = "";
+    const input = control(form, key);
+    input.value = value;
+    await click(choose);
+    assert.equal(appFixture.context.confirmPrompts.length, ++promptCount, `${key} alone must trigger replacement confirmation`);
+    assert.equal(input.value, value, `cancel must preserve ${key}`);
+    input.value = "";
+  }
+});
+
+test("Android source editor preserves non-ISO metadata dates verbatim", async () => {
+  const source = { id: "dated-source", kind: "source", title: "日期资料", body: "正文", hash: "synthetic-hash", meta: { date: "2024-03-01T10:20:30Z" }, children: [] };
+  const appFixture = await createAndroidBrowser();
+  appFixture.app.renderSourceGroupDrawer(source);
+  await click(findButton(appFixture.app.refs.drawerBody, "编辑原始资料"));
+  const date = control(appFixture.app.refs.drawerBody, "date");
+  assert.equal(date.type, "text");
+  assert.equal(date.value, "2024-03-01T10:20:30Z");
 });
 
 test("Android source drawer exposes history and exports the current source id; old body is text", async () => {

@@ -207,6 +207,23 @@ final class SourceDocumentFiles {
             URL parsed = new URL(value);
             if (!("http".equalsIgnoreCase(parsed.getProtocol()) || "https".equalsIgnoreCase(parsed.getProtocol()))
                 || parsed.getHost().isEmpty() || parsed.getPort() > 65535) throw new IllegalArgumentException();
+            // URL.getPort() conflates an omitted port and explicit :-1; validate the original spelling too.
+            String authority = parsed.getAuthority();
+            String hostPort = authority.substring(authority.lastIndexOf('@') + 1);
+            String port = null;
+            if (hostPort.startsWith("[")) {
+                int closingBracket = hostPort.indexOf(']');
+                if (closingBracket == -1) throw new IllegalArgumentException();
+                String suffix = hostPort.substring(closingBracket + 1);
+                if (!suffix.isEmpty()) {
+                    if (!suffix.startsWith(":")) throw new IllegalArgumentException();
+                    port = suffix.substring(1);
+                }
+            } else if (hostPort.indexOf(':') != -1) {
+                port = hostPort.substring(hostPort.lastIndexOf(':') + 1);
+            }
+            // WHATWG allows an empty port, but no sign, decimal point, exponent or radix prefix.
+            if (port != null && !port.matches("[0-9]*")) throw new IllegalArgumentException();
             String host = parsed.getHost();
             String asciiHost = host.startsWith("[") ? host : IDN.toASCII(host);
             if (new URI("http://" + asciiHost).getHost() == null) throw new IllegalArgumentException();

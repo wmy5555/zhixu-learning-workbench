@@ -2,6 +2,7 @@ package io.github.wmy5555.zhixu.sharedtest;
 
 import android.database.sqlite.SQLiteDatabase;
 import android.test.AndroidTestCase;
+import android.system.Os;
 import android.util.AtomicFile;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -557,11 +558,100 @@ public class LocalSourceBackupTest extends AndroidTestCase {
             expect("STORE_ERROR", () -> failed.restoreBackup(preview.getString("token"), "keep-current"));
             assertTrue(new File(destinationRoot, "restore-transaction-v1/plan.json").isFile());
             assertFalse(new File(destinationRoot, "restore-transaction-v1/committed").exists());
+            assertTrue(new File(destinationRoot, "restore-transaction-v1/files").listFiles().length > 0);
         }
         try (LocalSourceStore reopened = destination()) {
             assertEquals(0, reopened.list("").length());
             assertEquals(0, new File(destinationRoot, "originals").listFiles().length);
+            assertEquals(0, new File(destinationRoot, "restore-transaction-v1/files").listFiles().length);
             assertEquals(1, restore(reopened, exported).getInt("imported"));
+        }
+    }
+
+    public void testSmallRestoreRemovesOldUncommittedHighStagesAndAtomicSidecarsOnly() throws Exception {
+        save("小恢复清理旧暂存", "现有资料与公开备份保持不变");
+        JSONObject exported = store.backup();
+        File destinationRoot = new File(root, "destination");
+        try (LocalSourceStore destination = destination()) {
+            File directory = new File(destinationRoot, "restore-transaction-v1/files");
+            assertTrue(directory.mkdirs());
+            // The opened store already performed its one-time cleanup. New staging must check again.
+            for (String name : new String[] { "1199.md", "1199.md.new", "1199.md.bak" })
+                writeCleanupFixture(new File(directory, name), "旧未提交暂存");
+            File unrelated = new File(directory, "leave-this.txt");
+            writeCleanupFixture(unrelated, "未知文件不能清理");
+            File unrelatedDirectory = new File(directory, "leave-this-directory");
+            assertTrue(unrelatedDirectory.mkdir());
+            assertEquals(1, restore(destination, exported).getInt("imported"));
+            for (String name : new String[] { "1199.md", "1199.md.new", "1199.md.bak", "0000.md", "0001.md" })
+                assertFalse(new File(directory, name).exists());
+            assertEquals("未知文件不能清理", raw(unrelated));
+            assertTrue(unrelatedDirectory.isDirectory());
+            assertEquals(2, directory.listFiles().length);
+            assertEquals(exported.getJSONArray("notes").getJSONObject(0).getString("current"),
+                destination.backup().getJSONArray("notes").getJSONObject(0).getString("current"));
+        }
+    }
+
+    public void testCleanupRejectsLinkedPathsAndDirectoriesBeforeDeletingAnyOwnedFile() throws Exception {
+        JSONObject current = save("路径外原文保留", "资料正文不能被暂存清理影响");
+        store.close();
+        File transaction = new File(sourceRoot, "restore-transaction-v1");
+        File directory = new File(transaction, "files");
+        assertTrue(directory.mkdirs());
+        File safe = new File(directory, "0000.md");
+        writeCleanupFixture(safe, "普通暂存必须等所有路径安全后再清理");
+        File outside = new File(root, "outside-cleanup");
+        assertTrue(outside.mkdir());
+        File outsideFile = new File(outside, "0001.md");
+        writeCleanupFixture(outsideFile, "固定私有目录之外不能删除");
+        File linked = new File(directory, "0001.md");
+        Os.symlink(outsideFile.getPath(), linked.getPath());
+        try {
+            expect("STORE_ERROR", () -> { try (LocalSourceStore rejected = new LocalSourceStore(sourceRoot)) { fail("Linked stage must be rejected"); } });
+            assertTrue(safe.isFile());
+            assertEquals("固定私有目录之外不能删除", raw(outsideFile));
+        } finally { Os.unlink(linked.getPath()); }
+        assertTrue(linked.mkdir());
+        try {
+            expect("STORE_ERROR", () -> { try (LocalSourceStore rejected = new LocalSourceStore(sourceRoot)) { fail("Stage directory must be rejected"); } });
+            assertTrue(safe.isFile());
+        } finally { assertTrue(linked.delete()); }
+        File heldDirectory = new File(transaction, "files-held");
+        assertTrue(directory.renameTo(heldDirectory));
+        Os.symlink(outside.getPath(), directory.getPath());
+        try {
+            expect("STORE_ERROR", () -> { try (LocalSourceStore rejected = new LocalSourceStore(sourceRoot)) { fail("Linked staging directory must be rejected"); } });
+            assertEquals("固定私有目录之外不能删除", raw(outsideFile));
+        } finally {
+            Os.unlink(directory.getPath());
+            assertTrue(heldDirectory.renameTo(directory));
+        }
+        store = new LocalSourceStore(sourceRoot);
+        assertFalse(safe.exists());
+        assertEquals("资料正文不能被暂存清理影响", store.read(current.getString("id")).getString("body"));
+    }
+
+    public void testCommittedBackupMarkerKeepsAllStagingWhenPlanIsCorrupt() throws Exception {
+        File destinationRoot = new File(root, "destination");
+        try (LocalSourceStore destination = destination()) { assertEquals(0, destination.list("").length()); }
+        File transaction = new File(destinationRoot, "restore-transaction-v1");
+        File directory = new File(transaction, "files");
+        assertTrue(directory.mkdirs());
+        File staged = new File(directory, "1199.md");
+        writeCleanupFixture(staged, "已提交恢复证据不能作为垃圾清理");
+        writeCleanupFixture(new File(transaction, "plan.json"), "corrupt plan");
+        writeCleanupFixture(new File(transaction, "committed.bak"), repeat('0', 64));
+        expect("CORRUPT", () -> { try (LocalSourceStore rejected = destination()) { fail("Corrupt committed backup marker must block opening"); } });
+        assertEquals("已提交恢复证据不能作为垃圾清理", raw(staged));
+        assertTrue(new File(transaction, "committed").exists() || new File(transaction, "committed.bak").exists());
+        assertEquals("corrupt plan", raw(new File(transaction, "plan.json")));
+    }
+
+    private static void writeCleanupFixture(File file, String value) throws IOException {
+        try (FileOutputStream output = new FileOutputStream(file)) {
+            output.write(value.getBytes(StandardCharsets.UTF_8));
+            output.getFD().sync();
         }
     }
 

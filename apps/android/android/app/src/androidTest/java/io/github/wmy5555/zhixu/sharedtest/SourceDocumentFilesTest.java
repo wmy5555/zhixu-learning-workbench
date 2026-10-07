@@ -1,15 +1,34 @@
 package io.github.wmy5555.zhixu.sharedtest;
 
 import android.content.ClipData;
+import android.content.ContentProvider;
+import android.content.ContentValues;
+import android.content.Context;
+import android.content.ContextWrapper;
 import android.content.Intent;
+import android.content.pm.ProviderInfo;
+import android.database.Cursor;
+import android.database.MatrixCursor;
 import android.net.Uri;
+import android.os.Bundle;
+import android.os.ParcelFileDescriptor;
+import android.provider.DocumentsContract;
+import android.provider.OpenableColumns;
 import android.test.AndroidTestCase;
+import android.test.mock.MockContentResolver;
+import com.getcapacitor.Bridge;
+import com.getcapacitor.JSObject;
+import com.getcapacitor.PluginCall;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.lang.reflect.Field;
 import java.util.Arrays;
 import org.json.JSONObject;
 
@@ -317,6 +336,113 @@ public class SourceDocumentFilesTest extends AndroidTestCase {
         while (unicodeUrl.codePointCount(0, unicodeUrl.length()) < 2048) unicodeUrl.append("😀");
         assertEquals(unicodeUrl.toString(), exchangeHeader(SourceDocumentFiles.sourceExchange(
             exchangeNote(new JSONObject().put("url", unicodeUrl.toString())))).getJSONObject("source").getString("url"));
+    }
+
+    public void testExchangeRejectsSignedAndNonDecimalExplicitPortsWithoutChangingSource() throws Exception {
+        for (String url : new String[] { "http://example.invalid:-1/", "https://example.invalid:-0/",
+            "http://example.invalid:+80/", "http://[::1]:-1/", "http://example.invalid:80.0/",
+            "http://example.invalid:1e2/", "http://example.invalid:0x50/" }) {
+            JSONObject note = exchangeNote(new JSONObject().put("url", url).put("author", "保留作者"));
+            try { SourceDocumentFiles.sourceExchange(note); fail("Invalid explicit port produced a document"); }
+            catch (LocalSourceStore.StoreException exception) { assertEquals("VALIDATION", exception.code); }
+            assertEquals(url, note.getJSONObject("meta").getString("url"));
+            assertEquals("保留作者", note.getJSONObject("meta").getString("author"));
+        }
+    }
+
+    public void testExchangePreservesValidExplicitPortsAndUserInfo() throws Exception {
+        for (String url : new String[] { "http://example.invalid:0/", "https://example.invalid:65535/",
+            "http://example.invalid:00080/", "http://example.invalid:/", "http://[::1]:80/",
+            "http://user:-1@example.invalid:80/" }) {
+            assertEquals(url, exchangeHeader(SourceDocumentFiles.sourceExchange(exchangeNote(new JSONObject().put("url", url))))
+                .getJSONObject("source").getString("url"));
+        }
+    }
+
+    public void testAbandonedQueuedExportDeletesCreatedDocumentBeforeOpeningOutput() throws Exception {
+        RecordingDocumentProvider provider = new RecordingDocumentProvider(null);
+        ZhixuLocalPlugin plugin = pluginFor(provider);
+        // Destruction clears pending before the queued callback runs; the detached task is no longer current.
+        ZhixuLocalPlugin.PendingDocument detached = new ZhixuLocalPlugin.PendingDocument(null, "exportBackup");
+        Uri created = DocumentsContract.buildDocumentUri(RecordingDocumentProvider.AUTHORITY, "synthetic-created");
+        plugin.completeDocument(detached, created);
+        assertEquals(1, provider.deleteRequests);
+        assertEquals(0, provider.queries);
+        assertEquals(0, provider.opens);
+        assertEquals(created, provider.deletedUri);
+    }
+
+    public void testSuccessfulExportKeepsCreatedDocument() throws Exception {
+        File output = File.createTempFile("saf-regression-", ".md", getContext().getCacheDir());
+        try {
+            RecordingDocumentProvider provider = new RecordingDocumentProvider(output);
+            ZhixuLocalPlugin plugin = pluginFor(provider);
+            final boolean[] resolved = { false };
+            PluginCall call = new PluginCall(null, "ZhixuLocal", "synthetic-callback", "exportSource", new JSObject()) {
+                @Override public void resolve(JSObject response) { resolved[0] = response.optBoolean("saved"); }
+                @Override public void release(Bridge ignored) {}
+            };
+            ZhixuLocalPlugin.PendingDocument task = new ZhixuLocalPlugin.PendingDocument(call, "exportSource");
+            task.bytes = "合成原文正文".getBytes(StandardCharsets.UTF_8);
+            Field pending = ZhixuLocalPlugin.class.getDeclaredField("pending");
+            pending.setAccessible(true);
+            pending.set(plugin, task);
+            plugin.completeDocument(task, DocumentsContract.buildDocumentUri(RecordingDocumentProvider.AUTHORITY, "synthetic-created"));
+            assertTrue(resolved[0]);
+            assertEquals(0, provider.deleteRequests);
+            assertEquals(1, provider.opens);
+            try (FileInputStream input = new FileInputStream(output)) {
+                assertEquals("合成原文正文", SourceDocumentFiles.readUtf8(input, 1024));
+            }
+        } finally { output.delete(); }
+    }
+
+    private ZhixuLocalPlugin pluginFor(RecordingDocumentProvider provider) {
+        ProviderInfo info = new ProviderInfo();
+        info.authority = RecordingDocumentProvider.AUTHORITY;
+        info.exported = true;
+        info.grantUriPermissions = true;
+        provider.attachInfo(getContext(), info);
+        MockContentResolver resolver = new MockContentResolver(getContext());
+        resolver.addProvider(info.authority, provider);
+        Context context = new ContextWrapper(getContext()) {
+            @Override public android.content.ContentResolver getContentResolver() { return resolver; }
+        };
+        return new ZhixuLocalPlugin() {
+            @Override public Context getContext() { return context; }
+        };
+    }
+
+    private static final class RecordingDocumentProvider extends ContentProvider {
+        static final String AUTHORITY = "io.github.wmy5555.zhixu.synthetic.saf";
+        final File output;
+        int deleteRequests;
+        int queries;
+        int opens;
+        Uri deletedUri;
+        RecordingDocumentProvider(File output) { this.output = output; }
+        @Override public boolean onCreate() { return true; }
+        @Override public Bundle call(String method, String argument, Bundle extras) {
+            if (!"android:deleteDocument".equals(method)) throw new UnsupportedOperationException();
+            deleteRequests++;
+            deletedUri = extras.getParcelable("uri");
+            return new Bundle();
+        }
+        @Override public Cursor query(Uri uri, String[] projection, String selection, String[] arguments, String order) {
+            queries++;
+            MatrixCursor cursor = new MatrixCursor(new String[] { OpenableColumns.DISPLAY_NAME });
+            cursor.addRow(new Object[] { "synthetic.md" });
+            return cursor;
+        }
+        @Override public ParcelFileDescriptor openFile(Uri uri, String mode) throws FileNotFoundException {
+            opens++;
+            if (output == null) throw new FileNotFoundException("No synthetic output");
+            return ParcelFileDescriptor.open(output, ParcelFileDescriptor.parseMode(mode));
+        }
+        @Override public String getType(Uri uri) { return "text/markdown"; }
+        @Override public Uri insert(Uri uri, ContentValues values) { throw new UnsupportedOperationException(); }
+        @Override public int delete(Uri uri, String selection, String[] arguments) { throw new UnsupportedOperationException(); }
+        @Override public int update(Uri uri, ContentValues values, String selection, String[] arguments) { throw new UnsupportedOperationException(); }
     }
 
     private static JSONObject exchangeNote(JSONObject meta) throws Exception {

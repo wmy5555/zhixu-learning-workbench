@@ -55,6 +55,7 @@ final class LocalSourceBackup {
     private final LocalSourceStore store;
     private final File transactionDirectory;
     private Preview pending;
+    private boolean uncommittedCleaned;
 
     private static final class Note {
         final String id;
@@ -485,7 +486,14 @@ final class LocalSourceBackup {
     /** Called before any normal read/write and at startup. Only a synced commit marker authorizes replay. */
     void recover() throws IOException, JSONException, LocalSourceStore.StoreException {
         File marker = LocalSourceStore.child(transactionDirectory, "committed");
-        if (!exists(marker)) return;
+        if (!exists(marker)) {
+            // Scan once at startup, and again only after this instance starts staging a transaction.
+            if (!uncommittedCleaned) {
+                cleanupUncommittedStaging();
+                uncommittedCleaned = true;
+            }
+            return;
+        }
         byte[] bytes = readBounded(LocalSourceStore.child(transactionDirectory, "plan.json"), MAX_MANIFEST_BYTES);
         String committedHash = decode(readBounded(marker, 64));
         if (!committedHash.equals(digest(bytes))) throw corrupt();
@@ -505,11 +513,63 @@ final class LocalSourceBackup {
         syncDirectory(transactionDirectory);
         if (exists(marker)) throw new IOException("Cannot finish restore transaction");
         // Temporary snapshots are no longer recovery points after every destination is durable.
-        for (StagedFile file : writes.values()) new AtomicFile(file.staged).delete();
+        cleanupUncommittedStaging();
+        uncommittedCleaned = true;
+    }
+
+    /** Never follows links or recurses; only this transaction's fixed temporary filenames are owned. */
+    private void cleanupUncommittedStaging() throws IOException {
+        int transactionMode = noFollowMode(transactionDirectory);
+        if (transactionMode == 0) return;
+        requireCleanupPath(transactionDirectory, true);
+        requireNoCommitEvidence();
+        File directory = LocalSourceStore.child(transactionDirectory, "files");
+        if (noFollowMode(directory) == 0) return;
+        requireCleanupPath(directory, true);
+        File[] entries = directory.listFiles();
+        if (entries == null) throw new IOException("Cannot list private restore staging");
+        List<File> owned = new ArrayList<>();
+        // Validate the entire deletion set before touching any file. Unknown files remain untouched.
+        for (File entry : entries) {
+            if (!entry.getName().matches("[0-9]{4}\\.md(?:\\.new|\\.bak)?")) continue;
+            File file = LocalSourceStore.child(directory, entry.getName());
+            requireCleanupPath(file, false);
+            owned.add(file);
+        }
+        requireNoCommitEvidence();
+        for (File file : owned) {
+            requireCleanupPath(file, false);
+            if (!file.delete()) throw new IOException("Cannot remove private restore staging");
+        }
+        if (!owned.isEmpty()) syncDirectory(directory);
+    }
+
+    private void requireNoCommitEvidence() throws IOException {
+        // lstat also protects broken links and AtomicFile's backup marker as recovery evidence.
+        if (noFollowMode(new File(transactionDirectory, "committed")) != 0
+            || noFollowMode(new File(transactionDirectory, "committed.bak")) != 0)
+            throw new IOException("Committed restore evidence must be preserved");
+    }
+
+    private static void requireCleanupPath(File file, boolean directory) throws IOException {
+        if (!file.getCanonicalFile().equals(file.getAbsoluteFile())) throw new IOException("Unsafe restore cleanup path");
+        int mode = noFollowMode(file);
+        if (directory ? !OsConstants.S_ISDIR(mode) : !OsConstants.S_ISREG(mode))
+            throw new IOException("Unsafe restore cleanup entry");
+    }
+
+    private static int noFollowMode(File file) throws IOException {
+        try { return Os.lstat(file.getPath()).st_mode; }
+        catch (ErrnoException exception) {
+            if (exception.errno == OsConstants.ENOENT) return 0;
+            throw new IOException("Cannot inspect private restore staging", exception);
+        }
     }
 
     private void stageTransaction(Map<String, Note> accepted)
         throws IOException, JSONException, LocalSourceStore.StoreException {
+        cleanupUncommittedStaging();
+        uncommittedCleaned = false;
         LocalSourceStore.ensureDirectory(transactionDirectory);
         syncDirectory(transactionDirectory.getParentFile());
         File filesDirectory = LocalSourceStore.child(transactionDirectory, "files");

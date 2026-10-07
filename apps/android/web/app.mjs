@@ -358,7 +358,7 @@ async function renderCapture() {
         el("input", { name: "platform", placeholder: "平台，例如：网页 / 抖音 / AI 对话" }),
         el("input", { name: "author", placeholder: "作者（可选）" }),
         el("input", { name: "url", type: "url", placeholder: "https://…" }),
-        el("input", { name: "date", type: "date" }),
+        el("input", { name: "date", type: "text", placeholder: "原始日期，例如：2024年春" }),
         el("input", { name: "locator", class: "span-2", placeholder: "页码、时间点、段落等定位" }),
         el("input", { name: "topic", class: "span-2", placeholder: "来源主题（可选）" }),
       ])),
@@ -368,6 +368,8 @@ async function renderCapture() {
     el("label", { class: "check-field" }, [research, el("span", { text: "拆解时联网检验正确性并寻找反例（可选，需同时勾选 AI 拆解）" })]),
     el("div", { class: "form-actions" }, [button("保存原始资料", { kind: "primary", type: "submit" }), button("清空", { onClick: () => sourceForm.reset() })]),
   );
+  const captureDraftKeys = ["title", "body", "platform", "author", "url", "date", "locator", "topic"];
+  const initialCaptureDraft = new Map(captureDraftKeys.map(key => [key, sourceForm.querySelector(`[name="${key}"]`)?.value || ""]));
   sourceForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const data = serializeForm(sourceForm);
@@ -401,8 +403,12 @@ async function renderCapture() {
       try {
         const picked = await api.pickSourceFile();
         const draft = parseSourceFile(picked);
-        if ((title.value || body.value) && !await confirmAction({ title: "替换当前未保存草稿？", message: "所选文件将填入表单。请先保存需要保留的当前输入。", confirmText: "填入文件" })) return;
-        for (const key of ["title", "body", "platform", "author", "url", "date", "locator", "topic"]) {
+        const hasDraftChanges = captureDraftKeys.some(key => {
+          const input = sourceForm.querySelector(`[name="${key}"]`);
+          return input && input.value !== initialCaptureDraft.get(key);
+        });
+        if (hasDraftChanges && !await confirmAction({ title: "替换当前未保存草稿？", message: "所选文件将填入表单。请先保存需要保留的当前输入。", confirmText: "填入文件" })) return;
+        for (const key of captureDraftKeys) {
           const input = sourceForm.querySelector(`[name="${key}"]`);
           if (input) input.value = draft[key] || "";
         }
@@ -902,7 +908,7 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
       field("平台", el("input", { name: "platform", value: meta.platform || "", placeholder: "网页、抖音、AI 对话等" })),
       field("作者", el("input", { name: "author", value: meta.author || "" })),
       field("原始地址", el("input", { name: "url", type: "url", value: meta.url || "", placeholder: "https://…" })),
-      field("资料日期", el("input", { name: "date", type: "date", value: String(meta.date || "").slice(0, 10) })),
+      field("资料日期", el("input", { name: "date", type: "text", value: String(meta.date || ""), placeholder: "保留原始日期格式" })),
       field("原文定位", el("input", { name: "locator", value: meta.locator || "", placeholder: "页码、时间点或段落" })),
       field("本资料下次核验有效天数", el("input", { dataset: { tour: "note-validity" }, name: "researchIntervalDays", type: "number", min: 1, max: 365, step: 1, value: meta.researchIntervalDays ?? 30, required: true }), "仅在后续成功核验时生效；默认 30 天，可设置 1–365 天。"),
     ]),
