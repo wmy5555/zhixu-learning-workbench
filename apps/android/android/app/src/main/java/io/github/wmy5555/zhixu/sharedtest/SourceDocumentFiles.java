@@ -188,8 +188,8 @@ final class SourceDocumentFiles {
         for (String field : SOURCE_FIELDS) {
             Object value = meta == null ? null : meta.opt(field);
             if (value instanceof String) {
+                validateSingleLine((String) value, "url".equals(field) || "locator".equals(field) ? 2048 : 200, false);
                 if ("url".equals(field)) validateExchangeUrl((String) value);
-                else validateSingleLine((String) value, "locator".equals(field) ? 2048 : 200, false);
                 source.put(field, value);
             }
         }
@@ -200,11 +200,18 @@ final class SourceDocumentFiles {
 
     private static void validateSingleLine(String value, int limit, boolean title) throws LocalSourceStore.StoreException {
         boolean invalidValue = value.codePointCount(0, value.length()) > limit || (title && value.trim().isEmpty());
+        if (!value.isEmpty() && (boundaryWhitespace(value.charAt(0)) || boundaryWhitespace(value.charAt(value.length() - 1)))) invalidValue = true;
         for (int index = 0; index < value.length(); index++) {
             char unit = value.charAt(index);
             if (unit == '\r' || unit == '\n' || unit == '\0' || (title && Character.isISOControl(unit))) invalidValue = true;
         }
-        if (invalidValue) throw invalid("标题或来源信息无法用于原文交换。请在资料编辑中检查长度和换行后重新导出；原资料不会自动修改。");
+        if (invalidValue) throw invalid("标题或来源信息无法用于原文交换。请在资料编辑中检查长度、换行与首尾空白后重新导出；原资料不会自动修改。");
+    }
+
+    private static boolean boundaryWhitespace(char value) {
+        // Union of Java trim and ECMAScript trim, so both importers preserve attribution verbatim.
+        return value <= 0x20 || value == 0x00a0 || value == 0x1680 || value >= 0x2000 && value <= 0x200a
+            || value == 0x2028 || value == 0x2029 || value == 0x202f || value == 0x205f || value == 0x3000 || value == 0xfeff;
     }
 
     private static void validatePortableDnsHost(String host) {

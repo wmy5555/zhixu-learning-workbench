@@ -89,6 +89,20 @@ test("desktop ordinary files retain the 500000-character import allowance while 
   assert.equal(result.notes[0].body, body);
 });
 
+test("exchange fields reject boundary whitespace that either platform would trim", () => {
+  for (const parse of [parseSourceFile, parseAndroidSourceFile]) {
+    for (const field of ["title", "platform", "author", "url", "date", "locator", "topic"]) {
+      for (const boundary of [" ", "\t", "\u001f", "\u00a0", "\u2000", "\u3000", "\ufeff"]) {
+        for (const value of [boundary + "text", "text" + boundary]) {
+          const data = { format: "zhixu-source-exchange", version: 1, title: "合成标题", source: {} };
+          if (field === "title") data.title = value; else data.source[field] = value;
+          assert.throws(() => parse({ name: "空白.md", text: "---\n" + JSON.stringify(data) + "\n---\n正文" }), { code: "SOURCE_FILE_INVALID" });
+        }
+      }
+    }
+  }
+});
+
 test("Android exchange fixture keeps exact body and all six source fields", () => {
   const body = "正文首行\r\n\r\n末尾空白  \n";
   const item = parseSourceFile({ name: "交换.md", text: `\uFEFF${fixture(body)}` });

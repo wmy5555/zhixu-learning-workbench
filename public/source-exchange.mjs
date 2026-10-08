@@ -211,11 +211,12 @@ function exchangeItem(name, text, header, body) {
       || !data.source || Array.isArray(data.source) || typeof data.source !== "object"
       || Object.keys(data.source).some(key => !SOURCE_FIELDS.includes(key))) throw invalid();
     const title = data.title.trim();
-    if (!title || [...title].length > 200 || /[\p{Cc}]/u.test(data.title)) throw invalid("交换文件标题无效。");
+    if (!title || title !== data.title || [...title].length > 200 || /[\p{Cc}]/u.test(data.title)) throw invalid("交换文件标题无效。");
     for (const field of SOURCE_FIELDS) {
       if (!Object.hasOwn(data.source, field)) data.source[field] = "";
       const value = data.source[field];
-      if (typeof value !== "string" || /[\r\n\0]/.test(value) || [...value].length > (field === "url" || field === "locator" ? 2048 : 200)) {
+      if (typeof value !== "string" || value !== value.trim() || /^[\u0000-\u0020]|[\u0000-\u0020]$/.test(value)
+          || /[\r\n\0]/.test(value) || [...value].length > (field === "url" || field === "locator" ? 2048 : 200)) {
         throw invalid("交换文件来源信息无效。");
       }
     }

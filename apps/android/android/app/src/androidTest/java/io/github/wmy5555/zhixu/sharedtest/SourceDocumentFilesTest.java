@@ -500,6 +500,21 @@ public class SourceDocumentFilesTest extends AndroidTestCase {
         @Override public int update(Uri uri, ContentValues values, String selection, String[] arguments) { throw new UnsupportedOperationException(); }
     }
 
+    public void testExchangeRejectsBoundaryWhitespaceWithoutChangingSource() throws Exception {
+        for (String field : new String[] { "title", "platform", "author", "url", "date", "locator", "topic" }) {
+            for (char space : new char[] { ' ', '\t', 0x001f, 0x00a0, 0x2000, 0x3000, 0xfeff }) {
+                for (String value : new String[] { space + "text", "text" + space }) {
+                    JSONObject note = exchangeNote(new JSONObject());
+                    if ("title".equals(field)) note.put("title", value); else note.getJSONObject("meta").put(field, value);
+                    String before = note.toString();
+                    try { SourceDocumentFiles.sourceExchange(note); fail("Noncanonical attribution exported"); }
+                    catch (LocalSourceStore.StoreException expected) { assertEquals("SOURCE_FILE_INVALID", expected.code); }
+                    assertEquals(before, note.toString());
+                }
+            }
+        }
+    }
+
     private static JSONObject exchangeNote(JSONObject meta) throws Exception {
         return new JSONObject().put("title", "合成导出资料").put("body", "原正文保持不变。\n").put("meta", meta);
     }
