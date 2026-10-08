@@ -2,6 +2,32 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { click, control, createAndroidBrowser, descendants, findButton } from "./fixtures/android-browser.mjs";
 
+test("Android source restore remains successful when post-restore refresh rejects and cannot repeat the consumed token", async () => {
+  let nativeCalls = 0, refreshCalls = 0;
+  const errors = [];
+  const fixture = await createAndroidBrowser();
+  const panel = fixture.context.createAndroidDataPanel({ api: {
+    previewAndroidBackup: async () => ({ token: "consumed-source-token", newCount: 1, sameCount: 0, conflicts: [], versionCount: 1 }),
+    restoreAndroidBackup: async token => { assert.equal(token, "consumed-source-token"); nativeCalls++; return { imported: 1, unchanged: 0, conflictsSkipped: 0, versionsImported: 1 }; },
+  }, onRestored: async () => { refreshCalls++; throw new Error("bootstrap unavailable after commit"); }, onError: error => { errors.push(error); } });
+  await click(findButton(panel, "选择备份并预览"));
+  const reviewed = control(panel, "restoreReviewed"), restore = findButton(panel, "确认恢复，保留冲突资料");
+  reviewed.checked = true; reviewed.events.change();
+  await click(restore);
+  assert.equal(nativeCalls, 1);
+  assert.equal(refreshCalls, 1);
+  assert.match(panel.textContent, /已新增 1 份/);
+  assert.match(panel.textContent, /备份恢复已完成，但页面刷新未完成/);
+  assert.match(panel.textContent, /顶部刷新按钮或重新打开应用/);
+  assert.doesNotMatch(panel.textContent, /恢复未完成，请重新预览/);
+  assert.equal(restore.disabled, true);
+  assert.equal(reviewed.checked, false);
+  assert.equal(reviewed.disabled, true);
+  await click(restore);
+  assert.equal(nativeCalls, 1);
+  assert.equal(errors.length, 0);
+});
+
 const picked = {
   name: "换机资料.md",
   text: `---\n{"format":"zhixu-source-exchange","version":1,"title":"导入标题","source":{"platform":"网页","author":"合成作者","url":"https://example.test/","date":"2024年春","locator":"第 3 段","topic":"离线学习"}}\n---\n导入正文`,
