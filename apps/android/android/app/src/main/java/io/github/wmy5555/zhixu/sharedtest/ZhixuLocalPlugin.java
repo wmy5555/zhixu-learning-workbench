@@ -39,6 +39,8 @@ public class ZhixuLocalPlugin extends Plugin {
     private final ExecutorService serial = Executors.newSingleThreadExecutor();
     private final Object stateLock = new Object();
     private LocalSourceStore store;
+    private LocalLearningStore formalLearning;
+    private LocalLearningStore practiceLearning;
     private PendingDocument pending;
     private boolean destroyed;
     private String abandonedCreateCallId;
@@ -50,6 +52,7 @@ public class ZhixuLocalPlugin extends Plugin {
         byte[] bytes;
         File backupFile;
         String name;
+        String learningContext;
         boolean resultReceived;
         PendingDocument(PluginCall call, String kind) { this.call = call; this.kind = kind; }
         boolean writing() { return kind.startsWith("export"); }
@@ -107,6 +110,42 @@ public class ZhixuLocalPlugin extends Plugin {
     @PluginMethod public void exportBackup(PluginCall call) { beginDocument(call, "exportBackup"); }
     @PluginMethod public void exportSource(PluginCall call) { beginDocument(call, "exportSource"); }
 
+    @PluginMethod public void learningLoad(PluginCall call) {
+        execute(call, () -> {
+            onlyFields(call, "context");
+            return JSObject.fromJSONObject(getLearningStore(string(call, "context")).load());
+        });
+    }
+
+    @PluginMethod public void learningCommit(PluginCall call) {
+        execute(call, () -> {
+            onlyFields(call, "context", "expectedRevision", "state");
+            Object state = call.getData().opt("state");
+            if (!(state instanceof JSONObject)) throw invalid();
+            return JSObject.fromJSONObject(getLearningStore(string(call, "context"))
+                .commit(string(call, "expectedRevision"), (JSONObject) state));
+        });
+    }
+
+    @PluginMethod public void learningReset(PluginCall call) {
+        execute(call, () -> {
+            onlyFields(call, "context", "expectedRevision");
+            String context = string(call, "context");
+            if (!"practice".equals(context)) throw invalid();
+            return JSObject.fromJSONObject(getLearningStore(context).reset(string(call, "expectedRevision")));
+        });
+    }
+
+    @PluginMethod public void restoreLearningBackup(PluginCall call) {
+        execute(call, () -> {
+            onlyFields(call, "context", "token");
+            return JSObject.fromJSONObject(getLearningStore(string(call, "context")).restoreBackup(string(call, "token")));
+        });
+    }
+
+    @PluginMethod public void exportLearningBackup(PluginCall call) { beginDocument(call, "exportLearningBackup"); }
+    @PluginMethod public void previewLearningBackup(PluginCall call) { beginDocument(call, "previewLearningBackup"); }
+
     private void beginDocument(PluginCall call, String kind) {
         PendingDocument task = new PendingDocument(call, kind);
         synchronized (stateLock) {
@@ -116,8 +155,17 @@ public class ZhixuLocalPlugin extends Plugin {
                 serial.execute(() -> {
                     try {
                         if (!current(task)) return;
-                        onlyFields(call, "exportSource".equals(kind) ? new String[] { "id" } : new String[0]);
-                        if ("exportBackup".equals(kind)) {
+                        boolean learning = kind.endsWith("LearningBackup");
+                        onlyFields(call, learning ? new String[] { "context" } : "exportSource".equals(kind) ? new String[] { "id" } : new String[0]);
+                        if (learning) {
+                            task.learningContext = string(call, "context");
+                            LocalLearningStore.validateContext(task.learningContext);
+                        }
+                        if ("exportLearningBackup".equals(kind)) {
+                            prepareBackup(task);
+                            task.name = "zhixu-android-learning-" + task.learningContext + "-"
+                                + new SimpleDateFormat("yyyy-MM-dd", Locale.ROOT).format(new Date()) + ".json";
+                        } else if ("exportBackup".equals(kind)) {
                             prepareBackup(task);
                             task.name = "zhixu-android-backup-" + new SimpleDateFormat("yyyy-MM-dd", Locale.ROOT).format(new Date()) + ".json";
                         } else if ("exportSource".equals(kind)) {
@@ -150,7 +198,9 @@ public class ZhixuLocalPlugin extends Plugin {
                     // Attach only after opening, so destruction cannot delete then accidentally recreate this file.
                     task.backupFile = temporary;
                 }
-                LocalSourceBackup.writePackage(getStore().backup(), output);
+                if ("exportLearningBackup".equals(task.kind)) {
+                    LocalLearningStore.writePackage(getLearningStore(task.learningContext).backup(), output);
+                } else LocalSourceBackup.writePackage(getStore().backup(), output);
             }
             synchronized (stateLock) { retained = current(task); }
             if (!retained) throw new IOException("Operation interrupted");
@@ -212,31 +262,34 @@ public class ZhixuLocalPlugin extends Plugin {
             JSObject response;
             if (task.writing()) {
                 stage = "name";
-                SourceDocumentFiles.validateName(name, "exportBackup".equals(task.kind));
+                SourceDocumentFiles.validateName(name, task.kind.endsWith("Backup"));
                 final ContentResolver targetResolver = resolver;
                 stage = "export";
-                if ("exportBackup".equals(task.kind)) {
+                if (task.kind.endsWith("Backup")) {
                     File temporary;
                     synchronized (stateLock) { temporary = task.backupFile; }
                     if (temporary == null) throw new IOException("Missing private backup file");
                     try (InputStream input = new FileInputStream(temporary)) {
                         SourceDocumentFiles.copyDocument(() -> targetResolver.openOutputStream(uri, "wt"), input,
-                            SourceDocumentFiles.MAX_BACKUP_BYTES, () -> current(task));
+                            "exportLearningBackup".equals(task.kind) ? LocalLearningStore.MAX_BACKUP_BYTES
+                                : SourceDocumentFiles.MAX_BACKUP_BYTES, () -> current(task));
                     }
                 } else {
                     SourceDocumentFiles.writeDocument(() -> targetResolver.openOutputStream(uri, "wt"), task.bytes, () -> current(task));
                 }
                 response = new JSObject().put("saved", true).put("name", name);
             } else {
-                boolean backup = "previewBackup".equals(task.kind);
+                boolean backup = task.kind.endsWith("Backup");
                 SourceDocumentFiles.validateName(name, backup);
                 try (InputStream input = resolver.openInputStream(uri)) {
                     if (backup) {
                         stage = "read-package";
-                        JSONObject pack = LocalSourceBackup.readPackage(input);
+                        boolean learning = "previewLearningBackup".equals(task.kind);
+                        JSONObject pack = learning ? LocalLearningStore.readPackage(input) : LocalSourceBackup.readPackage(input);
                         if (!current(task)) return;
                         stage = "preview-restore";
-                        response = JSObject.fromJSONObject(getStore().previewRestore(pack));
+                        response = JSObject.fromJSONObject(learning ? getLearningStore(task.learningContext).previewRestore(pack)
+                            : getStore().previewRestore(pack));
                     } else {
                         stage = "read-source";
                         String text = SourceDocumentFiles.readUtf8(input, SourceDocumentFiles.MAX_SOURCE_BYTES);
@@ -326,6 +379,16 @@ public class ZhixuLocalPlugin extends Plugin {
     private LocalSourceStore getStore() throws LocalSourceStore.StoreException {
         if (store == null) store = new LocalSourceStore(getContext().getApplicationContext());
         return store;
+    }
+
+    private LocalLearningStore getLearningStore(String context) throws LocalSourceStore.StoreException {
+        LocalLearningStore.validateContext(context);
+        if ("formal".equals(context)) {
+            if (formalLearning == null) formalLearning = new LocalLearningStore(getContext().getApplicationContext(), context);
+            return formalLearning;
+        }
+        if (practiceLearning == null) practiceLearning = new LocalLearningStore(getContext().getApplicationContext(), context);
+        return practiceLearning;
     }
 
     private interface Operation { JSObject run() throws Exception; }
