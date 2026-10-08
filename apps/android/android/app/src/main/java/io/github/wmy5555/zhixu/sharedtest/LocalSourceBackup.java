@@ -425,7 +425,7 @@ final class LocalSourceBackup {
         JSONObject document = LocalSourceStore.parseMarkdown(id, raw);
         result.put(new JSONObject().put("id", versionId).put("createdAt", document.getString("updatedAt"))
             .put("reason", reason).put("title", document.getString("title")).put("body", document.getString("body"))
-            .put("hash", document.getString("hash")));
+            .put("hash", document.getString("hash")).put("meta", document.getJSONObject("meta")));
     }
 
     JSONObject version(String id, String versionId) throws LocalSourceStore.StoreException {

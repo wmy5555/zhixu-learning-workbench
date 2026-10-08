@@ -57,7 +57,13 @@ public class LocalSourceStore implements AutoCloseable {
     private final LocalSourceBackup backups;
     private SaveCleanupFailurePoint saveCleanupFailurePoint;
 
-    // Package-private device-test seam. No plugin/web entry point can inject cleanup failures.
+    private static final class SaveCommit {
+        final String nextHash;
+        boolean durable;
+        SaveCommit(byte[] next) { nextHash = digest(next); }
+    }
+
+    // Package-private device-test seam. No plugin/web entry point can inject save/recovery failures.
     interface SaveCleanupFailurePoint { void at(String stage) throws IOException; }
     void setSaveCleanupFailurePointForTests(SaveCleanupFailurePoint value) {
         synchronized (LOCK) { saveCleanupFailurePoint = value; }
@@ -158,7 +164,8 @@ public class LocalSourceStore implements AutoCloseable {
     public JSONObject save(JSONObject input) throws StoreException {
         synchronized (LOCK) {
             rejectUnknown(input, SAVE_FIELDS);
-            String title = requireString(input, "title").trim();
+            String title = requireString(input, "title");
+            validateWriteBoundary(title);
             String body = requireString(input, "body");
             validateContent(title, body);
             // New writes must remain exportable to the desktop UTF-16 title limit.
@@ -173,6 +180,7 @@ public class LocalSourceStore implements AutoCloseable {
             if (input.has("meta")) {
                 if (!(input.opt("meta") instanceof JSONObject)) throw validation("来源信息格式不正确。");
                 suppliedMeta = input.optJSONObject("meta");
+                validateWriteMeta(suppliedMeta);
                 sanitizeMeta(suppliedMeta);
             }
             try {
@@ -196,6 +204,7 @@ public class LocalSourceStore implements AutoCloseable {
                     mergedMeta.put(key, suppliedMeta.get(key));
                 }
                 JSONObject meta = sanitizeMeta(mergedMeta);
+                validateWriteMeta(meta);
                 String hash = contentHash(title, body, meta);
                 if (previous != null && hash.equals(previous.getString("hash"))) return previous;
                 if (previous != null) backups.requireHistoryCapacity();
@@ -232,11 +241,11 @@ public class LocalSourceStore implements AutoCloseable {
                 }
                 // The synced journal is written before originals/history/current. It proves ownership of cleanup.
                 File transaction = child(saveTransactionsDirectory, id + ".json");
+                SaveCommit commit = new SaveCommit(next);
                 JSONObject journal = new JSONObject().put("schema", 1).put("id", id)
-                    .put("operation", previous == null ? "create" : "replace").put("next", digest(next));
+                    .put("operation", previous == null ? "create" : "replace").put("next", commit.nextHash);
                 if (previous != null) journal.put("previous", digest(previousBytes)).put("snapshot", versionId);
                 writeTransaction(transaction, journal);
-                boolean nextDurable = false;
                 try {
                     if (previous == null) {
                         writeAtomically(child(originalsDirectory, id + ".md"), next);
@@ -245,14 +254,15 @@ public class LocalSourceStore implements AutoCloseable {
                     if (snapshot != null) writeAtomically(snapshot, previousBytes);
                     if (snapshot != null) syncDirectory(snapshot.getParentFile());
                     writeAtomically(target, next);
+                    injectSaveCleanupFailure("before-save-notes-sync");
                     syncDirectory(notesDirectory);
-                    nextDurable = true;
+                    commit.durable = true;
                     finishSaveTransaction(transaction);
                 } catch (IOException | RuntimeException exception) {
                     // Persistent storage failure can also interrupt recovery. Keep the journal for startup retry.
-                    try { recoverSaveTransaction(transaction, true); }
+                    try { recoverSaveTransaction(transaction, true, commit); }
                     catch (IOException | JSONException | StoreException | RuntimeException ignored) { /* Evidence remains intact. */ }
-                    if (!nextDurable) throw new IOException("Cannot commit source Markdown", exception);
+                    if (!commit.durable) throw new IOException("Cannot commit source Markdown", exception);
                     // Journal housekeeping is not another save. Return success only after the actual authority
                     // is still exactly the synced next version; ambiguous or unsafe evidence is never swallowed.
                     requireAtomicPrivate(target);
@@ -274,7 +284,7 @@ public class LocalSourceStore implements AutoCloseable {
                 rebuildIndex(documents);
                 return note;
             } catch (IOException | JSONException exception) {
-                throw new StoreException("STORE_ERROR", "资料未能完成保存，请保留当前输入后重试。");
+                throw new StoreException("STORE_ERROR", "保存结果暂无法确认，请保留当前输入，重新打开资料核对后再决定是否重试。");
             }
         }
     }
@@ -295,7 +305,7 @@ public class LocalSourceStore implements AutoCloseable {
         if (ids.size() > MAX_NOTES) throw uncertainSave();
         for (String id : ids) {
             File transaction = child(saveTransactionsDirectory, id + ".json");
-            if (atomicExists(transaction)) recoverSaveTransaction(transaction, false);
+            if (atomicExists(transaction)) recoverSaveTransaction(transaction, false, null);
             else {
                 // A .new-only journal never authorized changes to originals or current Markdown.
                 File staging = child(saveTransactionsDirectory, id + ".json.new");
@@ -306,7 +316,7 @@ public class LocalSourceStore implements AutoCloseable {
         }
     }
 
-    private void recoverSaveTransaction(File transaction, boolean failedInThisProcess)
+    private void recoverSaveTransaction(File transaction, boolean failedInThisProcess, SaveCommit commit)
         throws IOException, JSONException, StoreException {
         requireAtomicPrivate(transaction);
         JSONObject journal = new JSONObject(decode(readBytes(transaction)));
@@ -339,6 +349,7 @@ public class LocalSourceStore implements AutoCloseable {
                 // An interrupted rename may be visible without a durable directory entry.
                 injectSaveCleanupFailure("before-recovery-notes-sync");
                 syncDirectory(notesDirectory);
+                if (commit != null && next.equals(commit.nextHash)) commit.durable = true;
                 finishSaveTransaction(transaction);
                 return;
             }
@@ -372,6 +383,7 @@ public class LocalSourceStore implements AutoCloseable {
             if (archived == null) throw uncertainSave();
             injectSaveCleanupFailure("before-recovery-notes-sync");
             syncDirectory(notesDirectory);
+            if (commit != null && next.equals(commit.nextHash)) commit.durable = true;
             finishSaveTransaction(transaction); // The replacement committed; the previous snapshot is real history.
             return;
         }
@@ -610,6 +622,10 @@ public class LocalSourceStore implements AutoCloseable {
             output.write(bytes);
             output.getFD().sync();
             atomic.finishWrite(output);
+            // The write has finished: a readback error must use the save journal for recovery,
+            // rather than asking older AtomicFile implementations to roll back a closed write.
+            output = null;
+            injectSaveCleanupFailure("before-atomic-readback:" + file.getParentFile().getName());
             // AtomicFile can log a rename failure instead of throwing; the caller must not report success.
             // The caller bounds each format before writing (documents 160 KiB, restore manifests 512 KiB).
             // Compare against those exact bytes with bounded memory, rather than the document reader's cap.
@@ -690,6 +706,23 @@ public class LocalSourceStore implements AutoCloseable {
         } catch (JSONException exception) {
             throw validation("来源信息格式不正确。");
         }
+    }
+
+    private static void validateWriteMeta(JSONObject input) throws StoreException {
+        for (String field : SOURCE_FIELDS) if (input.has(field)) validateWriteBoundary(requireString(input, field));
+    }
+
+    private static void validateWriteBoundary(String value) throws StoreException {
+        if (!value.isEmpty() && (exchangeBoundaryWhitespace(value.charAt(0))
+            || exchangeBoundaryWhitespace(value.charAt(value.length() - 1))))
+            throw validation("标题或来源信息不能包含首尾空白，请检查后保存；原资料不会自动修改。");
+    }
+
+    private static boolean exchangeBoundaryWhitespace(char value) {
+        // Match SourceDocumentFiles' Java/ECMAScript trim union only at the new-write boundary.
+        // Legacy Markdown remains readable and backup preserves its exact bytes.
+        return value <= 0x20 || value == 0x00a0 || value == 0x1680 || value >= 0x2000 && value <= 0x200a
+            || value == 0x2028 || value == 0x2029 || value == 0x202f || value == 0x205f || value == 0x3000 || value == 0xfeff;
     }
 
     private static void validateContent(String title, String body) throws StoreException {

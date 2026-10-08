@@ -144,6 +144,45 @@ test("Android source drawer exposes history and exports the current source id; o
   assert.match(panel.textContent, /<script>danger\(\)<\/script>/);
 });
 
+test("Android history previews all restored source fields and confirms clearing before any restore", async () => {
+  const calls = [];
+  const current = { id: "source", kind: "source", title: "新标题", body: "新正文", hash: "current-hash", meta: { author: "后来更正的作者", topic: "新主题" }, children: [] };
+  const old = { id: "original", title: "旧标题", body: "旧正文", meta: { platform: "原平台", author: "<img src=x>旧作者", url: "https://example.test/old", date: "2024年春", locator: "第 2 段" } };
+  const fixture = await createAndroidBrowser({ confirmations: [false, true], api: {
+    history: async () => ({ versions: [old] }),
+    restoreVersion: async (id, payload) => { calls.push({ id, payload }); return { ...current, title: old.title, body: old.body, meta: old.meta }; },
+    bootstrap: async () => ({ notes: [], today: { items: [] }, stats: {} }),
+  } });
+  await fixture.app.renderHistory(current);
+  const panel = fixture.app.refs.drawerBody;
+  for (const text of ["旧标题", "来源平台：原平台", "作者：<img src=x>旧作者", "原始链接：https://example.test/old", "日期：2024年春", "原文位置：第 2 段", "主题：（空，恢复时清除当前值）"]) assert.ok(panel.textContent.includes(text));
+  assert.equal(panel.querySelector("img"), null);
+  const restore = findButton(panel, "恢复此版本");
+  await click(restore);
+  assert.equal(calls.length, 0);
+  assert.match(fixture.context.confirmPrompts[0].message, /标题、正文和来源信息将一起恢复/);
+  assert.match(fixture.context.confirmPrompts[0].message, /主题：（空，恢复时清除当前值）/);
+  assert.equal(current.meta.author, "后来更正的作者");
+  await click(restore);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].id, "source");
+  assert.equal(calls[0].payload.versionId, "original");
+  assert.equal(calls[0].payload.expectedHash, "current-hash");
+});
+
+test("Android history cannot restore until the version source fields are available", async () => {
+  const fixture = await createAndroidBrowser({ api: {
+    history: async () => ({ versions: [{ id: "original", title: "旧标题", body: "旧正文" }] }),
+    restoreVersion: async () => assert.fail("No source metadata must not permit restoration"),
+  } });
+  await fixture.app.renderHistory({ id: "source", kind: "source", meta: {} });
+  const panel = fixture.app.refs.drawerBody;
+  assert.match(panel.textContent, /未取得此版本的来源信息/);
+  assert.equal(findButton(panel, "恢复此版本").disabled, true);
+  await click(findButton(panel, "恢复此版本"));
+  assert.equal(fixture.context.confirmPrompts.length, 0);
+});
+
 test("Android backup preview requires review, clears stale previews, preserves conflicts, and gates one restore", async () => {
   const outcomes = [
     { token: "token-one", newCount: 1, sameCount: 0, conflicts: [{ title: '<img src=x onerror="bad()">冲突' }], versionCount: 2 },

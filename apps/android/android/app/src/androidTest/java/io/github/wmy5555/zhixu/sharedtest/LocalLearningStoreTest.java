@@ -251,6 +251,217 @@ public class LocalLearningStoreTest extends AndroidTestCase {
         }
     }
 
+    public void testInstalledManifestTransientSyncFailureReturnsExactCommitRestoreAndResetRevision() throws Exception {
+        JSONObject nextNote = note("knowledge", "合成同步恢复", "本次准确提交的正文", "next-sync");
+        formal.commit("empty", state(nextNote));
+        JSONObject incoming = formal.backup();
+        for (String operation : Arrays.asList("commit", "restore", "reset")) {
+            File parent = new File(root, "transient-sync-" + operation);
+            LocalLearningStore target = new LocalLearningStore(parent, "reset".equals(operation) ? "practice" : "formal");
+            JSONObject priorNote = new JSONObject(nextNote.toString()).put("body", "同步之前的正文").put("hash", "prior-sync");
+            String expectedRevision = "restore".equals(operation) ? "empty" : target.commit("empty", state(priorNote)).getString("revision");
+            String token = "restore".equals(operation) ? target.previewRestore(incoming).getString("token") : null;
+            int[] syncAttempts = { 0 };
+            target.setFailurePoint(stage -> {
+                if ("before-manifest-directory-sync".equals(stage) && ++syncAttempts[0] == 1) {
+                    throw new IOException("Synthetic transient installed-manifest directory sync failure");
+                }
+            });
+            JSONObject result = "restore".equals(operation) ? target.restoreBackup(token)
+                : "reset".equals(operation) ? target.reset(expectedRevision) : target.commit(expectedRevision, state(nextNote));
+            assertEquals(2, syncAttempts[0]);
+            String revision = result.getString("revision");
+            assertFalse(expectedRevision.equals(revision));
+            String context = "reset".equals(operation) ? "practice" : "formal";
+            assertEquals(revision, new JSONObject(readText(new File(parent, context + "/manifest.json"))).getString("revision"));
+            assertEquals(result.getJSONObject("state").toString(), target.load().getJSONObject("state").toString());
+            assertEquals("reset".equals(operation) ? 0 : 1, target.load().getJSONObject("state").getJSONArray("notes").length());
+            assertEquals(revision, target.commit(revision, result.getJSONObject("state")).getString("revision"));
+            assertEquals(2, syncAttempts[0]);
+            if ("restore".equals(operation)) {
+                assertTrue(result.getBoolean("restored"));
+                expectCode("INVALID_PREVIEW", () -> target.restoreBackup(token));
+                JSONObject identical = target.previewRestore(incoming);
+                assertTrue(target.restoreBackup(identical.getString("token")).getBoolean("unchanged"));
+            } else {
+                expectCode("CONFLICT", () -> target.commit(expectedRevision, state(nextNote)));
+            }
+            target.setFailurePoint(null);
+            assertEquals(result.getJSONObject("state").toString(), new LocalLearningStore(parent, context).load().getJSONObject("state").toString());
+        }
+    }
+
+    public void testAtomicInstalledManifestConfirmationIoReconcilesButSafetyAndProcessExitStayStrict() throws Exception {
+        for (String failure : Arrays.asList("io", "unsafe", "exit")) {
+            File parent = new File(root, "atomic-confirmation-" + failure);
+            LocalLearningStore target = new LocalLearningStore(parent, "formal");
+            JSONObject priorNote = note("knowledge", "合成原子确认边界", "安装之前的正文", "before-confirmation");
+            JSONObject saved = target.commit("empty", state(priorNote));
+            JSONObject nextNote = new JSONObject(priorNote.toString()).put("body", "原子安装之后的正文").put("hash", "after-confirmation");
+            File outside = new File(root, "atomic-confirmation-protected-" + failure + ".txt");
+            writeText(outside, "确认失败不能跟随的合成文件");
+            File sidecar = new File(parent, "formal/manifest.json.new");
+            int[] atomicInstalls = { 0 };
+            int[] syncAttempts = { 0 };
+            target.setFailurePoint(stage -> {
+                if ("before-manifest-directory-sync".equals(stage)) syncAttempts[0]++;
+                if (!"after-manifest-atomic-install".equals(stage)) return;
+                atomicInstalls[0]++;
+                if ("io".equals(failure)) throw new IOException("Synthetic post-rename atomic confirmation I/O failure");
+                if ("exit".equals(failure)) throw new SimulatedLearningProcessExit();
+                try { Os.symlink(outside.getPath(), sidecar.getPath()); }
+                catch (android.system.ErrnoException exception) { throw new IOException(exception); }
+                // The ordinary confirmation read must discover this safety violation itself.
+            });
+            JSONObject result = null;
+            try {
+                if ("io".equals(failure)) result = target.commit(saved.getString("revision"), state(nextNote));
+                else if ("unsafe".equals(failure)) expectCode("STORE_ERROR", () -> target.commit(saved.getString("revision"), state(nextNote)));
+                else {
+                    try { target.commit(saved.getString("revision"), state(nextNote)); fail("Expected process exit after atomic install"); }
+                    catch (SimulatedLearningProcessExit expected) { /* Installed bytes never justify swallowing Error. */ }
+                }
+                assertEquals(1, atomicInstalls[0]);
+                assertEquals("io".equals(failure) ? 1 : 0, syncAttempts[0]);
+                assertEquals(2, new File(parent, "formal/objects").listFiles().length);
+                assertEquals("确认失败不能跟随的合成文件", readText(outside));
+            } finally {
+                if ("unsafe".equals(failure)) assertTrue(sidecar.delete());
+                target.setFailurePoint(null);
+            }
+            JSONObject recovered = target.load();
+            assertFalse(saved.getString("revision").equals(recovered.getString("revision")));
+            assertEquals(nextNote.getString("body"), recovered.getJSONObject("state").getJSONArray("notes").getJSONObject(0).getString("body"));
+            if (result != null) assertEquals(result.toString(), recovered.toString());
+        }
+    }
+
+    public void testPersistentInstalledManifestSyncFailurePreservesEvidenceUntilVerifiedRead() throws Exception {
+        JSONObject nextNote = note("knowledge", "合成持续同步故障", "已安装但耐久性尚未确认", "persistent-sync");
+        formal.commit("empty", state(nextNote));
+        JSONObject incoming = formal.backup();
+        for (String operation : Arrays.asList("commit", "restore", "reset")) {
+            String context = "reset".equals(operation) ? "practice" : "formal";
+            File parent = new File(root, "persistent-sync-" + operation);
+            LocalLearningStore target = new LocalLearningStore(parent, context);
+            JSONObject priorNote = new JSONObject(nextNote.toString()).put("body", "前一提交仍须保留").put("hash", "prior-persistent");
+            String expectedRevision = "restore".equals(operation) ? "empty" : target.commit("empty", state(priorNote)).getString("revision");
+            String token = "restore".equals(operation) ? target.previewRestore(incoming).getString("token") : null;
+            int[] syncAttempts = { 0 };
+            target.setFailurePoint(stage -> {
+                if ("before-manifest-directory-sync".equals(stage)) {
+                    syncAttempts[0]++;
+                    throw new IOException("Synthetic persistent installed-manifest directory sync failure");
+                }
+                if ("before-recovery-sync".equals(stage)) throw new IOException("Synthetic persistent recovery sync failure");
+            });
+            try {
+                if ("restore".equals(operation)) target.restoreBackup(token);
+                else if ("reset".equals(operation)) target.reset(expectedRevision);
+                else target.commit(expectedRevision, state(nextNote));
+                fail("Unconfirmed directory durability must not report success");
+            } catch (LocalSourceStore.StoreException exception) {
+                assertEquals("STORE_ERROR", exception.code);
+                assertTrue(exception.getMessage().contains("先重新读取核对内容"));
+                assertNotNull(exception.getCause());
+                assertEquals(1, exception.getCause().getSuppressed().length);
+            }
+            assertEquals(2, syncAttempts[0]);
+            File manifest = new File(parent, context + "/manifest.json");
+            String installed = readText(manifest);
+            String installedRevision = new JSONObject(installed).getString("revision");
+            assertFalse(expectedRevision.equals(installedRevision));
+            File objects = new File(parent, context + "/objects");
+            assertEquals("commit".equals(operation) ? 2 : 1, objects.listFiles().length);
+            expectCode("STORE_ERROR", target::load);
+            assertEquals(installed, readText(manifest));
+            assertEquals("commit".equals(operation) ? 2 : 1, objects.listFiles().length);
+            target.setFailurePoint(null);
+            JSONObject recovered = target.load();
+            assertEquals(installedRevision, recovered.getString("revision"));
+            assertEquals("reset".equals(operation) ? 0 : 1, recovered.getJSONObject("state").getJSONArray("notes").length());
+            assertEquals("reset".equals(operation) ? 0 : "commit".equals(operation) ? 2 : 1, target.backup().getJSONArray("documents").length());
+            if ("restore".equals(operation)) {
+                expectCode("INVALID_PREVIEW", () -> target.restoreBackup(token));
+                JSONObject identical = target.previewRestore(incoming);
+                assertTrue(target.restoreBackup(identical.getString("token")).getBoolean("unchanged"));
+            } else expectCode("CONFLICT", () -> target.commit(expectedRevision, state(nextNote)));
+            assertEquals(installedRevision, target.commit(installedRevision, recovered.getJSONObject("state")).getString("revision"));
+            assertEquals(installedRevision, new LocalLearningStore(parent, context).load().getString("revision"));
+        }
+    }
+
+    public void testInstalledManifestReconciliationRejectsPreviousForeignCorruptAndUnsafeSnapshots() throws Exception {
+        for (String mutation : Arrays.asList("previous", "foreign-revision", "corrupt-document", "unsafe-sidecar")) {
+            File parent = new File(root, "reconcile-reject-" + mutation);
+            LocalLearningStore target = new LocalLearningStore(parent, "formal");
+            JSONObject priorNote = note("knowledge", "合成协调反例", "必须保留的前一版", "before-reconcile");
+            JSONObject saved = target.commit("empty", state(priorNote));
+            JSONObject nextNote = new JSONObject(priorNote.toString()).put("body", "尚待证实的新一版").put("hash", "after-reconcile");
+            File manifest = new File(parent, "formal/manifest.json");
+            String priorManifest = readText(manifest);
+            JSONObject priorDocument = target.backup().getJSONArray("documents").getJSONObject(0);
+            File oldObject = new File(parent, "formal/objects/" + priorDocument.getString("file"));
+            File outside = new File(root, "reconcile-protected-" + mutation + ".txt");
+            writeText(outside, "不能通过协调读取或修改的合成文件");
+            File sidecar = new File(parent, "formal/manifest.json.new");
+            int[] syncAttempts = { 0 };
+            target.setFailurePoint(stage -> {
+                if (!"before-manifest-directory-sync".equals(stage)) return;
+                syncAttempts[0]++;
+                try {
+                    if ("previous".equals(mutation)) writeText(new File(parent, "formal/manifest.json.bak"), priorManifest);
+                    else if ("foreign-revision".equals(mutation)) writeText(manifest, new JSONObject(readText(manifest)).put("revision", UUID.randomUUID().toString()).toString());
+                    else if ("corrupt-document".equals(mutation)) {
+                        String file = new JSONObject(readText(manifest)).getJSONArray("notes").getJSONObject(0).getString("file");
+                        writeText(new File(parent, "formal/objects/" + file), "合成损坏快照");
+                    } else Os.symlink(outside.getPath(), sidecar.getPath());
+                } catch (Exception exception) { throw new IOException(exception); }
+                throw new IOException("Synthetic installed-manifest sync failure with " + mutation);
+            });
+            try {
+                expectCode("corrupt-document".equals(mutation) ? "CORRUPT" : "STORE_ERROR",
+                    () -> target.commit(saved.getString("revision"), state(nextNote)));
+                assertEquals(1, syncAttempts[0]); // Never retry sync or collect a snapshot that failed exact validation.
+                assertEquals(priorDocument.getString("raw"), readText(oldObject));
+                assertEquals("不能通过协调读取或修改的合成文件", readText(outside));
+                if ("previous".equals(mutation)) assertEquals(priorManifest, readText(manifest));
+            } finally {
+                if ("unsafe-sidecar".equals(mutation)) assertTrue(sidecar.delete());
+                target.setFailurePoint(null);
+            }
+        }
+    }
+
+    public void testReconciliationDoesNotHandlePrecommitFailureOrCatchProcessExitError() throws Exception {
+        JSONObject priorNote = note("knowledge", "合成中断边界", "前一版本", "pre-interruption");
+        JSONObject saved = formal.commit("empty", state(priorNote));
+        JSONObject nextNote = new JSONObject(priorNote.toString()).put("body", "下一版本").put("hash", "post-interruption");
+        int[] syncAttempts = { 0 };
+        formal.setFailurePoint(stage -> {
+            if ("before-manifest".equals(stage)) throw new IOException("Synthetic precommit failure");
+            if ("before-manifest-directory-sync".equals(stage)) syncAttempts[0]++;
+        });
+        expectCode("STORE_ERROR", () -> formal.commit(saved.getString("revision"), state(nextNote)));
+        assertEquals(0, syncAttempts[0]);
+        formal.setFailurePoint(null);
+        assertEquals(saved.toString(), formal.load().toString());
+        formal.setFailurePoint(stage -> {
+            if ("before-manifest-directory-sync".equals(stage)) {
+                if (++syncAttempts[0] == 1) throw new IOException("Synthetic transient first sync failure");
+                throw new SimulatedLearningProcessExit();
+            }
+        });
+        try { formal.commit(saved.getString("revision"), state(nextNote)); fail("Expected process exit during reconciliation"); }
+        catch (SimulatedLearningProcessExit expected) { /* Error is never turned into a success or storage response. */ }
+        assertEquals(2, syncAttempts[0]);
+        assertEquals(2, objectCount());
+        formal.setFailurePoint(null);
+        JSONObject recovered = formal.load();
+        assertFalse(saved.getString("revision").equals(recovered.getString("revision")));
+        assertEquals(nextNote.getString("body"), recovered.getJSONObject("state").getJSONArray("notes").getJSONObject(0).getString("body"));
+    }
+
     public void testRecoveredManifestMustSyncBeforeCollectingPreviousAuthorityObjects() throws Exception {
         LocalLearningStore practice = new LocalLearningStore(root, "practice");
         JSONObject saved = practice.commit("empty", state(note("source", "合成练习原文", "不能在提交目录同步前清理", "practice")));

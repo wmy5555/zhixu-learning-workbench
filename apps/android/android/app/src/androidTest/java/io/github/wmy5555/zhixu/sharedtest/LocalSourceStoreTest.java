@@ -112,6 +112,67 @@ public class LocalSourceStoreTest extends AndroidTestCase {
         assertEquals(3, historyCount(id));
     }
 
+    public void testNewWritesRejectExchangeBoundaryWhitespaceWithoutChangingExistingBytes() throws Exception {
+        JSONObject saved = store.save(source("原有资料", "合成正文").put("meta", new JSONObject().put("author", "原作者")));
+        String current = readText(noteFile(saved));
+        String[] fields = { "platform", "author", "url", "date", "locator", "topic" };
+        String boundaries = " \t\r\n\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff";
+        for (int index = 0; index < boundaries.length(); index++) {
+            String edge = boundaries.substring(index, index + 1);
+            for (String value : Arrays.asList(edge + "合成值", "合成值" + edge)) {
+                expectCode("VALIDATION", () -> store.save(source(value, "拒绝新建")));
+                expectCode("VALIDATION", () -> store.save(edit(saved, value, "拒绝覆盖")));
+                for (String field : fields) {
+                    JSONObject meta = new JSONObject().put(field, value);
+                    expectCode("VALIDATION", () -> store.save(source("拒绝新来源", "合成正文").put("meta", meta)));
+                    expectCode("VALIDATION", () -> store.save(edit(saved, "原有资料", "拒绝覆盖").put("meta", meta)));
+                }
+            }
+        }
+        assertEquals(1, store.list("").length());
+        assertEquals(current, readText(noteFile(saved)));
+        assertEquals(current, readText(new File(root, "originals/" + saved.getString("id") + ".md")));
+        assertEquals(0, historyCount(saved.getString("id")));
+        JSONObject internal = store.save(edit(saved, "内部\u00a0空白", "正文仍保留").put("meta", new JSONObject().put("author", "内部\u2000空白")));
+        assertEquals("内部\u00a0空白", internal.getString("title"));
+        assertEquals("内部\u2000空白", internal.getJSONObject("meta").getString("author"));
+        JSONObject cleared = store.save(edit(internal, internal.getString("title"), internal.getString("body"))
+            .put("meta", new JSONObject().put("author", "")));
+        assertFalse(cleared.getJSONObject("meta").has("author"));
+    }
+
+    public void testLegacyExchangeBoundaryWhitespaceRemainsReadableAndBackedUpVerbatim() throws Exception {
+        JSONObject saved = store.save(source("旧版资料", "合成原文  \n"));
+        String current = readText(noteFile(saved));
+        JSONObject header = new JSONObject(current.substring(4, current.indexOf("\n---\n", 4)));
+        String title = "\u00a0旧版标题\u2000";
+        JSONObject meta = header.getJSONObject("meta");
+        String[] fields = { "platform", "author", "url", "date", "locator", "topic" };
+        org.json.JSONArray hashFields = new org.json.JSONArray().put(title).put(saved.getString("body")).put("reference").put("local");
+        for (String field : fields) { meta.put(field, "\ufeff合成" + field + "\u202f"); hashFields.put(meta.getString(field)); }
+        byte[] hash = java.security.MessageDigest.getInstance("SHA-256").digest(hashFields.toString().getBytes(StandardCharsets.UTF_8));
+        StringBuilder hex = new StringBuilder();
+        for (byte value : hash) hex.append(String.format(java.util.Locale.ROOT, "%02x", value & 0xff));
+        String legacy = "---\n" + header.put("title", title).put("hash", hex.toString()) + "\n---\n" + saved.getString("body");
+        store.close();
+        File original = new File(root, "originals/" + saved.getString("id") + ".md");
+        for (File file : Arrays.asList(noteFile(saved), original)) {
+            try (FileOutputStream output = new FileOutputStream(file)) { output.write(legacy.getBytes(StandardCharsets.UTF_8)); }
+        }
+        store = new LocalSourceStore(root);
+        JSONObject read = store.read(saved.getString("id"));
+        assertEquals(title, read.getString("title"));
+        for (String field : fields) assertEquals(meta.getString(field), read.getJSONObject("meta").getString(field));
+        JSONObject backup = store.backup().getJSONArray("notes").getJSONObject(0);
+        assertEquals(legacy, backup.getString("current"));
+        assertEquals(legacy, backup.getString("original"));
+        expectCode("VALIDATION", () -> store.save(edit(read, title, "不能静默去掉旧标题空白")));
+        expectCode("VALIDATION", () -> store.save(edit(read, "修正标题", "旧来源也须明确修正后才能新写入")));
+        assertEquals(legacy, readText(noteFile(saved)));
+        assertEquals(legacy, readText(original));
+        assertEquals(0, historyCount(saved.getString("id")));
+    }
+
     public void testValidationRejectsPathsOversizedContentAndUnsafeMetadata() throws Exception {
         expectCode("VALIDATION", () -> store.read("../index.sqlite"));
         expectCode("VALIDATION", () -> store.read("/storage/emulated/0/source.md"));
@@ -260,6 +321,161 @@ public class LocalSourceStoreTest extends AndroidTestCase {
         assertEquals(0, new File(root, "save-transactions-v1").listFiles().length);
     }
 
+    public void testRecoveryProvesAttemptedNextAfterTransientReadbackOrDirectorySyncFailure() throws Exception {
+        for (String stage : Arrays.asList("before-atomic-readback:notes", "before-save-notes-sync")) {
+            for (boolean replace : new boolean[] { false, true }) {
+                for (boolean deferredCleanup : new boolean[] { false, true }) {
+                    File scenario = new File(root, "recovered-commit-" + stage.replace(':', '-') + "-" + replace + "-" + deferredCleanup);
+                    JSONObject saved;
+                    try (LocalSourceStore destination = new LocalSourceStore(scenario)) {
+                        JSONObject previous = replace ? destination.save(source("恢复前旧版", "精确保留的旧原文  \n")) : null;
+                        String original = previous == null ? null : readText(new File(scenario, previous.getString("path")));
+                        int[] failures = { 0 }, cleanupFailures = { 0 };
+                        destination.setSaveCleanupFailurePointForTests(point -> {
+                            if (stage.equals(point) && failures[0]++ == 0) throw new IOException("Synthetic transient post-rename failure");
+                            if (deferredCleanup && "before-journal-delete".equals(point)) {
+                                cleanupFailures[0]++;
+                                throw new IOException("Synthetic persistent recovered-commit housekeeping failure");
+                            }
+                        });
+                        saved = destination.save(previous == null ? source("恢复证明已保存", "本次新原文  \n")
+                            : edit(previous, "恢复证明已保存", "本次新原文  \n"));
+                        assertEquals(1, failures[0]);
+                        assertEquals("本次新原文  \n", saved.getString("body"));
+                        assertEquals(1, new File(scenario, "notes").listFiles().length);
+                        assertEquals(deferredCleanup ? 1 : 0, new File(scenario, "save-transactions-v1").listFiles().length);
+                        assertEquals(deferredCleanup ? 1 : 0, cleanupFailures[0]);
+                        destination.setSaveCleanupFailurePointForTests(null);
+                        assertEquals(saved.getString("hash"), destination.read(saved.getString("id")).getString("hash"));
+                        JSONObject backup = destination.backup().getJSONArray("notes").getJSONObject(0);
+                        assertEquals(replace ? original : backup.getString("current"), backup.getString("original"));
+                        assertEquals(replace ? 1 : 0, backup.getJSONArray("history").length());
+                        if (replace) {
+                            assertEquals(original, backup.getJSONArray("history").getJSONObject(0).getString("raw"));
+                            expectCode("CONFLICT", () -> destination.save(edit(previous, "旧指纹不能重试", "不能覆盖恢复后的新版")));
+                        }
+                        JSONObject unchanged = destination.save(edit(saved, saved.getString("title"), saved.getString("body")));
+                        assertEquals(saved.getString("hash"), unchanged.getString("hash"));
+                        assertEquals(saved.getString("updatedAt"), unchanged.getString("updatedAt"));
+                        assertEquals(1, destination.list("").length());
+                        assertEquals(replace ? 1 : 0, destination.backup().getJSONArray("notes").getJSONObject(0).getJSONArray("history").length());
+                    }
+                    try (LocalSourceStore reopened = new LocalSourceStore(scenario)) {
+                        assertEquals(1, reopened.list("").length());
+                        assertEquals(saved.getString("hash"), reopened.read(saved.getString("id")).getString("hash"));
+                        assertEquals(0, new File(scenario, "save-transactions-v1").listFiles().length);
+                    }
+                }
+            }
+        }
+    }
+
+    public void testPersistentPostRenameDirectorySyncFailureKeepsUnknownResultAndRecoveryEvidence() throws Exception {
+        for (boolean replace : new boolean[] { false, true }) {
+            File scenario = new File(root, "unknown-post-rename-sync-" + replace);
+            String id, journalBytes, currentBytes, originalBytes, snapshotBytes = null;
+            File journal, current, original, snapshot = null;
+            try (LocalSourceStore destination = new LocalSourceStore(scenario)) {
+                JSONObject previous = replace ? destination.save(source("旧版同步故障", "不能丢失的旧原文  \n")) : null;
+                destination.setSaveCleanupFailurePointForTests(stage -> {
+                    if ("before-save-notes-sync".equals(stage) || "before-recovery-notes-sync".equals(stage))
+                        throw new IOException("Synthetic persistent notes-directory sync failure");
+                });
+                try {
+                    destination.save(previous == null ? source("结果尚未确认", "已rename但未证明持久的正文  \n")
+                        : edit(previous, "结果尚未确认", "已rename但未证明持久的正文  \n"));
+                    fail("Expected an unknown save result without durable proof");
+                } catch (LocalSourceStore.StoreException expected) {
+                    assertEquals("STORE_ERROR", expected.code);
+                    assertTrue(expected.getMessage().contains("保存结果暂无法确认"));
+                    assertTrue(expected.getMessage().contains("核对"));
+                }
+                File[] journals = new File(scenario, "save-transactions-v1").listFiles();
+                assertNotNull(journals);
+                assertEquals(1, journals.length);
+                journal = journals[0]; journalBytes = readText(journal);
+                JSONObject evidence = new JSONObject(journalBytes);
+                id = evidence.getString("id");
+                current = new File(scenario, "notes/" + id + ".md"); original = new File(scenario, "originals/" + id + ".md");
+                currentBytes = readText(current); originalBytes = readText(original);
+                if (replace) {
+                    snapshot = new File(scenario, "history/" + id + "/" + evidence.getString("snapshot"));
+                    snapshotBytes = readText(snapshot);
+                    assertEquals(originalBytes, snapshotBytes);
+                }
+                for (int attempt = 0; attempt < 2; attempt++) {
+                    expectCode("STORE_ERROR", () -> destination.list(""));
+                    assertEquals(journalBytes, readText(journal));
+                    assertEquals(currentBytes, readText(current));
+                    assertEquals(originalBytes, readText(original));
+                    if (replace) assertEquals(snapshotBytes, readText(snapshot));
+                }
+            }
+            try (LocalSourceStore reopened = new LocalSourceStore(scenario)) {
+                assertEquals("已rename但未证明持久的正文  \n", reopened.read(id).getString("body"));
+                assertEquals(1, reopened.list("").length());
+                assertEquals(currentBytes, readText(current));
+                assertEquals(originalBytes, readText(original));
+                if (replace) assertEquals(snapshotBytes, readText(snapshot));
+                assertFalse(journal.exists());
+            }
+        }
+    }
+
+    public void testPersistentPostRenameReadFailureRetainsJournalAndExactSnapshotsUntilReopen() throws Exception {
+        for (boolean replace : new boolean[] { false, true }) {
+            File scenario = new File(root, "unknown-post-rename-read-" + replace);
+            JSONObject previous;
+            try (LocalSourceStore seed = new LocalSourceStore(scenario)) {
+                previous = replace ? seed.save(source("旧版读回故障", "精确保留的旧原文  \n")) : null;
+            }
+            String id, journalBytes, currentBytes, originalBytes, snapshotBytes = null;
+            File journal, current, original, snapshot = null;
+            try (LocalSourceStore destination = new LocalSourceStore(scenario) {
+                private boolean unreadable;
+                @Override void writeAtomically(File file, byte[] bytes) throws IOException {
+                    super.writeAtomically(file, bytes);
+                    if ("notes".equals(file.getParentFile().getName())) {
+                        unreadable = true;
+                        throw new IOException("Synthetic post-rename readback failure");
+                    }
+                }
+                @Override byte[] readBytes(File file) throws IOException, LocalSourceStore.StoreException {
+                    if (unreadable && "notes".equals(file.getParentFile().getName())) throw new IOException("Synthetic persistent current read failure");
+                    return super.readBytes(file);
+                }
+            }) {
+                expectCode("STORE_ERROR", () -> destination.save(previous == null ? source("未确认读回", "保留已rename的新原文  \n")
+                    : edit(previous, "未确认读回", "保留已rename的新原文  \n")));
+                File[] journals = new File(scenario, "save-transactions-v1").listFiles();
+                assertNotNull(journals);
+                assertEquals(1, journals.length);
+                journal = journals[0]; journalBytes = readText(journal);
+                JSONObject evidence = new JSONObject(journalBytes); id = evidence.getString("id");
+                current = new File(scenario, "notes/" + id + ".md"); original = new File(scenario, "originals/" + id + ".md");
+                currentBytes = readText(current); originalBytes = readText(original);
+                if (replace) {
+                    snapshot = new File(scenario, "history/" + id + "/" + evidence.getString("snapshot"));
+                    snapshotBytes = readText(snapshot);
+                    assertEquals(originalBytes, snapshotBytes);
+                }
+                expectCode("CORRUPT", () -> destination.read(id));
+                assertEquals(journalBytes, readText(journal));
+                assertEquals(currentBytes, readText(current));
+                assertEquals(originalBytes, readText(original));
+                if (replace) assertEquals(snapshotBytes, readText(snapshot));
+            }
+            try (LocalSourceStore reopened = new LocalSourceStore(scenario)) {
+                assertEquals("保留已rename的新原文  \n", reopened.read(id).getString("body"));
+                assertEquals(1, reopened.list("").length());
+                assertEquals(currentBytes, readText(current));
+                assertEquals(originalBytes, readText(original));
+                if (replace) assertEquals(snapshotBytes, readText(snapshot));
+                assertFalse(journal.exists());
+            }
+        }
+    }
+
     public void testDurableSaveCannotSwallowUnsafeJournalPathOrUnexpectedCurrentBytes() throws Exception {
         for (boolean unsafePath : new boolean[] { false, true }) {
             File scenario = new File(root, "ambiguous-cleanup-" + unsafePath);
@@ -374,7 +590,9 @@ public class LocalSourceStoreTest extends AndroidTestCase {
                 if ("notes".equals(file.getParentFile().getName())) throw new IllegalStateException("Synthetic post-commit failure");
             }
         };
-        expectCode("STORE_ERROR", () -> store.save(edit(first, "提交后异常", "已提交的新原文")));
+        JSONObject saved = store.save(edit(first, "提交后异常", "已提交的新原文"));
+        assertEquals("已提交的新原文", saved.getString("body"));
+        assertEquals(saved.getString("hash"), store.read(first.getString("id")).getString("hash"));
         String id = first.getString("id");
         assertEquals("已提交的新原文", store.read(id).getString("body"));
         assertEquals(1, historyCount(id));

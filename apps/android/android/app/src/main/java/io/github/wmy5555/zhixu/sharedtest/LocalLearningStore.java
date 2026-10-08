@@ -65,6 +65,13 @@ public final class LocalLearningStore {
     void setCleanupFailurePointForTests(CleanupFailurePoint value) { synchronized (LOCK) { cleanupFailurePoint = value; } }
     void setClockForTests(LongSupplier value) { synchronized (LOCK) { clock = value; } }
 
+    // Safety inspection failures must bypass installed-manifest I/O reconciliation, even if a later read works.
+    private static final class UnsafePathException extends IOException {
+        private static final long serialVersionUID = 1L;
+        UnsafePathException(String message) { super(message); }
+        UnsafePathException(String message, Throwable cause) { super(message, cause); }
+    }
+
     /** Only ordinary housekeeping I/O is deferrable; path/type checks keep their original hard failures. */
     private static final class DeferredCleanupException extends IOException {
         private static final long serialVersionUID = 1L;
@@ -247,12 +254,17 @@ public final class LocalLearningStore {
     }
 
     private Snapshot readSnapshot() throws IOException, LocalSourceStore.StoreException {
+        return readSnapshot(true);
+    }
+
+    // Commit reconciliation validates disk authority without making it durable or collecting evidence first.
+    private Snapshot readSnapshot(boolean recoverAndCollect) throws IOException, LocalSourceStore.StoreException {
         safeAtomicPath(manifestFile);
         if (!manifestFile.exists() && !safeChild(root, "manifest.json.bak").exists()) {
             // AtomicFile .new is uncommitted, including an interrupted first commit.
             try {
                 Snapshot empty = snapshot(makeManifest("empty", new JSONArray(), new JSONArray(), emptyState()), new TreeMap<>());
-                collectRecoveredSnapshot(empty, false);
+                if (recoverAndCollect) collectRecoveredSnapshot(empty, false);
                 return empty;
             }
             catch (JSONException exception) { throw corrupt(); }
@@ -277,7 +289,7 @@ public final class LocalLearningStore {
             Snapshot result = snapshot(manifest, documents);
             ensureExportable(result);
             // All references are proven before cleanup. A corrupt manifest or Markdown never triggers guessing.
-            collectRecoveredSnapshot(result, atomicRecovery);
+            if (recoverAndCollect) collectRecoveredSnapshot(result, atomicRecovery);
             return result;
         } catch (LocalSourceStore.StoreException | JSONException exception) { throw corrupt(); }
     }
@@ -296,13 +308,49 @@ public final class LocalLearningStore {
         syncDirectory(objects);
         inject("before-manifest");
         String rawManifest = canonical(next.manifest);
-        writeAtomic(manifestFile, rawManifest);
-        inject("before-manifest-directory-sync");
-        syncDirectory(root);
-        durableManifestHash = digest(rawManifest);
+        installAndSyncManifest(next, rawManifest);
         inject("after-manifest");
         // Orphaned staging documents from a previous pre-commit failure are never exported as history.
         collectAfterValidation(next.documents.keySet());
+    }
+
+    private void installAndSyncManifest(Snapshot next, String rawManifest) throws IOException, LocalSourceStore.StoreException {
+        try {
+            writeAtomic(manifestFile, rawManifest);
+            inject("before-manifest-directory-sync");
+            requireCleanupPath(root, true);
+            syncDirectory(root);
+        } catch (UnsafePathException unsafe) {
+            throw unsafe;
+        } catch (IOException syncFailure) {
+            // AtomicFile may install the rename before its confirmation read or directory sync fails.
+            // One bounded reconciliation must prove this exact revision and every referenced Markdown.
+            // It never collects the old authority's objects or reports an older/uncommitted state as success.
+            Snapshot installed = readSnapshot(false);
+            if (!rawManifest.equals(canonical(installed.manifest)) || !next.documents.equals(installed.documents)) {
+                throw new IOException("Installed learning snapshot differs from intended commit", syncFailure);
+            }
+            requireCleanupPath(objects, true);
+            requireCleanupPath(root, true);
+            try {
+                // Reading AtomicFile may have restored object/manifest .bak entries; sync both directories.
+                syncDirectory(objects);
+                inject("before-manifest-directory-sync");
+                requireCleanupPath(root, true);
+                syncDirectory(root);
+            } catch (UnsafePathException unsafe) {
+                throw unsafe;
+            } catch (IOException retryFailure) {
+                retryFailure.addSuppressed(syncFailure);
+                LocalSourceStore.StoreException uncertain = new LocalSourceStore.StoreException("STORE_ERROR",
+                    "学习提交记录可能已保存，但未能确认完成落盘；请保留输入和应用数据，先重新读取核对内容，再决定是否重试。");
+                uncertain.initCause(retryFailure);
+                // Keep manifest, all current/history objects and previous-authority residue for recovery.
+                throw uncertain;
+            }
+        }
+        // Only a successful sync (initial or reconciled) authorizes returning next and post-commit cleanup.
+        durableManifestHash = digest(rawManifest);
     }
 
     private void inject(String stage) throws IOException { if (failurePoint != null) failurePoint.at(stage); }
@@ -370,11 +418,13 @@ public final class LocalLearningStore {
     }
 
     private static void requireCleanupPath(File file, boolean directory) throws IOException {
-        if (!file.getAbsoluteFile().equals(file.getCanonicalFile())) throw new IOException("Unsafe private learning cleanup path");
         try {
+            if (!file.getAbsoluteFile().equals(file.getCanonicalFile())) throw new UnsafePathException("Unsafe private learning cleanup path");
             int mode = Os.lstat(file.getPath()).st_mode;
-            if (directory ? !OsConstants.S_ISDIR(mode) : !OsConstants.S_ISREG(mode)) throw new IOException("Unsafe private learning cleanup entry");
-        } catch (ErrnoException exception) { throw new IOException("Cannot inspect private learning cleanup path", exception); }
+            if (directory ? !OsConstants.S_ISDIR(mode) : !OsConstants.S_ISREG(mode)) throw new UnsafePathException("Unsafe private learning cleanup entry");
+        } catch (ErrnoException exception) { throw new UnsafePathException("Cannot inspect private learning cleanup path", exception); }
+        catch (UnsafePathException unsafe) { throw unsafe; }
+        catch (IOException exception) { throw new UnsafePathException("Cannot validate private learning cleanup path", exception); }
     }
 
     private Snapshot validatePackage(JSONObject pack) throws LocalSourceStore.StoreException {
@@ -724,11 +774,14 @@ public final class LocalLearningStore {
     private static boolean versionOne(Object value) { return value instanceof Number && ((Number) value).doubleValue() == 1.0; }
 
     private static File safeChild(File parent, String name) throws IOException {
-        File directory = parent.getAbsoluteFile();
-        if (!directory.equals(directory.getCanonicalFile()) || name.contains("/") || name.contains("\\") || name.equals(".") || name.equals("..")) throw new IOException("Unsafe private path");
-        File file = new File(directory, name);
-        if (!file.equals(file.getCanonicalFile())) throw new IOException("Private symlink is not allowed");
-        return file;
+        try {
+            File directory = parent.getAbsoluteFile();
+            if (!directory.equals(directory.getCanonicalFile()) || name.contains("/") || name.contains("\\") || name.equals(".") || name.equals("..")) throw new UnsafePathException("Unsafe private path");
+            File file = new File(directory, name);
+            if (!file.equals(file.getCanonicalFile())) throw new UnsafePathException("Private symlink is not allowed");
+            return file;
+        } catch (UnsafePathException unsafe) { throw unsafe; }
+        catch (IOException exception) { throw new UnsafePathException("Cannot validate private path", exception); }
     }
 
     private static void safeDirectory(File directory) throws IOException {
@@ -762,7 +815,7 @@ public final class LocalLearningStore {
         }
     }
 
-    private static void writeAtomic(File file, String raw) throws IOException, LocalSourceStore.StoreException {
+    private void writeAtomic(File file, String raw) throws IOException, LocalSourceStore.StoreException {
         safeAtomicPath(file);
         AtomicFile atomic = new AtomicFile(file);
         FileOutputStream output = null;
@@ -773,6 +826,7 @@ public final class LocalLearningStore {
             output.getFD().sync();
             atomic.finishWrite(output);
             finished = true;
+            if (file.equals(manifestFile)) inject("after-manifest-atomic-install");
             // AtomicFile logs some rename failures instead of throwing. Confirm the committed bytes.
             if (!raw.equals(readAtomic(file, MAX_BACKUP_BYTES))) throw new IOException("Private atomic commit incomplete");
         } finally { if (!finished && output != null) atomic.failWrite(output); }
