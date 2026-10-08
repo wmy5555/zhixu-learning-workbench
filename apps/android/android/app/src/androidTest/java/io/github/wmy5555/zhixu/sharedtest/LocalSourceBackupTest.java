@@ -533,6 +533,27 @@ public class LocalSourceBackupTest extends AndroidTestCase {
         return full;
     }
 
+    public void testThousandSmallHistoryVersionsRestoreWithManifestLargerThanDocumentLimit() throws Exception {
+        JSONObject saved = save("多版本小原文", "合成小正文");
+        JSONObject item = store.backup().getJSONArray("notes").getJSONObject(0);
+        JSONArray history = new JSONArray();
+        for (int index = 0; index < LocalSourceBackup.MAX_VERSIONS; index++) history.put(versionEntry(item.getString("current"), saved.getString("id")));
+        JSONObject pack = backupEnvelope(item.getString("current"), item.getString("original"), history);
+        try (LocalSourceStore target = destination()) {
+            JSONObject result = restore(target, pack);
+            assertEquals(LocalSourceBackup.MAX_VERSIONS, result.getInt("versionsImported"));
+            File plan = new File(root, "destination/restore-transaction-v1/plan.json");
+            assertTrue("Exercise the old document reader limit", plan.length() > 160 * 1024);
+            assertTrue(plan.length() <= 512 * 1024);
+            assertEquals(LocalSourceBackup.MAX_VERSIONS, target.backup().getJSONArray("notes").getJSONObject(0).getJSONArray("history").length());
+            assertEquals(0, restore(target, pack).getInt("versionsImported"));
+        }
+        try (LocalSourceStore reopened = destination()) {
+            assertEquals(saved.getString("body"), reopened.read(saved.getString("id")).getString("body"));
+            assertEquals(LocalSourceBackup.MAX_VERSIONS + 1, reopened.history(saved.getString("id")).length());
+        }
+    }
+
     private JSONObject versionEntry(String raw, String id) throws Exception {
         String createdAt = LocalSourceStore.parseMarkdown(id, raw).getString("updatedAt");
         return new JSONObject().put("id", createdAt.replace(':', '-') + "-" + UUID.randomUUID() + ".md").put("raw", raw);
