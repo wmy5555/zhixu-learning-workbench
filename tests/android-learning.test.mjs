@@ -85,6 +85,61 @@ test('explicit personal confirmation promotes understanding while leaving offlin
   assert.deepEqual(service.state.records.reviews, undefined);
 });
 
+test('confirming understanding preserves chapters the user added after the old understanding', () => {
+  const service = app(), heading = '\n\n## 我的理解（用户确认）\n\n';
+  const first = service.confirmNote(id(1), { body: '最初的个人理解。', expectedHash: service.getNote(id(1)).hash });
+  const expanded = `${first.body}\n\n## 用户新增的例子\n这个例子不能被删除。\n\n## 后续行动\n- 保留用户写下的安排。`;
+  const edited = service.editNote(id(1), { body: expanded, expectedHash: first.hash });
+  const result = service.confirmNote(id(1), { body: '本次重新确认的理解。', expectedHash: edited.hash });
+  assert.equal(result.body, `${expanded}${heading}本次重新确认的理解。`);
+  assert.equal(result.meta.personalUnderstanding, '本次重新确认的理解。');
+  assert.equal(result.meta.stage, 'integrated');
+  assert.equal(result.meta.confirmedBy, 'user');
+});
+
+test('reconfirmation replaces only an exact application understanding at the end of the material', () => {
+  const service = app(), original = service.getNote(id(1)), heading = '\n\n## 我的理解（用户确认）\n\n';
+  const first = service.confirmNote(id(1), { body: '应用记录的旧理解。', expectedHash: original.hash });
+  const result = service.confirmNote(id(1), { body: '更新后的理解。', expectedHash: first.hash });
+  assert.equal(result.body, `${original.body}${heading}更新后的理解。`);
+  assert.equal(result.body.split('## 我的理解（用户确认）').length - 1, 1);
+  assert.equal(result.meta.personalUnderstanding, '更新后的理解。');
+  assert.notEqual(result.hash, first.hash);
+});
+
+test('reconfirmation preserves externally edited or untracked understanding sections', () => {
+  const heading = '\n\n## 我的理解（用户确认）\n\n';
+  for (const mode of ['externally edited', 'untracked heading', 'copied old block']) {
+    const service = app();
+    const original = service.getNote(id(1));
+    const first = mode !== 'untracked heading'
+      ? service.confirmNote(id(1), { body: '曾由应用记录的旧理解。', expectedHash: original.hash }) : original;
+    const preserved = mode === 'copied old block'
+      ? `${first.body}\n\n## 用户保存的历史副本\n后续内容必须保留。${heading}曾由应用记录的旧理解。`
+      : `${original.body}${heading}后来手动修改的理解，必须保留。`;
+    const edited = service.editNote(id(1), { body: preserved, expectedHash: first.hash });
+    const result = service.confirmNote(id(1), { body: '本次明确确认的新理解。', expectedHash: edited.hash });
+    assert.equal(result.body, `${preserved}${heading}本次明确确认的新理解。`, mode);
+    assert.equal(result.meta.personalUnderstanding, '本次明确确认的新理解。', mode);
+  }
+});
+
+test('confirmation preserves managed link bytes and chapters appended after those links', () => {
+  const heading = '\n\n## 我的理解（用户确认）\n\n';
+  const links = '<!-- zhixu-managed-links:start -->\n## 已确认的知识链接\n\n- [[合成链接|合成标题]]\n<!-- zhixu-managed-links:end -->';
+  const material = { ...note(), body: `${note().body}\n\n${links}\n` };
+  const service = app({ notes: [material] });
+  const first = service.confirmNote(id(1), { body: '首次理解。', expectedHash: material.hash });
+  assert.equal(first.body, `${note().body}${heading}首次理解。\n\n${links}\n`);
+  const second = service.confirmNote(id(1), { body: '再次理解。', expectedHash: first.hash });
+  assert.equal(second.body, `${note().body}${heading}再次理解。\n\n${links}\n`);
+  const expanded = `${second.body}\n## 用户后补的边界\n这段位于自动链接之后，仍要完整保留。`;
+  const edited = service.editNote(id(1), { body: expanded, expectedHash: second.hash });
+  const third = service.confirmNote(id(1), { body: '第三次确认。', expectedHash: edited.hash });
+  assert.equal(third.body, `${expanded}${heading}第三次确认。`);
+  assert.equal(third.body.split(links).length - 1, 1);
+});
+
 test('a stale session cannot overwrite newly edited material or personal understanding', () => {
   for (const change of ['editNote', 'external update']) {
     let service = app();

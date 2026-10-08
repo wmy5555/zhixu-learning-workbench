@@ -119,10 +119,22 @@ export function createAndroidLearning({ state = createEmptyLearningState(), sour
     inputObject(input, ['body', 'expectedHash']); const note = getRawNote(id);
     if (note.kind !== 'knowledge') fail('请先把资料整理为知识条目。');
     text(input.body, '自己的理解', learningLimits.bodyBytes); text(input.expectedHash, '当前版本', 256);
-    const managed = note.body.match(/<!-- zhixu-managed-links:start -->[\s\S]*?<!-- zhixu-managed-links:end -->/)?.[0] || '';
-    const original = managed ? note.body.replace(managed, '').trimEnd() : note.body;
+    const heading = '\n\n## 我的理解（用户确认）\n\n';
+    const linkStart = '<!-- zhixu-managed-links:start -->', linkEnd = '<!-- zhixu-managed-links:end -->';
+    // Keep a single terminal managed block in place after the new understanding.
+    // Ambiguous or nonterminal blocks stay byte-for-byte in the original text.
+    const terminalLinks = note.body.indexOf(linkStart) === note.body.lastIndexOf(linkStart)
+      && note.body.indexOf(linkEnd) === note.body.lastIndexOf(linkEnd)
+      ? note.body.match(/\n\n<!-- zhixu-managed-links:start -->[\s\S]*?<!-- zhixu-managed-links:end -->[\t \r\n]*$/) : null;
+    const suffix = terminalLinks?.[0] || '';
+    let original = suffix ? note.body.slice(0, terminalLinks.index) : note.body;
+    // Only the exact last block recorded by the previous confirmation is ours
+    // to replace. Later chapters or external edits must never be truncated.
+    const previous = typeof note.meta.personalUnderstanding === 'string' && note.meta.personalUnderstanding
+      ? `${heading}${note.meta.personalUnderstanding}` : '';
+    if (previous && original.endsWith(previous) && original.indexOf(previous) === original.lastIndexOf(previous)) original = original.slice(0, -previous.length);
     return complete(publicNote(store.update(id, { expectedHash: input.expectedHash, meta: { stage: 'integrated', personalUnderstanding: input.body, confirmedAt: now(), confirmedBy: 'user' },
-      body: `${original.split('\n## 我的理解（用户确认）')[0]}\n\n## 我的理解（用户确认）\n\n${input.body}${managed ? '\n\n' + managed : ''}` })));
+      body: `${original}${heading}${input.body}${suffix}` })));
   }
   function extractSource(id, input) {
     inputObject(input, ['title', 'body', 'topic', 'reason', 'depth', 'claimType', 'expectedHash']); const source = getRawNote(id);
