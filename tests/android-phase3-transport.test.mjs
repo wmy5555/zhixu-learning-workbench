@@ -35,6 +35,35 @@ function fakeNative() {
   return { plugin, states, sources, calls, failNext: () => { failNext = true; } };
 }
 const post = (transport, path, body = {}) => transport.request(path, { method: 'POST', body });
+
+test('learning backup preview validates the exact WebView state before exposing a restore token', async () => {
+  for (const context of ['formal', 'practice']) {
+    const native = fakeNative(), transport = createAndroidTransport(native.plugin, { clock });
+    let candidateState = createEmptyLearningState();
+    native.plugin.previewLearningBackup = async () => ({ token: 'candidate-token', context, notes: 0, history: 0, canRestore: true, candidateState });
+    const route = context === 'practice' ? '/api/practice/android-local/android/learning-backup-preview' : '/api/android/learning-backup-preview';
+    const before = structuredClone(native.states);
+    for (const corrupt of [
+      state => { state.settings.dailyMinutes = '25'; },
+      state => { state.settings.timezone = 'Not/AZone'; },
+      state => { state.records.unknown = {}; },
+      state => { state.records.sessions = { invalid: {} }; },
+      state => { state.records.jobs = { pending: {} }; },
+      state => { state.guide = []; },
+    ]) {
+      candidateState = createEmptyLearningState(); corrupt(candidateState);
+      await assert.rejects(post(transport, route), { code: 'INVALID' });
+      assert.deepEqual(native.states, before);
+    }
+    candidateState = createEmptyLearningState();
+    candidateState.settings = { dailyMinutes: 35, timezone: 'Asia/Singapore' };
+    const preview = await post(transport, route);
+    assert.equal(preview.token, 'candidate-token');
+    assert.equal(preview.context, context);
+    assert.equal(Object.hasOwn(preview, 'candidateState'), false);
+    assert.equal(native.calls.some(([name]) => ['learningCommit', 'restoreLearningBackup'].includes(name)), false);
+  }
+});
 async function ready(transport, prefix = '/api', id = sourceId, hash = 'source-version-1') {
   const note = await post(transport, `${prefix}/notes/${id}/extract`, { expectedHash: hash, title: '个人观点', body: '我想用自己的话重述，再记录不明白之处。', claimType: 'opinion', depth: 'explain' });
   const promoted = await post(transport, `${prefix}/notes/${note.id}/promote`, { stage: 'learning', reason: '记录自己的练习', expectedHash: note.hash });

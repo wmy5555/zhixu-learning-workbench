@@ -203,11 +203,17 @@ function statCard(label, value, detail = "") {
   return el("div", { class: "stat" }, [el("span", { text: label }), el("strong", { text: String(value) }), detail ? el("small", { text: detail }) : null]);
 }
 
+function androidTopicPlanBlocked(item) {
+  if (!isMobilePrototype() || !item.topicId) return false;
+  const topic = asArray(state.bootstrap?.topics).find(value => value.id === item.topicId);
+  return !topic || topic.paused || topic.meta?.paused || topic.status === "paused" || topic.meta?.status === "paused" || Boolean(topic.progress?.blockedNoteId) || topic.progress?.nextNoteId !== item.noteId;
+}
+
 function todayItem(item) {
   const actions = el("div", { class: "item-actions" });
   if (item.state === "pending") {
     if (["study", "learn", "review", "mistake"].includes(item.kind)) {
-      actions.append(button("开始", { kind: "primary compact", onClick: () => beginStudy(item.noteId, item.id, item) }));
+      actions.append(button("开始", { kind: "primary compact", disabled: androidTopicPlanBlocked(item), title: androidTopicPlanBlocked(item) ? "请先完成当前可用前置步骤" : "", onClick: () => { if (androidTopicPlanBlocked(item)) return; return beginStudy(item.noteId, item.id, item); } }));
     }
     actions.append(button("延期", { kind: "quiet compact", onClick: () => actToday(item.id, "defer", 1) }));
     actions.append(button("跳过", { kind: "text compact", onClick: () => actToday(item.id, "skip") }));
@@ -1244,6 +1250,10 @@ function tabButton(value, label) {
 async function studyQueuePanel() {
   const [todayData, notesData, sessionsData] = await Promise.all([api.today(), api.notes({ stage: "learning" }), api.studySessions()]);
   const today = asArray(todayData.items).filter((item) => item.noteId);
+  if (isMobilePrototype() && today.some(item => item.topicId)) {
+    const topicData = await api.topics();
+    state.bootstrap = { ...asObject(state.bootstrap), topics: asArray(topicData.topics) };
+  }
   const learning = asArray(notesData.notes);
   const byId = new Map();
   today.forEach((item) => byId.set(item.noteId, { ...item, inToday: true }));
@@ -1255,7 +1265,7 @@ async function studyQueuePanel() {
     items.length ? el("div", { class: "list" }, items.map((item) => el("article", { class: "list-item" }, [
       el("div", { class: "item-symbol", text: item.inToday ? "今" : "学" }),
       el("div", { class: "item-copy" }, [el("h3", { text: item.title || "未命名知识" }), el("p", { text: item.reason || "等待学习" }), el("div", { class: "item-meta" }, [item.minutes ? badge(`${item.minutes} 分钟`) : null, item.inToday ? badge("今日", "accent") : badge("学习池")])]),
-      el("div", { class: "item-actions" }, button("开始学习", { kind: "primary compact", onClick: () => beginStudy(item.noteId, item.inToday ? item.id : undefined, item) })),
+      el("div", { class: "item-actions" }, button("开始学习", { kind: "primary compact", disabled: androidTopicPlanBlocked(item), title: androidTopicPlanBlocked(item) ? "请先完成当前可用前置步骤" : "", onClick: () => { if (androidTopicPlanBlocked(item)) return; return beginStudy(item.noteId, item.inToday ? item.id : undefined, item); } })),
     ]))) : emptyState("学习队列为空", "在知识详情中选择“加入学习”，或先处理一份原始资料。", button("浏览知识", { onClick: () => navigate("library") })),
     tour(sectionHeading("最近学习记录", "服务重启后仍可继续已有会话，原始回答和提示使用不会丢失"), "study-history"),
     sessions.length ? el("div", { class: "list" }, sessions.map((session) => {
@@ -1595,6 +1605,8 @@ async function openTopic(topic) {
     const prerequisites = topic.prerequisites ?? meta.prerequisites;
     const members = asArray(topic.members);
     const paused = topic.paused === true || meta.paused === true;
+    const canStartNext = !paused && Boolean(progress.nextNoteId) && (!isMobilePrototype() || !progress.blockedNoteId);
+    const canStartMember = member => !paused && member.available && (!isMobilePrototype() || (!progress.blockedNoteId && member.id === progress.nextNoteId));
     openDrawer(topic.title || "主题学习包", "主题学习包", el("div", { class: "page-stack" }, [
       el("div", { class: "prose", text: readableBody(topic.body) || "暂无说明" }),
       el("dl", { class: "key-values" }, [
@@ -1604,11 +1616,11 @@ async function openTopic(topic) {
       ]),
       el("div", { class: "notice info", text: isMobilePrototype() ? "按下面的顺序学习。离线结束只保留回答，不计入本包进度；整理并确认个人理解后才可推进后续内容。确认也不代表已通过批改或永久掌握。" : "按下面的顺序学习。下方成员列表为当前顺序，说明原文可自行编辑。进度表示已有学习记录，不代表永久掌握；文本前置缺口仍需补充材料。" }),
       progress.blockedNoteId ? el("div", { class: "notice" }, [el("p", { text: "下一项知识或前置内容暂不可学习，请先查看其研究限制或状态。" }), button("查看待处理知识", { kind: "text", onClick: () => openNote(progress.blockedNoteId) })]) : null,
-      button(progress.nextNoteId ? `开始下一条：${progress.nextNoteTitle || "前置知识"}` : "本包暂无待继续内容", { kind: "primary", disabled: paused || !progress.nextNoteId, onClick: () => beginStudy(progress.nextNoteId, undefined, { topicId: topic.id }) }),
+      button(progress.nextNoteId ? `开始下一条：${progress.nextNoteTitle || "前置知识"}` : "本包暂无待继续内容", { kind: "primary", disabled: !canStartNext, onClick: () => { if (!canStartNext) return; return beginStudy(progress.nextNoteId, undefined, { topicId: topic.id }); } }),
       el("ol", { class: "list" }, members.map((member, index) => el("li", { class: "list-item" }, [
         el("div", { class: "item-symbol", text: String(index + 1) }),
         el("div", { class: "item-copy" }, [el("h3", { text: member.title || "知识暂不可读" }), el("div", { class: "item-meta" }, [badge(depthLabel(member.depth || "explain")), badge(member.completed ? "已有学习记录" : member.available ? "待学习" : "暂不可学习", member.completed ? "good" : "neutral")])]),
-        el("div", { class: "item-actions wrap" }, [button("查看", { kind: "text compact", onClick: () => openNote(member.id) }), button("开始", { kind: "quiet compact", disabled: paused || !member.available, onClick: () => beginStudy(member.id, undefined, { topicId: topic.id }) })]),
+        el("div", { class: "item-actions wrap" }, [button("查看", { kind: "text compact", onClick: () => openNote(member.id) }), button("开始", { kind: "quiet compact", disabled: !canStartMember(member), title: isMobilePrototype() && !canStartMember(member) ? "请先完成当前可用前置步骤；受限或已完成的成员不能从本包重新开始" : "", onClick: () => { if (!canStartMember(member)) return; return beginStudy(member.id, undefined, { topicId: topic.id }); } })]),
       ]))),
       el("div", { class: "form-actions" }, [button("调整成员与顺序", { kind: "primary", onClick: () => editTopic(topic).catch(handleError) }), button("复制或拆分为新学习包", { onClick: () => createTopicDrawer(topic).catch(handleError) }), button(paused ? "恢复" : "暂停", { onClick: () => actTopic(topic.id, paused ? "resume" : "pause") })]),
     ]));

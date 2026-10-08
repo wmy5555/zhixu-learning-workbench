@@ -189,7 +189,9 @@ public final class LocalLearningStore {
                 return new JSONObject().put("token", preview.token).put("context", context)
                     .put("notes", incoming.state.getJSONArray("notes").length())
                     .put("history", incoming.manifest.getJSONArray("history").length())
-                    .put("canRestore", empty(current) || identical).put("identical", identical);
+                    .put("canRestore", empty(current) || identical).put("identical", identical)
+                    // Transport validates with the exact JS schema, then removes this before presenting the summary.
+                    .put("candidateState", copyObject(incoming.state));
             } catch (IOException | JSONException exception) { throw storageError(); }
         }
     }
@@ -202,13 +204,16 @@ public final class LocalLearningStore {
             try {
                 Snapshot current = readSnapshot();
                 if (!selected.revision.equals(current.revision())) throw expired();
-                if (identity(current).equals(identity(selected.incoming))) {
+                // Recheck the same cached snapshot before either an idempotent response or a disk write.
+                Snapshot incoming = snapshot(copyObject(selected.incoming.manifest), selected.incoming.documents);
+                ensureExportable(incoming);
+                if (identity(current).equals(identity(incoming))) {
                     return envelope(current).put("restored", false).put("unchanged", true);
                 }
                 if (!empty(current)) throw new LocalSourceStore.StoreException("CONFLICT", "当前学习库已有不同内容；请保留现有内容，不能覆盖恢复。");
-                JSONObject manifest = copyObject(selected.incoming.manifest);
+                JSONObject manifest = copyObject(incoming.manifest);
                 manifest.put("revision", UUID.randomUUID().toString());
-                Snapshot next = snapshot(manifest, selected.incoming.documents);
+                Snapshot next = snapshot(manifest, incoming.documents);
                 ensureExportable(next);
                 persist(next);
                 return envelope(next).put("restored", true).put("unchanged", false);
@@ -377,6 +382,7 @@ public final class LocalLearningStore {
 
     private JSONObject validateState(JSONObject input) throws LocalSourceStore.StoreException {
         fields(input, "notes", "records", "settings", "guide");
+        validateClientJson(input, 0, new int[] { 0 });
         JSONArray notes = array(input, "notes");
         if (notes.length() > MAX_NOTES) throw capacity();
         Set<String> ids = new HashSet<>();
@@ -392,23 +398,187 @@ public final class LocalLearningStore {
 
     private void validateNote(JSONObject note) throws LocalSourceStore.StoreException {
         fields(note, "id", "kind", "title", "body", "meta", "hash");
+        validateClientJson(note, 0, new int[] { 0 });
         LocalSourceStore.validateId(string(note, "id"));
         String kind = string(note, "kind");
         if (!Arrays.asList("knowledge", "topic", "mistake").contains(kind) && !("practice".equals(context) && "source".equals(kind))) throw invalid("正式学习库只保存知识、专题和错题；原始资料保存在独立资料库。");
-        String title = string(note, "title");
+        String title = clientText(note.opt("title"), 800, false);
         // Match the persisted JavaScript string limit (UTF-16 units), including supplementary emoji.
-        if (title.trim().isEmpty() || title.length() > 200 || title.indexOf('\n') >= 0 || title.indexOf('\r') >= 0 || title.indexOf('\0') >= 0) throw invalid("笔记标题不能为空，最多 200 个字符且不能换行。");
-        LocalSourceStore.validateUtf8(title);
-        String body = string(note, "body");
-        if (body.length() > 128 * 1024 || body.indexOf('\0') >= 0 || LocalSourceStore.validateUtf8(body) > 128 * 1024) throw invalid("笔记正文最多 128 KiB，不能包含无效字符。");
-        String hash = string(note, "hash");
-        if (hash.length() > 256 || hash.trim().isEmpty() || hash.indexOf('\0') >= 0 || LocalSourceStore.validateUtf8(hash) > 256) throw invalid("笔记内容版本不能为空，最多 256 字节。");
-        boundedJson(object(note, "meta"), 160 * 1024);
+        if (title.length() > 200 || title.matches("(?s).*[\\x00-\\x1f\\x7f-\\x9f].*")) throw invalid("笔记标题最多 200 个字符，不能包含控制字符。");
+        clientText(note.opt("body"), 128 * 1024, false);
+        clientText(note.opt("hash"), 256, false);
+        JSONObject meta = object(note, "meta");
+        for (String key : Arrays.asList("stage", "depth", "privacy", "claimType", "correctionState", "processKey", "reviewAfter", "supersededBy", "confirmedAt")) {
+            if (meta.has(key) && !meta.isNull(key)) clientText(meta.opt(key), 1024, false);
+        }
+        optionalChoice(meta, "stage", "reference", "candidate", "learning", "integrated", "core", "retired");
+        optionalChoice(meta, "depth", "aware", "find", "explain", "apply");
+        optionalChoice(meta, "privacy", "local", "cloud");
+        for (String key : Arrays.asList("noteIds", "prerequisites", "researchLimitations", "sessions")) {
+            if (meta.has(key)) clientStrings(meta.opt(key), "noteIds".equals(key) ? 500 : "sessions".equals(key) ? 1000 : 100);
+        }
+        for (String key : Arrays.asList("paused", "userEdited", "userStructured", "demo", "practice")) {
+            if (meta.has(key) && !(meta.opt(key) instanceof Boolean)) throw invalid("笔记属性中的开关格式不正确。");
+        }
+        // Date.parse and Intl have platform-specific accepted forms. Exact JS preflight also runs in transport.
+        if (meta.has("sources")) {
+            JSONArray sources = array(meta, "sources");
+            if (sources.length() > 100) throw invalid("来源引用过多。");
+            for (int index = 0; index < sources.length(); index++) {
+                JSONObject ref = objectAt(sources, index);
+                clientText(ref.opt("id"), 256, false);
+                clientText(ref.opt("role"), 64, false);
+                if (ref.has("hash")) clientText(ref.opt("hash"), 256, false);
+            }
+        }
+        boundedJson(meta, 160 * 1024);
     }
 
     private static void validateRuntime(JSONObject records, JSONObject settings, JSONObject guide) throws LocalSourceStore.StoreException {
-        try { boundedJson(new JSONObject().put("records", records).put("settings", settings).put("guide", guide), MAX_RUNTIME_BYTES); }
+        try {
+            JSONObject runtime = new JSONObject().put("records", records).put("settings", settings).put("guide", guide);
+            validateClientJson(runtime, 0, new int[] { 0 });
+            int count = 0;
+            for (Iterator<String> keys = records.keys(); keys.hasNext();) {
+                String namespace = keys.next();
+                if (!Arrays.asList("sessions", "plans", "reviews", "studyEvidence", "topics", "jobs", "relations").contains(namespace)) throw invalid("学习记录包含不受支持的分类。");
+                JSONObject entries = object(records, namespace);
+                count += entries.length();
+                if (count > 2000) throw invalid("学习记录条目过多。");
+                for (Iterator<String> ids = entries.keys(); ids.hasNext();) {
+                    String id = ids.next(); clientText(id, 256, false);
+                    JSONObject record = object(entries, id);
+                    if ("sessions".equals(namespace)) validateSession(record);
+                    else if ("studyEvidence".equals(namespace)) validateOfflineEvidence(record);
+                    else if ("jobs".equals(namespace)) throw invalid("手机学习库不能恢复模型任务。");
+                    else if ("plans".equals(namespace)) {
+                        requiredChoice(record, "state", "pending", "done", "skip", "defer", "pause", "budget_deferred", "paused");
+                        finiteNumber(record.opt("minutes"));
+                    }
+                }
+            }
+            validateSettings(settings);
+            boundedJson(runtime, MAX_RUNTIME_BYTES);
+        }
         catch (JSONException exception) { throw invalid("学习记录格式不正确。"); }
+    }
+
+    private static void validateSession(JSONObject record) throws LocalSourceStore.StoreException {
+        clientText(record.opt("id"), 256, false);
+        clientText(record.opt("noteId"), 256, false);
+        clientText(record.opt("sourceHash"), 256, false);
+        requiredChoice(record, "status", "reading", "unassessed", "completed");
+        clientText(record.opt("material"), 128 * 1024, false);
+        if (truthy(record.opt("pendingJobId")) || record.has("feedback")) throw invalid("离线学习记录不能包含模型反馈或待处理模型任务。");
+        integerRange(record.opt("hintCount"), 0, 1000);
+        JSONArray turns = array(record, "turns");
+        if (turns.length() > 500) throw invalid("单次学习回答过多。");
+        for (int index = 0; index < turns.length(); index++) {
+            JSONObject turn = objectAt(turns, index);
+            clientText(turn.opt("id"), 256, false);
+            clientText(turn.opt("requestId"), 128, false);
+            clientText(turn.opt("answer"), 128 * 1024, false);
+            if (!(turn.opt("hintUsed") instanceof Boolean) || !"unassessed".equals(turn.opt("assessment")) || turn.has("feedback")) throw invalid("回答必须保留为尚未评估的离线记录。");
+        }
+        if ("completed".equals(record.opt("status"))) {
+            JSONObject completion = object(record, "completion");
+            if (turns.length() == 0 || !Boolean.FALSE.equals(completion.opt("reviewSettled")) || !completion.has("interval") || completion.opt("interval") != JSONObject.NULL) throw invalid("离线完成记录不能结算复习间隔。");
+            validateOfflineEvidence(object(completion, "evidence"));
+        }
+    }
+
+    private static void validateOfflineEvidence(JSONObject record) throws LocalSourceStore.StoreException {
+        if (!"unassessed".equals(record.opt("assessment"))) throw invalid("离线学习证据必须保留为尚未评估。");
+        for (String key : Arrays.asList("reviewSettled", "independent", "explanationPractice", "applicationPractice", "spacedRecall")) {
+            if (!Boolean.FALSE.equals(record.opt(key))) throw invalid("离线记录不能声明已评估掌握或已结算复习。");
+        }
+    }
+
+    private static void validateSettings(JSONObject settings) throws LocalSourceStore.StoreException {
+        Set<String> allowed = new HashSet<>(Arrays.asList("dailyMinutes", "timezone", "scheduleTime", "focusTopics", "pausedIds", "discoveryDays"));
+        for (Iterator<String> keys = settings.keys(); keys.hasNext();) if (!allowed.contains(keys.next())) throw invalid("学习设置包含不受支持的字段。");
+        if (settings.has("dailyMinutes")) integerRange(settings.opt("dailyMinutes"), 5, 240);
+        if (settings.has("discoveryDays")) integerRange(settings.opt("discoveryDays"), 1, 365);
+        if (settings.has("scheduleTime") && !clientText(settings.opt("scheduleTime"), 128, false).matches("([01][0-9]|2[0-3]):[0-5][0-9]")) throw invalid("学习提醒时间格式不正确。");
+        if (settings.has("focusTopics")) clientStrings(settings.opt("focusTopics"), 100);
+        if (settings.has("pausedIds")) clientStrings(settings.opt("pausedIds"), 200);
+        if (settings.has("timezone")) validateTimezone(clientText(settings.opt("timezone"), 128, false));
+    }
+
+    private static void validateTimezone(String zone) throws LocalSourceStore.StoreException {
+        boolean[] system = new boolean[1];
+        android.icu.util.TimeZone.getCanonicalID(zone, system);
+        if (system[0]) return;
+        for (String id : android.icu.util.TimeZone.getAvailableIDs()) if (id.equalsIgnoreCase(zone)) return;
+        // New Intl versions also support numeric offsets. JS preflight determines WebView support.
+        if (zone.matches("[+-]([01][0-9]|2[0-3])(:?[0-5][0-9])?")) return;
+        // Keep newly introduced IANA zones readable on devices with older ICU data; JS checks the actual name.
+        if (zone.matches("[A-Za-z][A-Za-z0-9._+-]*(/[A-Za-z0-9._+-]+)+")) return;
+        throw invalid("学习时区格式不正确。");
+    }
+
+    private static void optionalChoice(JSONObject object, String key, String... choices) throws LocalSourceStore.StoreException {
+        if (object.has(key)) requiredChoice(object, key, choices);
+    }
+    private static void requiredChoice(JSONObject object, String key, String... choices) throws LocalSourceStore.StoreException {
+        if (!Arrays.asList(choices).contains(object.opt(key))) throw invalid("学习内容包含无效状态。");
+    }
+    private static double finiteNumber(Object value) throws LocalSourceStore.StoreException {
+        if (!(value instanceof Number)) throw invalid("学习内容的数值格式不正确。");
+        double number = ((Number) value).doubleValue();
+        if (Double.isInfinite(number) || Double.isNaN(number)) throw invalid("学习内容包含无效数值。");
+        return number;
+    }
+    private static void integerRange(Object value, int minimum, int maximum) throws LocalSourceStore.StoreException {
+        double number = finiteNumber(value);
+        if (number != Math.rint(number) || number < minimum || number > maximum) throw invalid("学习设置或记录的数值超出范围。");
+    }
+    private static boolean truthy(Object value) {
+        if (value == null || value == JSONObject.NULL || Boolean.FALSE.equals(value)) return false;
+        if (value instanceof Number) return ((Number) value).doubleValue() != 0;
+        return !(value instanceof String) || !((String) value).isEmpty();
+    }
+    private static void clientStrings(Object value, int maximum) throws LocalSourceStore.StoreException {
+        if (!(value instanceof JSONArray) || ((JSONArray) value).length() > maximum) throw invalid("学习内容的文本列表格式不正确或过长。");
+        JSONArray list = (JSONArray) value;
+        for (int index = 0; index < list.length(); index++) clientText(list.opt(index), 256, false);
+    }
+    private static String clientText(Object value, int maximum, boolean emptyAllowed) throws LocalSourceStore.StoreException {
+        if (!(value instanceof String)) throw invalid("学习内容的文本格式不正确。");
+        String text = (String) value;
+        if (text.length() > maximum || text.indexOf('\0') >= 0 || LocalSourceStore.validateUtf8(text) > maximum || !emptyAllowed && jsBlank(text)) throw invalid("学习内容的文本无效或过长。");
+        return text;
+    }
+    private static boolean jsBlank(String text) {
+        for (int index = 0; index < text.length(); index++) {
+            char ch = text.charAt(index);
+            if (!(ch >= '\t' && ch <= '\r' || ch == ' ' || ch == '\u00a0' || ch == '\u1680' || ch >= '\u2000' && ch <= '\u200a' || ch == '\u2028' || ch == '\u2029' || ch == '\u202f' || ch == '\u205f' || ch == '\u3000' || ch == '\ufeff')) return false;
+        }
+        return true;
+    }
+    // Mirror persisted JS JSON limits, separately from raw Markdown/backup strings which can be larger.
+    private static void validateClientJson(Object value, int depth, int[] nodes) throws LocalSourceStore.StoreException {
+        if (depth > MAX_JSON_DEPTH || ++nodes[0] > MAX_JSON_NODES) throw invalid("学习内容层级或条目数量超过手机保存上限。");
+        if (value == null || value == JSONObject.NULL || value instanceof Boolean) return;
+        if (value instanceof String) { clientText(value, 128 * 1024, true); return; }
+        if (value instanceof Number) { finiteNumber(value); return; }
+        if (value instanceof JSONArray) {
+            JSONArray list = (JSONArray) value;
+            if (list.length() > 2000) throw invalid("学习内容的列表项过多。");
+            for (int index = 0; index < list.length(); index++) validateClientJson(list.opt(index), depth + 1, nodes);
+            return;
+        }
+        if (value instanceof JSONObject) {
+            JSONObject object = (JSONObject) value;
+            if (object.length() > 2000) throw invalid("学习内容的对象字段过多。");
+            for (Iterator<String> keys = object.keys(); keys.hasNext();) {
+                String key = keys.next();
+                if (key.isEmpty() || key.length() > 256 || Arrays.asList("__proto__", "prototype", "constructor").contains(key)) throw invalid("学习内容包含无效字段名。");
+                validateClientJson(object.opt(key), depth + 1, nodes);
+            }
+            return;
+        }
+        throw invalid("学习内容不是受支持的 JSON。");
     }
 
     private String markdown(JSONObject note) throws LocalSourceStore.StoreException, JSONException {

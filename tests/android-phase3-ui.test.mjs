@@ -6,6 +6,68 @@ const source = { id: "reflection", kind: "source", title: "合成反思", body: 
 const bootstrap = async () => ({ notes: [], today: { items: [] }, stats: {} });
 const guide = async () => ({ steps: [{ id: "sources", label: "保存原文", completed: true }, { id: "answer", label: "保存回答", completed: false }] });
 
+test("Android topic member starts only the current next step and disabled starts make no request", async () => {
+  for (const scenario of [
+    { label: "A is next", progress: { nextNoteId: "a", nextNoteTitle: "A" }, members: [{ id: "a", available: true }, { id: "b", available: true }], enabled: "a" },
+    { label: "A is blocked", progress: { nextNoteId: null, blockedNoteId: "a" }, members: [{ id: "a", available: false }, { id: "b", available: true }], enabled: null },
+    { label: "A is paused", progress: { nextNoteId: null, blockedNoteId: "a" }, members: [{ id: "a", available: false }, { id: "b", available: true }], enabled: null },
+    { label: "A is confirmed and B is next", progress: { nextNoteId: "b", nextNoteTitle: "B" }, members: [{ id: "a", available: true, completed: true }, { id: "b", available: true }], enabled: "b" },
+    { label: "topic is paused", paused: true, progress: { nextNoteId: "a" }, members: [{ id: "a", available: true }, { id: "b", available: true }], enabled: null },
+  ]) {
+    const calls = [], topic = { id: "topic", title: "有前置顺序的主题", body: "先A再B", ...scenario };
+    const session = { id: "session", noteId: scenario.enabled, status: "reading", turns: [], material: "本地材料" };
+    const fixture = await createAndroidBrowser({ api: { topics: async () => ({ topics: [topic] }), startStudy: async body => { calls.push({ ...body }); return session; }, study: async () => session } });
+    await fixture.app.navigate("topics");
+    await click(findButton(fixture.app.refs.main, "查看"));
+    const starts = descendants(fixture.app.refs.drawerBody).filter(node => node.tagName === "button" && node.textContent === "开始");
+    assert.equal(starts.length, 2, scenario.label);
+    for (let index = 0; index < starts.length; index++) {
+      assert.equal(starts[index].disabled, scenario.members[index].id !== scenario.enabled, scenario.label);
+      if (starts[index].disabled) await click(starts[index]);
+    }
+    assert.equal(calls.length, 0, `${scenario.label}: disabled members cannot send a request even when the handler is invoked`);
+    const next = descendants(fixture.app.refs.drawerBody).find(node => node.tagName === "button" && (node.textContent.startsWith("开始下一条") || node.textContent === "本包暂无待继续内容"));
+    assert.equal(next.disabled, !scenario.enabled, scenario.label);
+    if (!scenario.enabled) { await click(next); assert.equal(calls.length, 0, scenario.label); }
+    else {
+      await click(starts[scenario.members.findIndex(member => member.id === scenario.enabled)]);
+      assert.deepEqual(calls, [{ noteId: scenario.enabled, topicId: topic.id }]);
+    }
+  }
+});
+
+test("Android ordinary single knowledge remains startable without topic context", async () => {
+  const calls = [], session = { id: "session", noteId: "b", status: "reading", turns: [], material: "个人反思" };
+  const fixture = await createAndroidBrowser({ api: { startStudy: async body => { calls.push({ ...body }); return session; }, study: async () => session } });
+  fixture.app.renderNoteDrawer({ id: "b", kind: "knowledge", title: "B的独立学习", body: "个人反思", meta: { claimType: "opinion", stage: "learning" } });
+  const start = findButton(fixture.app.refs.drawerBody, "开始学习");
+  assert.equal(start.disabled, false);
+  await click(start);
+  assert.deepEqual(calls, [{ noteId: "b" }]);
+});
+
+test("Android today and queue topic plans disable later steps while unbound single knowledge remains available", async () => {
+  for (const view of ["today", "study"]) for (const next of ["a", null, "b"]) {
+    const calls = [], topic = { id: "topic", progress: { nextNoteId: next, ...(next ? {} : { blockedNoteId: "a" }) } };
+    const items = ["a", "b", "single"].map(noteId => ({ id: `plan-${noteId}`, noteId, title: noteId, kind: "study", state: "pending", minutes: 5, ...(noteId === "single" ? {} : { topicId: "topic" }) }));
+    const session = { id: "session", noteId: next, status: "reading", turns: [], material: "本地材料" };
+    const fixture = await createAndroidBrowser({ api: {
+      bootstrap: async () => ({ topics: [topic], today: { items, budget: 25 }, stats: {} }),
+      today: async () => ({ items }), topics: async () => ({ topics: [topic] }), notes: async () => ({ notes: [] }), studySessions: async () => ({ sessions: [] }),
+      startStudy: async body => { calls.push({ ...body }); return session; }, study: async () => session,
+    } });
+    await fixture.app.navigate(view);
+    const starts = descendants(fixture.app.refs.main).filter(node => node.tagName === "button" && node.textContent === (view === "today" ? "开始" : "开始学习"));
+    assert.equal(starts.length, 3);
+    assert.equal(starts[0].disabled, next !== "a", `${view}: A follows current progress`);
+    assert.equal(starts[1].disabled, next !== "b", `${view}: B follows current progress`);
+    assert.equal(starts[2].disabled, false, `${view}: unbound knowledge stays available`);
+    for (const start of starts.filter(node => node.disabled)) await click(start);
+    assert.equal(calls.length, 0, `${view}: disabled topic plan sends no request`);
+    if (next) { await click(starts[next === "a" ? 0 : 1]); assert.deepEqual(calls, [{ noteId: next, planId: `plan-${next}`, topicId: "topic" }]); }
+  }
+});
+
 test("Android learning restore keeps committed success when bootstrap refresh fails and does not repeat restore", async () => {
   let nativeCalls = 0, refreshCalls = 0;
   const fixture = await createAndroidBrowser({ api: { androidGuide: guide,

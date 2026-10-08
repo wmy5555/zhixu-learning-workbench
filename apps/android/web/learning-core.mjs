@@ -194,6 +194,7 @@ export function createLearning(dependencies) {
       topic = getNote(topicId);
       if (topic.kind !== 'topic' || !topicPath(topic, store.list()).includes(noteId)) fail('主题学习包不包含这项知识。');
       if (topicPaused(topic)) fail('这个主题学习包已暂停。');
+      if (topicDetails(topic).progress.nextNoteId !== noteId) fail('请先完成主题当前可用的下一步；前置知识尚未完成、被暂停或需更新时，后续步骤不能开始。', 'TOPIC_STEP_UNAVAILABLE', 409);
     }
     const depth = depthOf(note), goal = goals[depth].label;
     const mistakeContext = mistake ? {
@@ -295,7 +296,9 @@ export function createLearning(dependencies) {
   function confirmStudy(id, { body }) {
     const store = storage(), s = session(id);
     if (!s.turns.length) fail('请先留下至少一次自己的解释。');
-    const n = getNote(s.noteId), wasCurrent = n.hash === s.sourceHash, result = confirmNote(n.id, { body, expectedHash: n.hash });
+    const n = getNote(s.noteId), wasCurrent = n.hash === s.sourceHash;
+    if (dependencies.assessmentMode === 'offline' && !wasCurrent) fail('学习材料已有更新，请按当前材料重新开始；本次回答与当前知识均已保留。', 'SOURCE_CHANGED', 409);
+    const result = confirmNote(n.id, { body, expectedHash: n.hash });
     s.confirmedNoteId = result.id;
     // The explicit confirmation appends the user's own note; the original teaching snapshot stays separate.
     if (wasCurrent) s.sourceHash = result.hash;

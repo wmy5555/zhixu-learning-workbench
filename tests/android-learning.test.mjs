@@ -85,6 +85,32 @@ test('explicit personal confirmation promotes understanding while leaving offlin
   assert.deepEqual(service.state.records.reviews, undefined);
 });
 
+test('a stale session cannot overwrite newly edited material or personal understanding', () => {
+  for (const change of ['editNote', 'external update']) {
+    let service = app();
+    const session = service.learning.startStudy({ noteId: id(1) });
+    service.learning.answerStudy(session.id, { answer: '这份解释对应旧学习材料。', requestId: 'old-confirmation' });
+    const latestBody = '用户刚修改的新材料。\n\n## 我的理解（用户确认）\n\n当前版本的新理解，应完整保留。';
+    if (change === 'editNote') {
+      service.editNote(id(1), { body: latestBody, expectedHash: service.getNote(id(1)).hash });
+    } else {
+      const currentState = service.state;
+      currentState.notes[0] = { ...currentState.notes[0], body: latestBody, hash: 'external-current-version',
+        meta: { ...currentState.notes[0].meta, stage: 'integrated', confirmedAt: timestamp, confirmedBy: 'user', personalUnderstanding: '当前版本的新理解，应完整保留。' } };
+      service = createAndroidLearning({ state: currentState, clock });
+    }
+    const before = service.state, latest = service.getNote(id(1)), savedSession = service.learning.session(session.id);
+    assert.notEqual(latest.hash, session.sourceHash, change);
+    assert.throws(() => service.learning.confirmStudy(session.id, { body: '旧会话理解不能覆盖新内容。' }), error => error.code === 'SOURCE_CHANGED' && error.status === 409, change);
+    assert.deepEqual(service.state, before, `${change}: rejection must preserve the entire current draft`);
+    assert.deepEqual(service.getNote(id(1)), latest, `${change}: material and understanding must stay unchanged`);
+    assert.deepEqual(service.learning.session(session.id), savedSession, `${change}: old answer and session version must stay unchanged`);
+    assert.equal(service.learning.session(session.id).confirmedNoteId, undefined);
+    assert.equal(service.state.records.studyEvidence, undefined);
+    assert.equal(service.learning.session(session.id).status, 'unassessed');
+  }
+});
+
 test('manual facts remain blocked; opinions retain their original snapshot and go stale with their source version', () => {
   const source = note(50, { platform: '合成来源', author: '合成作者', url: '', date: '', locator: '', topic: '' }, 'source');
   const service = app({ notes: [], sources: [source] });
@@ -204,6 +230,69 @@ test('missing imported dependencies stay visible and block scheduling instead of
   assert.equal(service.learning.today().blocked[0].prerequisiteId, id(99));
   const direct = app({ notes: [note(1, { prerequisites: [id(99)] })] });
   assert.equal(direct.learning.today().items.length, 0);
+});
+
+test('topic study starts only its current step and advances after eligible personal confirmation', () => {
+  const service = app({ notes: [note(1), note(2)] });
+  const topic = service.learning.createTopic({ title: '先 A 后 B', noteIds: [id(1), id(2)] });
+  assert.equal(topic.progress.nextNoteId, id(1));
+  const outOfOrder = error => error.code === 'TOPIC_STEP_UNAVAILABLE' && error.status === 409;
+  assert.throws(() => service.learning.startStudy({ noteId: id(2), topicId: topic.id }), outOfOrder);
+  assert.equal(service.sessions().length, 0, 'rejected start creates no session');
+  const first = service.learning.startStudy({ noteId: id(1), topicId: topic.id });
+  assert.equal(first.topicId, topic.id);
+  service.learning.answerStudy(first.id, { answer: 'A 的合成解释', requestId: 'first-topic-answer' });
+  service.learning.finishStudy(first.id);
+  assert.equal(service.learning.topics()[0].progress.nextNoteId, id(1), 'unassessed finish does not certify the prerequisite');
+  assert.throws(() => service.learning.startStudy({ noteId: id(2), topicId: topic.id }), outOfOrder);
+  assert.equal(service.sessions().length, 1);
+  const current = service.getNote(id(1));
+  service.confirmNote(id(1), { body: '这是我主动确认的 A 的个人理解。', expectedHash: current.hash });
+  assert.equal(service.learning.topics()[0].progress.nextNoteId, id(2));
+  const second = service.learning.startStudy({ noteId: id(2), topicId: topic.id });
+  assert.equal(second.noteId, id(2));
+  assert.equal(second.topicId, topic.id);
+  assert.equal(second.status, 'reading');
+  assert.throws(() => service.learning.startStudy({ noteId: id(1), topicId: topic.id }), outOfOrder, 'completed earlier steps cannot be restarted through the ordered topic entry');
+});
+
+test('a plan inherits topic ordering while ordinary single-note study keeps its original scope', () => {
+  const service = app({ notes: [note(1), note(2, { prerequisites: [id(1)] })] });
+  const topic = service.learning.createTopic({ title: '带今日安排的顺序', noteIds: [id(1), id(2)] });
+  const today = service.learning.today();
+  const firstPlan = today.items.find(item => item.noteId === id(1)), secondPlan = today.items.find(item => item.noteId === id(2));
+  assert.equal(secondPlan.topicId, topic.id);
+  assert.throws(() => service.learning.startStudy({ noteId: id(2), planId: secondPlan.id }), errorCode('TOPIC_STEP_UNAVAILABLE'));
+  assert.equal(service.sessions().length, 0);
+  assert.equal(service.learning.startStudy({ noteId: id(1), planId: firstPlan.id }).topicId, topic.id);
+  const independent = service.learning.startStudy({ noteId: id(2) });
+  assert.equal(independent.noteId, id(2));
+  assert.equal(independent.topicId, undefined, 'the new guard is limited to topic-scoped entry');
+});
+
+test('topic study cannot jump over missing, paused, stale or unavailable prerequisites', () => {
+  const cases = [
+    ['unverified', { researchLimitations: ['尚待核验'] }, {}],
+    ['expired', { confirmedAt: timestamp, reviewAfter: '2026-10-07T00:00:00.000Z' }, {}],
+    ['not selected for learning', { stage: 'candidate' }, {}],
+    ['retired', { stage: 'retired' }, {}],
+    ['superseded', { supersededBy: id(3) }, {}],
+    ['missing predecessor of A', { prerequisites: [id(99)] }, {}],
+    ['paused A', {}, { pausedIds: [id(1)] }],
+    ['paused next B', { confirmedAt: timestamp }, { pausedIds: [id(2)] }],
+    ['stale source', { confirmedAt: timestamp, sources: [{ id: id(50), role: 'input', hash: 'obsolete-version' }] }, {}],
+  ];
+  for (const [label, changes, settings] of cases) {
+    const topic = note(90, { noteIds: [id(1), id(2)], prerequisites: [], minutes: 20 }, 'topic');
+    const service = app({ notes: [note(1, changes), note(2), topic], settings, sources: [note(50, {}, 'source')] });
+    assert.equal(service.learning.topics()[0].progress.nextNoteId, null, label);
+    assert.throws(() => service.learning.startStudy({ noteId: id(2), topicId: topic.id }), error => error.code === 'TOPIC_STEP_UNAVAILABLE' && error.status === 409, label);
+    assert.equal(service.sessions().length, 0, `${label}: failure must not save a session`);
+  }
+  const missingMember = app({ notes: [note(2), note(90, { noteIds: [id(1), id(2)], prerequisites: [], minutes: 20 }, 'topic')] });
+  assert.equal(missingMember.learning.topics()[0].progress.blockedNoteId, id(1));
+  assert.throws(() => missingMember.learning.startStudy({ noteId: id(2), topicId: id(90) }), errorCode('TOPIC_STEP_UNAVAILABLE'));
+  assert.equal(missingMember.sessions().length, 0);
 });
 
 test('personally confirming an unverified manual fact never completes its topic prerequisite', () => {

@@ -36,8 +36,8 @@ public class LocalLearningStoreTest extends AndroidTestCase {
         assertEquals(initial.toString(), new LocalLearningStore(root, "formal").load().toString());
         JSONObject note = note("knowledge", "概念", "# 合成 Markdown\n\n末行保留空格  \n", "js-version-opaque");
         JSONObject state = state(note);
-        state.getJSONObject("records").put(note.getString("id"), new JSONObject().put("answer", "保留回答").put("finished", true));
-        state.getJSONObject("settings").put("dailyLimit", 6);
+        relation(state, note.getString("id"), new JSONObject().put("answer", "保留回答").put("finished", true));
+        state.getJSONObject("settings").put("dailyMinutes", 6);
         state.getJSONObject("guide").put("step", "study");
         JSONObject saved = formal.commit("empty", state);
         assertFalse("empty".equals(saved.getString("revision")));
@@ -46,7 +46,7 @@ public class LocalLearningStoreTest extends AndroidTestCase {
         JSONObject restoredNote = reopened.getJSONObject("state").getJSONArray("notes").getJSONObject(0);
         assertEquals("js-version-opaque", restoredNote.getString("hash"));
         assertEquals(note.getString("body"), restoredNote.getString("body"));
-        assertTrue(reopened.getJSONObject("state").getJSONObject("records").getJSONObject(note.getString("id")).getBoolean("finished"));
+        assertTrue(reopened.getJSONObject("state").getJSONObject("records").getJSONObject("relations").getJSONObject(note.getString("id")).getBoolean("finished"));
         JSONObject document = formal.backup().getJSONArray("documents").getJSONObject(0);
         assertTrue(document.getString("raw").startsWith("---\n{"));
         assertTrue(document.getString("raw").endsWith(note.getString("body")));
@@ -60,7 +60,7 @@ public class LocalLearningStoreTest extends AndroidTestCase {
         String revision = saved.getString("revision");
         assertEquals(revision, formal.commit(revision, saved.getJSONObject("state")).getString("revision"));
         JSONObject next = state(note);
-        next.getJSONObject("records").put("answer", "第二次回答");
+        relation(next, "answer", new JSONObject().put("answer", "第二次回答"));
         JSONObject second = new LocalLearningStore(root, "formal").commit(revision, next);
         expectCode("CONFLICT", () -> formal.commit(revision, state(note)));
         assertEquals(second.toString(), formal.load().toString());
@@ -71,7 +71,7 @@ public class LocalLearningStoreTest extends AndroidTestCase {
         JSONObject saved = formal.commit("empty", state(note));
         JSONObject nextNote = new JSONObject(note.toString()).put("body", "第二版").put("hash", "two");
         JSONObject next = state(nextNote);
-        next.getJSONObject("records").put("answer", "不得部分保存");
+        relation(next, "answer", new JSONObject().put("answer", "不得部分保存"));
         formal.setFailurePoint(stage -> { if ("before-manifest".equals(stage)) throw new IOException("Synthetic failure"); });
         expectCode("STORE_ERROR", () -> formal.commit(saved.getString("revision"), next));
         assertEquals(2, objectCount());
@@ -85,7 +85,7 @@ public class LocalLearningStoreTest extends AndroidTestCase {
         JSONObject saved = formal.commit("empty", state(note));
         JSONObject nextNote = new JSONObject(note.toString()).put("body", "第二版").put("hash", "two");
         JSONObject next = state(nextNote);
-        next.getJSONObject("records").put("answer", "完整保存");
+        relation(next, "answer", new JSONObject().put("answer", "完整保存"));
         formal.setFailurePoint(stage -> { if ("after-manifest".equals(stage)) throw new IOException("Synthetic failure"); });
         expectCode("STORE_ERROR", () -> formal.commit(saved.getString("revision"), next));
         assertEquals(2, objectCount());
@@ -93,7 +93,7 @@ public class LocalLearningStoreTest extends AndroidTestCase {
         assertEquals(2, objectCount());
         assertFalse(saved.getString("revision").equals(reopened.getString("revision")));
         assertEquals("第二版", reopened.getJSONObject("state").getJSONArray("notes").getJSONObject(0).getString("body"));
-        assertEquals("完整保存", reopened.getJSONObject("state").getJSONObject("records").getString("answer"));
+        assertEquals("完整保存", reopened.getJSONObject("state").getJSONObject("records").getJSONObject("relations").getJSONObject("answer").getString("answer"));
         assertEquals(2, new LocalLearningStore(root, "formal").backup().getJSONArray("documents").length());
     }
 
@@ -190,7 +190,7 @@ public class LocalLearningStoreTest extends AndroidTestCase {
         assertEquals(restored.getString("revision"), unchanged.getString("revision"));
         JSONObject stale = target.previewRestore(backup);
         JSONObject next = unchanged.getJSONObject("state");
-        next.getJSONObject("records").put("answer", "新的回答");
+        relation(next, "answer", new JSONObject().put("answer", "新的回答"));
         target.commit(unchanged.getString("revision"), next);
         expectCode("INVALID_PREVIEW", () -> target.restoreBackup(stale.getString("token")));
         expectCode("INVALID_PREVIEW", () -> target.restoreBackup(stale.getString("token")));
@@ -245,7 +245,7 @@ public class LocalLearningStoreTest extends AndroidTestCase {
     public void testDifferentNonemptyRuntimeCannotBeOverwrittenByRestore() throws Exception {
         JSONObject backup = formal.backup();
         JSONObject currentState = state();
-        currentState.getJSONObject("records").put("draft", "尚未完成的回答");
+        relation(currentState, "draft", new JSONObject().put("answer", "尚未完成的回答"));
         JSONObject current = formal.commit("empty", currentState);
         JSONObject preview = formal.previewRestore(backup);
         assertFalse(preview.getBoolean("canRestore"));
@@ -347,19 +347,21 @@ public class LocalLearningStoreTest extends AndroidTestCase {
         expectCode("VALIDATION", () -> formal.commit("empty", state(new JSONObject(note.toString()).put("body", repeated('文', 44000)))));
         expectCode("VALIDATION", () -> formal.commit("empty", state(new JSONObject(note.toString()).put("hash", repeated('x', 257)))));
         JSONObject runtime = state();
-        runtime.getJSONObject("records").put("retainedAnswer", repeated('x', 1024 * 1024 + 1));
+        relation(runtime, "retainedAnswer", new JSONObject().put("chunks", chunks(9)));
         JSONObject saved = formal.commit("empty", runtime);
-        assertEquals(1024 * 1024 + 1, formal.load().getJSONObject("state").getJSONObject("records").getString("retainedAnswer").length());
+        assertEquals(9, formal.load().getJSONObject("state").getJSONObject("records").getJSONObject("relations").getJSONObject("retainedAnswer").getJSONArray("chunks").length());
         JSONObject oversized = state();
-        oversized.getJSONObject("records").put("answer", repeated('x', LocalLearningStore.MAX_RUNTIME_BYTES));
+        relation(oversized, "retainedAnswer", new JSONObject().put("chunks", chunks(64)));
         expectCode("VALIDATION", () -> formal.commit(saved.getString("revision"), oversized));
-        JSONObject deep = state(); JSONObject nested = deep.getJSONObject("records");
+        JSONObject deep = state(); JSONObject nested = new JSONObject(); relation(deep, "deep", nested);
         for (int index = 0; index < 20; index++) { JSONObject child = new JSONObject(); nested.put("nested", child); nested = child; }
         expectCode("VALIDATION", () -> formal.commit(saved.getString("revision"), deep));
         JSONObject manyNodes = state();
         JSONArray turns = new JSONArray();
-        for (int index = 0; index < LocalLearningStore.MAX_JSON_NODES; index++) turns.put(JSONObject.NULL);
-        manyNodes.getJSONObject("records").put("turns", turns);
+        for (int index = 0; index < 100; index++) {
+            JSONArray row = new JSONArray(); for (int item = 0; item < 1000; item++) row.put(JSONObject.NULL); turns.put(row);
+        }
+        relation(manyNodes, "turns", new JSONObject().put("turns", turns));
         expectCode("VALIDATION", () -> formal.commit(saved.getString("revision"), manyNodes));
         for (String raw : Arrays.asList("{\"x\":1,\"x\":2}", "{\"x\":1} trailing", "{/*comment*/\"x\":1}", "{'x':1}", "{\"x\":01}", "{\"x\":1,}")) {
             expectCode("VALIDATION", () -> LocalLearningStore.readPackage(new ByteArrayInputStream(raw.getBytes(StandardCharsets.UTF_8))));
@@ -388,6 +390,214 @@ public class LocalLearningStoreTest extends AndroidTestCase {
         assertEquals(result.toString(), new LocalLearningStore(root, "formal").load().toString());
     }
 
+    public void testInvalidSettingsNamespacesAndGuideRejectBeforePreviewOrCommit() throws Exception {
+        JSONObject valid = compatibleState();
+        LocalLearningStore donor = new LocalLearningStore(new File(root, "runtime-donor"), "formal");
+        donor.commit("empty", valid);
+        JSONObject pack = donor.backup();
+        for (StateEdit edit : new StateEdit[] {
+            value -> value.getJSONObject("settings").put("dailyMinutes", "25"),
+            value -> value.getJSONObject("settings").put("dailyMinutes", 4),
+            value -> value.getJSONObject("settings").put("dailyMinutes", 241),
+            value -> value.getJSONObject("settings").put("dailyMinutes", 25.5),
+            value -> value.getJSONObject("settings").put("dailyMinutes", JSONObject.NULL),
+            value -> value.getJSONObject("settings").put("discoveryDays", 0),
+            value -> value.getJSONObject("settings").put("discoveryDays", "7"),
+            value -> value.getJSONObject("settings").put("discoveryDays", 366),
+            value -> value.getJSONObject("settings").put("dailyLimit", 6),
+            value -> value.getJSONObject("settings").put("timezone", 8),
+            value -> value.getJSONObject("settings").put("timezone", "not-a-zone"),
+            value -> value.getJSONObject("settings").put("scheduleTime", "24:00"),
+            value -> value.getJSONObject("settings").put("scheduleTime", "8:00"),
+            value -> value.getJSONObject("settings").put("focusTopics", new JSONArray().put("\u00a0")),
+            value -> value.getJSONObject("settings").put("focusTopics", textList(101)),
+            value -> value.getJSONObject("settings").put("pausedIds", textList(201)),
+            value -> value.getJSONObject("settings").put("pausedIds", new JSONArray().put(1)),
+            value -> value.getJSONObject("records").put("unknown", new JSONObject()),
+            value -> value.getJSONObject("records").put("topics", new JSONArray()),
+            value -> value.getJSONObject("records").getJSONObject("relations").put("bad", "primitive"),
+            value -> value.getJSONObject("records").getJSONObject("relations").put(" ", new JSONObject()),
+            value -> value.getJSONObject("records").getJSONObject("jobs").put("job", new JSONObject()),
+            value -> value.getJSONObject("records").getJSONObject("plans").getJSONObject("day:note").put("state", "mastered"),
+            value -> value.getJSONObject("records").getJSONObject("plans").getJSONObject("day:note").put("minutes", "5"),
+            value -> value.getJSONObject("guide").put("__proto__", new JSONObject()),
+            value -> value.getJSONObject("guide").put("nested", new JSONObject().put("constructor", "unsafe")),
+            value -> value.getJSONObject("guide").put("", true),
+            value -> value.getJSONObject("guide").put(repeated('k', 257), true),
+            value -> value.getJSONObject("guide").put("items", textList(2001)),
+            value -> value.getJSONObject("guide").put("body", repeated('x', 128 * 1024 + 1))
+        }) assertInvalidRuntime(valid, pack, edit);
+        JSONObject tooMany = new JSONObject(valid.toString());
+        JSONObject records = new JSONObject();
+        for (int index = 0; index < 2000; index++) records.put("r" + index, new JSONObject());
+        tooMany.getJSONObject("records").put("reviews", records);
+        assertInvalidRuntime(tooMany, pack, value -> {});
+    }
+
+    public void testInvalidSessionTurnsAndOfflineEvidenceRejectBeforePreviewOrCommit() throws Exception {
+        JSONObject valid = compatibleState();
+        LocalLearningStore donor = new LocalLearningStore(new File(root, "session-donor"), "formal");
+        donor.commit("empty", valid);
+        JSONObject pack = donor.backup();
+        for (StateEdit edit : new StateEdit[] {
+            value -> session(value).put("id", ""),
+            value -> session(value).put("noteId", 1),
+            value -> session(value).put("sourceHash", JSONObject.NULL),
+            value -> session(value).put("status", "mastered"),
+            value -> session(value).put("material", "\ufeff\u3000"),
+            value -> session(value).put("hintCount", -1),
+            value -> session(value).put("hintCount", 1001),
+            value -> session(value).put("hintCount", "0"),
+            value -> session(value).put("hintCount", 0.5),
+            value -> session(value).put("pendingJobId", "pending"),
+            value -> session(value).put("feedback", JSONObject.NULL),
+            value -> session(value).put("turns", new JSONArray()),
+            value -> session(value).put("turns", textList(501)),
+            value -> session(value).put("turns", new JSONArray().put("invalid turn")),
+            value -> turn(value).put("id", JSONObject.NULL),
+            value -> turn(value).put("requestId", repeated('r', 129)),
+            value -> turn(value).put("answer", " "),
+            value -> turn(value).put("hintUsed", "false"),
+            value -> turn(value).put("assessment", "correct"),
+            value -> turn(value).put("feedback", JSONObject.NULL),
+            value -> session(value).getJSONObject("completion").put("reviewSettled", true),
+            value -> session(value).getJSONObject("completion").remove("interval"),
+            value -> session(value).getJSONObject("completion").put("interval", 1),
+            value -> session(value).getJSONObject("completion").getJSONObject("evidence").put("assessment", "correct"),
+            value -> value.getJSONObject("records").getJSONObject("studyEvidence").getJSONObject("session").remove("spacedRecall")
+        }) assertInvalidRuntime(valid, pack, edit);
+        for (String key : Arrays.asList("reviewSettled", "independent", "explanationPractice", "applicationPractice", "spacedRecall")) {
+            assertInvalidRuntime(valid, pack, value -> session(value).getJSONObject("completion").getJSONObject("evidence").put(key, true));
+            assertInvalidRuntime(valid, pack, value -> value.getJSONObject("records").getJSONObject("studyEvidence").getJSONObject("session").put(key, true));
+        }
+    }
+
+    public void testCompatibleRuntimeCandidateStateRestoreAndReopenPreserveAllFields() throws Exception {
+        JSONObject valid = compatibleState();
+        JSONObject saved = formal.commit("empty", valid);
+        LocalLearningStore target = new LocalLearningStore(new File(root, "compatible-target"), "formal");
+        JSONObject preview = target.previewRestore(roundtrip(formal.backup()));
+        assertEquals(saved.getJSONObject("state").toString(), preview.getJSONObject("candidateState").toString());
+        // Returning a candidate for JS preflight must not expose the cached snapshot to caller mutation.
+        preview.getJSONObject("candidateState").getJSONObject("settings").put("dailyMinutes", "bad");
+        JSONObject restored = target.restoreBackup(preview.getString("token"));
+        assertEquals(saved.getJSONObject("state").toString(), restored.getJSONObject("state").toString());
+        JSONObject reopened = new LocalLearningStore(new File(root, "compatible-target"), "formal").load();
+        assertEquals(restored.getString("revision"), reopened.getString("revision"));
+        assertEquals(restored.getJSONObject("state").toString(), reopened.getJSONObject("state").toString());
+        JSONObject identical = target.previewRestore(formal.backup());
+        assertTrue(target.restoreBackup(identical.getString("token")).getBoolean("unchanged"));
+        // Full ICU aliases/case and offset syntax remain compatible; exact Intl support is checked by transport.
+        for (String zone : Arrays.asList("US/Eastern", "utc", "Etc/GMT+8", "+01:30")) {
+            JSONObject current = target.load();
+            JSONObject next = current.getJSONObject("state"); next.getJSONObject("settings").put("timezone", zone);
+            target.commit(current.getString("revision"), next);
+        }
+        for (String status : Arrays.asList("reading", "unassessed")) {
+            JSONObject current = target.load();
+            JSONObject next = current.getJSONObject("state");
+            session(next).put("status", status).put("turns", new JSONArray()).remove("completion");
+            next.put("settings", new JSONObject()); // Partial/missing settings use JS defaults without rewriting stored data.
+            target.commit(current.getString("revision"), next);
+        }
+    }
+
+    public void testPersistedNoteMetadataRejectsInvalidBackupWithoutChangingLibrary() throws Exception {
+        JSONObject valid = compatibleState();
+        LocalLearningStore donor = new LocalLearningStore(new File(root, "metadata-donor"), "formal");
+        donor.commit("empty", valid);
+        JSONObject pack = donor.backup();
+        for (StateEdit edit : new StateEdit[] {
+            value -> value.getJSONArray("notes").getJSONObject(0).put("body", "\u00a0\ufeff"),
+            value -> value.getJSONArray("notes").getJSONObject(0).put("title", "标题\t控制字符"),
+            value -> meta(value).put("stage", "mastered"),
+            value -> meta(value).put("stage", JSONObject.NULL),
+            value -> meta(value).put("depth", "expert"),
+            value -> meta(value).put("privacy", "public"),
+            value -> meta(value).put("claimType", false),
+            value -> meta(value).put("confirmedAt", ""),
+            value -> meta(value).put("reviewAfter", 123),
+            value -> meta(value).put("reviewAfter", ""),
+            value -> meta(value).put("paused", "false"),
+            value -> meta(value).put("userStructured", JSONObject.NULL),
+            value -> meta(value).put("noteIds", textList(501)),
+            value -> meta(value).put("prerequisites", textList(101)),
+            value -> meta(value).put("researchLimitations", new JSONArray().put(" ")),
+            value -> meta(value).put("sessions", textList(1001)),
+            value -> meta(value).put("sources", new JSONArray().put("bad")),
+            value -> meta(value).put("sources", textList(101)),
+            value -> meta(value).put("sources", new JSONArray().put(new JSONObject().put("id", "source").put("role", ""))),
+            value -> meta(value).put("sources", new JSONArray().put(new JSONObject().put("id", "source").put("role", "input").put("hash", JSONObject.NULL))),
+            value -> meta(value).put("nested", new JSONObject().put("prototype", "unsafe"))
+        }) {
+            JSONObject invalidState = new JSONObject(valid.toString()); edit.apply(invalidState);
+            expectCode("VALIDATION", () -> formal.commit("empty", invalidState));
+            JSONObject invalidPack = new JSONObject(pack.toString());
+            replaceOnlyNote(invalidPack, invalidState.getJSONArray("notes").getJSONObject(0));
+            expectCode("VALIDATION", () -> formal.previewRestore(invalidPack));
+            assertEquals("empty", formal.load().getString("revision"));
+            assertEquals(0, objectCount());
+        }
+        String token = formal.previewRestore(pack).getString("token");
+        JSONObject restored = formal.restoreBackup(token);
+        assertEquals("2026-10-08T11:02:05.243Z", meta(restored.getJSONObject("state")).getString("reviewAfter"));
+    }
+
+    private void assertInvalidRuntime(JSONObject template, JSONObject pack, StateEdit edit) throws Exception {
+        JSONObject invalidState = new JSONObject(template.toString()); edit.apply(invalidState);
+        expectCode("VALIDATION", () -> formal.commit("empty", invalidState));
+        JSONObject invalidPack = new JSONObject(pack.toString());
+        for (String field : Arrays.asList("records", "settings", "guide")) invalidPack.getJSONObject("manifest").put(field, invalidState.get(field));
+        expectCode("VALIDATION", () -> formal.previewRestore(invalidPack));
+        expectCode("INVALID_PREVIEW", () -> formal.restoreBackup("no-preview-token"));
+        assertEquals("empty", formal.load().getString("revision"));
+        assertEquals(0, objectCount());
+    }
+    private interface StateEdit { void apply(JSONObject state) throws Exception; }
+    private static JSONObject meta(JSONObject state) throws Exception { return state.getJSONArray("notes").getJSONObject(0).getJSONObject("meta"); }
+    private static JSONObject session(JSONObject state) throws Exception { return state.getJSONObject("records").getJSONObject("sessions").getJSONObject("session"); }
+    private static JSONObject turn(JSONObject state) throws Exception { return session(state).getJSONArray("turns").getJSONObject(0); }
+    private static JSONArray textList(int count) { JSONArray list = new JSONArray(); for (int index = 0; index < count; index++) list.put("id-" + index); return list; }
+    private static JSONObject evidence() throws Exception {
+        return new JSONObject().put("assessment", "unassessed").put("reviewSettled", false).put("independent", false)
+            .put("explanationPractice", false).put("applicationPractice", false).put("spacedRecall", false).put("day", "10/08/2026");
+    }
+    private static JSONObject compatibleState() throws Exception {
+        JSONObject note = note("knowledge", "合成反思", "我会观察个人计划，不把感受当作已掌握证据。", "version");
+        note.getJSONObject("meta").put("depth", "explain").put("reviewAfter", "2026-10-08T11:02:05.243Z")
+            .put("confirmedAt", JSONObject.NULL).put("userStructured", true).put("noteIds", new JSONArray().put("source"))
+            .put("sources", new JSONArray().put(new JSONObject().put("id", "source").put("role", "input").put("hash", "source-version").put("extra", true)))
+            .put("researchLimitations", new JSONArray()).put("sourceSnapshot", new JSONObject().put("body", "合成原文").put("title", repeated('文', 210)));
+        JSONObject value = state(note);
+        JSONObject turn = new JSONObject().put("id", "turn").put("requestId", "request").put("answer", "保留原始回答")
+            .put("hintUsed", false).put("assessment", "unassessed").put("createdAt", "2026-10-08T11:02:05.243Z");
+        JSONObject session = new JSONObject().put("id", "session").put("noteId", note.getString("id")).put("sourceHash", "version")
+            .put("status", "completed").put("hintCount", 0).put("pendingJobId", JSONObject.NULL).put("material", note.getString("body"))
+            .put("turns", new JSONArray().put(turn)).put("completion", new JSONObject().put("reviewSettled", false).put("interval", JSONObject.NULL).put("evidence", evidence()));
+        value.getJSONObject("records").put("sessions", new JSONObject().put("session", session))
+            .put("studyEvidence", new JSONObject().put("session", evidence()))
+            .put("plans", new JSONObject().put("day:note", new JSONObject().put("state", "done").put("minutes", -0.5)))
+            .put("reviews", new JSONObject().put("note", new JSONObject().put("date", "10/08/2026")))
+            .put("topics", new JSONObject().put("topic", new JSONObject().put("id", "topic").put("paused", true)))
+            .put("relations", new JSONObject().put("relation", new JSONObject().put("arbitrary", new JSONArray().put(JSONObject.NULL).put(true))))
+            .put("jobs", new JSONObject());
+        value.getJSONObject("settings").put("dailyMinutes", 25).put("discoveryDays", 7).put("timezone", "Asia/Shanghai")
+            .put("scheduleTime", "08:00").put("focusTopics", new JSONArray().put("topic").put("topic")).put("pausedIds", new JSONArray());
+        value.getJSONObject("guide").put("steps", new JSONArray().put("study").put(new JSONObject().put("done", true))).put("custom", JSONObject.NULL);
+        return value;
+    }
+    private static void replaceOnlyNote(JSONObject pack, JSONObject note) throws Exception {
+        JSONObject header = new JSONObject().put("format", "zhixu-local-learning-note").put("version", 1);
+        for (String field : Arrays.asList("id", "kind", "title", "meta", "hash")) header.put(field, note.get(field));
+        String raw = "---\n" + header.toString() + "\n---\n" + note.getString("body");
+        byte[] checksum = java.security.MessageDigest.getInstance("SHA-256").digest(raw.getBytes(StandardCharsets.UTF_8));
+        StringBuilder name = new StringBuilder();
+        for (byte item : checksum) name.append(String.format(java.util.Locale.ROOT, "%02x", item & 0xff));
+        String file = name.append(".md").toString();
+        pack.getJSONArray("documents").getJSONObject(0).put("raw", raw).put("file", file);
+        pack.getJSONObject("manifest").getJSONArray("notes").getJSONObject(0).put("file", file);
+    }
+
     private static JSONObject note(String kind, String title, String body, String hash) throws Exception {
         return new JSONObject().put("id", UUID.randomUUID().toString()).put("kind", kind).put("title", title)
             .put("body", body).put("hash", hash).put("meta", new JSONObject().put("stage", "reference").put("privacy", "local"));
@@ -395,6 +605,17 @@ public class LocalLearningStoreTest extends AndroidTestCase {
     private static JSONObject state(JSONObject... notes) throws Exception {
         JSONArray array = new JSONArray(); for (JSONObject note : notes) array.put(note);
         return new JSONObject().put("notes", array).put("records", new JSONObject()).put("settings", new JSONObject()).put("guide", new JSONObject());
+    }
+    private static void relation(JSONObject state, String id, JSONObject record) throws Exception {
+        JSONObject records = state.getJSONObject("records");
+        if (!records.has("relations")) records.put("relations", new JSONObject());
+        records.getJSONObject("relations").put(id, record);
+    }
+    private static JSONArray chunks(int count) {
+        JSONArray values = new JSONArray();
+        String text = repeated('x', 128 * 1024);
+        for (int index = 0; index < count; index++) values.put(text);
+        return values;
     }
     private static JSONObject roundtrip(JSONObject pack) throws Exception {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();

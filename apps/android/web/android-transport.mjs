@@ -1,4 +1,4 @@
-import { createAndroidLearning } from './android-learning.mjs';
+import { createAndroidLearning, validateLearningState } from './android-learning.mjs';
 
 const UUID = '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}';
 const noteRoute = new RegExp(`^/api/notes/(${UUID})(?:/(extract|promote|confirm|evidence))?$`);
@@ -71,7 +71,16 @@ export function createAndroidTransport(plugin, { clock } = {}) {
     if (Object.hasOwn(learningFiles, route)) {
       if (method !== 'POST' || url.search) return unavailable();
       fields(payload, route.endsWith('-restore') ? ['token'] : []);
-      return plugin[learningFiles[route]]({ ...payload, context });
+      const result = await plugin[learningFiles[route]]({ ...payload, context });
+      if (route.endsWith('-preview')) {
+        // Use the exact WebView schema before exposing a token the UI could restore.
+        // This also covers platform differences in Date.parse and Intl time zones.
+        const candidate = validateLearningState(result.candidateState);
+        if (result.context !== context || context === 'formal' && candidate.notes.some(note => note.kind === 'source')) invalid('备份的资料库类型不一致。');
+        const { candidateState, ...summary } = result;
+        return summary;
+      }
+      return result;
     }
     const history = route.match(historyRoute);
     if (history) {
