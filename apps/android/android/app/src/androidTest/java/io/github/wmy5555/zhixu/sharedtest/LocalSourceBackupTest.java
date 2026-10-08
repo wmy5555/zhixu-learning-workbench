@@ -77,6 +77,104 @@ public class LocalSourceBackupTest extends AndroidTestCase {
         }
     }
 
+    public void testCommittedCleanupIoDefersWithoutFailingRestoreReadbackOrFreshRecovery() throws Exception {
+        JSONObject first = save("清理失败后恢复仍成功", "合成原始资料");
+        JSONObject saved = store.save(edit(first, "清理可延期", "已经提交的合成正文"));
+        JSONObject pack = store.backup();
+        JSONObject later = save("尚未开始的第二次恢复", "第一次提交之外的新资料");
+        JSONObject largerPack = store.backup();
+        for (String operation : Arrays.asList("list", "delete", "sync")) {
+            File target = new File(root, "cleanup-" + operation);
+            File transaction = new File(target, "restore-transaction-v1");
+            File stages = new File(transaction, "files");
+            int[] failures = { 0 };
+            LocalSourceBackup.CleanupFailurePoint fault = point -> {
+                if (operation.equals(point)) {
+                    failures[0]++;
+                    throw new IOException("Synthetic persistent staging " + operation + " failure");
+                }
+            };
+            try (LocalSourceStore destination = new LocalSourceStore(target)) {
+                backupHelper(destination).setCleanupFailurePointForTests(fault);
+                String token = destination.previewRestore(pack).getString("token");
+                JSONObject result = destination.restoreBackup(token, "keep-current");
+                assertEquals(1, result.getInt("imported"));
+                assertEquals(1, result.getInt("versionsImported"));
+                assertFalse(result.optBoolean("readbackPending"));
+                assertEquals(1, failures[0]); // Immediate index readback must not reattempt deferred cleanup.
+                assertFalse(new File(transaction, "committed").exists());
+                assertFalse(new File(transaction, "committed.bak").exists());
+                assertEquals(saved.getString("body"), destination.read(saved.getString("id")).getString("body"));
+                assertEquals(1, destination.list("").length());
+                assertEquals(2, destination.history(saved.getString("id")).length());
+                assertEquals(pack.getJSONArray("notes").toString(), destination.backup().getJSONArray("notes").toString());
+                assertEquals(1, failures[0]);
+                expect("INVALID_PREVIEW", () -> destination.restoreBackup(token, "keep-current"));
+                if (!"sync".equals(operation)) assertTrue(stages.listFiles().length > 0);
+
+                // A fresh helper runs the same no-marker branch as process startup, with the fault still present.
+                writeCleanupFixture(new File(stages, "1199.md"), "可确认归属的残留暂存");
+                LocalSourceBackup freshRecovery = new LocalSourceBackup(destination, target);
+                freshRecovery.setCleanupFailurePointForTests(fault);
+                freshRecovery.recover();
+                assertEquals(2, failures[0]);
+                freshRecovery.recover();
+                assertEquals(2, failures[0]);
+                assertEquals(saved.getString("body"), destination.read(saved.getString("id")).getString("body"));
+
+                // Before a new transaction overwrites fixed staging names, cleanup is still mandatory and strict.
+                writeCleanupFixture(new File(stages, "1198.md"), "新事务必须先清理旧暂存");
+                String laterToken = destination.previewRestore(largerPack).getString("token");
+                expect("STORE_ERROR", () -> destination.restoreBackup(laterToken, "keep-current"));
+                assertEquals(3, failures[0]);
+                assertFalse(new File(target, "notes/" + later.getString("id") + ".md").exists());
+                assertFalse(new File(transaction, "committed").exists());
+                assertEquals(pack.getJSONArray("notes").toString(), destination.backup().getJSONArray("notes").toString());
+            }
+            // Once housekeeping works again, a real reopened store reclaims leftovers and retains all committed bytes.
+            try (LocalSourceStore reopened = new LocalSourceStore(target)) {
+                assertEquals(0, stages.listFiles().length);
+                assertEquals(pack.getJSONArray("notes").toString(), reopened.backup().getJSONArray("notes").toString());
+            }
+        }
+    }
+
+    public void testPostCommitUnsafeCleanupEntryStillBlocksAndPreservesOwnedStages() throws Exception {
+        JSONObject saved = save("安全错误不能作为延期清理忽略", "合成正文仍保留");
+        JSONObject pack = store.backup();
+        File target = new File(root, "unsafe-post-commit");
+        File stages = new File(target, "restore-transaction-v1/files");
+        File unsafe = new File(stages, "1199.md");
+        try (LocalSourceStore destination = new LocalSourceStore(target) {
+            @Override void writeAtomically(File file, byte[] bytes) throws IOException {
+                super.writeAtomically(file, bytes);
+                if ("notes".equals(file.getParentFile().getName()) && !unsafe.mkdir())
+                    throw new IOException("Cannot create synthetic unsafe cleanup entry");
+            }
+        }) {
+            String token = destination.previewRestore(pack).getString("token");
+            expect("STORE_ERROR", () -> destination.restoreBackup(token, "keep-current"));
+            assertFalse(new File(target, "restore-transaction-v1/committed").exists());
+            assertTrue(new File(stages, "0000.md").isFile());
+            assertTrue(new File(stages, "0001.md").isFile());
+            assertEquals(pack.getJSONArray("notes").getJSONObject(0).getString("current"),
+                raw(new File(target, "notes/" + saved.getString("id") + ".md")));
+            expect("STORE_ERROR", () -> destination.read(saved.getString("id")));
+            assertTrue(unsafe.delete());
+            assertEquals(saved.getString("body"), destination.read(saved.getString("id")).getString("body"));
+        } finally { if (unsafe.exists()) assertTrue(unsafe.delete()); }
+        try (LocalSourceStore reopened = new LocalSourceStore(target)) {
+            assertEquals(pack.getJSONArray("notes").toString(), reopened.backup().getJSONArray("notes").toString());
+        }
+    }
+
+    private static LocalSourceBackup backupHelper(LocalSourceStore store) throws Exception {
+        // Keep the injection seam confined to the backup helper, without adding a production store API.
+        java.lang.reflect.Field field = LocalSourceStore.class.getDeclaredField("backups");
+        field.setAccessible(true);
+        return (LocalSourceBackup) field.get(store);
+    }
+
     public void testRestoreVersionArchivesCurrentAndEnforcesHashAndMetadataClearing() throws Exception {
         JSONObject first = save("原始版本", "第一次保存");
         JSONObject second = store.save(edit(first, "新版本", "编辑后内容")

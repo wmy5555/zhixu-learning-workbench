@@ -56,6 +56,18 @@ final class LocalSourceBackup {
     private final File transactionDirectory;
     private Preview pending;
     private boolean uncommittedCleaned;
+    private CleanupFailurePoint cleanupFailurePoint;
+
+    // Package-private instrumentation seam; no plugin/web entry point exposes this.
+    interface CleanupFailurePoint { void at(String operation) throws IOException; }
+    void setCleanupFailurePointForTests(CleanupFailurePoint value) { cleanupFailurePoint = value; }
+
+    /** Ordinary housekeeping I/O may be retried; unsafe paths/commit evidence never use this exception. */
+    private static final class DeferredCleanupException extends IOException {
+        private static final long serialVersionUID = 1L;
+        DeferredCleanupException(String message) { super(message); }
+        DeferredCleanupException(IOException cause) { super(cause); }
+    }
 
     private static final class Note {
         final String id;
@@ -489,8 +501,7 @@ final class LocalSourceBackup {
         if (!exists(marker)) {
             // Scan once at startup, and again only after this instance starts staging a transaction.
             if (!uncommittedCleaned) {
-                cleanupUncommittedStaging();
-                uncommittedCleaned = true;
+                cleanupAfterRecovery();
             }
             return;
         }
@@ -513,7 +524,16 @@ final class LocalSourceBackup {
         syncDirectory(transactionDirectory);
         if (exists(marker)) throw new IOException("Cannot finish restore transaction");
         // Temporary snapshots are no longer recovery points after every destination is durable.
-        cleanupUncommittedStaging();
+        cleanupAfterRecovery();
+    }
+
+    private void cleanupAfterRecovery() throws IOException {
+        try { cleanupUncommittedStaging(); }
+        catch (DeferredCleanupException ignored) {
+            // With no commit marker, owned staging cannot authorize replay. Keep ordinary reads available,
+            // including restore's immediate readback. Reopen retries; staging a new transaction stays strict.
+        }
+        // This also means "attempted but deferred". Unsafe paths still throw above and remain unchecked.
         uncommittedCleaned = true;
     }
 
@@ -526,8 +546,9 @@ final class LocalSourceBackup {
         File directory = LocalSourceStore.child(transactionDirectory, "files");
         if (noFollowMode(directory) == 0) return;
         requireCleanupPath(directory, true);
+        injectCleanupFailure("list");
         File[] entries = directory.listFiles();
-        if (entries == null) throw new IOException("Cannot list private restore staging");
+        if (entries == null) throw new DeferredCleanupException("Cannot list private restore staging");
         List<File> owned = new ArrayList<>();
         // Validate the entire deletion set before touching any file. Unknown files remain untouched.
         for (File entry : entries) {
@@ -539,9 +560,21 @@ final class LocalSourceBackup {
         requireNoCommitEvidence();
         for (File file : owned) {
             requireCleanupPath(file, false);
-            if (!file.delete()) throw new IOException("Cannot remove private restore staging");
+            injectCleanupFailure("delete");
+            if (!file.delete()) throw new DeferredCleanupException("Cannot remove private restore staging");
         }
-        if (!owned.isEmpty()) syncDirectory(directory);
+        if (!owned.isEmpty()) {
+            requireCleanupPath(directory, true);
+            injectCleanupFailure("sync");
+            try { syncDirectory(directory); }
+            catch (IOException exception) { throw new DeferredCleanupException(exception); }
+        }
+    }
+
+    private void injectCleanupFailure(String operation) throws DeferredCleanupException {
+        if (cleanupFailurePoint == null) return;
+        try { cleanupFailurePoint.at(operation); }
+        catch (IOException exception) { throw new DeferredCleanupException(exception); }
     }
 
     private void requireNoCommitEvidence() throws IOException {
