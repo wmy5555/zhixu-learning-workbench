@@ -26,9 +26,13 @@ export function createLearning(dependencies) {
   const privacyFor = note => dependencies.privacyFor ? dependencies.privacyFor(note) : note.meta.privacy;
   const completedIds = () => {
     const store = storage();
+    // Confirmation and settled reviews remain historical records. They count
+    // toward current prerequisites only while the knowledge is still usable.
+    const current = store.list().filter(n => n.kind === 'knowledge' && eligible(n));
+    const currentIds = new Set(current.map(n => n.id));
     return new Set([
-      ...store.records('sessions').filter(s => s.status === 'completed' && s.completion?.reviewSettled).map(s => s.noteId),
-      ...store.list().filter(n => n.kind === 'knowledge' && n.meta.confirmedAt).map(n => n.id),
+      ...store.records('sessions').filter(s => s.status === 'completed' && s.completion?.reviewSettled && currentIds.has(s.noteId)).map(s => s.noteId),
+      ...current.filter(n => n.meta.confirmedAt).map(n => n.id),
     ]);
   };
   const topicPaused = topic => topic.meta.paused ?? storage().get('topics', topic.id, {}).paused ?? false;

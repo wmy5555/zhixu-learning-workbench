@@ -206,6 +206,93 @@ test('missing imported dependencies stay visible and block scheduling instead of
   assert.equal(direct.learning.today().items.length, 0);
 });
 
+test('personally confirming an unverified manual fact never completes its topic prerequisite', () => {
+  const source = note(50, {}, 'source'), service = app({ notes: [note(2)], sources: [source] });
+  const fact = service.extractSource(source.id, { title: '尚未核验的前置事实', body: '需要证据的合成事实', claimType: 'fact', expectedHash: source.hash });
+  const confirmed = service.confirmNote(fact.id, { body: '这是我的理解，但不能替代事实核验。', expectedHash: fact.hash });
+  assert.equal(confirmed.meta.stage, 'integrated');
+  assert.ok(confirmed.meta.confirmedAt);
+  assert.ok(confirmed.meta.researchLimitations.length);
+  const topic = service.learning.createTopic({ title: '事实作为前置知识', noteIds: [fact.id, id(2)] });
+  const detail = service.learning.topics().find(item => item.id === topic.id);
+  assert.equal(detail.members.find(item => item.id === fact.id).completed, false);
+  assert.equal(detail.progress.completedCount, 0);
+  assert.equal(detail.progress.nextNoteId, null);
+  assert.equal(detail.progress.blockedNoteId, fact.id);
+  const today = service.learning.today();
+  assert.equal(today.items.length, 0);
+  assert.equal(today.unavailable.find(item => item.noteId === id(2)).code, 'prerequisite');
+  assert.equal(today.unavailable.find(item => item.noteId === id(2)).prerequisiteId, fact.id);
+  assert.throws(() => service.learning.startStudy({ noteId: fact.id }), errorCode('RESEARCH_REQUIRED'));
+  assert.equal(service.getNote(fact.id).meta.confirmedAt, confirmed.meta.confirmedAt);
+});
+
+test('confirmed prerequisites stop counting after research expiry, source changes, retirement or replacement', () => {
+  const source = note(50, {}, 'source');
+  const cases = [
+    ['unverified', { researchLimitations: ['该事实尚待核验。'] }],
+    ['expired', { reviewAfter: '2026-10-07T00:00:00.000Z' }],
+    ['stale process', { processKey: `${source.id}:obsolete-version:0` }],
+    ['stale source reference', { sources: [{ id: source.id, role: 'input', hash: 'obsolete-version' }] }],
+    ['retired', { stage: 'retired' }],
+    ['superseded', { supersededBy: id(3) }],
+  ];
+  for (const [label, changes] of cases) {
+    const predecessor = note(1, { stage: 'integrated', confirmedAt: timestamp, confirmedBy: 'user', ...changes });
+    const topic = note(90, { noteIds: [id(1), id(2)], prerequisites: [], minutes: 20 }, 'topic');
+    const service = app({ notes: [predecessor, note(2, { prerequisites: [id(1)] }), topic], sources: [source] });
+    const detail = service.learning.topics()[0], today = service.learning.today();
+    assert.equal(detail.members[0].completed, false, label);
+    assert.equal(detail.progress.completedCount, 0, label);
+    assert.equal(detail.progress.nextNoteId, null, label);
+    assert.equal(detail.progress.blockedNoteId, id(1), label);
+    assert.equal(today.items.length, 0, label);
+    assert.equal(today.unavailable.find(item => item.noteId === id(2)).prerequisiteId, id(1), label);
+    assert.equal(service.getNote(id(1)).meta.confirmedAt, timestamp, 'historical confirmation is retained');
+  }
+  const service = app({ notes: [note(1, { stage: 'integrated', confirmedAt: timestamp }), note(2, { prerequisites: [id(1)] }), note(90, { noteIds: [id(1), id(2)], prerequisites: [], minutes: 20 }, 'topic')] });
+  assert.equal(service.learning.topics()[0].progress.nextNoteId, id(2), 'eligible personal confirmation still counts');
+  assert.ok(service.learning.today().items.some(item => item.noteId === id(2)));
+});
+
+test('settled review history cannot complete a prerequisite whose current knowledge became ineligible', () => {
+  const config = { dailyMinutes: 25, timezone: 'Asia/Shanghai', focusTopics: [], pausedIds: [] };
+  const cases = [
+    ['eligible', {}, true],
+    ['unverified', { researchLimitations: ['材料尚待核验。'] }, false],
+    ['expired', { reviewAfter: '2026-10-07T00:00:00.000Z' }, false],
+    ['stale process', { processKey: `${id(50)}:obsolete-version:0` }, false],
+    ['stale source reference', { sources: [{ id: id(50), role: 'input', hash: 'obsolete-version' }] }, false],
+    ['retired', { stage: 'retired' }, false],
+    ['superseded', { supersededBy: id(3) }, false],
+  ];
+  for (const [label, changes, completed] of cases) {
+    const predecessor = note(1, changes), successor = note(2, { prerequisites: [id(1)] });
+    const topic = note(90, { noteIds: [id(1), id(2)], prerequisites: [], minutes: 20 }, 'topic');
+    const settled = { id: 'historical-settled-session', noteId: id(1), status: 'completed', completion: { reviewSettled: true } };
+    const seed = { notes: [predecessor, successor, topic, note(50, {}, 'source')], settings: {}, guide: {}, records: { sessions: { [settled.id]: settled } } };
+    // This probes the retained full-feedback core directly. Android's service
+    // correctly refuses imported graded results, so it cannot seed this path.
+    const harness = parityHarness(createPortableCore, seed, structuredClone(config), (n, store) => {
+      if (n.kind !== 'knowledge' || n.meta.stage === 'retired' || n.meta.supersededBy || n.meta.researchLimitations?.length || n.meta.reviewAfter && n.meta.reviewAfter < timestamp) return false;
+      if (n.meta.processKey) { const [sourceId, sourceHash] = n.meta.processKey.split(':'); if (store.row(sourceId)?.hash !== sourceHash) return false; }
+      return !(n.meta.sources || []).some(ref => ref.role === 'input' && ref.hash && store.row(ref.id)?.hash !== ref.hash);
+    });
+    const detail = harness.learning.topics()[0], today = harness.learning.today();
+    assert.equal(detail.members[0].completed, completed, label);
+    if (completed) {
+      assert.equal(detail.progress.nextNoteId, id(2), label);
+      assert.ok(today.items.some(item => item.noteId === id(2)), label);
+    } else {
+      assert.equal(detail.progress.nextNoteId, null, label);
+      assert.equal(detail.progress.blockedNoteId, id(1), label);
+      assert.equal(today.items.length, 0, label);
+      assert.equal(today.unavailable.find(item => item.noteId === id(2)).prerequisiteId, id(1), label);
+    }
+    assert.deepEqual(harness.state.records.sessions[settled.id], settled, 'historical review evidence is retained');
+  }
+});
+
 test('strict boundary rejects oversized answers, unsafe JSON keys, unsupported settings and nonboolean hints', () => {
   const original = { notes: [note()], records: {}, settings: {}, guide: {} };
   const service = createAndroidLearning({ state: original, clock }), session = service.learning.startStudy({ noteId: id(1) });
@@ -226,9 +313,9 @@ test('strict boundary rejects oversized answers, unsafe JSON keys, unsupported s
   assert.deepEqual(validateLearningState(createEmptyLearningState()), createEmptyLearningState());
 });
 
-function parityHarness(factory, seed, config) {
+function parityHarness(factory, seed, config, eligibility) {
   const state = structuredClone(seed), store = createMemoryStore(state, [], () => timestamp);
-  const dependencies = { store, settings: () => config, getNote: n => store.read(n), eligible: n => n.kind === 'knowledge' && n.meta.stage !== 'retired' && !n.meta.supersededBy && !n.meta.researchLimitations?.length,
+  const dependencies = { store, settings: () => config, getNote: n => store.read(n), eligible: n => eligibility ? eligibility(n, store) : n.kind === 'knowledge' && n.meta.stage !== 'retired' && !n.meta.supersededBy && !n.meta.researchLimitations?.length,
     learningClock: clock, updateSettings: value => Object.assign(config, value), queue() { throw new Error('Not used'); },
   };
   return { learning: factory(dependencies), state, store };

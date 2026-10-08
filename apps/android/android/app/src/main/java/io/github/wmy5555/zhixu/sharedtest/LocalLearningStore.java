@@ -396,7 +396,8 @@ public final class LocalLearningStore {
         String kind = string(note, "kind");
         if (!Arrays.asList("knowledge", "topic", "mistake").contains(kind) && !("practice".equals(context) && "source".equals(kind))) throw invalid("正式学习库只保存知识、专题和错题；原始资料保存在独立资料库。");
         String title = string(note, "title");
-        if (title.trim().isEmpty() || title.codePointCount(0, title.length()) > 200 || title.indexOf('\n') >= 0 || title.indexOf('\r') >= 0 || title.indexOf('\0') >= 0) throw invalid("笔记标题不能为空，最多 200 个字符且不能换行。");
+        // Match the persisted JavaScript string limit (UTF-16 units), including supplementary emoji.
+        if (title.trim().isEmpty() || title.length() > 200 || title.indexOf('\n') >= 0 || title.indexOf('\r') >= 0 || title.indexOf('\0') >= 0) throw invalid("笔记标题不能为空，最多 200 个字符且不能换行。");
         LocalSourceStore.validateUtf8(title);
         String body = string(note, "body");
         if (body.length() > 128 * 1024 || body.indexOf('\0') >= 0 || LocalSourceStore.validateUtf8(body) > 128 * 1024) throw invalid("笔记正文最多 128 KiB，不能包含无效字符。");

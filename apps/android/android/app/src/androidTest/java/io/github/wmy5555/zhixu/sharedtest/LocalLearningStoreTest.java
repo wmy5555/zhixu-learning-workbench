@@ -200,6 +200,48 @@ public class LocalLearningStoreTest extends AndroidTestCase {
         expectCode("VALIDATION", () -> target.previewRestore(new JSONObject().put("format", "zhixu-android-source-backup")));
     }
 
+    public void testPersistedTitleUtf16BoundaryRejectsOversizedBackupBeforeMutation() throws Exception {
+        String emoji = "\uD83D\uDE00";
+        StringBuilder title = new StringBuilder();
+        for (int index = 0; index < 100; index++) title.append(emoji);
+        String boundary = title.toString();
+        String oversized = boundary + emoji;
+        assertEquals(200, boundary.length());
+        assertEquals(202, oversized.length());
+        JSONObject note = note("knowledge", boundary, "合成的标题边界回归", "title-version");
+        JSONObject empty = formal.load();
+        expectCode("VALIDATION", () -> formal.commit("empty", state(new JSONObject(note.toString()).put("title", oversized))));
+        assertEquals(empty.toString(), formal.load().toString());
+
+        LocalLearningStore donor = new LocalLearningStore(new File(root, "title-donor"), "formal");
+        donor.commit("empty", state(note));
+        JSONObject validBackup = roundtrip(donor.backup());
+        JSONObject oversizedBackup = new JSONObject(validBackup.toString());
+        JSONObject document = oversizedBackup.getJSONArray("documents").getJSONObject(0);
+        String raw = document.getString("raw");
+        int end = raw.indexOf("\n---\n", 4);
+        JSONObject header = new JSONObject(raw.substring(4, end)).put("title", oversized);
+        String changedRaw = "---\n" + header.toString() + "\n---\n" + raw.substring(end + 5);
+        byte[] checksum = java.security.MessageDigest.getInstance("SHA-256").digest(changedRaw.getBytes(StandardCharsets.UTF_8));
+        StringBuilder name = new StringBuilder();
+        for (byte item : checksum) name.append(String.format(java.util.Locale.ROOT, "%02x", item & 0xff));
+        String changedFile = name.append(".md").toString();
+        document.put("raw", changedRaw).put("file", changedFile);
+        oversizedBackup.getJSONObject("manifest").getJSONArray("notes").getJSONObject(0).put("file", changedFile);
+        // Keep physical integrity valid, so the failure is specifically the persisted title contract.
+        expectCode("VALIDATION", () -> formal.previewRestore(oversizedBackup));
+        assertEquals(empty.toString(), formal.load().toString());
+        assertEquals(0, formal.backup().getJSONArray("documents").length());
+
+        JSONObject preview = formal.previewRestore(validBackup);
+        assertTrue(preview.getBoolean("canRestore"));
+        JSONObject restored = formal.restoreBackup(preview.getString("token"));
+        assertTrue(restored.getBoolean("restored"));
+        assertEquals(boundary, restored.getJSONObject("state").getJSONArray("notes").getJSONObject(0).getString("title"));
+        assertEquals(boundary, new LocalLearningStore(root, "formal").load().getJSONObject("state")
+            .getJSONArray("notes").getJSONObject(0).getString("title"));
+    }
+
     public void testDifferentNonemptyRuntimeCannotBeOverwrittenByRestore() throws Exception {
         JSONObject backup = formal.backup();
         JSONObject currentState = state();
