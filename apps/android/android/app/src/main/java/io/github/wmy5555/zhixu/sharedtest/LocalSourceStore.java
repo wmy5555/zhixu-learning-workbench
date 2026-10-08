@@ -575,8 +575,18 @@ public class LocalSourceStore implements AutoCloseable {
             output.getFD().sync();
             atomic.finishWrite(output);
             // AtomicFile can log a rename failure instead of throwing; the caller must not report success.
-            try { if (!Arrays.equals(bytes, readBytes(file))) throw new IOException("Atomic source write did not commit"); }
-            catch (StoreException exception) { throw new IOException("Cannot verify atomic source write", exception); }
+            // The caller bounds each format before writing (documents 160 KiB, restore manifests 512 KiB).
+            // Compare against those exact bytes with bounded memory, rather than the document reader's cap.
+            try (java.io.FileInputStream input = atomic.openRead()) {
+                byte[] block = new byte[8192];
+                int offset = 0, count;
+                while ((count = input.read(block)) != -1) {
+                    if (count > bytes.length - offset) throw new IOException("Atomic write has unexpected trailing bytes");
+                    for (int index = 0; index < count; index++) if (block[index] != bytes[offset + index]) throw new IOException("Atomic write content differs");
+                    offset += count;
+                }
+                if (offset != bytes.length) throw new IOException("Atomic write is incomplete");
+            }
         } catch (IOException | RuntimeException exception) {
             if (output != null) atomic.failWrite(output);
             throw exception;
