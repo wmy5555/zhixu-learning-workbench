@@ -203,6 +203,102 @@ public class LocalSourceStoreTest extends AndroidTestCase {
         assertEquals(1, store.list("").length());
     }
 
+    public void testDurableCreateAndReplacementReturnSavedVersionAfterJournalCleanupFailure() throws Exception {
+        for (String stage : Arrays.asList("before-journal-delete", "before-journal-sync", "after-journal-sync")) {
+            for (boolean replace : new boolean[] { false, true }) {
+                File scenario = new File(root, "journal-cleanup-" + stage + "-" + replace);
+                JSONObject saved;
+                String original;
+                try (LocalSourceStore destination = new LocalSourceStore(scenario)) {
+                    JSONObject previous = replace ? destination.save(source("原有资料", "必须保留的旧原文")) : null;
+                    original = previous == null ? null : readText(new File(scenario, previous.getString("path")));
+                    int[] failures = { 0 };
+                    destination.setSaveCleanupFailurePointForTests(point -> {
+                        if (stage.equals(point) && failures[0]++ == 0) throw new IOException("Synthetic one-shot journal cleanup failure");
+                    });
+                    saved = destination.save(previous == null ? source("已保存的新资料", "已持久提交的合成正文")
+                        : edit(previous, "已保存的新标题", "已持久提交的合成正文"));
+                    assertTrue(failures[0] > 0);
+                    assertEquals("已持久提交的合成正文", saved.getString("body"));
+                    assertEquals(saved.getString("hash"), destination.read(saved.getString("id")).getString("hash"));
+                    assertEquals(1, destination.list("").length());
+                    assertEquals(0, new File(scenario, "save-transactions-v1").listFiles().length);
+                    JSONObject backup = destination.backup().getJSONArray("notes").getJSONObject(0);
+                    assertEquals(readText(new File(scenario, saved.getString("path"))), backup.getString("current"));
+                    assertEquals(replace ? 1 : 0, backup.getJSONArray("history").length());
+                    assertEquals(replace ? original : backup.getString("current"), backup.getString("original"));
+                    if (replace) {
+                        assertEquals(original, backup.getJSONArray("history").getJSONObject(0).getString("raw"));
+                        expectCode("CONFLICT", () -> destination.save(edit(previous, "过时重试", "不能覆盖已经保存的新版本")));
+                    }
+                    // The returned new hash makes a no-op retry succeed without another history entry.
+                    JSONObject unchanged = destination.save(edit(saved, saved.getString("title"), saved.getString("body")));
+                    assertEquals(saved.getString("hash"), unchanged.getString("hash"));
+                    assertEquals(saved.getString("updatedAt"), unchanged.getString("updatedAt"));
+                    assertEquals(replace ? 1 : 0, destination.backup().getJSONArray("notes").getJSONObject(0).getJSONArray("history").length());
+                }
+                try (LocalSourceStore reopened = new LocalSourceStore(scenario)) {
+                    assertEquals(saved.getString("hash"), reopened.read(saved.getString("id")).getString("hash"));
+                    assertEquals(saved.getString("body"), reopened.read(saved.getString("id")).getString("body"));
+                }
+            }
+        }
+    }
+
+    public void testPersistentJournalCleanupStillBlocksReadsUntilStorageRecovers() throws Exception {
+        store.setSaveCleanupFailurePointForTests(stage -> {
+            if ("before-journal-delete".equals(stage)) throw new IOException("Synthetic persistent journal delete failure");
+        });
+        JSONObject saved = store.save(source("新版已确认持久提交", "收尾故障不会让提交变成失败"));
+        assertTrue(noteFile(saved).isFile());
+        assertEquals(1, new File(root, "save-transactions-v1").listFiles().length);
+        // This focused fix reports the known durable save; it does not make persistent storage faults disappear.
+        expectCode("STORE_ERROR", () -> store.read(saved.getString("id")));
+        expectCode("STORE_ERROR", () -> store.list(""));
+        store.setSaveCleanupFailurePointForTests(null);
+        assertEquals(saved.getString("hash"), store.read(saved.getString("id")).getString("hash"));
+        assertEquals(0, new File(root, "save-transactions-v1").listFiles().length);
+    }
+
+    public void testDurableSaveCannotSwallowUnsafeJournalPathOrUnexpectedCurrentBytes() throws Exception {
+        for (boolean unsafePath : new boolean[] { false, true }) {
+            File scenario = new File(root, "ambiguous-cleanup-" + unsafePath);
+            try (LocalSourceStore destination = new LocalSourceStore(scenario)) {
+                JSONObject previous = destination.save(source("已提交旧原文", "保留旧版证据"));
+                File current = new File(scenario, previous.getString("path"));
+                String original = readText(current);
+                File unsafe = new File(scenario, "save-transactions-v1/" + previous.getString("id") + ".json.new");
+                String[] committed = { null };
+                boolean[] injected = { false };
+                destination.setSaveCleanupFailurePointForTests(stage -> {
+                    if (!injected[0] && "before-journal-delete".equals(stage)) {
+                        injected[0] = true;
+                        try { committed[0] = readText(current); }
+                        catch (Exception exception) { throw new IOException("Cannot capture synthetic committed bytes", exception); }
+                        if (unsafePath) {
+                            if (!unsafe.mkdir()) throw new IOException("Cannot create synthetic unsafe journal entry");
+                        } else {
+                            try (FileOutputStream output = new FileOutputStream(current, true)) {
+                                output.write("unexpected trailing bytes".getBytes(StandardCharsets.UTF_8)); output.getFD().sync();
+                            }
+                        }
+                        throw new IOException("Synthetic ambiguous cleanup failure");
+                    }
+                });
+                expectCode(unsafePath ? "STORE_ERROR" : "CORRUPT", () -> destination.save(edit(previous, "新版本", "提交后需要重新核对的原文")));
+                assertEquals(original, readText(new File(scenario, "originals/" + previous.getString("id") + ".md")));
+                assertEquals(original, readText(new File(scenario, "history/" + previous.getString("id")).listFiles()[0]));
+                assertTrue(new File(scenario, "save-transactions-v1/" + previous.getString("id") + ".json").isFile());
+                destination.setSaveCleanupFailurePointForTests(null);
+                if (unsafePath) assertTrue(unsafe.delete());
+                else try (FileOutputStream output = new FileOutputStream(current)) {
+                    output.write(committed[0].getBytes(StandardCharsets.UTF_8)); output.getFD().sync();
+                }
+                assertEquals("提交后需要重新核对的原文", destination.read(previous.getString("id")).getString("body"));
+            }
+        }
+    }
+
     public void testFailedWriteKeepsOldMarkdownAndInputVersion() throws Exception {
         JSONObject first = store.save(source("写入失败", "应保留的旧正文"));
         String original = readText(noteFile(first));

@@ -55,6 +55,13 @@ public class LocalSourceStore implements AutoCloseable {
     private SQLiteDatabase database;
     private boolean indexReady;
     private final LocalSourceBackup backups;
+    private SaveCleanupFailurePoint saveCleanupFailurePoint;
+
+    // Package-private device-test seam. No plugin/web entry point can inject cleanup failures.
+    interface SaveCleanupFailurePoint { void at(String stage) throws IOException; }
+    void setSaveCleanupFailurePointForTests(SaveCleanupFailurePoint value) {
+        synchronized (LOCK) { saveCleanupFailurePoint = value; }
+    }
 
     public static class StoreException extends Exception {
         public final String code;
@@ -229,6 +236,7 @@ public class LocalSourceStore implements AutoCloseable {
                     .put("operation", previous == null ? "create" : "replace").put("next", digest(next));
                 if (previous != null) journal.put("previous", digest(previousBytes)).put("snapshot", versionId);
                 writeTransaction(transaction, journal);
+                boolean nextDurable = false;
                 try {
                     if (previous == null) {
                         writeAtomically(child(originalsDirectory, id + ".md"), next);
@@ -238,12 +246,28 @@ public class LocalSourceStore implements AutoCloseable {
                     if (snapshot != null) syncDirectory(snapshot.getParentFile());
                     writeAtomically(target, next);
                     syncDirectory(notesDirectory);
+                    nextDurable = true;
                     finishSaveTransaction(transaction);
                 } catch (IOException | RuntimeException exception) {
                     // Persistent storage failure can also interrupt recovery. Keep the journal for startup retry.
                     try { recoverSaveTransaction(transaction, true); }
                     catch (IOException | JSONException | StoreException | RuntimeException ignored) { /* Evidence remains intact. */ }
-                    throw new IOException("Cannot commit source Markdown", exception);
+                    if (!nextDurable) throw new IOException("Cannot commit source Markdown", exception);
+                    // Journal housekeeping is not another save. Return success only after the actual authority
+                    // is still exactly the synced next version; ambiguous or unsafe evidence is never swallowed.
+                    requireAtomicPrivate(target);
+                    if (!Arrays.equals(next, readBytes(target))) throw uncertainSave();
+                    File original = child(originalsDirectory, id + ".md");
+                    requireAtomicPrivate(original);
+                    if (previous == null && !Arrays.equals(next, readBytes(original))) throw uncertainSave();
+                    if (snapshot != null) {
+                        requireAtomicPrivate(snapshot);
+                        if (!Arrays.equals(previousBytes, readBytes(snapshot))) throw uncertainSave();
+                    }
+                    requireAtomicPrivate(transaction);
+                    if (atomicExists(transaction)) {
+                        if (!Arrays.equals(journal.toString().getBytes(StandardCharsets.UTF_8), readBytes(transaction))) throw uncertainSave();
+                    } else if (new File(transaction.getPath() + ".new").exists()) throw uncertainSave();
                 }
                 documents.put(id, note);
                 // After Markdown has committed, a disposable index failure must not turn save into a retry.
@@ -383,9 +407,16 @@ public class LocalSourceStore implements AutoCloseable {
 
     private void finishSaveTransaction(File transaction) throws IOException {
         requireAtomicPrivate(transaction);
+        injectSaveCleanupFailure("before-journal-delete");
         new AtomicFile(transaction).delete();
+        injectSaveCleanupFailure("before-journal-sync");
         syncDirectory(saveTransactionsDirectory);
+        injectSaveCleanupFailure("after-journal-sync");
         if (atomicExists(transaction) || new File(transaction.getPath() + ".new").exists()) throw new IOException("Cannot finish save journal");
+    }
+
+    private void injectSaveCleanupFailure(String stage) throws IOException {
+        if (saveCleanupFailurePoint != null) saveCleanupFailurePoint.at(stage);
     }
 
     private static boolean atomicExists(File file) { return file.exists() || new File(file.getPath() + ".bak").exists(); }

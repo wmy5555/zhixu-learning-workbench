@@ -85,6 +85,28 @@ test('explicit personal confirmation promotes understanding while leaving offlin
   assert.deepEqual(service.state.records.reviews, undefined);
 });
 
+test('confirming a retired note records understanding without restoring its learning status', () => {
+  const original = note(1, { stage: 'retired', promotionReason: '用户此前决定不再使用。' });
+  const service = app({ notes: [original] });
+  const confirmed = service.confirmNote(id(1), { body: '保留这份个人理解，但仍不再使用这项知识。', expectedHash: original.hash });
+  assert.equal(confirmed.meta.stage, 'retired');
+  assert.equal(confirmed.meta.promotionReason, original.meta.promotionReason);
+  assert.equal(confirmed.meta.personalUnderstanding, '保留这份个人理解，但仍不再使用这项知识。');
+  assert.equal(confirmed.meta.confirmedBy, 'user');
+  const today = service.learning.today();
+  assert.equal(today.items.length, 0);
+  assert.equal(today.unavailable[0].code, 'retired');
+  assert.throws(() => service.learning.startStudy({ noteId: id(1) }), errorCode('RESEARCH_REQUIRED'));
+  assert.throws(() => service.promote(id(1), { stage: 'integrated', reason: '' }), /格式无效/);
+  assert.equal(service.getNote(id(1)).hash, confirmed.hash);
+  const restored = service.promote(id(1), { stage: 'integrated', reason: '用户明确决定恢复使用这项知识。' });
+  assert.equal(restored.meta.stage, 'integrated');
+  assert.equal(restored.meta.promotionReason, '用户明确决定恢复使用这项知识。');
+  assert.equal(restored.meta.personalUnderstanding, confirmed.meta.personalUnderstanding);
+  assert.ok(service.learning.today().items.some(item => item.noteId === id(1)));
+  assert.equal(service.learning.startStudy({ noteId: id(1) }).status, 'reading');
+});
+
 test('confirming understanding preserves chapters the user added after the old understanding', () => {
   const service = app(), heading = '\n\n## 我的理解（用户确认）\n\n';
   const first = service.confirmNote(id(1), { body: '最初的个人理解。', expectedHash: service.getNote(id(1)).hash });
@@ -348,6 +370,63 @@ test('topic study cannot jump over missing, paused, stale or unavailable prerequ
   assert.equal(missingMember.learning.topics()[0].progress.blockedNoteId, id(1));
   assert.throws(() => missingMember.learning.startStudy({ noteId: id(2), topicId: id(90) }), errorCode('TOPIC_STEP_UNAVAILABLE'));
   assert.equal(missingMember.sessions().length, 0);
+});
+
+test('active prerequisite cycles block topic progress and study just as they block the daily planner', () => {
+  const cases = [
+    ['self cycle', [note(1, { prerequisites: [id(1)] })], [id(1)], []],
+    ['two-note cycle', [note(1, { prerequisites: [id(2)] }), note(2, { prerequisites: [id(1)] })], [id(1), id(2)], []],
+    ['cycle in external topic prerequisites', [note(1, { prerequisites: [id(2)] }), note(2, { prerequisites: [id(1)] }), note(3)], [id(3)], [id(1)]],
+  ];
+  for (const [label, notes, noteIds, prerequisites] of cases) {
+    const service = app({ notes });
+    const topic = service.learning.createTopic({ title: label, noteIds, prerequisites });
+    assert.equal(topic.progress.nextNoteId, null, label);
+    assert.ok(topic.progress.blockedNoteId, label);
+    const today = service.learning.today();
+    assert.equal(today.items.length, 0, label);
+    assert.ok(today.blocked.some(item => item.reason.includes('循环')), label);
+    const before = service.state;
+    for (const noteId of noteIds) assert.throws(() => service.learning.startStudy({ noteId, topicId: topic.id }), error => error.code === 'TOPIC_STEP_UNAVAILABLE' && error.status === 409, label);
+    assert.equal(service.sessions().length, 0, label);
+    assert.deepEqual(service.state, before, `${label}: rejected topic starts preserve all records`);
+  }
+});
+
+test('a currently valid completed prerequisite can break a topic cycle while stale confirmation cannot', () => {
+  for (const current of [true, false]) {
+    const predecessor = note(1, { stage: 'integrated', prerequisites: [id(2)], confirmedAt: timestamp, ...(current ? {} : { reviewAfter: '2026-10-07T00:00:00.000Z' }) });
+    const service = app({ notes: [predecessor, note(2, { prerequisites: [id(1)] })] });
+    const topic = service.learning.createTopic({ title: '使用有效前置完成记录', noteIds: [id(1), id(2)] });
+    if (current) {
+      assert.equal(topic.progress.nextNoteId, id(2));
+      assert.ok(service.learning.today().items.some(item => item.noteId === id(2)));
+      assert.equal(service.learning.startStudy({ noteId: id(2), topicId: topic.id }).status, 'reading');
+    } else {
+      assert.equal(topic.progress.nextNoteId, null);
+      assert.ok(topic.progress.blockedNoteId);
+      assert.equal(service.learning.today().items.length, 0);
+      assert.throws(() => service.learning.startStudy({ noteId: id(2), topicId: topic.id }), errorCode('TOPIC_STEP_UNAVAILABLE'));
+      assert.equal(service.sessions().length, 0);
+    }
+  }
+});
+
+test('an independent current topic step remains available ahead of a later cycle', () => {
+  const service = app({ notes: [note(1), note(2, { prerequisites: [id(3)] }), note(3, { prerequisites: [id(2)] })] });
+  const topic = service.learning.createTopic({ title: '当前步骤与后续循环分开', noteIds: [id(1), id(2), id(3)] });
+  assert.equal(topic.progress.nextNoteId, id(1));
+  assert.deepEqual(service.learning.today().items.map(item => item.noteId), [id(1)]);
+  assert.equal(service.learning.startStudy({ noteId: id(1), topicId: topic.id }).status, 'reading');
+  const current = service.getNote(id(1));
+  service.confirmNote(id(1), { body: '用户确认这个独立步骤的理解。', expectedHash: current.hash });
+  const blocked = service.learning.topics().find(item => item.id === topic.id);
+  assert.equal(blocked.progress.nextNoteId, null);
+  assert.ok([id(2), id(3)].includes(blocked.progress.blockedNoteId));
+  const before = service.state;
+  assert.throws(() => service.learning.startStudy({ noteId: id(2), topicId: topic.id }), errorCode('TOPIC_STEP_UNAVAILABLE'));
+  assert.throws(() => service.learning.startStudy({ noteId: id(3), topicId: topic.id }), errorCode('TOPIC_STEP_UNAVAILABLE'));
+  assert.deepEqual(service.state, before);
 });
 
 test('personally confirming an unverified manual fact never completes its topic prerequisite', () => {

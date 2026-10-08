@@ -133,7 +133,7 @@ export function createAndroidLearning({ state = createEmptyLearningState(), sour
     const previous = typeof note.meta.personalUnderstanding === 'string' && note.meta.personalUnderstanding
       ? `${heading}${note.meta.personalUnderstanding}` : '';
     if (previous && original.endsWith(previous) && original.indexOf(previous) === original.lastIndexOf(previous)) original = original.slice(0, -previous.length);
-    return complete(publicNote(store.update(id, { expectedHash: input.expectedHash, meta: { stage: 'integrated', personalUnderstanding: input.body, confirmedAt: now(), confirmedBy: 'user' },
+    return complete(publicNote(store.update(id, { expectedHash: input.expectedHash, meta: { stage: note.meta.stage === 'retired' ? 'retired' : 'integrated', personalUnderstanding: input.body, confirmedAt: now(), confirmedBy: 'user' },
       body: `${original}${heading}${input.body}${suffix}` })));
   }
   function extractSource(id, input) {

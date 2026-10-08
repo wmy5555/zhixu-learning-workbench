@@ -50,6 +50,27 @@ export function createLearning(dependencies) {
     for (const id of textList(topic.meta.noteIds)) visit(id);
     return ordered;
   }
+  function prerequisitesFor(note, path, byId) {
+    const index = path.indexOf(note.id);
+    return uniqueStrings([...textList(note.meta.prerequisites).filter(id => dependencies.strictPrerequisites || byId.get(id)?.kind === 'knowledge'), ...(index > 0 ? path.slice(0, index) : [])]);
+  }
+  function activeTopicCycle(nextId, path, byId, done) {
+    // Use the planner's direct and ordered prerequisites. Valid completed steps
+    // satisfy their edges; a later unrelated cycle does not block this step.
+    const visiting = new Set(), seen = new Set();
+    const visit = id => {
+      const note = byId.get(id);
+      if (done.has(id) || seen.has(id) || note?.kind !== 'knowledge') return null;
+      if (visiting.has(id)) return id;
+      visiting.add(id);
+      for (const predecessor of prerequisitesFor(note, path, byId)) {
+        const cycleId = visit(predecessor);
+        if (cycleId) return cycleId;
+      }
+      visiting.delete(id); seen.add(id); return null;
+    };
+    return nextId ? visit(nextId) : null;
+  }
   function topicDetails(topic, all = storage().list()) {
     const done = completedIds(), byId = new Map(all.map(n => [n.id, n]));
     const pausedIds = settings().pausedIds || [];
@@ -61,10 +82,11 @@ export function createLearning(dependencies) {
     // A missing/inactive prerequisite remains a visible gap, rather than being silently skipped.
     const nextId = path.find(id => !done.has(id));
     const next = nextId ? byId.get(nextId) : null;
-    const canStart = next && eligible(next) && learningStages.has(next.meta.stage) && !pausedIds.includes(next.id) && !topicPaused(topic);
+    const cycleId = activeTopicCycle(nextId, path, byId, done);
+    const canStart = !cycleId && next && eligible(next) && learningStages.has(next.meta.stage) && !pausedIds.includes(next.id) && !topicPaused(topic);
     return {
       ...topic, ...topic.meta, paused: topicPaused(topic), members,
-      progress: { total: members.length, completedCount: members.filter(m => m.completed).length, completedNoteIds: members.filter(m => m.completed).map(m => m.id), nextNoteId: canStart ? next.id : null, nextNoteTitle: canStart ? next.title : null, blockedNoteId: dependencies.strictPrerequisites ? nextId && !canStart ? nextId : null : next && !canStart ? next.id : null },
+      progress: { total: members.length, completedCount: members.filter(m => m.completed).length, completedNoteIds: members.filter(m => m.completed).map(m => m.id), nextNoteId: canStart ? next.id : null, nextNoteTitle: canStart ? next.title : null, blockedNoteId: cycleId || (dependencies.strictPrerequisites ? nextId && !canStart ? nextId : null : next && !canStart ? next.id : null) },
     };
   }
   function topics() { const store = storage(); store.scan(); const all = store.list(); return all.filter(n => n.kind === 'topic').map(n => topicDetails(n, all)); }
@@ -93,8 +115,7 @@ export function createLearning(dependencies) {
     const ordered = [], selected = new Set(), visiting = new Set(), blocked = [];
     const dependenciesFor = n => {
       const bundle = bundleFor.get(n.id), path = bundle ? topicPath(bundle, all) : [];
-      const index = path.indexOf(n.id);
-      return uniqueStrings([...textList(n.meta.prerequisites).filter(id => dependencies.strictPrerequisites || byId.get(id)?.kind === 'knowledge'), ...(index > 0 ? path.slice(0, index) : [])]);
+      return prerequisitesFor(n, path, byId);
     };
     function visit(note) {
       if (selected.has(note.id)) return true;
