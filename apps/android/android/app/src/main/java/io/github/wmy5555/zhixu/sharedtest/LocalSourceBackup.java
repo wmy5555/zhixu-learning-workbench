@@ -1,0 +1,1113 @@
+package io.github.wmy5555.zhixu.sharedtest;
+
+import android.os.SystemClock;
+import android.system.ErrnoException;
+import android.system.Os;
+import android.system.OsConstants;
+import android.util.AtomicFile;
+import android.util.JsonReader;
+import android.util.JsonToken;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileDescriptor;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.io.PushbackReader;
+import java.io.Writer;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.UUID;
+import java.util.regex.Pattern;
+
+/** Strict v1 snapshots and additive, durable restore transactions. Called under the store lock. */
+final class LocalSourceBackup {
+    static final int MAX_BACKUP_BYTES = 32 * 1024 * 1024;
+    static final int MAX_VERSIONS = 1000;
+    private static final String FORMAT = "zhixu-android-source-backup";
+    private static final String TRANSACTION_FORMAT = "zhixu-android-source-restore";
+    private static final int MAX_MANIFEST_BYTES = 512 * 1024;
+    private static final int MAX_DOCUMENT_BYTES = 160 * 1024;
+    private static final int MAX_JSON_DEPTH = 5;
+    private static final long PREVIEW_LIFETIME_MS = 5 * 60 * 1000;
+    private static final Pattern VERSION_ID = Pattern.compile(
+        "\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}\\.\\d{3}Z-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\.md");
+    private final LocalSourceStore store;
+    private final File transactionDirectory;
+    private Preview pending;
+    private boolean uncommittedCleaned;
+    private CleanupFailurePoint cleanupFailurePoint;
+
+    // Package-private instrumentation seam; no plugin/web entry point exposes this.
+    interface CleanupFailurePoint { void at(String operation) throws IOException; }
+    void setCleanupFailurePointForTests(CleanupFailurePoint value) { cleanupFailurePoint = value; }
+
+    /** Ordinary housekeeping I/O may be retried; unsafe paths/commit evidence never use this exception. */
+    private static final class DeferredCleanupException extends IOException {
+        private static final long serialVersionUID = 1L;
+        DeferredCleanupException(String message) { super(message); }
+        DeferredCleanupException(IOException cause) { super(cause); }
+    }
+
+    private static final class Note {
+        final String id;
+        final String current;
+        final String original;
+        final JSONObject document;
+        final Map<String, String> history;
+
+        Note(String current, String original, JSONObject document, Map<String, String> history) {
+            this.id = document.optString("id");
+            this.current = current;
+            this.original = original;
+            // Comparison needs only small metadata; retaining parsed bodies duplicates every current raw snapshot.
+            this.document = new JSONObject();
+            try {
+                for (String field : new String[] { "id", "title", "hash", "updatedAt" })
+                    this.document.put(field, document.optString(field));
+            } catch (JSONException exception) { throw new IllegalStateException(exception); }
+            this.history = history;
+        }
+
+        JSONObject json() throws JSONException {
+            JSONArray versions = new JSONArray();
+            for (Map.Entry<String, String> entry : history.entrySet()) {
+                versions.put(new JSONObject().put("id", entry.getKey()).put("raw", entry.getValue()));
+            }
+            return new JSONObject().put("current", current).put("original", original).put("history", versions);
+        }
+    }
+
+    private static final class Preview {
+        final String token = UUID.randomUUID().toString();
+        final long created = SystemClock.elapsedRealtime();
+        final Map<String, Note> incoming;
+        final String fingerprint;
+
+        Preview(Map<String, Note> incoming, String fingerprint) {
+            this.incoming = incoming;
+            this.fingerprint = fingerprint;
+        }
+    }
+
+    private static final class Plan {
+        final Map<String, Note> accepted = new TreeMap<>();
+        final JSONArray conflicts = new JSONArray();
+        int imported;
+        int unchanged;
+        int versionsImported;
+    }
+
+    /** The journal retains paths and digests, never another complete set of Markdown strings. */
+    private static final class StagedFile {
+        final String area;
+        final String id;
+        final String versionId;
+        final File staged;
+        final File target;
+        final int bytes;
+        final String hash;
+
+        StagedFile(String area, String id, String versionId, File staged, File target, int bytes, String hash) {
+            this.area = area;
+            this.id = id;
+            this.versionId = versionId;
+            this.staged = staged;
+            this.target = target;
+            this.bytes = bytes;
+            this.hash = hash;
+        }
+    }
+
+    private static final class PackageLimitException extends IOException {
+        private static final long serialVersionUID = 1L;
+    }
+
+    private static final class PackageSyntaxException extends IOException {
+        private static final long serialVersionUID = 1L;
+    }
+
+    /** Bounds individual tokens before JsonReader can accumulate an attacker-sized String. */
+    private static final class PackageJsonReader extends java.io.FilterReader {
+        private boolean quoted;
+        private boolean escaped;
+        private int unicodeDigits;
+        private int quotedChars;
+        private int literalChars;
+
+        PackageJsonReader(java.io.Reader input) { super(input); }
+
+        @Override public int read() throws IOException {
+            int value = in.read();
+            if (value != -1) accept((char) value);
+            return value;
+        }
+
+        @Override public int read(char[] buffer, int offset, int length) throws IOException {
+            int count = in.read(buffer, offset, length);
+            for (int index = offset; index < offset + count; index++) accept(buffer[index]);
+            return count;
+        }
+
+        private void accept(char value) throws PackageSyntaxException {
+            if (quoted) {
+                if (++quotedChars > 6 * MAX_DOCUMENT_BYTES + 2) throw new PackageSyntaxException();
+                if (unicodeDigits > 0) {
+                    if (!(value >= '0' && value <= '9') && !(value >= 'a' && value <= 'f')
+                        && !(value >= 'A' && value <= 'F')) throw new PackageSyntaxException();
+                    unicodeDigits--;
+                } else if (escaped) {
+                    escaped = false;
+                    if (value == 'u') unicodeDigits = 4;
+                    else if ("\"\\/bfnrt".indexOf(value) < 0) throw new PackageSyntaxException();
+                } else if (value == '\\') escaped = true;
+                else if (value == '"') quoted = false;
+                else if (value < 0x20) throw new PackageSyntaxException();
+            } else if (value == '"') {
+                quoted = true;
+                quotedChars = 0;
+                literalChars = 0;
+            } else if ("{}[],: \t\r\n".indexOf(value) >= 0) literalChars = 0;
+            else {
+                if (value < 0x20 || value == '\ufeff' || ++literalChars > 128) throw new PackageSyntaxException();
+            }
+        }
+    }
+
+    private static final class PackageInput extends InputStream {
+        private final InputStream input;
+        private long count;
+
+        PackageInput(InputStream input) { this.input = input; }
+
+        @Override public int read() throws IOException {
+            int value = input.read();
+            if (value != -1 && ++count > MAX_BACKUP_BYTES) throw new PackageLimitException();
+            return value;
+        }
+
+        @Override public int read(byte[] buffer, int offset, int length) throws IOException {
+            if (length == 0) return 0;
+            int allowed = (int) Math.min(length, MAX_BACKUP_BYTES - count + 1);
+            int read = input.read(buffer, offset, allowed);
+            if (read == 0) {
+                int value = read();
+                if (value == -1) return -1;
+                buffer[offset] = (byte) value;
+                return 1;
+            }
+            if (read > 0 && (count += read) > MAX_BACKUP_BYTES) throw new PackageLimitException();
+            return read;
+        }
+    }
+
+    private static final class PackageOutput extends OutputStream {
+        private final OutputStream output;
+        private long count;
+
+        PackageOutput(OutputStream output) { this.output = output; }
+
+        @Override public void write(int value) throws IOException {
+            if (++count > MAX_BACKUP_BYTES) throw new PackageLimitException();
+            output.write(value);
+        }
+
+        @Override public void write(byte[] buffer, int offset, int length) throws IOException {
+            if ((count += length) > MAX_BACKUP_BYTES) throw new PackageLimitException();
+            output.write(buffer, offset, length);
+        }
+
+        @Override public void flush() throws IOException { output.flush(); }
+    }
+
+    /** File boundary: no whole-file byte array or JSON text; stream ownership stays with the caller. */
+    static JSONObject readPackage(InputStream input) throws IOException, LocalSourceStore.StoreException {
+        if (input == null) throw new IOException("No backup input stream");
+        PackageInput bounded = new PackageInput(input);
+        PushbackReader text = new PushbackReader(new InputStreamReader(bounded, StandardCharsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)), 1);
+        try {
+            int first = text.read();
+            if (first != -1 && first != '\ufeff') text.unread(first);
+            JsonReader reader = new JsonReader(new PackageJsonReader(text));
+            reader.setLenient(false);
+            JSONObject result = readBackupObject(reader, "package", 1, new int[1]);
+            if (reader.peek() != JsonToken.END_DOCUMENT) throw invalid("备份 JSON 后还有多余内容。");
+            validatePackage(result);
+            return result;
+        } catch (PackageLimitException exception) { throw invalid("备份整体最多 32 MiB。"); }
+        catch (PackageSyntaxException exception) { throw invalid("备份 JSON 格式或字段长度不正确。"); }
+        catch (CharacterCodingException exception) { throw invalid("备份不是有效的 UTF-8 文本。"); }
+        catch (android.util.MalformedJsonException | java.io.EOFException | JSONException | IllegalStateException exception) {
+            throw invalid("备份 JSON 格式不正确。");
+        }
+    }
+
+    /** Uses the same per-string escaping as the size budget, without a complete String/byte[] copy. */
+    static void writePackage(JSONObject input, OutputStream output) throws IOException, LocalSourceStore.StoreException {
+        if (output == null) throw new IOException("No backup output stream");
+        validatePackage(input); // Nothing reaches the output until the whole package is valid.
+        Writer writer = new OutputStreamWriter(new PackageOutput(output), StandardCharsets.UTF_8.newEncoder()
+            .onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT));
+        try {
+            writeJson(writer, input, 1);
+            writer.flush();
+        } catch (PackageLimitException exception) { throw invalid("备份整体最多 32 MiB。"); }
+        catch (JSONException exception) { throw invalid("备份字段格式不正确。"); }
+    }
+
+    private static JSONObject readBackupObject(JsonReader reader, String kind, int depth, int[] versions)
+        throws IOException, JSONException, LocalSourceStore.StoreException {
+        requireDepth(depth);
+        requireToken(reader, JsonToken.BEGIN_OBJECT);
+        reader.beginObject();
+        String[] expected = "package".equals(kind) ? new String[] { "format", "version", "createdAt", "notes" }
+            : "note".equals(kind) ? new String[] { "current", "original", "history" } : new String[] { "id", "raw" };
+        Set<String> allowed = new HashSet<>(Arrays.asList(expected));
+        Set<String> seen = new HashSet<>();
+        JSONObject result = new JSONObject();
+        while (reader.hasNext()) {
+            String name = reader.nextName();
+            if (!seen.add(name)) throw invalid("备份包含重复字段。");
+            if (!allowed.contains(name)) throw invalid("备份包含不支持的字段。");
+            if ("notes".equals(name) || "history".equals(name)) {
+                result.put(name, readBackupArray(reader, name, depth + 1, versions));
+            } else if ("version".equals(name)) {
+                requireToken(reader, JsonToken.NUMBER);
+                if (!"1".equals(reader.nextString())) throw invalid("备份格式或版本不受支持。");
+                result.put(name, 1); // Keep the existing exact Integer schema contract.
+            } else {
+                requireToken(reader, JsonToken.STRING);
+                String value = reader.nextString();
+                int limit = "current".equals(name) || "original".equals(name) || "raw".equals(name)
+                    ? MAX_DOCUMENT_BYTES : "id".equals(name) || "createdAt".equals(name) ? 64 : 128;
+                if (LocalSourceStore.validateUtf8(value) > limit) throw invalid("备份字段超出长度限制。");
+                result.put(name, value);
+            }
+        }
+        reader.endObject();
+        fields(result, expected);
+        return result;
+    }
+
+    private static JSONArray readBackupArray(JsonReader reader, String kind, int depth, int[] versions)
+        throws IOException, JSONException, LocalSourceStore.StoreException {
+        requireDepth(depth);
+        requireToken(reader, JsonToken.BEGIN_ARRAY);
+        reader.beginArray();
+        JSONArray result = new JSONArray();
+        while (reader.hasNext()) {
+            if ("notes".equals(kind)) {
+                if (result.length() >= 100) throw invalid("备份最多包含 100 份资料。");
+                result.put(readBackupObject(reader, "note", depth + 1, versions));
+            } else {
+                if (++versions[0] > MAX_VERSIONS) throw invalid("备份最多包含 1000 个历史版本。");
+                result.put(readBackupObject(reader, "history", depth + 1, versions));
+            }
+        }
+        reader.endArray();
+        return result;
+    }
+
+    private static void requireToken(JsonReader reader, JsonToken expected) throws IOException, LocalSourceStore.StoreException {
+        if (reader.peek() != expected) throw invalid("备份字段类型不正确。");
+    }
+
+    private static void requireDepth(int depth) throws LocalSourceStore.StoreException {
+        if (depth > MAX_JSON_DEPTH) throw invalid("备份 JSON 层级超出限制。");
+    }
+
+    private static void writeJson(Writer writer, Object value, int depth)
+        throws IOException, JSONException, LocalSourceStore.StoreException {
+        if (value instanceof JSONObject) {
+            requireDepth(depth);
+            JSONObject object = (JSONObject) value;
+            writer.write('{');
+            boolean first = true;
+            for (java.util.Iterator<String> keys = object.keys(); keys.hasNext();) {
+                String key = keys.next();
+                if (!first) writer.write(',');
+                first = false;
+                writer.write(JSONObject.quote(key));
+                writer.write(':');
+                writeJson(writer, object.get(key), depth + 1);
+            }
+            writer.write('}');
+        } else if (value instanceof JSONArray) {
+            requireDepth(depth);
+            JSONArray array = (JSONArray) value;
+            writer.write('[');
+            for (int index = 0; index < array.length(); index++) {
+                if (index != 0) writer.write(',');
+                writeJson(writer, array.get(index), depth + 1);
+            }
+            writer.write(']');
+        } else if (value instanceof String) writer.write(JSONObject.quote((String) value));
+        else if (value instanceof Number) writer.write(JSONObject.numberToString((Number) value));
+        else throw invalid("备份字段类型不正确。");
+    }
+
+    /** Counts the exact serializer envelope, escaping and UTF-8, without materializing the whole backup. */
+    private static final class BackupBudget {
+        private static final int NOTE_ENVELOPE_BYTES = "{\"current\":\"\",\"original\":\"\",\"history\":[]}".length() - 4;
+        private static final int VERSION_ENVELOPE_BYTES = "{\"id\":\"\",\"raw\":\"\"}".length() - 4;
+        private long bytes;
+        private int notes;
+        private int versions;
+
+        BackupBudget() throws JSONException {
+            bytes = new JSONObject().put("format", FORMAT).put("version", 1)
+                .put("createdAt", "2000-01-01T00:00:00.000Z").put("notes", new JSONArray())
+                .toString().getBytes(StandardCharsets.UTF_8).length;
+        }
+
+        void note(String current, String original) throws LocalSourceStore.StoreException {
+            add(NOTE_ENVELOPE_BYTES + (long) quotedBytes(current) + quotedBytes(original) + (notes++ == 0 ? 0 : 1));
+            versions = 0;
+        }
+
+        void version(String id, String raw) throws LocalSourceStore.StoreException {
+            add(VERSION_ENVELOPE_BYTES + (long) quotedBytes(id) + quotedBytes(raw) + (versions++ == 0 ? 0 : 1));
+        }
+
+        private void add(long count) throws LocalSourceStore.StoreException {
+            bytes += count;
+            if (bytes > MAX_BACKUP_BYTES) throw new LocalSourceStore.StoreException("LIMIT_REACHED",
+                "保存后的完整备份将超过 32 MiB；本次修改尚未写入，请保留现有资料和当前输入。");
+        }
+
+        private static int quotedBytes(String raw) throws LocalSourceStore.StoreException {
+            // Android's own quote handles slash/control escaping; individual snapshots are bounded to 160 KiB.
+            return LocalSourceStore.validateUtf8(JSONObject.quote(raw));
+        }
+    }
+
+    LocalSourceBackup(LocalSourceStore store, File root) throws IOException {
+        this.store = store;
+        transactionDirectory = LocalSourceStore.child(root, "restore-transaction-v1");
+    }
+
+    JSONArray history(String id) throws LocalSourceStore.StoreException {
+        try {
+            LocalSourceStore.validateId(id);
+            store.read(id);
+            JSONArray result = new JSONArray();
+            addVersion(result, id, "original", "original", readRaw(LocalSourceStore.child(store.originalsDirectory(), id + ".md")));
+            for (Map.Entry<String, String> entry : readHistory(id).entrySet()) {
+                addVersion(result, id, entry.getKey(), "edit", entry.getValue());
+            }
+            return result;
+        } catch (IOException | JSONException exception) { throw storageError(); }
+    }
+
+    private void addVersion(JSONArray result, String id, String versionId, String reason, String raw)
+        throws JSONException, LocalSourceStore.StoreException {
+        JSONObject document = LocalSourceStore.parseMarkdown(id, raw);
+        result.put(new JSONObject().put("id", versionId).put("createdAt", document.getString("updatedAt"))
+            .put("reason", reason).put("title", document.getString("title")).put("body", document.getString("body"))
+            .put("hash", document.getString("hash")).put("meta", document.getJSONObject("meta")));
+    }
+
+    JSONObject version(String id, String versionId) throws LocalSourceStore.StoreException {
+        try {
+            LocalSourceStore.validateId(id);
+            store.read(id);
+            File target;
+            if ("original".equals(versionId)) target = LocalSourceStore.child(store.originalsDirectory(), id + ".md");
+            else {
+                validateVersionId(versionId);
+                target = LocalSourceStore.child(LocalSourceStore.child(store.historyDirectory(), id), versionId);
+            }
+            if (!exists(target)) throw new LocalSourceStore.StoreException("NOT_FOUND", "这个历史版本不存在。");
+            String raw = readRaw(target);
+            if (!"original".equals(versionId)) validateVersionSnapshot(id, versionId, raw);
+            return LocalSourceStore.parseMarkdown(id, raw);
+        } catch (IOException | JSONException exception) { throw storageError(); }
+    }
+
+    JSONObject backup() throws LocalSourceStore.StoreException {
+        try {
+            Map<String, Note> notes = snapshot();
+            requireDatasetCapacity(notes);
+            JSONObject result = packageNotes(notes);
+            requirePackageSize(result);
+            return result;
+        } catch (IOException | JSONException exception) { throw storageError(); }
+    }
+
+    JSONObject preview(JSONObject input) throws LocalSourceStore.StoreException {
+        // A failed/new preview invalidates any earlier in-memory token.
+        pending = null;
+        try {
+            Map<String, Note> incoming = validatePackage(input);
+            Map<String, Note> current = snapshot();
+            Plan plan = plan(incoming, current);
+            pending = new Preview(incoming, fingerprint(current));
+            return new JSONObject().put("token", pending.token).put("newCount", plan.imported)
+                .put("sameCount", plan.unchanged).put("conflicts", plan.conflicts)
+                .put("versionCount", countVersions(incoming));
+        } catch (IOException | JSONException exception) { throw storageError(); }
+    }
+
+    JSONObject restore(String token, String policy) throws LocalSourceStore.StoreException {
+        if (!"keep-current".equals(policy)) throw invalid("恢复只能选择保留本机现有资料。");
+        Preview preview = pending;
+        if (preview == null || token == null || !preview.token.equals(token)) throw expired();
+        pending = null;
+        if (SystemClock.elapsedRealtime() - preview.created > PREVIEW_LIFETIME_MS) throw expired();
+        try {
+            Map<String, Note> current = snapshot();
+            if (!preview.fingerprint.equals(fingerprint(current))) throw expired();
+            Plan plan = plan(preview.incoming, current);
+            JSONObject result = new JSONObject().put("imported", plan.imported).put("unchanged", plan.unchanged)
+                .put("conflictsSkipped", plan.conflicts.length()).put("versionsImported", plan.versionsImported);
+            if (plan.imported != 0 || plan.versionsImported != 0) {
+                stageTransaction(plan.accepted);
+                // The caller can retain its input object. Release our duplicate current snapshots before replay.
+                current.clear();
+                plan.accepted.clear();
+                preview.incoming.clear();
+                recover();
+            }
+            return result;
+        } catch (IOException | JSONException exception) {
+            throw new LocalSourceStore.StoreException("STORE_ERROR", "恢复未能完成；已提交的恢复计划会在重新打开后继续，现有资料已保留。");
+        }
+    }
+
+    /** Called before any normal read/write and at startup. Only a synced commit marker authorizes replay. */
+    void recover() throws IOException, JSONException, LocalSourceStore.StoreException {
+        File marker = LocalSourceStore.child(transactionDirectory, "committed");
+        if (!exists(marker)) {
+            // Scan once at startup, and again only after this instance starts staging a transaction.
+            if (!uncommittedCleaned) {
+                cleanupAfterRecovery();
+            }
+            return;
+        }
+        byte[] bytes = readBounded(LocalSourceStore.child(transactionDirectory, "plan.json"), MAX_MANIFEST_BYTES);
+        String committedHash = decode(readBounded(marker, 64));
+        if (!committedHash.equals(digest(bytes))) throw corrupt();
+        Map<File, StagedFile> writes = validateManifest(new JSONObject(decode(bytes)));
+        validateStagedFiles(writes);
+        validateReplayCapacity(writes);
+        requireStagedDatasetCapacity(writes);
+        for (StagedFile file : writes.values()) {
+            if (exists(file.target)) {
+                // Replay may resume just after a rename and before its parent was synced.
+                // A sync failure must leave the commit marker for the next recovery attempt.
+                if (cleanupFailurePoint != null) cleanupFailurePoint.at("replay-parent-sync:" + file.target.getParentFile().getName());
+                syncDirectory(file.target.getParentFile());
+                continue;
+            }
+            LocalSourceStore.ensureDirectory(file.target.getParentFile());
+            syncDirectory(file.target.getParentFile().getParentFile());
+            store.writeAtomically(file.target, stagedBytes(file));
+            syncDirectory(file.target.getParentFile());
+        }
+        // Deleting the commit marker LAST makes interrupted replay idempotent. Leave harmless plan for diagnostics.
+        new AtomicFile(marker).delete();
+        syncDirectory(transactionDirectory);
+        if (exists(marker)) throw new IOException("Cannot finish restore transaction");
+        // Temporary snapshots are no longer recovery points after every destination is durable.
+        cleanupAfterRecovery();
+    }
+
+    private void cleanupAfterRecovery() throws IOException {
+        try { cleanupUncommittedStaging(); }
+        catch (DeferredCleanupException ignored) {
+            // With no commit marker, owned staging cannot authorize replay. Keep ordinary reads available,
+            // including restore's immediate readback. Reopen retries; staging a new transaction stays strict.
+        }
+        // This also means "attempted but deferred". Unsafe paths still throw above and remain unchecked.
+        uncommittedCleaned = true;
+    }
+
+    /** Never follows links or recurses; only this transaction's fixed temporary filenames are owned. */
+    private void cleanupUncommittedStaging() throws IOException {
+        int transactionMode = noFollowMode(transactionDirectory);
+        if (transactionMode == 0) return;
+        requireCleanupPath(transactionDirectory, true);
+        requireNoCommitEvidence();
+        File directory = LocalSourceStore.child(transactionDirectory, "files");
+        if (noFollowMode(directory) == 0) return;
+        requireCleanupPath(directory, true);
+        injectCleanupFailure("list");
+        File[] entries = directory.listFiles();
+        if (entries == null) throw new DeferredCleanupException("Cannot list private restore staging");
+        List<File> owned = new ArrayList<>();
+        // Validate the entire deletion set before touching any file. Unknown files remain untouched.
+        for (File entry : entries) {
+            if (!entry.getName().matches("[0-9]{4}\\.md(?:\\.new|\\.bak)?")) continue;
+            File file = LocalSourceStore.child(directory, entry.getName());
+            requireCleanupPath(file, false);
+            owned.add(file);
+        }
+        requireNoCommitEvidence();
+        for (File file : owned) {
+            requireCleanupPath(file, false);
+            injectCleanupFailure("delete");
+            if (!file.delete()) throw new DeferredCleanupException("Cannot remove private restore staging");
+        }
+        if (!owned.isEmpty()) {
+            requireCleanupPath(directory, true);
+            injectCleanupFailure("sync");
+            try { syncDirectory(directory); }
+            catch (IOException exception) { throw new DeferredCleanupException(exception); }
+        }
+    }
+
+    private void injectCleanupFailure(String operation) throws DeferredCleanupException {
+        if (cleanupFailurePoint == null) return;
+        try { cleanupFailurePoint.at(operation); }
+        catch (IOException exception) { throw new DeferredCleanupException(exception); }
+    }
+
+    private void requireNoCommitEvidence() throws IOException {
+        // lstat also protects broken links and AtomicFile's backup marker as recovery evidence.
+        if (noFollowMode(new File(transactionDirectory, "committed")) != 0
+            || noFollowMode(new File(transactionDirectory, "committed.bak")) != 0)
+            throw new IOException("Committed restore evidence must be preserved");
+    }
+
+    private static void requireCleanupPath(File file, boolean directory) throws IOException {
+        if (!file.getCanonicalFile().equals(file.getAbsoluteFile())) throw new IOException("Unsafe restore cleanup path");
+        int mode = noFollowMode(file);
+        if (directory ? !OsConstants.S_ISDIR(mode) : !OsConstants.S_ISREG(mode))
+            throw new IOException("Unsafe restore cleanup entry");
+    }
+
+    private static int noFollowMode(File file) throws IOException {
+        try { return Os.lstat(file.getPath()).st_mode; }
+        catch (ErrnoException exception) {
+            if (exception.errno == OsConstants.ENOENT) return 0;
+            throw new IOException("Cannot inspect private restore staging", exception);
+        }
+    }
+
+    private void stageTransaction(Map<String, Note> accepted)
+        throws IOException, JSONException, LocalSourceStore.StoreException {
+        cleanupUncommittedStaging();
+        uncommittedCleaned = false;
+        LocalSourceStore.ensureDirectory(transactionDirectory);
+        syncDirectory(transactionDirectory.getParentFile());
+        File filesDirectory = LocalSourceStore.child(transactionDirectory, "files");
+        LocalSourceStore.ensureDirectory(filesDirectory);
+        syncDirectory(transactionDirectory);
+        JSONArray files = new JSONArray();
+        // Original and historical files always precede new current files in the durable manifest.
+        for (Note note : accepted.values()) {
+            stageFile(files, filesDirectory, "originals", note.id, "", note.original);
+            for (Map.Entry<String, String> version : note.history.entrySet())
+                stageFile(files, filesDirectory, "history", note.id, version.getKey(), version.getValue());
+        }
+        for (Note note : accepted.values()) stageFile(files, filesDirectory, "notes", note.id, "", note.current);
+        syncDirectory(filesDirectory);
+        JSONObject manifest = new JSONObject().put("format", TRANSACTION_FORMAT).put("version", 2).put("files", files);
+        byte[] bytes = manifest.toString().getBytes(StandardCharsets.UTF_8);
+        if (bytes.length > MAX_MANIFEST_BYTES) throw corrupt();
+        Map<File, StagedFile> staged = validateManifest(manifest);
+        // Read back and validate ALL snapshots and the final budget before creating the commit marker.
+        validateStagedFiles(staged);
+        requireStagedDatasetCapacity(staged);
+        store.writeAtomically(LocalSourceStore.child(transactionDirectory, "plan.json"), bytes);
+        syncDirectory(transactionDirectory);
+        store.writeAtomically(LocalSourceStore.child(transactionDirectory, "committed"), digest(bytes).getBytes(StandardCharsets.US_ASCII));
+        syncDirectory(transactionDirectory);
+    }
+
+    private void stageFile(JSONArray files, File directory, String area, String id, String versionId, String raw)
+        throws IOException, JSONException {
+        String name = String.format(Locale.ROOT, "%04d.md", files.length());
+        byte[] bytes = raw.getBytes(StandardCharsets.UTF_8);
+        store.writeAtomically(LocalSourceStore.child(directory, name), bytes);
+        files.put(new JSONObject().put("area", area).put("id", id).put("versionId", versionId)
+            .put("stage", name).put("bytes", bytes.length).put("sha256", digest(bytes)));
+    }
+
+    private Map<File, StagedFile> validateManifest(JSONObject manifest)
+        throws IOException, JSONException, LocalSourceStore.StoreException {
+        fields(manifest, "format", "version", "files");
+        if (!TRANSACTION_FORMAT.equals(manifest.opt("format")) || !(manifest.opt("version") instanceof Integer)
+            || manifest.getInt("version") != 2 || !(manifest.opt("files") instanceof JSONArray)) throw corrupt();
+        JSONArray files = manifest.getJSONArray("files");
+        if (files.length() > 2 * 100 + MAX_VERSIONS) throw corrupt();
+        Map<File, StagedFile> result = new LinkedHashMap<>();
+        Set<String> stages = new HashSet<>();
+        Set<String> currentIds = new HashSet<>();
+        Set<String> originalIds = new HashSet<>();
+        Set<String> historyIds = new HashSet<>();
+        boolean currentStarted = false;
+        int versions = 0;
+        File directory = LocalSourceStore.child(transactionDirectory, "files");
+        for (int index = 0; index < files.length(); index++) {
+            if (!(files.opt(index) instanceof JSONObject)) throw corrupt();
+            JSONObject item = files.getJSONObject(index);
+            fields(item, "area", "id", "versionId", "stage", "bytes", "sha256");
+            String area = LocalSourceStore.requireString(item, "area");
+            String id = LocalSourceStore.requireString(item, "id");
+            LocalSourceStore.validateId(id);
+            String versionId = LocalSourceStore.requireString(item, "versionId");
+            String stage = LocalSourceStore.requireString(item, "stage");
+            String hash = LocalSourceStore.requireString(item, "sha256");
+            if (!stage.matches("\\d{4}\\.md") || !stages.add(stage) || !hash.matches("[0-9a-f]{64}")
+                || !(item.opt("bytes") instanceof Integer)) throw corrupt();
+            int byteCount = item.getInt("bytes");
+            if (byteCount <= 0 || byteCount > MAX_DOCUMENT_BYTES) throw corrupt();
+            File target;
+            if ("history".equals(area)) {
+                if (currentStarted || ++versions > MAX_VERSIONS) throw corrupt();
+                validateVersionId(versionId);
+                historyIds.add(id);
+                target = LocalSourceStore.child(LocalSourceStore.child(store.historyDirectory(), id), versionId);
+            } else if ("originals".equals(area)) {
+                if (currentStarted || !versionId.isEmpty() || !originalIds.add(id)) throw corrupt();
+                target = LocalSourceStore.child(store.originalsDirectory(), id + ".md");
+            } else if ("notes".equals(area)) {
+                currentStarted = true;
+                if (!versionId.isEmpty() || !currentIds.add(id)) throw corrupt();
+                target = LocalSourceStore.child(store.notesDirectory(), id + ".md");
+            } else throw corrupt();
+            StagedFile file = new StagedFile(area, id, versionId, LocalSourceStore.child(directory, stage), target, byteCount, hash);
+            if (result.put(target, file) != null) throw corrupt();
+        }
+        if (currentIds.size() > 100 || !currentIds.equals(originalIds) || !currentIds.containsAll(historyIds)) throw corrupt();
+        return result;
+    }
+
+    private byte[] stagedBytes(StagedFile file) throws IOException, LocalSourceStore.StoreException {
+        byte[] bytes = store.readBytes(file.staged);
+        if (bytes.length != file.bytes || !file.hash.equals(digest(bytes))) throw corrupt();
+        return bytes;
+    }
+
+    private void validateStagedFiles(Map<File, StagedFile> files)
+        throws IOException, JSONException, LocalSourceStore.StoreException {
+        for (StagedFile file : files.values()) {
+            String raw = decode(stagedBytes(file));
+            if ("history".equals(file.area)) validateVersionSnapshot(file.id, file.versionId, raw);
+            else LocalSourceStore.parseMarkdown(file.id, raw);
+            if (exists(file.target) && !raw.equals(readRaw(file.target))) throw corrupt();
+        }
+    }
+
+    private void requireStagedDatasetCapacity(Map<File, StagedFile> files)
+        throws IOException, JSONException, LocalSourceStore.StoreException {
+        Set<String> ids = new java.util.TreeSet<>(store.documentsForRecovery().keySet());
+        for (StagedFile file : files.values()) if ("notes".equals(file.area)) ids.add(file.id);
+        BackupBudget budget = new BackupBudget();
+        for (String id : ids) {
+            String current = finalRaw(LocalSourceStore.child(store.notesDirectory(), id + ".md"), files);
+            String original = finalRaw(LocalSourceStore.child(store.originalsDirectory(), id + ".md"), files);
+            LocalSourceStore.parseMarkdown(id, current);
+            LocalSourceStore.parseMarkdown(id, original);
+            budget.note(current, original);
+            File directory = LocalSourceStore.child(store.historyDirectory(), id);
+            Set<String> versions = new java.util.TreeSet<>();
+            if (directory.exists()) versions.addAll(fileNames(directory, true));
+            for (StagedFile file : files.values()) if ("history".equals(file.area) && id.equals(file.id)) versions.add(file.versionId);
+            for (String versionId : versions) {
+                String raw = finalRaw(LocalSourceStore.child(directory, versionId), files);
+                validateVersionSnapshot(id, versionId, raw);
+                budget.version(versionId, raw);
+            }
+        }
+    }
+
+    private String finalRaw(File target, Map<File, StagedFile> files) throws IOException, LocalSourceStore.StoreException {
+        StagedFile file = files.get(target);
+        return file == null ? readRaw(target) : decode(stagedBytes(file));
+    }
+
+    private Map<File, String> destinations(Map<String, Note> notes) throws IOException {
+        Map<File, String> writes = new LinkedHashMap<>();
+        for (Note note : notes.values()) {
+            writes.put(LocalSourceStore.child(store.originalsDirectory(), note.id + ".md"), note.original);
+            for (Map.Entry<String, String> version : note.history.entrySet()) {
+                writes.put(LocalSourceStore.child(LocalSourceStore.child(store.historyDirectory(), note.id), version.getKey()), version.getValue());
+            }
+        }
+        // Make each new current visible only after its original and versions exist.
+        for (Note note : notes.values()) writes.put(LocalSourceStore.child(store.notesDirectory(), note.id + ".md"), note.current);
+        return writes;
+    }
+
+    private void validateReplayCapacity(Map<File, ?> writes) throws IOException, LocalSourceStore.StoreException {
+        Set<String> currentIds = new HashSet<>(fileNames(store.notesDirectory(), false));
+        Set<String> versions = historyPaths();
+        for (File target : writes.keySet()) {
+            if (target.getParentFile().equals(store.notesDirectory())) currentIds.add(target.getName());
+            if (target.getParentFile().getParentFile().equals(store.historyDirectory())) versions.add(target.getParentFile().getName() + "/" + target.getName());
+        }
+        if (currentIds.size() > 100 || versions.size() > MAX_VERSIONS) throw invalid("恢复后资料或版本数量超过手机保存上限。");
+    }
+
+    void requireHistoryCapacity() throws IOException, LocalSourceStore.StoreException {
+        if (historyPaths().size() >= MAX_VERSIONS) throw new LocalSourceStore.StoreException("LIMIT_REACHED", "手机最多保留 1000 个历史版本，请先导出备份。");
+    }
+
+    void requireSaveCapacity(Map<String, JSONObject> documents, JSONObject next, String nextRaw, String versionId)
+        throws IOException, JSONException, LocalSourceStore.StoreException {
+        BackupBudget budget = new BackupBudget();
+        String nextId = next.getString("id");
+        for (String id : new TreeMap<>(documents).keySet()) {
+            String current = readRaw(LocalSourceStore.child(store.notesDirectory(), id + ".md"));
+            String original = readRaw(LocalSourceStore.child(store.originalsDirectory(), id + ".md"));
+            LocalSourceStore.parseMarkdown(id, original);
+            budget.note(nextId.equals(id) ? nextRaw : current, original);
+            File directory = LocalSourceStore.child(store.historyDirectory(), id);
+            if (directory.exists()) for (String name : fileNames(directory, true)) {
+                String raw = readRaw(LocalSourceStore.child(directory, name));
+                validateVersionSnapshot(id, name, raw);
+                budget.version(name, raw);
+            }
+            if (nextId.equals(id)) budget.version(versionId, current);
+        }
+        // A new note is represented twice: immutable original and current Markdown.
+        if (!documents.containsKey(nextId)) budget.note(nextRaw, nextRaw);
+    }
+
+    private Set<String> historyPaths() throws IOException, LocalSourceStore.StoreException {
+        Set<String> paths = new HashSet<>();
+        File[] directories = store.historyDirectory().listFiles();
+        if (directories == null) throw new IOException("Cannot enumerate history");
+        for (File directory : directories) {
+            LocalSourceStore.validateId(directory.getName());
+            if (!directory.isDirectory()) throw corrupt();
+            LocalSourceStore.child(store.historyDirectory(), directory.getName());
+            for (String name : fileNames(directory, true)) paths.add(directory.getName() + "/" + name);
+        }
+        return paths;
+    }
+
+    private Map<String, Note> snapshot() throws IOException, JSONException, LocalSourceStore.StoreException {
+        return snapshot(store.documents());
+    }
+
+    private Map<String, Note> snapshot(Map<String, JSONObject> documents) throws IOException, JSONException, LocalSourceStore.StoreException {
+        Map<String, Note> notes = new TreeMap<>();
+        for (Map.Entry<String, JSONObject> entry : documents.entrySet()) {
+            String id = entry.getKey();
+            String current = readRaw(LocalSourceStore.child(store.notesDirectory(), id + ".md"));
+            String original = readRaw(LocalSourceStore.child(store.originalsDirectory(), id + ".md"));
+            LocalSourceStore.parseMarkdown(id, original);
+            notes.put(id, new Note(current, original, entry.getValue(), readHistory(id)));
+        }
+        if (countVersions(notes) > MAX_VERSIONS) throw invalid("历史版本超过备份上限。");
+        return notes;
+    }
+
+    private Map<String, String> readHistory(String id) throws IOException, JSONException, LocalSourceStore.StoreException {
+        File directory = LocalSourceStore.child(store.historyDirectory(), id);
+        Map<String, String> result = new TreeMap<>();
+        if (!directory.exists()) return result;
+        for (String name : fileNames(directory, true)) {
+            String raw = readRaw(LocalSourceStore.child(directory, name));
+            validateVersionSnapshot(id, name, raw);
+            result.put(name, raw);
+        }
+        if (result.size() > MAX_VERSIONS) throw invalid("历史版本超过备份上限。");
+        return result;
+    }
+
+    private List<String> fileNames(File directory, boolean history) throws IOException, LocalSourceStore.StoreException {
+        File[] files = directory.listFiles();
+        if (files == null) throw new IOException("Cannot enumerate snapshots");
+        Set<String> names = new HashSet<>();
+        for (File file : files) {
+            String name = file.getName();
+            if (name.endsWith(".bak")) name = name.substring(0, name.length() - 4);
+            if (name.endsWith(".new")) continue; // AtomicFile's uncommitted staging file.
+            if (history) validateVersionId(name);
+            else {
+                if (!name.endsWith(".md")) throw corrupt();
+                LocalSourceStore.validateId(name.substring(0, name.length() - 3));
+            }
+            LocalSourceStore.child(directory, name);
+            names.add(name);
+        }
+        List<String> ordered = new ArrayList<>(names);
+        java.util.Collections.sort(ordered);
+        return ordered;
+    }
+
+    private static Map<String, Note> validatePackage(JSONObject input) throws LocalSourceStore.StoreException {
+        try { return validatePackageJson(input); }
+        catch (JSONException exception) { throw invalid("备份中的快照格式不正确。"); }
+    }
+
+    private static Map<String, Note> validatePackageJson(JSONObject input) throws JSONException, LocalSourceStore.StoreException {
+        fields(input, "format", "version", "createdAt", "notes");
+        requirePackageSize(input);
+        if (!FORMAT.equals(input.opt("format")) || !(input.opt("version") instanceof Integer) || input.getInt("version") != 1)
+            throw invalid("备份格式或版本不受支持。");
+        if (!LocalSourceStore.validTimestamp(LocalSourceStore.requireString(input, "createdAt"))) throw invalid("备份时间不正确。");
+        if (!(input.opt("notes") instanceof JSONArray)) throw invalid("备份资料列表不正确。");
+        JSONArray array = input.getJSONArray("notes");
+        if (array.length() > 100) throw invalid("备份最多包含 100 份资料。");
+        Map<String, Note> notes = new TreeMap<>();
+        int versionCount = 0;
+        for (int index = 0; index < array.length(); index++) {
+            if (!(array.opt(index) instanceof JSONObject)) throw invalid("备份资料格式不正确。");
+            JSONObject item = array.getJSONObject(index);
+            fields(item, "current", "original", "history");
+            String raw = LocalSourceStore.requireString(item, "current");
+            String id = rawId(raw);
+            JSONObject current = LocalSourceStore.parseMarkdown(id, raw);
+            String original = LocalSourceStore.requireString(item, "original");
+            LocalSourceStore.parseMarkdown(id, original);
+            if (!(item.opt("history") instanceof JSONArray)) throw invalid("历史版本格式不正确。");
+            JSONArray versions = item.getJSONArray("history");
+            versionCount += versions.length();
+            if (versionCount > MAX_VERSIONS) throw invalid("备份最多包含 1000 个历史版本。");
+            Map<String, String> history = new TreeMap<>();
+            for (int versionIndex = 0; versionIndex < versions.length(); versionIndex++) {
+                if (!(versions.opt(versionIndex) instanceof JSONObject)) throw invalid("历史版本格式不正确。");
+                JSONObject version = versions.getJSONObject(versionIndex);
+                fields(version, "id", "raw");
+                String name = LocalSourceStore.requireString(version, "id");
+                validateVersionId(name);
+                String historyRaw = LocalSourceStore.requireString(version, "raw");
+                validateVersionSnapshot(id, name, historyRaw);
+                if (history.put(name, historyRaw) != null) throw invalid("备份包含重复历史版本。");
+            }
+            if (notes.put(id, new Note(raw, original, current, history)) != null) throw invalid("备份包含重复资料标识。");
+        }
+        return notes;
+    }
+
+    private Plan plan(Map<String, Note> incoming, Map<String, Note> current) throws IOException, JSONException, LocalSourceStore.StoreException {
+        Plan plan = new Plan();
+        int totalVersions = countVersions(current);
+        for (Note next : incoming.values()) {
+            Note existing = current.get(next.id);
+            boolean conflict = existing != null && (!existing.document.getString("hash").equals(next.document.getString("hash"))
+                || !existing.original.equals(next.original));
+            File original = LocalSourceStore.child(store.originalsDirectory(), next.id + ".md");
+            if (exists(original) && !next.original.equals(readRaw(original))) conflict = true;
+            for (Map.Entry<String, String> version : next.history.entrySet()) {
+                File target = LocalSourceStore.child(LocalSourceStore.child(store.historyDirectory(), next.id), version.getKey());
+                if (exists(target) && !version.getValue().equals(readRaw(target))) conflict = true;
+            }
+            if (existing != null) for (Map.Entry<String, String> version : next.history.entrySet()) {
+                String previous = existing.history.get(version.getKey());
+                if (previous != null && !previous.equals(version.getValue())) conflict = true;
+            }
+            if (conflict) {
+                plan.conflicts.put(new JSONObject().put("id", next.id).put("title", next.document.getString("title")));
+                continue;
+            }
+            plan.accepted.put(next.id, existing == null ? next
+                : new Note(existing.current, existing.original, existing.document, next.history));
+            if (existing == null) plan.imported++;
+            else plan.unchanged++;
+            for (String name : next.history.keySet()) {
+                if (existing == null || !existing.history.containsKey(name)) plan.versionsImported++;
+            }
+        }
+        if (current.size() + plan.imported > 100 || totalVersions + plan.versionsImported > MAX_VERSIONS)
+            throw invalid("恢复后资料或版本数量超过手机保存上限。");
+        validateReplayCapacity(destinations(plan.accepted));
+        requireMergedCapacity(current, plan.accepted);
+        return plan;
+    }
+
+    private void requireMergedCapacity(Map<String, Note> current, Map<String, Note> accepted)
+        throws IOException, JSONException, LocalSourceStore.StoreException {
+        Map<String, Note> merged = new TreeMap<>(current);
+        for (Note incoming : accepted.values()) {
+            Note existing = current.get(incoming.id);
+            Map<String, String> history = new TreeMap<>(existing == null ? readHistory(incoming.id) : existing.history);
+            history.putAll(incoming.history);
+            merged.put(incoming.id, new Note(existing == null ? incoming.current : existing.current,
+                existing == null ? incoming.original : existing.original,
+                existing == null ? incoming.document : existing.document, history));
+        }
+        requireDatasetCapacity(merged);
+    }
+
+    private static void requireDatasetCapacity(Map<String, Note> notes) throws JSONException, LocalSourceStore.StoreException {
+        BackupBudget budget = new BackupBudget();
+        for (Note note : notes.values()) {
+            budget.note(note.current, note.original);
+            for (Map.Entry<String, String> version : note.history.entrySet()) budget.version(version.getKey(), version.getValue());
+        }
+    }
+
+    private JSONObject packageNotes(Map<String, Note> notes) throws JSONException {
+        JSONArray array = new JSONArray();
+        for (Note note : notes.values()) array.put(note.json());
+        return new JSONObject().put("format", FORMAT).put("version", 1).put("createdAt", LocalSourceStore.timestamp()).put("notes", array);
+    }
+
+    private String fingerprint(Map<String, Note> notes) {
+        try {
+            MessageDigest hash = MessageDigest.getInstance("SHA-256");
+            for (Note note : notes.values()) {
+                digestField(hash, note.id);
+                digestField(hash, note.current);
+                digestField(hash, note.original);
+                hash.update(ByteBuffer.allocate(4).putInt(note.history.size()).array());
+                for (Map.Entry<String, String> version : note.history.entrySet()) {
+                    digestField(hash, version.getKey());
+                    digestField(hash, version.getValue());
+                }
+            }
+            return hex(hash.digest());
+        } catch (NoSuchAlgorithmException exception) { throw new IllegalStateException(exception); }
+    }
+
+    private static void digestField(MessageDigest hash, String text) {
+        byte[] bytes = text.getBytes(StandardCharsets.UTF_8);
+        hash.update(ByteBuffer.allocate(4).putInt(bytes.length).array());
+        hash.update(bytes);
+    }
+
+    private static int countVersions(Map<String, Note> notes) {
+        int count = 0;
+        for (Note note : notes.values()) count += note.history.size();
+        return count;
+    }
+
+    private static void requirePackageSize(JSONObject input) throws LocalSourceStore.StoreException {
+        jsonBytes(input);
+    }
+
+    // Incoming validation and journal replay use the same serializer sizing without another 32 MiB string.
+    private static long jsonBytes(Object value) throws LocalSourceStore.StoreException {
+        if (value == null || value == JSONObject.NULL) return 4;
+        if (value instanceof String) {
+            String text = (String) value;
+            if (text.length() > MAX_BACKUP_BYTES) throw invalid("备份整体最多 32 MiB。");
+            return boundedPackageBytes(BackupBudget.quotedBytes(text));
+        }
+        if (value instanceof JSONObject) {
+            JSONObject object = (JSONObject) value;
+            long bytes = 2;
+            int count = 0;
+            for (java.util.Iterator<String> keys = object.keys(); keys.hasNext();) {
+                String key = keys.next();
+                bytes = boundedPackageBytes(bytes + BackupBudget.quotedBytes(key) + 1 + jsonBytes(object.opt(key))
+                    + (count++ == 0 ? 0 : 1));
+            }
+            return bytes;
+        }
+        if (value instanceof JSONArray) {
+            JSONArray array = (JSONArray) value;
+            long bytes = 2;
+            for (int index = 0; index < array.length(); index++) {
+                bytes = boundedPackageBytes(bytes + jsonBytes(array.opt(index)) + (index == 0 ? 0 : 1));
+            }
+            return bytes;
+        }
+        if (value instanceof Boolean) return Boolean.TRUE.equals(value) ? 4 : 5;
+        if (value instanceof Number) {
+            try { return JSONObject.numberToString((Number) value).length(); }
+            catch (JSONException exception) { throw invalid("备份包含无效数值。"); }
+        }
+        throw invalid("备份字段格式不正确。");
+    }
+
+    private static long boundedPackageBytes(long bytes) throws LocalSourceStore.StoreException {
+        if (bytes > MAX_BACKUP_BYTES) throw invalid("备份整体最多 32 MiB。");
+        return bytes;
+    }
+
+    private static void fields(JSONObject input, String... allowed) throws LocalSourceStore.StoreException {
+        LocalSourceStore.rejectUnknown(input, new HashSet<>(Arrays.asList(allowed)));
+        for (String field : allowed) if (!input.has(field) || input.isNull(field)) throw invalid("备份缺少必要字段。");
+    }
+
+    private static String rawId(String raw) throws JSONException, LocalSourceStore.StoreException {
+        if (LocalSourceStore.validateUtf8(raw) > 160 * 1024 || !raw.startsWith("---\n")) throw corrupt();
+        int end = raw.indexOf("\n---\n", 4);
+        if (end < 4) throw corrupt();
+        String id = LocalSourceStore.requireString(new JSONObject(raw.substring(4, end)), "id");
+        LocalSourceStore.validateId(id);
+        return id;
+    }
+
+    private static void validateVersionId(String id) throws LocalSourceStore.StoreException {
+        if (id == null || !VERSION_ID.matcher(id).matches()) throw invalid("历史版本标识不正确。");
+    }
+
+    private static void validateVersionSnapshot(String id, String versionId, String raw)
+        throws JSONException, LocalSourceStore.StoreException {
+        JSONObject document = LocalSourceStore.parseMarkdown(id, raw);
+        if (!versionId.startsWith(document.getString("updatedAt").replace(':', '-') + "-")) throw corrupt();
+    }
+
+    private String readRaw(File file) throws IOException, LocalSourceStore.StoreException { return decode(store.readBytes(file)); }
+
+    private static byte[] readBounded(File file, int limit) throws IOException, LocalSourceStore.StoreException {
+        try (FileInputStream input = new AtomicFile(file).openRead()) {
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            byte[] buffer = new byte[8192];
+            int count;
+            while ((count = input.read(buffer)) != -1) {
+                if (output.size() + count > limit) throw corrupt();
+                output.write(buffer, 0, count);
+            }
+            return output.toByteArray();
+        }
+    }
+
+    private static String decode(byte[] bytes) throws LocalSourceStore.StoreException {
+        try {
+            return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString();
+        } catch (CharacterCodingException exception) { throw corrupt(); }
+    }
+
+    private static boolean exists(File file) { return file.exists() || new File(file.getPath() + ".bak").exists(); }
+
+    private static String digest(byte[] bytes) {
+        try {
+            return hex(MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (NoSuchAlgorithmException exception) { throw new IllegalStateException(exception); }
+    }
+
+    private static String hex(byte[] hash) {
+        StringBuilder result = new StringBuilder();
+        for (byte value : hash) result.append(String.format(Locale.ROOT, "%02x", value & 0xff));
+        return result.toString();
+    }
+
+    private static void syncDirectory(File directory) throws IOException {
+        FileDescriptor descriptor = null;
+        try {
+            if (!directory.isDirectory()) throw new IOException("Missing private restore directory");
+            descriptor = Os.open(directory.getPath(), OsConstants.O_RDONLY, 0);
+            Os.fsync(descriptor);
+        } catch (ErrnoException exception) { throw new IOException("Cannot sync private restore directory", exception); }
+        finally {
+            if (descriptor != null) try { Os.close(descriptor); }
+            catch (ErrnoException exception) { throw new IOException("Cannot close restore directory", exception); }
+        }
+    }
+
+    private static LocalSourceStore.StoreException invalid(String message) { return new LocalSourceStore.StoreException("VALIDATION", message); }
+    private static LocalSourceStore.StoreException corrupt() { return new LocalSourceStore.StoreException("CORRUPT", "备份或恢复快照不一致，请保留原文件后重试。"); }
+    private static LocalSourceStore.StoreException storageError() { return new LocalSourceStore.StoreException("STORE_ERROR", "无法读取手机资料或备份，请保留应用数据后重试。"); }
+    private static LocalSourceStore.StoreException expired() { return new LocalSourceStore.StoreException("INVALID_PREVIEW", "资料已变化或预览已失效，请重新预览恢复内容。"); }
+}
