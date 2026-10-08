@@ -51,6 +51,32 @@ public class LocalSourceBackupTest extends AndroidTestCase {
         assertEquals(current, store.backup().getJSONArray("notes").getJSONObject(0).getString("current"));
     }
 
+    public void testCommittedRestoreSurvivesPostCommitReadbackFailure() throws Exception {
+        JSONObject saved = save("已提交恢复", "读回失败也保留的合成原文");
+        JSONObject pack = store.backup();
+        for (int kind = 0; kind < 2; kind++) {
+            final int failure = kind;
+            File target = new File(root, "readback-" + kind);
+            try (LocalSourceStore destination = new LocalSourceStore(target) {
+                @Override void refreshAfterRestore() throws IOException, StoreException {
+                    if (failure == 0) throw new IOException("Synthetic post-commit enumeration failure");
+                    throw new StoreException("CORRUPT", "Synthetic post-commit read failure");
+                }
+            }) {
+                String token = destination.previewRestore(pack).getString("token");
+                JSONObject result = destination.restoreBackup(token, "keep-current");
+                assertEquals(1, result.getInt("imported"));
+                assertTrue(result.getBoolean("readbackPending"));
+                assertEquals(saved.getString("body"), destination.read(saved.getString("id")).getString("body"));
+                expect("INVALID_PREVIEW", () -> destination.restoreBackup(token, "keep-current"));
+            }
+            try (LocalSourceStore reopened = new LocalSourceStore(target)) {
+                assertEquals(1, reopened.list("").length());
+                assertEquals(pack.getJSONArray("notes").toString(), reopened.backup().getJSONArray("notes").toString());
+            }
+        }
+    }
+
     public void testRestoreVersionArchivesCurrentAndEnforcesHashAndMetadataClearing() throws Exception {
         JSONObject first = save("原始版本", "第一次保存");
         JSONObject second = store.save(edit(first, "新版本", "编辑后内容")

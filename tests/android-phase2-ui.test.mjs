@@ -28,6 +28,21 @@ test("Android source restore remains successful when post-restore refresh reject
   assert.equal(errors.length, 0);
 });
 
+test("Android committed source restore readback warning does not invite a second restore", async () => {
+  const fixture = await createAndroidBrowser();
+  const panel = fixture.context.createAndroidDataPanel({ api: {
+    previewAndroidBackup: async () => ({ token: "readback-token", newCount: 1, sameCount: 0, conflicts: [], versionCount: 0 }),
+    restoreAndroidBackup: async () => ({ imported: 1, unchanged: 0, conflictsSkipped: 0, versionsImported: 0, readbackPending: true }),
+  }, onRestored: async () => {}, onError: () => assert.fail("Committed restore must not report failure") });
+  await click(findButton(panel, "选择备份并预览"));
+  const reviewed = control(panel, "restoreReviewed"), restore = findButton(panel, "确认恢复，保留冲突资料");
+  reviewed.checked = true; reviewed.events.change(); await click(restore);
+  assert.match(panel.textContent, /已新增 1 份/);
+  assert.match(panel.textContent, /资料已恢复，列表暂未刷新/);
+  assert.match(panel.textContent, /无需再次恢复备份/);
+  assert.equal(restore.disabled, true);
+});
+
 const picked = {
   name: "换机资料.md",
   text: `---\n{"format":"zhixu-source-exchange","version":1,"title":"导入标题","source":{"platform":"网页","author":"合成作者","url":"https://example.test/","date":"2024年春","locator":"第 3 段","topic":"离线学习"}}\n---\n导入正文`,
