@@ -537,6 +537,46 @@ public class LocalSourceStoreTest extends AndroidTestCase {
         assertEquals(original, readText(new File(root, "history/" + id).listFiles()[0]));
     }
 
+    public void testInterruptedHistoryStagingIsReclaimedOnlyAfterPreviousCurrentValidation() throws Exception {
+        JSONObject first = store.save(source("历史写入中断", "已提交的第一版"));
+        JSONObject previous = store.save(edit(first, "历史写入中断", "已提交的第二版"));
+        String previousMarkdown = readText(noteFile(previous));
+        File directory = new File(root, "history/" + previous.getString("id"));
+        File[] existing = directory.listFiles();
+        assertNotNull(existing);
+        assertEquals(1, existing.length);
+        String existingMarkdown = readText(existing[0]);
+        store.close();
+        store = new LocalSourceStore(root) {
+            @Override void writeAtomically(File file, byte[] bytes) throws IOException {
+                if ("history".equals(file.getParentFile().getParentFile().getName())) {
+                    AtomicFile atomic = new AtomicFile(file);
+                    FileOutputStream output = atomic.startWrite();
+                    output.write("unfinished archive".getBytes(StandardCharsets.UTF_8));
+                    output.close();
+                    throw new SimulatedProcessExit();
+                }
+                super.writeAtomically(file, bytes);
+            }
+        };
+        try { store.save(edit(previous, "尚未提交", "历史快照未写完的新输入")); fail("Expected simulated process exit"); }
+        catch (SimulatedProcessExit expected) { /* The uniquely owned .new remains until startup validates current. */ }
+        assertEquals(2, directory.listFiles().length);
+        boolean staged = false;
+        for (File file : directory.listFiles()) if (file.getName().endsWith(".new")) staged = true;
+        assertTrue(staged);
+        assertEquals(1, new File(root, "save-transactions-v1").listFiles().length);
+        assertEquals(previousMarkdown, readText(noteFile(previous)));
+        store.close();
+        store = new LocalSourceStore(root);
+        assertEquals(1, directory.listFiles().length);
+        assertEquals(existingMarkdown, readText(existing[0]));
+        assertEquals(previousMarkdown, readText(noteFile(previous)));
+        assertEquals(previous.getString("hash"), store.read(previous.getString("id")).getString("hash"));
+        assertEquals(0, new File(root, "save-transactions-v1").listFiles().length);
+        assertEquals(1, store.backup().getJSONArray("notes").getJSONObject(0).getJSONArray("history").length());
+    }
+
     public void testInterruptedAtomicWriteRecoversLastCommittedMarkdown() throws Exception {
         JSONObject saved = store.save(source("中断恢复", "最后一次完整正文"));
         store.close();

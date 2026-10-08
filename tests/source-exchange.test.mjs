@@ -23,6 +23,18 @@ test("native exports with optional missing source fields import on both platform
   }
 });
 
+test("exchange titles cannot exceed the desktop UTF-16 persistence limit", () => {
+  for (const parse of [parseSourceFile, parseAndroidSourceFile]) {
+    const make = title => ({ name: "标题.md", text: `---\n${JSON.stringify({ format: "zhixu-source-exchange", version: 1, title, source: {} })}\n---\n正文` });
+    const accepted = "😀".repeat(100);
+    assert.equal(parse(make(accepted)).title, accepted);
+    for (const title of [accepted + "a", accepted + "😀"]) {
+      assert.throws(() => parse(make(title)), { code: "SOURCE_FILE_INVALID" });
+      assert.throws(() => parse({ name: `${title}.md`, text: "正文" }), { code: "SOURCE_FILE_INVALID" });
+    }
+  }
+});
+
 test("ordinary Markdown frontmatter remains part of the imported body", () => {
   const text = "---\ntitle: ordinary\n---\n正文\n";
   const item = parseSourceFile({ name: "原文.md", text });
