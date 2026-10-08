@@ -1,25 +1,63 @@
 package io.github.wmy5555.zhixu.sharedtest;
 
+import android.app.Activity;
+import android.content.ContentResolver;
+import android.content.Intent;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
+import android.database.Cursor;
+import android.net.Uri;
+import android.os.Process;
+import android.provider.DocumentsContract;
+import android.provider.OpenableColumns;
+import android.util.Log;
+import androidx.activity.result.ActivityResult;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
+import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.text.SimpleDateFormat;
+import java.util.Arrays;
+import java.util.Date;
 import java.util.Iterator;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import org.json.JSONObject;
 
-/** No network, credentials, external paths, import, deletion or learning promotion entry points. */
+/** Offline local sources and user-selected SAF documents; no arbitrary path/URI entry points. */
 @CapacitorPlugin(name = "ZhixuLocal")
 public class ZhixuLocalPlugin extends Plugin {
     private final ExecutorService serial = Executors.newSingleThreadExecutor();
+    private final Object stateLock = new Object();
     private LocalSourceStore store;
+    private PendingDocument pending;
+    private boolean destroyed;
+    private String abandonedCreateCallId;
+
+    // Package-private so device regressions can exercise a queued task abandoned by destruction.
+    static final class PendingDocument {
+        final PluginCall call;
+        final String kind;
+        byte[] bytes;
+        File backupFile;
+        String name;
+        boolean resultReceived;
+        PendingDocument(PluginCall call, String kind) { this.call = call; this.kind = kind; }
+        boolean writing() { return kind.startsWith("export"); }
+    }
 
     @PluginMethod public void list(PluginCall call) {
         execute(call, () -> {
-            onlyField(call, "q");
+            onlyFields(call, "q");
             Object query = call.getData().opt("q");
             if (query != null && !(query instanceof String)) throw invalid();
             return new JSObject().put("notes", getStore().list((String) query));
@@ -28,15 +66,261 @@ public class ZhixuLocalPlugin extends Plugin {
 
     @PluginMethod public void read(PluginCall call) {
         execute(call, () -> {
-            onlyField(call, "id");
-            Object id = call.getData().opt("id");
-            if (!(id instanceof String)) throw invalid();
-            return new JSObject().put("note", getStore().read((String) id));
+            onlyFields(call, "id");
+            return new JSObject().put("note", getStore().read(string(call, "id")));
         });
     }
 
     @PluginMethod public void save(PluginCall call) {
-        execute(call, () -> new JSObject().put("note", getStore().save(new JSONObject(call.getData().toString()))));
+        execute(call, () -> {
+            onlyFields(call, "id", "title", "body", "expectedHash", "meta");
+            return new JSObject().put("note", getStore().save(new JSONObject(call.getData().toString())));
+        });
+    }
+
+    @PluginMethod public void history(PluginCall call) {
+        execute(call, () -> {
+            onlyFields(call, "id");
+            return new JSObject().put("versions", getStore().history(string(call, "id")));
+        });
+    }
+
+    @PluginMethod public void restoreVersion(PluginCall call) {
+        execute(call, () -> {
+            onlyFields(call, "id", "versionId", "expectedHash");
+            return new JSObject().put("note", getStore().restoreVersion(string(call, "id"),
+                string(call, "versionId"), string(call, "expectedHash")));
+        });
+    }
+
+    @PluginMethod public void restoreBackup(PluginCall call) {
+        execute(call, () -> {
+            onlyFields(call, "token", "conflictPolicy");
+            String policy = string(call, "conflictPolicy");
+            if (!"keep-current".equals(policy)) throw invalid();
+            return JSObject.fromJSONObject(getStore().restoreBackup(string(call, "token"), policy));
+        });
+    }
+
+    @PluginMethod public void pickSource(PluginCall call) { beginDocument(call, "pickSource"); }
+    @PluginMethod public void previewBackup(PluginCall call) { beginDocument(call, "previewBackup"); }
+    @PluginMethod public void exportBackup(PluginCall call) { beginDocument(call, "exportBackup"); }
+    @PluginMethod public void exportSource(PluginCall call) { beginDocument(call, "exportSource"); }
+
+    private void beginDocument(PluginCall call, String kind) {
+        PendingDocument task = new PendingDocument(call, kind);
+        synchronized (stateLock) {
+            if (!available(call)) return;
+            pending = task;
+            try {
+                serial.execute(() -> {
+                    try {
+                        if (!current(task)) return;
+                        onlyFields(call, "exportSource".equals(kind) ? new String[] { "id" } : new String[0]);
+                        if ("exportBackup".equals(kind)) {
+                            prepareBackup(task);
+                            task.name = "zhixu-android-backup-" + new SimpleDateFormat("yyyy-MM-dd", Locale.ROOT).format(new Date()) + ".json";
+                        } else if ("exportSource".equals(kind)) {
+                            task.bytes = SourceDocumentFiles.sourceExchange(getStore().read(string(call, "id")));
+                            task.name = "zhixu-source.md";
+                        }
+                        Intent intent = SourceDocumentFiles.documentIntent(task.writing(), kind.endsWith("Backup"), task.name);
+                        getActivity().runOnUiThread(() -> {
+                            synchronized (stateLock) {
+                                if (!current(task)) { cleanupPayload(task); return; }
+                                try { startActivityForResult(call, intent, "documentResult"); }
+                                catch (Exception exception) { fail(task, "无法打开系统文件选择器，请重试。", "FILE_ERROR"); }
+                            }
+                        });
+                    } catch (LocalSourceStore.StoreException exception) { fail(task, exception.getMessage(), exception.code); }
+                    catch (Exception exception) { fail(task, "无法准备文件，请保留输入后重试。", "FILE_ERROR"); }
+                });
+            } catch (RejectedExecutionException exception) { fail(task, "应用正在关闭，请重新打开后重试。", "UNAVAILABLE"); }
+        }
+    }
+
+    private void prepareBackup(PendingDocument task) throws Exception {
+        // cacheDir is app-private and excluded from Android backup; no WebView asset or arbitrary path access.
+        File temporary = File.createTempFile("zhixu-export-", ".json", getContext().getCacheDir());
+        boolean retained = false;
+        try {
+            try (FileOutputStream output = new FileOutputStream(temporary)) {
+                synchronized (stateLock) {
+                    if (!current(task)) throw new IOException("Operation interrupted");
+                    // Attach only after opening, so destruction cannot delete then accidentally recreate this file.
+                    task.backupFile = temporary;
+                }
+                LocalSourceBackup.writePackage(getStore().backup(), output);
+            }
+            synchronized (stateLock) { retained = current(task); }
+            if (!retained) throw new IOException("Operation interrupted");
+        } finally {
+            if (!retained) temporary.delete();
+        }
+    }
+
+    @ActivityCallback
+    private void documentResult(PluginCall call, ActivityResult result) {
+        PendingDocument task;
+        synchronized (stateLock) {
+            task = pending;
+            if (task == null) {
+                if (call != null && call.getCallbackId().equals(abandonedCreateCallId)) {
+                    abandonedCreateCallId = null;
+                    if (result.getResultCode() == Activity.RESULT_OK) {
+                        try { deleteCreatedDocument(SourceDocumentFiles.selectedDocument(result.getData())); }
+                        catch (Exception ignored) {}
+                    }
+                }
+                if (call != null) { call.reject("文件操作已结束，请重新选择文件。", "UNAVAILABLE"); call.release(bridge); }
+                return;
+            }
+            if (call == null) { fail(task, "文件操作已中断，请重新选择文件。", "UNAVAILABLE"); return; }
+            if (!task.call.getCallbackId().equals(call.getCallbackId())) {
+                call.reject("文件操作已结束，请重新选择文件。", "UNAVAILABLE"); call.release(bridge); return;
+            }
+            // A provider must not cause two queued writes or delete a successfully exported document.
+            if (task.resultReceived) return;
+            task.resultReceived = true;
+        }
+        if (result.getResultCode() != Activity.RESULT_OK) { fail(task, "已取消文件操作。", "CANCELLED"); return; }
+        Uri uri;
+        try { uri = SourceDocumentFiles.selectedDocument(result.getData()); }
+        catch (LocalSourceStore.StoreException exception) { fail(task, exception.getMessage(), exception.code); return; }
+        debugResultPermissions(result.getData(), uri);
+        try { serial.execute(() -> completeDocument(task, uri)); }
+        catch (RejectedExecutionException exception) {
+            if (task.writing()) deleteCreatedDocument(uri);
+            fail(task, task.writing() ? incompleteMessage() : "应用正在关闭，请重新打开后重试。", "UNAVAILABLE");
+        }
+    }
+
+    private void deleteCreatedDocument(Uri uri) {
+        try { DocumentsContract.deleteDocument(getContext().getContentResolver(), uri); }
+        catch (Exception exception) { debugFailure("cleanup", exception); }
+    }
+
+    void completeDocument(PendingDocument task, Uri uri) {
+        ContentResolver resolver = null;
+        boolean written = false;
+        String stage = "resolver";
+        try {
+            if (!current(task)) return;
+            resolver = getContext().getContentResolver();
+            stage = "metadata";
+            String name = displayName(resolver, uri);
+            JSObject response;
+            if (task.writing()) {
+                stage = "name";
+                SourceDocumentFiles.validateName(name, "exportBackup".equals(task.kind));
+                final ContentResolver targetResolver = resolver;
+                stage = "export";
+                if ("exportBackup".equals(task.kind)) {
+                    File temporary;
+                    synchronized (stateLock) { temporary = task.backupFile; }
+                    if (temporary == null) throw new IOException("Missing private backup file");
+                    try (InputStream input = new FileInputStream(temporary)) {
+                        SourceDocumentFiles.copyDocument(() -> targetResolver.openOutputStream(uri, "wt"), input,
+                            SourceDocumentFiles.MAX_BACKUP_BYTES, () -> current(task));
+                    }
+                } else {
+                    SourceDocumentFiles.writeDocument(() -> targetResolver.openOutputStream(uri, "wt"), task.bytes, () -> current(task));
+                }
+                response = new JSObject().put("saved", true).put("name", name);
+            } else {
+                boolean backup = "previewBackup".equals(task.kind);
+                SourceDocumentFiles.validateName(name, backup);
+                try (InputStream input = resolver.openInputStream(uri)) {
+                    if (backup) {
+                        stage = "read-package";
+                        JSONObject pack = LocalSourceBackup.readPackage(input);
+                        if (!current(task)) return;
+                        stage = "preview-restore";
+                        response = JSObject.fromJSONObject(getStore().previewRestore(pack));
+                    } else {
+                        stage = "read-source";
+                        String text = SourceDocumentFiles.readUtf8(input, SourceDocumentFiles.MAX_SOURCE_BYTES);
+                        if (!current(task)) return;
+                        response = new JSObject().put("name", name).put("text", text);
+                    }
+                }
+            }
+            stage = "response";
+            synchronized (stateLock) {
+                if (current(task)) {
+                    task.call.resolve(response);
+                    written = task.writing();
+                    clear(task);
+                }
+            }
+        } catch (LocalSourceStore.StoreException exception) {
+            debugFailure(stage, exception);
+            fail(task, task.writing() ? incompleteMessage() : exception.getMessage(), task.writing() ? "FILE_ERROR" : exception.code);
+        } catch (Exception exception) {
+            debugFailure(stage, exception);
+            fail(task, task.writing() ? incompleteMessage() : "无法读取所选文件，请确认文件格式并重试。", "FILE_ERROR");
+        } finally {
+            cleanupPayload(task);
+            if (task.writing() && !written) {
+                // Providers may reject deletion; never claim an incomplete document is a valid backup.
+                // This also covers a queued task destroyed before it acquired its working resolver.
+                deleteCreatedDocument(uri);
+            }
+        }
+    }
+
+    private void debugFailure(String stage, Exception exception) {
+        if ((getContext().getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            Log.w("ZhixuSaf", SourceDocumentFiles.failureDiagnostic(stage, exception));
+        }
+    }
+
+    private void debugResultPermissions(Intent data, Uri uri) {
+        if ((getContext().getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) == 0) return;
+        try {
+            boolean read = getContext().checkUriPermission(uri, Process.myPid(), Process.myUid(),
+                Intent.FLAG_GRANT_READ_URI_PERMISSION) == PackageManager.PERMISSION_GRANTED;
+            boolean write = getContext().checkUriPermission(uri, Process.myPid(), Process.myUid(),
+                Intent.FLAG_GRANT_WRITE_URI_PERMISSION) == PackageManager.PERMISSION_GRANTED;
+            Log.d("ZhixuSaf", "stage=result-grants flags=" + data.getFlags() + " read=" + read + " write=" + write);
+        } catch (Exception exception) { debugFailure("result-grants", exception); }
+    }
+
+    private static String displayName(ContentResolver resolver, Uri uri) throws Exception {
+        try (Cursor cursor = resolver.query(uri, new String[] { OpenableColumns.DISPLAY_NAME }, null, null, null)) {
+            if (cursor == null || !cursor.moveToFirst() || cursor.isNull(0)) throw new java.io.IOException("Missing document name");
+            return cursor.getString(0);
+        }
+    }
+
+    private static String incompleteMessage() { return "文件未保存完成，可能不完整，不能用于恢复；请删除该文件后重新导出。"; }
+
+    private boolean current(PendingDocument task) {
+        synchronized (stateLock) { return !destroyed && pending == task; }
+    }
+
+    private void fail(PendingDocument task, String message, String code) {
+        synchronized (stateLock) {
+            if (pending != task) { cleanupPayload(task); return; }
+            task.call.reject(message, code);
+            clear(task);
+        }
+    }
+
+    private void clear(PendingDocument task) {
+        cleanupPayload(task);
+        pending = null;
+        task.call.release(bridge);
+    }
+
+    private void cleanupPayload(PendingDocument task) {
+        synchronized (stateLock) {
+            task.bytes = null;
+            if (task.backupFile != null) {
+                task.backupFile.delete();
+                task.backupFile = null;
+            }
+        }
     }
 
     private LocalSourceStore getStore() throws LocalSourceStore.StoreException {
@@ -46,27 +330,37 @@ public class ZhixuLocalPlugin extends Plugin {
 
     private interface Operation { JSObject run() throws Exception; }
 
+    private boolean available(PluginCall call) {
+        if (destroyed) { call.reject("应用正在关闭，请重新打开后重试。", "UNAVAILABLE"); return false; }
+        if (pending != null) { call.reject("请先完成或取消当前文件操作。", "BUSY"); return false; }
+        return true;
+    }
+
     private void execute(PluginCall call, Operation operation) {
-        try {
-            serial.execute(() -> {
-                try {
-                    call.resolve(operation.run());
-                } catch (LocalSourceStore.StoreException exception) {
-                    call.reject(exception.getMessage(), exception.code);
-                } catch (Exception exception) {
-                    // Never forward private file paths, source text or platform stack traces to the WebView.
-                    call.reject("手机本地操作未完成，请保留输入后重试。", "STORE_ERROR");
-                }
-            });
-        } catch (RejectedExecutionException exception) {
-            call.reject("应用正在关闭，请重新打开后重试。", "UNAVAILABLE");
+        synchronized (stateLock) {
+            if (!available(call)) return;
+            try {
+                serial.execute(() -> {
+                    try {
+                        synchronized (stateLock) { if (destroyed) { call.reject("应用已关闭，请重新打开。", "UNAVAILABLE"); return; } }
+                        call.resolve(operation.run());
+                    } catch (LocalSourceStore.StoreException exception) { call.reject(exception.getMessage(), exception.code); }
+                    catch (Exception exception) { call.reject("手机本地操作未完成，请保留输入后重试。", "STORE_ERROR"); }
+                });
+            } catch (RejectedExecutionException exception) { call.reject("应用正在关闭，请重新打开后重试。", "UNAVAILABLE"); }
         }
     }
 
-    private static void onlyField(PluginCall call, String allowed) throws LocalSourceStore.StoreException {
+    private static void onlyFields(PluginCall call, String... allowed) throws LocalSourceStore.StoreException {
         for (Iterator<String> keys = call.getData().keys(); keys.hasNext();) {
-            if (!allowed.equals(keys.next())) throw invalid();
+            if (!Arrays.asList(allowed).contains(keys.next())) throw invalid();
         }
+    }
+
+    private static String string(PluginCall call, String field) throws LocalSourceStore.StoreException {
+        Object value = call.getData().opt(field);
+        if (!(value instanceof String)) throw invalid();
+        return (String) value;
     }
 
     private static LocalSourceStore.StoreException invalid() {
@@ -74,8 +368,14 @@ public class ZhixuLocalPlugin extends Plugin {
     }
 
     @Override protected void handleOnDestroy() {
-        // Finish already queued local saves before releasing the database.
-        serial.execute(() -> { if (store != null) store.close(); });
-        serial.shutdown();
+        synchronized (stateLock) {
+            destroyed = true;
+            if (pending != null) {
+                if (pending.writing() && !pending.resultReceived) abandonedCreateCallId = pending.call.getCallbackId();
+                fail(pending, pending.writing() ? incompleteMessage() : "文件操作已中断，请重新选择文件。", "UNAVAILABLE");
+            }
+            try { serial.execute(() -> { if (store != null) store.close(); }); } catch (RejectedExecutionException ignored) {}
+            serial.shutdown();
+        }
     }
 }
