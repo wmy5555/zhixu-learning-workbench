@@ -64,7 +64,11 @@ export function createAndroidDataPanel({ api, onRestored, onError }) {
       forget();
       status.textContent = `已新增 ${result.imported} 份，保留相同资料 ${result.unchanged} 份，跳过冲突 ${result.conflictsSkipped} 份，补入历史 ${result.versionsImported} 条。`;
       toast('备份恢复完成', 'success');
-      await onRestored();
+      try { await onRestored(); }
+      catch {
+        status.textContent += ' 备份恢复已完成，但页面刷新未完成。请使用顶部刷新按钮或重新打开应用查看已恢复资料，无需再次恢复备份。';
+        toast('备份恢复已完成，请刷新页面或重新打开应用查看', 'info');
+      }
     } catch (error) { forget(); status.textContent = '恢复未完成，请重新预览后再确认；已有资料不会被冲突内容覆盖。'; report(error); }
     finally { busy = false; sync(); }
   }
