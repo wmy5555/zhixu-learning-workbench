@@ -140,9 +140,9 @@ public class SourceDocumentFilesTest extends AndroidTestCase {
     }
 
     public void testExchangeIncludesOnlyPortableSourceFieldsAndPreservesBody() throws Exception {
-        String title = "引号\"、换行\n和\\反斜杠";
+        String title = "引号\"和\\反斜杠";
         String body = "---\n普通正文原样保留\n---\n";
-        JSONObject meta = new JSONObject().put("author", "作者\"\n").put("platform", "合成平台")
+        JSONObject meta = new JSONObject().put("author", "作者\"").put("platform", "合成平台")
             .put("url", 123).put("privacy", "local").put("stage", "reference").put("credentials", "synthetic");
         JSONObject note = new JSONObject().put("title", title).put("body", body).put("meta", meta)
             .put("id", "private-id").put("hash", "private-hash").put("learning", "private-state");
@@ -351,7 +351,7 @@ public class SourceDocumentFilesTest extends AndroidTestCase {
             catch (LocalSourceStore.StoreException exception) {
                 assertEquals("VALIDATION", exception.code);
                 assertTrue(exception.getMessage().contains("资料编辑"));
-                assertTrue(exception.getMessage().contains("HTTP 或 HTTPS"));
+                assertTrue(exception.getMessage().contains(url.indexOf('\0') >= 0 ? "换行与首尾空白" : "HTTP 或 HTTPS"));
             }
             assertEquals(url, note.getJSONObject("meta").getString("url"));
             assertEquals("需保留的作者", note.getJSONObject("meta").getString("author"));
@@ -508,10 +508,22 @@ public class SourceDocumentFilesTest extends AndroidTestCase {
                     if ("title".equals(field)) note.put("title", value); else note.getJSONObject("meta").put(field, value);
                     String before = note.toString();
                     try { SourceDocumentFiles.sourceExchange(note); fail("Noncanonical attribution exported"); }
-                    catch (LocalSourceStore.StoreException expected) { assertEquals("SOURCE_FILE_INVALID", expected.code); }
+                    catch (LocalSourceStore.StoreException expected) { assertEquals("VALIDATION", expected.code); }
                     assertEquals(before, note.toString());
                 }
             }
+        }
+    }
+
+    public void testExchangeTitleUsesDesktopUtf16LimitWithoutTruncation() throws Exception {
+        String accepted = String.join("", java.util.Collections.nCopies(100, "😀"));
+        JSONObject note = exchangeNote(new JSONObject()).put("title", accepted);
+        assertEquals(accepted, exchangeHeader(SourceDocumentFiles.sourceExchange(note)).getString("title"));
+        for (String title : new String[] { accepted + "a", accepted + "😀" }) {
+            note.put("title", title);
+            try { SourceDocumentFiles.sourceExchange(note); fail("Desktop-truncated title exported"); }
+            catch (LocalSourceStore.StoreException expected) { assertEquals("VALIDATION", expected.code); }
+            assertEquals(title, note.getString("title"));
         }
     }
 

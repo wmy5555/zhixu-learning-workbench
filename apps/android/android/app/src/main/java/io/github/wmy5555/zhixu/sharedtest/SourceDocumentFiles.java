@@ -199,7 +199,7 @@ final class SourceDocumentFiles {
     }
 
     private static void validateSingleLine(String value, int limit, boolean title) throws LocalSourceStore.StoreException {
-        boolean invalidValue = value.codePointCount(0, value.length()) > limit || (title && value.trim().isEmpty());
+        boolean invalidValue = (title ? value.length() : value.codePointCount(0, value.length())) > limit || (title && value.trim().isEmpty());
         if (!value.isEmpty() && (boundaryWhitespace(value.charAt(0)) || boundaryWhitespace(value.charAt(value.length() - 1)))) invalidValue = true;
         for (int index = 0; index < value.length(); index++) {
             char unit = value.charAt(index);

@@ -344,6 +344,15 @@ public class LocalSourceStore implements AutoCloseable {
             return;
         }
         if (current != null && previous.equals(digest(current))) {
+            if (archived == null) {
+                // The journal owns this unique snapshot path; .new alone never committed a history version.
+                File staging = child(snapshot.getParentFile(), snapshot.getName() + ".new");
+                requireRegularPrivate(staging);
+                if (staging.exists()) {
+                    if (!staging.delete()) throw new IOException("Cannot discard this save snapshot staging");
+                    syncDirectory(snapshot.getParentFile());
+                }
+            }
             if (failedInThisProcess && archived != null) {
                 new AtomicFile(snapshot).delete();
                 syncDirectory(snapshot.getParentFile());

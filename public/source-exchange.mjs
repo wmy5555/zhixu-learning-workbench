@@ -211,7 +211,7 @@ function exchangeItem(name, text, header, body) {
       || !data.source || Array.isArray(data.source) || typeof data.source !== "object"
       || Object.keys(data.source).some(key => !SOURCE_FIELDS.includes(key))) throw invalid();
     const title = data.title.trim();
-    if (!title || title !== data.title || [...title].length > 200 || /[\p{Cc}]/u.test(data.title)) throw invalid("交换文件标题无效。");
+    if (!title || title !== data.title || title.length > 200 || /[\p{Cc}]/u.test(data.title)) throw invalid("交换文件标题无效。");
     for (const field of SOURCE_FIELDS) {
       if (!Object.hasOwn(data.source, field)) data.source[field] = "";
       const value = data.source[field];
@@ -226,7 +226,7 @@ function exchangeItem(name, text, header, body) {
   }
 
   const title = String(name || "").replace(/\.(?:md|txt)$/i, "").trim();
-  if (!title || [...title].length > 200 || /[\p{Cc}]/u.test(title)) throw invalid("文件名标题无效。");
+  if (!title || title.length > 200 || /[\p{Cc}]/u.test(title)) throw invalid("文件名标题无效。");
   if (!text.trim() || text.includes(String.fromCharCode(0)) || text.length > MAX_DESKTOP_BODY_CHARS) throw invalid("文件正文为空、含无效字符或超过 500000 个字符。");
   return { title, body: text, platform: "本地文件", author: "", url: "", date: "", locator: name, topic: "", privacy: "local" };
 }
