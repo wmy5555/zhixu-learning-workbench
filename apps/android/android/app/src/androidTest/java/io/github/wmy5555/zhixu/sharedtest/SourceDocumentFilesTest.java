@@ -306,6 +306,41 @@ public class SourceDocumentFilesTest extends AndroidTestCase {
         }
     }
 
+    public void testExchangeRejectsSingleLineMetadataBreaksWithoutChangingOriginalNote() throws Exception {
+        for (String field : new String[] { "platform", "author", "date", "locator", "topic", "title" }) {
+            for (String value : new String[] { "前\n后", "前\r后", "前\r\n后", "\n前", "后\r" }) {
+                JSONObject meta = new JSONObject().put("author", "保留作者");
+                JSONObject note = exchangeNote(meta);
+                if ("title".equals(field)) note.put("title", value);
+                else meta.put(field, value);
+                String original = note.toString();
+                try { SourceDocumentFiles.sourceExchange(note); fail("Multiline metadata produced a document: " + field); }
+                catch (LocalSourceStore.StoreException exception) { assertEquals("VALIDATION", exception.code); }
+                assertEquals(original, note.toString());
+            }
+        }
+        JSONObject meta = new JSONObject().put("platform", "平台").put("author", "作者").put("date", "2026-10-08")
+            .put("locator", "第一行").put("topic", "主题");
+        assertEquals(meta.toString(), exchangeHeader(SourceDocumentFiles.sourceExchange(exchangeNote(meta))).getJSONObject("source").toString());
+    }
+
+    public void testExchangePortableHostnameRepertoireMatchesWebImportWithoutRewritingUrls() throws Exception {
+        for (String url : new String[] { "https://😀.example/", "https://xn--e28h.example/", "https://例子。中国/",
+            "https://ｅxample.com/", "https://ß.example/", "https://xn--.example/" }) {
+            JSONObject note = exchangeNote(new JSONObject().put("url", url));
+            String original = note.toString();
+            try { SourceDocumentFiles.sourceExchange(note); fail("Nonportable hostname produced a document"); }
+            catch (LocalSourceStore.StoreException exception) { assertEquals("VALIDATION", exception.code); }
+            assertEquals(original, note.toString());
+        }
+        for (String url : new String[] { "https://中文.中国/路径", "https://xn--fiq228c.xn--fiqs8s/路径",
+            "https://中文-example.中国./路径", "http://192.168.1.10:8080/资料", "https://[2001:db8::1]/",
+            "http://[::ffff:192.168.0.1]/" }) {
+            assertEquals(url, exchangeHeader(SourceDocumentFiles.sourceExchange(exchangeNote(new JSONObject().put("url", url))))
+                .getJSONObject("source").getString("url"));
+        }
+    }
+
     public void testExchangeRejectsLegacyInvalidUrlsBeforeProducingDocument() throws Exception {
         for (String url : new String[] { "ftp://example.invalid/source", "javascript:alert(1)", "旧版任意来源字符串",
             "https://", "https:///source", "http://:4318/source", "http://example.invalid:65536/",

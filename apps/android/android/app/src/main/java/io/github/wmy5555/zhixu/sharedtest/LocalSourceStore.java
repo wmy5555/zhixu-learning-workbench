@@ -186,16 +186,27 @@ public class LocalSourceStore implements AutoCloseable {
                 String versionId = previous == null ? null : previous.getString("updatedAt").replace(':', '-')
                     + "-" + UUID.randomUUID() + ".md";
                 backups.requireSaveCapacity(documents, note, new String(next, StandardCharsets.UTF_8), versionId);
+                File snapshot = null;
+                byte[] previousBytes = null;
                 if (previous == null) {
                     writeAtomically(child(originalsDirectory, id + ".md"), next);
                 } else {
                     // Archive the exact previous Markdown before replacing it, including original whitespace.
                     File versions = child(historyDirectory, id);
                     ensureDirectory(versions);
-                    File snapshot = child(versions, versionId);
-                    writeAtomically(snapshot, readBytes(target));
+                    snapshot = child(versions, versionId);
+                    // This path belongs only to this attempt; never roll back an existing user snapshot.
+                    if (snapshot.exists() || child(versions, versionId + ".bak").exists()
+                        || child(versions, versionId + ".new").exists()) throw new IOException("History path already exists");
+                    previousBytes = readBytes(target);
                 }
-                writeAtomically(target, next);
+                try {
+                    if (snapshot != null) writeAtomically(snapshot, previousBytes);
+                    writeAtomically(target, next);
+                } catch (IOException | RuntimeException exception) {
+                    discardUncommittedSnapshot(target, snapshot, previousBytes);
+                    throw new IOException("Cannot commit source Markdown", exception);
+                }
                 documents.put(id, note);
                 // After Markdown has committed, a disposable index failure must not turn save into a retry.
                 rebuildIndex(documents);
@@ -203,6 +214,17 @@ public class LocalSourceStore implements AutoCloseable {
             } catch (IOException | JSONException exception) {
                 throw new StoreException("STORE_ERROR", "资料未能完成保存，请保留当前输入后重试。");
             }
+        }
+    }
+
+    private void discardUncommittedSnapshot(File target, File snapshot, byte[] previousBytes) {
+        if (snapshot == null) return;
+        try {
+            // AtomicFile recovery must establish that the old authority is still intact before cleanup.
+            // A committed replacement, unreadable file, or process death keeps the recovery evidence.
+            if (Arrays.equals(previousBytes, readBytes(target))) new AtomicFile(snapshot).delete();
+        } catch (IOException | StoreException | RuntimeException ignored) {
+            // The newly archived bytes may now be the only recoverable previous version.
         }
     }
 

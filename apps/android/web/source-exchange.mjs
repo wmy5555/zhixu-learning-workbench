@@ -2,6 +2,7 @@ const FORMAT = "zhixu-source-exchange";
 const SOURCE_FIELDS = ["platform", "author", "url", "date", "locator", "topic"];
 const MAX_FILE_BYTES = 160 * 1024;
 const MAX_BODY_BYTES = 128 * 1024;
+const MAX_EXCHANGE_HEADER_BYTES = 32 * 1024;
 
 function invalid(message = "文件不是有效的 UTF-8 原文交换文件。") {
   const error = new Error(message);
@@ -71,6 +72,91 @@ function rejectDuplicateJsonKeys(source) {
   if (index !== source.length) throw invalid();
 }
 
+// Inspect JSON tokens only at the root object. A nested object or YAML string is ordinary Markdown.
+// This intentionally recognizes a declaration even when the rest of its JSON is malformed.
+function declaresExchange(source) {
+  let index = 0, depth = 0, expectKey = false;
+  const whitespace = () => { while (/\s/.test(source[index] || "")) index++; };
+  whitespace();
+  if (source[index] !== "{") return false;
+  while (index < source.length) {
+    const char = source[index];
+    if (char === '"') {
+      const start = index++;
+      while (index < source.length) {
+        if (source[index] === "\\") index += 2;
+        else if (source[index++] === '"') break;
+      }
+      if (depth === 1 && expectKey) {
+        let key;
+        try { key = JSON.parse(source.slice(start, index)); } catch { return false; }
+        whitespace();
+        if (source[index] === ":") {
+          index++; whitespace();
+          if (key === "format" && source[index] === '"') {
+            const valueStart = index++;
+            while (index < source.length) {
+              if (source[index] === "\\") index += 2;
+              else if (source[index++] === '"') break;
+            }
+            try { if (JSON.parse(source.slice(valueStart, index)) === FORMAT) return true; } catch { return false; }
+          }
+        }
+        expectKey = false;
+      }
+      continue;
+    }
+    if (char === "{" || char === "[") { depth++; if (depth === 1) expectKey = true; }
+    else if (char === "}" || char === "]") { depth--; if (depth === 0) return false; }
+    else if (char === "," && depth === 1) expectKey = true;
+    index++;
+  }
+  return false;
+}
+
+// Portable DNS repertoire: ASCII letters/digits/hyphens and basic CJK ideographs.
+// Decode A-labels too, so an ASCII xn-- spelling cannot bypass the same repertoire.
+function portableDnsLabel(label) {
+  let decoded = label;
+  if (/^xn--/i.test(label)) {
+    const input = label.slice(4).toLowerCase(), output = [];
+    let index = input.lastIndexOf("-"), n = 128, i = 0, bias = 72;
+    if (index >= 0) for (const char of input.slice(0, index)) output.push(char.codePointAt(0));
+    index = index >= 0 ? index + 1 : 0;
+    const adapt = (delta, points, first) => {
+      delta = first ? Math.floor(delta / 700) : Math.floor(delta / 2);
+      delta += Math.floor(delta / points);
+      let k = 0;
+      while (delta > 455) { delta = Math.floor(delta / 35); k += 36; }
+      return k + Math.floor(36 * delta / (delta + 38));
+    };
+    try {
+      while (index < input.length) {
+        const old = i;
+        let weight = 1;
+        for (let k = 36; ; k += 36) {
+          const code = input.charCodeAt(index++);
+          const digit = code >= 97 && code <= 122 ? code - 97 : code >= 48 && code <= 57 ? code - 22 : -1;
+          if (digit < 0 || !Number.isSafeInteger(i + digit * weight)) return false;
+          i += digit * weight;
+          const threshold = k <= bias ? 1 : k >= bias + 26 ? 26 : k - bias;
+          if (digit < threshold) break;
+          weight *= 36 - threshold;
+          if (!Number.isSafeInteger(weight)) return false;
+        }
+        const points = output.length + 1;
+        bias = adapt(i - old, points, old === 0);
+        n += Math.floor(i / points); i %= points;
+        if (n > 0x10ffff || n >= 0xd800 && n <= 0xdfff) return false;
+        output.splice(i++, 0, n);
+      }
+      decoded = String.fromCodePoint(...output);
+      if (new URL(`http://${decoded}`).hostname !== label.toLowerCase()) return false;
+    } catch { return false; }
+  }
+  return /^[a-z0-9\u4e00-\u9fff](?:[a-z0-9\u4e00-\u9fff-]*[a-z0-9\u4e00-\u9fff])?$/i.test(decoded);
+}
+
 function validateExchangeUrl(value) {
   if (!value) return;
   if (/[\p{Cc}]/u.test(value)) throw invalid("来源网址无效。");
@@ -96,6 +182,7 @@ function validateExchangeUrl(value) {
 
   const numericHost = rawHost.endsWith(".") ? rawHost.slice(0, -1) : rawHost;
   const labels = numericHost.split(".");
+  if (labels.some(label => !portableDnsLabel(label))) throw invalid("来源网址主机名不符合可移植字符范围。");
   const canonicalIpv4 = labels.length === 4 && labels.every(label => /^(?:0|[1-9][0-9]{0,2})$/.test(label) && Number(label) <= 255);
   const lastLabel = labels.at(-1) || "";
   const numericEnding = /^[0-9]+$/.test(lastLabel) || /^0x[0-9a-f]*$/i.test(lastLabel);
@@ -109,7 +196,8 @@ function validateExchangeUrl(value) {
 }
 
 function exchangeItem(name, text, header, body) {
-  if (/"format"\s*:\s*"zhixu-source-exchange"/.test(header)) {
+  if (header) {
+    if (utf8Length(header) > MAX_EXCHANGE_HEADER_BYTES) throw invalid("交换文件头部超过限制。");
     let data;
     try {
       rejectDuplicateJsonKeys(header);
@@ -124,11 +212,11 @@ function exchangeItem(name, text, header, body) {
       || !data.source || Array.isArray(data.source) || typeof data.source !== "object"
       || Object.keys(data.source).some(key => !SOURCE_FIELDS.includes(key))) throw invalid();
     const title = data.title.trim();
-    if (!title || [...title].length > 200 || /[\p{Cc}]/u.test(title)) throw invalid("交换文件标题无效。");
+    if (!title || [...title].length > 200 || /[\p{Cc}]/u.test(data.title)) throw invalid("交换文件标题无效。");
     for (const field of SOURCE_FIELDS) {
       if (!Object.hasOwn(data.source, field)) data.source[field] = "";
       const value = data.source[field];
-      if (typeof value !== "string" || value.includes("\0") || [...value].length > (field === "url" || field === "locator" ? 2048 : 200)) {
+      if (typeof value !== "string" || /[\r\n\0]/.test(value) || [...value].length > (field === "url" || field === "locator" ? 2048 : 200)) {
         throw invalid("交换文件来源信息无效。");
       }
     }
@@ -153,9 +241,12 @@ export function parseSourceFile({ name, text } = {}) {
   const separator = /\r?\n---(?:\r?\n|$)/g;
   separator.lastIndex = afterOpening;
   const match = separator.exec(normalized);
-  if (!match) return exchangeItem(name, normalized, "", normalized);
+  if (!match) {
+    if (declaresExchange(normalized.slice(afterOpening))) throw invalid();
+    return exchangeItem(name, normalized, "", normalized);
+  }
   const header = normalized.slice(afterOpening, match.index);
-  const signature = /"format"\s*:\s*"zhixu-source-exchange"/.test(header);
+  const signature = declaresExchange(header);
   if (signature) return exchangeItem(name, normalized, header, normalized.slice(match.index + match[0].length));
   return exchangeItem(name, normalized, "", normalized);
 }

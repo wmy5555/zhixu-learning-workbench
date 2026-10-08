@@ -181,16 +181,140 @@ public class LocalSourceStoreTest extends AndroidTestCase {
         store.close();
         store = new LocalSourceStore(root) {
             @Override void writeAtomically(File file, byte[] bytes) throws IOException {
-                if ("notes".equals(file.getParentFile().getName())) throw new IOException("Synthetic write failure");
+                if ("notes".equals(file.getParentFile().getName())) {
+                    AtomicFile atomic = new AtomicFile(file);
+                    FileOutputStream output = atomic.startWrite();
+                    output.write("unfinished".getBytes(StandardCharsets.UTF_8));
+                    atomic.failWrite(output);
+                    throw new IOException("Synthetic partial write failure");
+                }
                 super.writeAtomically(file, bytes);
             }
         };
         expectCode("STORE_ERROR", () -> store.save(edit(first, "未保存的新标题", "未保存的新正文")));
         assertEquals(original, readText(noteFile(first)));
         assertEquals(first.getString("hash"), store.read(first.getString("id")).getString("hash"));
+        assertEquals(0, historyCount(first.getString("id")));
+        assertEquals(original, readText(new File(root, "originals/" + first.getString("id") + ".md")));
         store.close();
         store = new LocalSourceStore(root);
         assertEquals("应保留的旧正文", store.read(first.getString("id")).getString("body"));
+    }
+
+    public void testRepeatedFailedWritesKeepExistingHistoryAndLastHistorySlot() throws Exception {
+        JSONObject first = store.save(source("已有历史", "合成第一版"));
+        JSONObject current = store.save(edit(first, "已有历史", "合成第二版"));
+        String id = first.getString("id");
+        File versions = new File(root, "history/" + id);
+        File[] existing = versions.listFiles();
+        assertNotNull(existing);
+        assertEquals(1, existing.length);
+        String existingMarkdown = readText(existing[0]);
+        // Disposable, valid snapshots put the store one slot below its real 1000-history limit.
+        for (int index = 1; index < 999; index++) {
+            File snapshot = new File(versions, first.getString("updatedAt").replace(':', '-')
+                + "-" + UUID.randomUUID() + ".md");
+            try (FileOutputStream output = new FileOutputStream(snapshot)) {
+                output.write(existingMarkdown.getBytes(StandardCharsets.UTF_8));
+            }
+        }
+        String currentMarkdown = readText(noteFile(current));
+        store.close();
+        store = new LocalSourceStore(root) {
+            @Override void writeAtomically(File file, byte[] bytes) throws IOException {
+                if ("notes".equals(file.getParentFile().getName())) throw new IOException("Synthetic write failure");
+                super.writeAtomically(file, bytes);
+            }
+        };
+        for (int attempt = 0; attempt < 3; attempt++) {
+            expectCode("STORE_ERROR", () -> store.save(edit(current, "失败重试", "仍未提交")));
+            assertEquals(999, historyCount(id));
+            assertEquals(currentMarkdown, readText(noteFile(current)));
+            assertEquals(existingMarkdown, readText(existing[0]));
+        }
+        store.close();
+        store = new LocalSourceStore(root);
+        JSONObject saved = store.save(edit(current, "成功编辑", "最后一个历史名额仍可用"));
+        assertEquals(1000, historyCount(id));
+        assertEquals(saved.getString("hash"), store.read(id).getString("hash"));
+        assertEquals(existingMarkdown, readText(existing[0]));
+    }
+
+    public void testExceptionAfterCurrentCommitPreservesPreviousHistory() throws Exception {
+        JSONObject first = store.save(source("提交后异常", "必须保留的旧原文"));
+        String original = readText(noteFile(first));
+        store.close();
+        store = new LocalSourceStore(root) {
+            @Override void writeAtomically(File file, byte[] bytes) throws IOException {
+                super.writeAtomically(file, bytes);
+                if ("notes".equals(file.getParentFile().getName())) throw new IllegalStateException("Synthetic post-commit failure");
+            }
+        };
+        expectCode("STORE_ERROR", () -> store.save(edit(first, "提交后异常", "已提交的新原文")));
+        String id = first.getString("id");
+        assertEquals("已提交的新原文", store.read(id).getString("body"));
+        assertEquals(1, historyCount(id));
+        assertEquals(original, readText(new File(root, "history/" + id).listFiles()[0]));
+        expectCode("CONFLICT", () -> store.save(edit(first, "过时重试", "不能覆盖已提交内容")));
+        store.close();
+        store = new LocalSourceStore(root);
+        assertEquals("已提交的新原文", store.read(id).getString("body"));
+        assertEquals(1, historyCount(id));
+    }
+
+    public void testUncertainCurrentReadPreservesOnlyPreviousSnapshot() throws Exception {
+        JSONObject first = store.save(source("读回不确定", "完整旧原文"));
+        JSONObject current = store.save(edit(first, "读回不确定", "只有当前和历史保存的第二版"));
+        String previousMarkdown = readText(noteFile(current));
+        String original = readText(new File(root, "originals/" + first.getString("id") + ".md"));
+        store.close();
+        store = new LocalSourceStore(root) {
+            @Override void writeAtomically(File file, byte[] bytes) throws IOException {
+                if ("notes".equals(file.getParentFile().getName())) {
+                    // Simulate a storage fault that leaves no readable current file; the snapshot is needed.
+                    new AtomicFile(file).delete();
+                    throw new IOException("Synthetic lost current file");
+                }
+                super.writeAtomically(file, bytes);
+            }
+        };
+        expectCode("STORE_ERROR", () -> store.save(edit(current, "未提交", "不要丢弃旧原文")));
+        String id = first.getString("id");
+        assertEquals(2, historyCount(id));
+        boolean previousPreserved = false;
+        for (File snapshot : new File(root, "history/" + id).listFiles()) {
+            if (previousMarkdown.equals(readText(snapshot))) previousPreserved = true;
+        }
+        assertTrue(previousPreserved);
+        assertEquals(original, readText(new File(root, "originals/" + id + ".md")));
+    }
+
+    public void testInterruptedSaveKeepsRecoveryEvidenceOnReopen() throws Exception {
+        JSONObject first = store.save(source("保存中断", "退出前的完整原文"));
+        String original = readText(noteFile(first));
+        store.close();
+        store = new LocalSourceStore(root) {
+            @Override void writeAtomically(File file, byte[] bytes) throws IOException {
+                if ("notes".equals(file.getParentFile().getName())) {
+                    AtomicFile atomic = new AtomicFile(file);
+                    FileOutputStream output = atomic.startWrite();
+                    output.write("unfinished".getBytes(StandardCharsets.UTF_8));
+                    output.close();
+                    throw new SimulatedProcessExit();
+                }
+                super.writeAtomically(file, bytes);
+            }
+        };
+        try {
+            store.save(edit(first, "未完成", "未完成的新原文"));
+            fail("Expected simulated process exit");
+        } catch (SimulatedProcessExit expected) { /* No catch-time cleanup can run after process death. */ }
+        store.close();
+        store = new LocalSourceStore(root);
+        String id = first.getString("id");
+        assertEquals(original, readText(noteFile(first)));
+        assertEquals(1, historyCount(id));
+        assertEquals(original, readText(new File(root, "history/" + id).listFiles()[0]));
     }
 
     public void testInterruptedAtomicWriteRecoversLastCommittedMarkdown() throws Exception {
@@ -232,6 +356,8 @@ public class LocalSourceStoreTest extends AndroidTestCase {
     }
 
     private interface ThrowingOperation { void run() throws Exception; }
+
+    private static class SimulatedProcessExit extends Error { }
 
     private void expectCode(String expected, ThrowingOperation operation) throws Exception {
         try {

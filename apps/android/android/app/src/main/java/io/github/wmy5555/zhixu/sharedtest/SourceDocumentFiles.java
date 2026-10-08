@@ -181,18 +181,48 @@ final class SourceDocumentFiles {
     }
 
     static byte[] sourceExchange(JSONObject note) throws Exception {
+        String title = note.getString("title");
+        validateSingleLine(title, 200, true);
         JSONObject source = new JSONObject();
         JSONObject meta = note.optJSONObject("meta");
         for (String field : SOURCE_FIELDS) {
             Object value = meta == null ? null : meta.opt(field);
             if (value instanceof String) {
                 if ("url".equals(field)) validateExchangeUrl((String) value);
+                else validateSingleLine((String) value, "locator".equals(field) ? 2048 : 200, false);
                 source.put(field, value);
             }
         }
         JSONObject header = new JSONObject().put("format", "zhixu-source-exchange").put("version", 1)
-            .put("title", note.getString("title")).put("source", source);
+            .put("title", title).put("source", source);
         return ("---\n" + header.toString() + "\n---\n" + note.getString("body")).getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static void validateSingleLine(String value, int limit, boolean title) throws LocalSourceStore.StoreException {
+        boolean invalidValue = value.codePointCount(0, value.length()) > limit || (title && value.trim().isEmpty());
+        for (int index = 0; index < value.length(); index++) {
+            char unit = value.charAt(index);
+            if (unit == '\r' || unit == '\n' || unit == '\0' || (title && Character.isISOControl(unit))) invalidValue = true;
+        }
+        if (invalidValue) throw invalid("标题或来源信息无法用于原文交换。请在资料编辑中检查长度和换行后重新导出；原资料不会自动修改。");
+    }
+
+    private static void validatePortableDnsHost(String host) {
+        String dnsHost = host.endsWith(".") ? host.substring(0, host.length() - 1) : host;
+        for (String label : dnsHost.split("\\.", -1)) {
+            String decoded = label;
+            if (label.regionMatches(true, 0, "xn--", 0, 4)) {
+                decoded = IDN.toUnicode(label);
+                if (decoded.equalsIgnoreCase(label)
+                    || !IDN.toASCII(decoded, IDN.USE_STD3_ASCII_RULES).equalsIgnoreCase(label)) throw new IllegalArgumentException();
+            }
+            // Same explicit repertoire as the web importer; do not depend on differing IDNA versions.
+            if (!decoded.matches("[a-zA-Z0-9\u4e00-\u9fff](?:[a-zA-Z0-9\u4e00-\u9fff-]*[a-zA-Z0-9\u4e00-\u9fff])?")) {
+                throw new IllegalArgumentException();
+            }
+        }
+        String ascii = IDN.toASCII(dnsHost, IDN.USE_STD3_ASCII_RULES);
+        if (ascii.length() > 253) throw new IllegalArgumentException();
     }
 
     private static void validateExchangeUrl(String value) throws LocalSourceStore.StoreException {
@@ -232,8 +262,8 @@ final class SourceDocumentFiles {
                     // Embedded IPv4 follows stricter IPv6 grammar: four decimal parts without leading zeros.
                     validateDottedIpv4(host.substring(host.lastIndexOf(':') + 1, host.length() - 1));
                 }
-            }
-            String asciiHost = host.startsWith("[") ? host : IDN.toASCII(host);
+            } else validatePortableDnsHost(host);
+            String asciiHost = host.startsWith("[") ? host : IDN.toASCII(host, IDN.USE_STD3_ASCII_RULES);
             if (new URI("http://" + asciiHost).getHost() == null) throw new IllegalArgumentException();
             // WHATWG treats a host ending in a number as IPv4; reject malformed numeric hosts.
             String numericHost = asciiHost.endsWith(".") ? asciiHost.substring(0, asciiHost.length() - 1) : asciiHost;

@@ -32,6 +32,47 @@ test("ordinary Markdown frontmatter remains part of the imported body", () => {
   assert.equal(item.privacy, "local");
 });
 
+test("only a root JSON format declaration identifies an exchange file", () => {
+  const ordinaryHeaders = [
+    '{"nested":{"format":"zhixu-source-exchange"},"title":"ordinary"}',
+    '[{"format":"zhixu-source-exchange"}]',
+    'description: \'literal "format":"zhixu-source-exchange"\'',
+    '{"description":"\\\"format\\\":\\\"zhixu-source-exchange\\\""}',
+    '{"nested":{"format":"zhixu-source-exchange"},"format":"ordinary"}',
+  ];
+  const invalidHeaders = [
+    '{"format":"zhixu-source-exchange",}',
+    '{"nested":{},"format":"zhixu-source-exchange","format":"ordinary"}',
+    '{"format":"ordinary","format":"zhixu-source-exchange"}',
+    '{"for\\u006dat":"zhixu-source-exchange","version":1}',
+    '{"format":"zhixu-source-exchange","extra":"' + 'x'.repeat(33000) + '"}',
+  ];
+  for (const parse of [parseSourceFile, parseAndroidSourceFile]) {
+    for (const header of ordinaryHeaders) {
+      const text = `---\n${header}\n---\n正文  \n`;
+      assert.equal(parse({ name: "普通.md", text }).body, text, header);
+    }
+    for (const header of invalidHeaders) {
+      assert.throws(() => parse({ name: "交换.md", text: `---\n${header}\n---\n正文` }), { code: "SOURCE_FILE_INVALID" });
+    }
+    assert.throws(() => parse({ name: "交换.md", text: '---\n{"format":"zhixu-source-exchange"}\n正文' }), { code: "SOURCE_FILE_INVALID" });
+  }
+});
+
+test("single-line exchange metadata rejects CR and LF before a form can silently remove them", () => {
+  for (const parse of [parseSourceFile, parseAndroidSourceFile]) {
+    for (const field of ["platform", "author", "date", "locator", "topic", "title"]) {
+      for (const value of ["前\n后", "前\r后", "前\r\n后", "\n前", "后\r"]) {
+        const data = { format: "zhixu-source-exchange", version: 1, title: "交换标题", source: {} };
+        if (field === "title") data.title = value;
+        else data.source[field] = value;
+        assert.throws(() => parse({ name: "换行.md", text: `---\n${JSON.stringify(data)}\n---\n正文` }), { code: "SOURCE_FILE_INVALID" }, `${field}: ${JSON.stringify(value)}`);
+        assert.equal(field === "title" ? data.title : data.source[field], value);
+      }
+    }
+  }
+});
+
 test("desktop ordinary files retain the 500000-character import allowance while Android keeps its prototype limit", t => {
   const body = "原".repeat(200000);
   const parsed = parseSourceFile({ name: "大篇幅.txt", text: body });
@@ -80,6 +121,12 @@ test("both exchange parsers match native URL acceptance without rewriting source
     format: "zhixu-source-exchange", version: 1, title: "网址样例", source: { url },
   })}\n---\n正文`;
   const rejected = [
+    "https://😀.example/",
+    "https://xn--e28h.example/",
+    "https://例子。中国/",
+    "https://ｅxample.com/",
+    "https://ß.example/",
+    "https://xn--.example/",
     "https://exa\tmple.com/path",
     "http://127.1/path",
     "http://0177.0.0.1/path",
@@ -101,6 +148,8 @@ test("both exchange parsers match native URL acceptance without rewriting source
     "https://example.com/path?q=a%20b",
     "http://192.168.1.10:8080/资料",
     "https://中文.中国/路径",
+    "https://xn--fiq228c.xn--fiqs8s/路径",
+    "https://中文-example.中国./路径",
     "http://[2001:db8::1]/path",
     "http://[::ffff:192.168.0.1]:8080/",
     "https://[::192.0.2.1]/",
