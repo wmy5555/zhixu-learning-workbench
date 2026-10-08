@@ -6,6 +6,63 @@ const source = { id: "reflection", kind: "source", title: "合成反思", body: 
 const bootstrap = async () => ({ notes: [], today: { items: [] }, stats: {} });
 const guide = async () => ({ steps: [{ id: "sources", label: "保存原文", completed: true }, { id: "answer", label: "保存回答", completed: false }] });
 
+test("Android current learning after restart exposes saved completed session and reloads the original answer", async () => {
+  const calls = [];
+  const summary = { id: "persisted-session", noteId: "knowledge", status: "completed", createdAt: "2026-10-08T10:00:00Z", question: "怎样反思", turns: [] };
+  const fixture = await createAndroidBrowser({ api: { studySessions: async () => ({ sessions: [{ ...summary, id: "older", createdAt: "2026-10-07T10:00:00Z" }, summary] }), study: async id => { calls.push(id); return { ...summary, turns: [{ answer: "飞行模式下保存的原始回答" }], completion: { reviewSettled: false } }; } } });
+  fixture.app.state.studyTab = "session";
+  assert.equal(fixture.app.state.currentStudy, null);
+  await fixture.app.renderStudy();
+  assert.ok(findButton(fixture.app.refs.main, "查看最近记录"));
+  assert.ok(findButton(fixture.app.refs.main, "查看全部已保存记录"));
+  assert.doesNotMatch(fixture.app.refs.main.textContent, /还没有进行中的学习/);
+  await click(findButton(fixture.app.refs.main, "查看最近记录"));
+  assert.deepEqual(calls, ["persisted-session"]);
+  assert.match(fixture.app.refs.main.textContent, /飞行模式下保存的原始回答/);
+  assert.match(fixture.app.refs.main.textContent, /未批改/);
+});
+
+test("Android today hero counts pending work separately from saved completed records", async () => {
+  const done = { id: "done", noteId: "saved", title: "已保存学习", state: "done", kind: "study", minutes: 30 };
+  const pending = { id: "pending", noteId: "next", title: "待学习", state: "pending", kind: "study", minutes: 7 };
+  const fixture = await createAndroidBrowser({ api: { bootstrap: async () => ({ today: { items: [done, pending], minutes: 37, budget: 25 }, stats: {} }) } });
+  await fixture.app.navigate("today");
+  assert.match(fixture.app.refs.main.textContent, /今天还有 1 项待学习/);
+  assert.match(fixture.app.refs.main.textContent, /待学习预计 7 分钟/);
+  assert.match(fixture.app.refs.main.textContent, /已结束并保存 1 项记录/);
+  fixture.app.state.bootstrap = { today: { items: [done], minutes: 0, budget: 25 }, stats: {} };
+  await fixture.app.navigate("today");
+  assert.match(fixture.app.refs.main.textContent, /今天已保存 1 项学习记录/);
+  assert.match(fixture.app.refs.main.textContent, /待学习预计 0 分钟/);
+  assert.doesNotMatch(fixture.app.refs.main.textContent, /今天有 1 项值得投入/);
+});
+
+test("Android starting study from an open source drawer reveals learning and failed start preserves the drawer", async () => {
+  const child = { id: "knowledge", kind: "knowledge", title: "我的观点", body: "个人反思", meta: { claimType: "opinion", stage: "learning" } };
+  const session = { id: "session", noteId: child.id, status: "reading", turns: [], material: child.body };
+  let resolveStart;
+  const starting = new Promise(resolve => { resolveStart = resolve; });
+  const fixture = await createAndroidBrowser({ api: { startStudy: async () => starting, study: async () => session } });
+  fixture.app.renderSourceGroupDrawer({ ...source, children: [child] });
+  fixture.app.refs.drawer.classList.add("is-open"); fixture.app.refs.drawerBackdrop.hidden = false;
+  const request = click(findButton(fixture.app.refs.drawerBody, "开始学习"));
+  assert.equal(fixture.app.refs.drawer.classList.contains("is-open"), true);
+  resolveStart(session); await request;
+  assert.equal(fixture.app.state.view, "study");
+  assert.equal(fixture.app.refs.drawer.classList.contains("is-open"), false);
+  assert.equal(fixture.app.refs.drawerBackdrop.hidden, true);
+  assert.match(fixture.app.refs.main.textContent, /学习材料/);
+  assert.equal(descendants(fixture.app.refs.main).filter(node => node.tagName === "strong" && node.textContent === "手机本地学习").length, 1);
+
+  const failed = await createAndroidBrowser({ api: { startStudy: async () => { throw new Error("暂不能开始"); } } });
+  failed.app.renderSourceGroupDrawer({ ...source, children: [child] });
+  failed.app.refs.drawer.classList.add("is-open"); failed.app.refs.drawerBackdrop.hidden = false;
+  await click(findButton(failed.app.refs.drawerBody, "开始学习"));
+  assert.equal(failed.app.refs.drawer.classList.contains("is-open"), true);
+  assert.equal(failed.app.refs.drawerBackdrop.hidden, false);
+  assert.equal(failed.app.state.currentStudy, null);
+});
+
 test("Android manual extraction defaults to facts and explicitly preserves classification, depth and reason", async () => {
   const requests = [];
   const fixture = await createAndroidBrowser({ api: { bootstrap, note: async () => source, extractSource: async (id, payload) => { requests.push({ id, ...payload }); return { id: "knowledge" }; } } });

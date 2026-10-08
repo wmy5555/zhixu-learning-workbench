@@ -240,12 +240,14 @@ async function renderToday() {
   const stats = asObject(boot.stats);
   const jobs = asArray(boot.jobs);
   const pendingJobs = jobs.filter((job) => ["queued", "running", "waiting", "failed"].includes(job.state));
+  const androidPending = items.filter(item => item.state === "pending");
+  const androidCompleted = items.filter(item => item.state === "done").length;
 
   const hero = el("section", { class: "hero" }, [
     el("div", {}, [
       el("p", { class: "eyebrow", text: today.date ? formatDate(today.date) : "今天" }),
-      el("h2", { text: items.length ? `今天有 ${items.length} 项值得投入` : "今天可以从容整理" }),
-      el("p", { text: items.length ? `预计 ${number(today.minutes)} 分钟，时间预算 ${number(today.budget)} 分钟。可延期或跳过，不制造学习欠债。` : "目前没有学习任务。你可以生成清单，或先收集一份真正想理解的材料。" }),
+      el("h2", { text: isMobilePrototype() ? androidPending.length ? `今天还有 ${androidPending.length} 项待学习` : androidCompleted ? `今天已保存 ${androidCompleted} 项学习记录` : "今天可以从容整理" : items.length ? `今天有 ${items.length} 项值得投入` : "今天可以从容整理" }),
+      el("p", { text: isMobilePrototype() ? `待学习预计 ${androidPending.reduce((sum, item) => sum + number(item.minutes), 0)} 分钟，时间预算 ${number(today.budget)} 分钟。已结束并保存 ${androidCompleted} 项记录；保存记录不代表回答正确或掌握。` : items.length ? `预计 ${number(today.minutes)} 分钟，时间预算 ${number(today.budget)} 分钟。可延期或跳过，不制造学习欠债。` : "目前没有学习任务。你可以生成清单，或先收集一份真正想理解的材料。" }),
     ]),
     el("div", { class: "hero-actions" }, [
       button("收集资料", { onClick: () => navigate("capture") }),
@@ -1219,6 +1221,7 @@ async function beginStudy(noteId, planId, context = {}) {
     state.studyMaterialVisible = true;
     state.studyTab = "session";
     await navigate("study");
+    if (isMobilePrototype()) closeDrawer();
   } catch (error) { handleError(error); }
 }
 
@@ -1282,8 +1285,9 @@ async function studySessionPanel() {
   let session = state.currentStudy;
   if (session?.id) {
     try { session = await api.study(session.id); state.currentStudy = session; }
-    catch (error) { if (error.status !== 404) throw error; state.currentStudy = null; }
+    catch (error) { if (error.status !== 404) throw error; state.currentStudy = null; if (isMobilePrototype()) session = null; }
   }
+  if (!session && isMobilePrototype()) return androidSavedStudyEntry();
   if (!session) return emptyState("还没有进行中的学习", "从学习队列开始一次回忆与解释。系统会保留你的原始回答。", button("打开学习队列", { kind: "primary", onClick: () => { state.studyTab = "queue"; renderStudy(); } }));
   if (isMobilePrototype()) return androidStudySession(session);
   const turns = asArray(session.turns);
@@ -1384,11 +1388,27 @@ function studyStatusLabel(status) {
   return ({ reading: "阅读材料", unassessed: "未批改", awaiting_feedback: "等待反馈", feedback: "可继续追问", completed: isMobilePrototype() ? "记录已保存 · 未批改" : "已完成" })[status] || labels.state(status);
 }
 
+async function androidSavedStudyEntry() {
+  const data = await api.studySessions();
+  const sessions = asArray(data.sessions).slice().sort((a, b) => String(b.updatedAt || b.completedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.completedAt || a.createdAt || "")));
+  const latest = sessions[0];
+  if (!latest) return emptyState("还没有学习记录", "从学习队列开始一次回忆与解释，原答会保存在手机。", button("打开学习队列", { kind: "primary", onClick: async () => { state.studyTab = "queue"; await renderStudy(); } }));
+  return el("section", { class: "panel page-stack" }, [sectionHeading("已保存的学习记录", "重启后原答仍保留。下面打开最近记录；全部记录位于学习队列下方。"), el("h3", { text: latest.question || "最近一次学习" }), badge(studyStatusLabel(latest.status)), button(latest.status === "completed" ? "查看最近记录" : "继续最近学习", { kind: "primary", onClick: async () => {
+    state.currentStudy = { id: latest.id }; state.studyTab = "session";
+    state.studyMaterialVisible = latest.status === "reading" && !asArray(latest.turns).length;
+    try { await renderStudy(); } catch (error) { handleError(error); }
+  } }), button("查看全部已保存记录", { onClick: async () => {
+    state.studyTab = "queue";
+    try { await renderStudy(); const history = refs.main.querySelector('[data-tour="study-history"]'); if (history) { history.tabIndex = -1; history.scrollIntoView({ block: "start" }); history.focus({ preventScroll: true }); } }
+    catch (error) { handleError(error); }
+  } })]);
+}
+
 function androidStudySession(session) {
   const turns = asArray(session.turns), completed = session.status === "completed";
   const context = api.getContext();
   const current = () => api.getContext().version === context.version;
-  const wrapper = el("div", { class: "page-stack" }, [mobileNotice(), el("div", { class: "notice info", text: completed ? "本轮已结束并保存记录，未批改。记录不表示回答正确或已经掌握。" : turns.length ? "回答已保存在手机 · 未批改。你可以继续回答，也可以结束并保存记录。" : "先阅读材料，再用自己的话回答。手机只保存原答，不生成反馈。" })]);
+  const wrapper = el("div", { class: "page-stack" }, [el("div", { class: "notice info", text: completed ? "本轮已结束并保存记录，未批改。记录不表示回答正确或已经掌握。" : turns.length ? "回答已保存在手机 · 未批改。你可以继续回答，也可以结束并保存记录。" : "先阅读材料，再用自己的话回答。手机只保存原答，不生成反馈。" })]);
   if (state.studyMaterialVisible && !turns.length) {
     wrapper.append(el("section", { class: "panel" }, [sectionHeading("学习材料"), el("div", { class: "prose", text: session.material || "暂无材料" })]), button("隐藏材料，开始回忆", { kind: "primary", onClick: async () => { state.studyMaterialVisible = false; await renderStudy(); } }));
     return wrapper;
