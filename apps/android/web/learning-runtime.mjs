@@ -54,7 +54,14 @@ export function strings(value, label, max = 200) {
 export function validateNote(note, { sourceOnly = false, summary = false, persisted = false } = {}) {
   inputObject(note, persisted ? ['id', 'kind', 'title', 'body', 'hash', 'meta'] : ['id', 'kind', 'title', 'body', 'hash', 'path', 'meta', 'createdAt', 'updatedAt', 'limitations', 'children', 'structure', 'titleGeneration']);
   idText(note.id); if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(note.id)) fail('条目标识应为 UUID。');
-  text(note.hash, '版本标识', 256); titleText(note.title);
+  text(note.hash, '版本标识', 256);
+  if (!persisted && sourceOnly) {
+    // LocalSourceStore's existing source contract counts Unicode code points,
+    // so 200 emoji are valid even though they occupy 400 UTF-16 code units.
+    // Preserve that original title; new learning notes keep their stricter cap.
+    text(note.title, '标题', 800);
+    if ([...note.title].length > 200 || /[\u0000-\u001f\u007f-\u009f]/u.test(note.title)) fail('原文标题格式无效。');
+  } else titleText(note.title);
   if (!summary || note.body !== undefined) text(note.body, '正文', learningLimits.bodyBytes);
   if (!['source', 'knowledge', 'topic', 'mistake'].includes(note.kind) || sourceOnly && note.kind !== 'source') fail('条目类型无效。');
   jsonObject(note.meta, '条目属性'); jsonValue(note.meta);

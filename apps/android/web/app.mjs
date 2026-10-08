@@ -1600,9 +1600,9 @@ async function openTopic(topic) {
       el("dl", { class: "key-values" }, [
         el("div", { class: "key-value" }, [el("dt", { text: "预计投入" }), el("dd", { text: `${number(topic.minutes || meta.minutes || 20)} 分钟` })]),
         el("div", { class: "key-value" }, [el("dt", { text: "前置知识" }), el("dd", { text: Array.isArray(prerequisites) ? prerequisites.join("、") || "未标记缺口" : prerequisites || "未标记缺口" })]),
-        el("div", { class: "key-value" }, [el("dt", { text: "本包进度" }), el("dd", { text: `${number(progress.completedCount)} / ${number(progress.total || members.length)} 条已有练习结束或理解确认记录` })]),
+        el("div", { class: "key-value" }, [el("dt", { text: "本包进度" }), el("dd", { text: `${number(progress.completedCount)} / ${number(progress.total || members.length)} 条${isMobilePrototype() ? "已有个人理解确认" : "已有练习结束或理解确认记录"}` })]),
       ]),
-      el("div", { class: "notice info", text: "按下面的顺序学习。下方成员列表为当前顺序，说明原文可自行编辑。进度表示已有学习记录，不代表永久掌握；文本前置缺口仍需补充材料。" }),
+      el("div", { class: "notice info", text: isMobilePrototype() ? "按下面的顺序学习。离线结束只保留回答，不计入本包进度；整理并确认个人理解后才可推进后续内容。确认也不代表已通过批改或永久掌握。" : "按下面的顺序学习。下方成员列表为当前顺序，说明原文可自行编辑。进度表示已有学习记录，不代表永久掌握；文本前置缺口仍需补充材料。" }),
       progress.blockedNoteId ? el("div", { class: "notice" }, [el("p", { text: "下一项知识或前置内容暂不可学习，请先查看其研究限制或状态。" }), button("查看待处理知识", { kind: "text", onClick: () => openNote(progress.blockedNoteId) })]) : null,
       button(progress.nextNoteId ? `开始下一条：${progress.nextNoteTitle || "前置知识"}` : "本包暂无待继续内容", { kind: "primary", disabled: paused || !progress.nextNoteId, onClick: () => beginStudy(progress.nextNoteId, undefined, { topicId: topic.id }) }),
       el("ol", { class: "list" }, members.map((member, index) => el("li", { class: "list-item" }, [

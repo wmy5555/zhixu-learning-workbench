@@ -114,6 +114,21 @@ test('source summaries suffice for ordinary operations but extraction requires f
   assert.deepEqual(service.list({ q: 'undefined' }), []);
 });
 
+test('legacy native sources keep valid 200-code-point emoji titles and can be extracted under a short new title', () => {
+  const source = { ...note(50, {}, 'source'), title: '😀'.repeat(200) };
+  assert.equal(source.title.length, 400);
+  const service = app({ notes: [], sources: [source] });
+  const boot = service.bootstrap();
+  assert.equal(boot.stats.sources, 1);
+  assert.equal(boot.notes[0].title, source.title);
+  assert.equal(service.getNote(source.id).title, source.title);
+  const knowledge = service.extractSource(source.id, { title: '短知识标题', body: '明确标记的个人观点', claimType: 'opinion', expectedHash: source.hash });
+  assert.equal(knowledge.title, '短知识标题');
+  assert.equal(knowledge.meta.sourceSnapshot.title, source.title);
+  assert.equal(service.getNote(source.id).title, source.title);
+  assert.throws(() => service.extractSource(source.id, { title: source.title, body: '新学习条目保持严格限制', claimType: 'opinion', expectedHash: source.hash }), errorCode('LIMIT_REACHED'));
+});
+
 test('stale research, stale processing, retired and superseded knowledge stay outside study and today', () => {
   const notes = [note(1, { reviewAfter: '2020-01-01T00:00:00.000Z' }), note(2, { processKey: `${id(50)}:obsolete:0` }), note(3, { stage: 'retired' }), note(4, { supersededBy: id(5) })];
   const service = app({ notes, sources: [note(50, {}, 'source')] });
