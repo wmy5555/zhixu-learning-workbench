@@ -6,6 +6,32 @@ const source = { id: "reflection", kind: "source", title: "合成反思", body: 
 const bootstrap = async () => ({ notes: [], today: { items: [] }, stats: {} });
 const guide = async () => ({ steps: [{ id: "sources", label: "保存原文", completed: true }, { id: "answer", label: "保存回答", completed: false }] });
 
+test("Android learning restore keeps committed success when bootstrap refresh fails and does not repeat restore", async () => {
+  let nativeCalls = 0, refreshCalls = 0;
+  const fixture = await createAndroidBrowser({ api: { androidGuide: guide,
+    previewAndroidLearningBackup: async () => ({ token: "consumed-learning-token", context: "formal", notes: 1, history: 1, canRestore: true }),
+    restoreAndroidLearningBackup: async token => { assert.equal(token, "consumed-learning-token"); nativeCalls++; return { restored: true, unchanged: false }; },
+    bootstrap: async () => { refreshCalls++; throw new Error("bootstrap unavailable after commit"); },
+  } });
+  await fixture.app.renderSystem();
+  const main = fixture.app.refs.main;
+  await click(findButton(main, "选择学习备份并预览"));
+  const reviewed = control(main, "learningRestoreReviewed"), restore = findButton(main, "确认恢复学习记录");
+  reviewed.checked = true; reviewed.events.change();
+  await click(restore);
+  assert.equal(nativeCalls, 1);
+  assert.equal(refreshCalls, 1);
+  assert.match(main.textContent, /学习记录恢复完成/);
+  assert.match(main.textContent, /页面刷新未完成/);
+  assert.match(main.textContent, /无需再次恢复备份/);
+  assert.equal(restore.disabled, true);
+  assert.equal(reviewed.checked, false);
+  assert.equal(reviewed.disabled, true);
+  await click(restore);
+  assert.equal(nativeCalls, 1);
+  assert.doesNotMatch(fixture.document.querySelector("#toast-region").textContent, /bootstrap unavailable after commit/);
+});
+
 test("Android current learning after restart exposes saved completed session and reloads the original answer", async () => {
   const calls = [];
   const summary = { id: "persisted-session", noteId: "knowledge", status: "completed", createdAt: "2026-10-08T10:00:00Z", question: "怎样反思", turns: [] };

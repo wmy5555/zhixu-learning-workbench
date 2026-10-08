@@ -2024,7 +2024,13 @@ function androidLearningBackupPanel() {
     if (!await confirmAction({ title: "恢复预览中的学习记录？", message: "仅向当前空学习库恢复预览内容。请核对正式库或练习库目标。", confirmText: "确认恢复", danger: true })) return;
     if (!current() || pending !== selected || busy) return;
     busy = true; update();
-    try { const result = await api.restoreAndroidLearningBackup(selected.token); if (!current()) return; pending = null; reviewed.checked = false; clear(preview).append(el("p", { text: result.unchanged ? "已有相同学习记录，无需恢复。" : result.restored ? "学习记录恢复完成。" : "本次没有恢复学习记录。" })); await refreshBootstrap(); }
+    try {
+      const result = await api.restoreAndroidLearningBackup(selected.token); if (!current()) return;
+      pending = null; reviewed.checked = false;
+      clear(preview).append(el("p", { text: result.unchanged ? "已有相同学习记录，无需恢复。" : result.restored ? "学习记录恢复完成。" : "本次没有恢复学习记录。" }));
+      try { await refreshBootstrap(); }
+      catch { if (current()) { preview.append(el("p", { text: "页面刷新未完成。已恢复的学习记录仍保留，请使用顶部刷新按钮或重新打开应用查看，无需再次恢复备份。" })); toast("学习备份已处理，请刷新页面或重新打开应用查看", "info"); } }
+    }
     catch (error) { if (current()) { pending = null; reviewed.checked = false; handleError(error); } }
     finally { busy = false; update(); }
   } });
