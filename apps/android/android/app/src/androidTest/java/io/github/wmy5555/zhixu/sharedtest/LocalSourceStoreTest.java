@@ -287,6 +287,226 @@ public class LocalSourceStoreTest extends AndroidTestCase {
         }
         assertTrue(previousPreserved);
         assertEquals(original, readText(new File(root, "originals/" + id + ".md")));
+        assertEquals(1, new File(root, "save-transactions-v1").listFiles().length);
+        store.close();
+        store = new LocalSourceStore(root);
+        assertEquals(previousMarkdown, readText(noteFile(current)));
+        assertEquals(current.getString("hash"), store.read(id).getString("hash"));
+        assertEquals(1, store.list("第二版").length());
+        assertEquals(3, store.history(id).length()); // immutable original plus both retained edit snapshots
+        JSONObject backup = store.backup().getJSONArray("notes").getJSONObject(0);
+        assertEquals(previousMarkdown, backup.getString("current"));
+        assertEquals(2, backup.getJSONArray("history").length());
+        assertEquals(0, new File(root, "save-transactions-v1").listFiles().length);
+    }
+
+    public void testOneLostCurrentWriteRepairsOldVersionBeforeReturningFailure() throws Exception {
+        JSONObject first = store.save(source("旧版可达", "第一版合成资料"));
+        JSONObject previous = store.save(edit(first, "旧版可达", "第二版不能丢失"));
+        String bytes = readText(noteFile(previous));
+        store.close();
+        store = new LocalSourceStore(root) {
+            private boolean failed;
+            @Override void writeAtomically(File file, byte[] value) throws IOException {
+                if (!failed && "notes".equals(file.getParentFile().getName())) {
+                    failed = true;
+                    new AtomicFile(file).delete();
+                    throw new IOException("Synthetic one-shot lost current");
+                }
+                super.writeAtomically(file, value);
+            }
+        };
+        expectCode("STORE_ERROR", () -> store.save(edit(previous, "未提交", "第三版未能保存")));
+        assertEquals(bytes, readText(noteFile(previous)));
+        assertEquals(previous.getString("hash"), store.read(previous.getString("id")).getString("hash"));
+        assertEquals(1, store.list("不能丢失").length());
+        assertEquals(bytes, store.backup().getJSONArray("notes").getJSONObject(0).getString("current"));
+        assertEquals(2, historyCount(previous.getString("id")));
+    }
+
+    public void testInterruptedReplacementWithMissingCurrentRepairsOnReopen() throws Exception {
+        JSONObject first = store.save(source("重开恢复", "第一版合成资料"));
+        JSONObject previous = store.save(edit(first, "重开恢复", "最后已提交的第二版"));
+        String bytes = readText(noteFile(previous));
+        store.close();
+        store = new LocalSourceStore(root) {
+            @Override void writeAtomically(File file, byte[] value) throws IOException {
+                if ("notes".equals(file.getParentFile().getName())) {
+                    new AtomicFile(file).delete();
+                    throw new SimulatedProcessExit();
+                }
+                super.writeAtomically(file, value);
+            }
+        };
+        try { store.save(edit(previous, "中断修改", "尚未提交的第三版")); fail("Expected simulated process exit"); }
+        catch (SimulatedProcessExit expected) { /* No catch-time repair can execute. */ }
+        assertFalse(noteFile(previous).exists());
+        assertEquals(2, historyCount(previous.getString("id")));
+        store.close();
+        store = new LocalSourceStore(root);
+        assertEquals(bytes, readText(noteFile(previous)));
+        assertEquals(1, store.list("").length());
+        assertEquals(previous.getString("hash"), store.read(previous.getString("id")).getString("hash"));
+        assertEquals(bytes, store.backup().getJSONArray("notes").getJSONObject(0).getString("current"));
+        assertEquals(2, historyCount(previous.getString("id")));
+    }
+
+    public void testExistingAmbiguousCurrentIsPreservedWithExplicitRecoveryError() throws Exception {
+        JSONObject first = store.save(source("不确定当前版本", "用户最初原文"));
+        JSONObject previous = store.save(edit(first, "不确定当前版本", "最后已提交的第二版"));
+        String firstMarkdown = readText(new File(root, "originals/" + first.getString("id") + ".md"));
+        String previousMarkdown = readText(noteFile(previous));
+        store.close();
+        store = new LocalSourceStore(root) {
+            @Override void writeAtomically(File file, byte[] value) throws IOException {
+                if ("notes".equals(file.getParentFile().getName())) {
+                    // A valid external change is neither the expected previous bytes nor our new bytes.
+                    super.writeAtomically(file, firstMarkdown.getBytes(StandardCharsets.UTF_8));
+                    throw new IOException("Synthetic unexpected current version");
+                }
+                super.writeAtomically(file, value);
+            }
+        };
+        expectCode("STORE_ERROR", () -> store.save(edit(previous, "保存失败", "未提交的第三版")));
+        assertEquals(firstMarkdown, readText(noteFile(previous)));
+        expectCode("CORRUPT", () -> store.list(""));
+        expectCode("CORRUPT", () -> store.read(previous.getString("id")));
+        expectCode("CORRUPT", () -> store.backup());
+        boolean oldPreserved = false;
+        for (File file : new File(root, "history/" + previous.getString("id")).listFiles()) {
+            if (previousMarkdown.equals(readText(file))) oldPreserved = true;
+        }
+        assertTrue(oldPreserved);
+        assertEquals(1, new File(root, "save-transactions-v1").listFiles().length);
+        store.close();
+        expectCode("CORRUPT", () -> new LocalSourceStore(root));
+        assertEquals(firstMarkdown, readText(noteFile(previous)));
+    }
+
+    public void testTemporarilyUnreadableCurrentRetainsJournalAndSnapshotUntilReopen() throws Exception {
+        JSONObject first = store.save(source("暂时不可读", "旧原文仍应保留"));
+        String original = readText(noteFile(first));
+        store.close();
+        store = new LocalSourceStore(root) {
+            private boolean unreadable;
+            @Override void writeAtomically(File file, byte[] value) throws IOException {
+                if ("notes".equals(file.getParentFile().getName())) {
+                    unreadable = true;
+                    throw new IOException("Synthetic current read fault");
+                }
+                super.writeAtomically(file, value);
+            }
+            @Override byte[] readBytes(File file) throws IOException, LocalSourceStore.StoreException {
+                if (unreadable && "notes".equals(file.getParentFile().getName())) throw new IOException("Synthetic unreadable current");
+                return super.readBytes(file);
+            }
+        };
+        expectCode("STORE_ERROR", () -> store.save(edit(first, "尚未保存", "新的合成输入")));
+        expectCode("CORRUPT", () -> store.read(first.getString("id")));
+        assertEquals(original, readText(noteFile(first)));
+        assertEquals(1, historyCount(first.getString("id")));
+        assertEquals(1, new File(root, "save-transactions-v1").listFiles().length);
+        store.close();
+        store = new LocalSourceStore(root);
+        assertEquals(first.getString("hash"), store.read(first.getString("id")).getString("hash"));
+        assertEquals(original, store.backup().getJSONArray("notes").getJSONObject(0).getString("current"));
+        assertEquals(1, historyCount(first.getString("id")));
+    }
+
+    public void testRepeatedFailedNewWritesCleanOnlyJournalOwnedOriginals() throws Exception {
+        store.close();
+        store = new LocalSourceStore(root) {
+            @Override void writeAtomically(File file, byte[] value) throws IOException {
+                if ("notes".equals(file.getParentFile().getName())) throw new IOException("Synthetic new current write failure");
+                super.writeAtomically(file, value);
+            }
+        };
+        for (int attempt = 0; attempt < 3; attempt++) {
+            expectCode("STORE_ERROR", () -> store.save(source("未提交的新资料", "合成草稿不能留下永久孤儿")));
+            assertEquals(0, new File(root, "notes").listFiles().length);
+            assertEquals(0, new File(root, "originals").listFiles().length);
+            assertEquals(0, new File(root, "save-transactions-v1").listFiles().length);
+            assertEquals(0, store.backup().getJSONArray("notes").length());
+        }
+        store.close();
+        store = new LocalSourceStore(root);
+        assertEquals(0, store.list("").length());
+    }
+
+    public void testInterruptedNewSaveReclaimsOriginalAndPartialCurrentOnReopen() throws Exception {
+        store.close();
+        store = new LocalSourceStore(root) {
+            @Override void writeAtomically(File file, byte[] value) throws IOException {
+                if ("notes".equals(file.getParentFile().getName())) {
+                    AtomicFile atomic = new AtomicFile(file);
+                    FileOutputStream output = atomic.startWrite();
+                    output.write("unfinished".getBytes(StandardCharsets.UTF_8)); output.close();
+                    throw new SimulatedProcessExit();
+                }
+                super.writeAtomically(file, value);
+            }
+        };
+        try { store.save(source("新建中断", "尚未提交的合成原文")); fail("Expected simulated process exit"); }
+        catch (SimulatedProcessExit expected) { /* The synced journal authorizes startup cleanup. */ }
+        assertEquals(1, new File(root, "originals").listFiles().length);
+        assertEquals(1, new File(root, "save-transactions-v1").listFiles().length);
+        store.close();
+        store = new LocalSourceStore(root);
+        assertEquals(0, store.list("").length());
+        assertEquals(0, new File(root, "notes").listFiles().length);
+        assertEquals(0, new File(root, "originals").listFiles().length);
+        assertEquals(0, new File(root, "save-transactions-v1").listFiles().length);
+        assertEquals(0, store.backup().getJSONArray("notes").length());
+    }
+
+    public void testInterruptedNewSaveAfterCurrentCommitRetainsOriginalAndNote() throws Exception {
+        store.close();
+        store = new LocalSourceStore(root) {
+            @Override void writeAtomically(File file, byte[] value) throws IOException {
+                super.writeAtomically(file, value);
+                if ("notes".equals(file.getParentFile().getName())) throw new SimulatedProcessExit();
+            }
+        };
+        try { store.save(source("已提交的新资料", "进程退出前已完整提交")); fail("Expected simulated process exit"); }
+        catch (SimulatedProcessExit expected) { /* The authority has committed but the journal remains. */ }
+        assertEquals(1, new File(root, "notes").listFiles().length);
+        assertEquals(1, new File(root, "originals").listFiles().length);
+        store.close();
+        store = new LocalSourceStore(root);
+        JSONObject note = store.list("").getJSONObject(0);
+        assertEquals("进程退出前已完整提交", note.getString("body"));
+        assertEquals(readText(noteFile(note)), readText(new File(root, "originals/" + note.getString("id") + ".md")));
+        assertEquals(1, store.backup().getJSONArray("notes").length());
+        assertEquals(0, new File(root, "save-transactions-v1").listFiles().length);
+    }
+
+    public void testUnmarkedAndAmbiguousOriginalsAreNeverDeleted() throws Exception {
+        JSONObject saved = store.save(source("无法判断的旧原文", "没有保存日志的原始资料必须保留"));
+        File original = new File(root, "originals/" + saved.getString("id") + ".md");
+        String bytes = readText(original);
+        new AtomicFile(noteFile(saved)).delete();
+        store.close();
+        store = new LocalSourceStore(root);
+        assertEquals(bytes, readText(original));
+        assertEquals(0, new File(root, "save-transactions-v1").listFiles().length);
+        store.close();
+        store = new LocalSourceStore(root) {
+            @Override void writeAtomically(File file, byte[] value) throws IOException {
+                if ("notes".equals(file.getParentFile().getName())) throw new SimulatedProcessExit();
+                super.writeAtomically(file, value);
+            }
+        };
+        try { store.save(source("未完成的新建", "需要校验才能清理")); fail("Expected simulated process exit"); }
+        catch (SimulatedProcessExit expected) { }
+        File changed = null;
+        for (File file : new File(root, "originals").listFiles()) if (!file.equals(original)) changed = file;
+        assertNotNull(changed);
+        try (FileOutputStream output = new FileOutputStream(changed)) { output.write("unexpected external bytes".getBytes(StandardCharsets.UTF_8)); }
+        store.close();
+        expectCode("CORRUPT", () -> new LocalSourceStore(root));
+        assertEquals(bytes, readText(original));
+        assertEquals("unexpected external bytes", readText(changed));
+        assertEquals(1, new File(root, "save-transactions-v1").listFiles().length);
     }
 
     public void testInterruptedSaveKeepsRecoveryEvidenceOnReopen() throws Exception {
