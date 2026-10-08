@@ -63,6 +63,7 @@ export function createAndroidDataPanel({ api, onRestored, onError }) {
       const result = await api.restoreAndroidBackup(selected.token);
       forget();
       status.textContent = `已新增 ${result.imported} 份，保留相同资料 ${result.unchanged} 份，跳过冲突 ${result.conflictsSkipped} 份，补入历史 ${result.versionsImported} 条。`;
+      if (result.readbackPending) status.textContent += ' 资料已恢复，列表暂未刷新；请刷新页面或重新打开应用查看，无需再次恢复备份。';
       toast('备份恢复完成', 'success');
       try { await onRestored(); }
       catch {

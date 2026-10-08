@@ -57,6 +57,34 @@ public class LocalSourceStoreTest extends AndroidTestCase {
         assertEquals(0, store.list("不存在的检索词").length());
     }
 
+    public void testNewTitlesStayWithinExchangeUtf16Limit() throws Exception {
+        StringBuilder title = new StringBuilder();
+        for (int index = 0; index < 100; index++) title.append("\uD83D\uDE00");
+        JSONObject saved = store.save(source(title.toString(), "标题边界合成正文"));
+        assertEquals(title.toString(), saved.getString("title"));
+        expectCode("VALIDATION", () -> store.save(source(title + "a", "不可新建")));
+        expectCode("VALIDATION", () -> store.save(edit(saved, title + "\uD83D\uDE00", "不可修改")));
+        assertEquals(1, store.list("").length());
+        assertEquals(saved.getString("hash"), store.read(saved.getString("id")).getString("hash"));
+        // A legacy snapshot can contain 101 emoji: read/backup must not truncate or reject it.
+        String legacyTitle = title + "\uD83D\uDE00";
+        String original = readText(noteFile(saved));
+        int headerEnd = original.indexOf("\n---\n", 4);
+        JSONObject header = new JSONObject(original.substring(4, headerEnd));
+        org.json.JSONArray hashFields = new org.json.JSONArray().put(legacyTitle).put(saved.getString("body")).put("reference").put("local");
+        for (int index = 0; index < 6; index++) hashFields.put("");
+        byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(hashFields.toString().getBytes(StandardCharsets.UTF_8));
+        StringBuilder legacyHash = new StringBuilder();
+        for (byte item : digest) legacyHash.append(String.format(java.util.Locale.ROOT, "%02x", item & 0xff));
+        String legacyRaw = "---\n" + header.put("title", legacyTitle).put("hash", legacyHash.toString()) + "\n---\n" + saved.getString("body");
+        store.close();
+        try (FileOutputStream output = new FileOutputStream(noteFile(saved))) { output.write(legacyRaw.getBytes(StandardCharsets.UTF_8)); }
+        try (FileOutputStream output = new FileOutputStream(new File(root, "originals/" + saved.getString("id") + ".md"))) { output.write(legacyRaw.getBytes(StandardCharsets.UTF_8)); }
+        store = new LocalSourceStore(root);
+        assertEquals(legacyTitle, store.read(saved.getString("id")).getString("title"));
+        assertEquals(legacyRaw, store.backup().getJSONArray("notes").getJSONObject(0).getString("current"));
+    }
+
     public void testEditsRequireCurrentHashAndNoopCreatesNoHistory() throws Exception {
         JSONObject first = store.save(source("原题", "第一版"));
         String id = first.getString("id");

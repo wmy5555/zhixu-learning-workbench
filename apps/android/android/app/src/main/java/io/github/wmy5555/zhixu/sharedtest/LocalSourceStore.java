@@ -154,6 +154,9 @@ public class LocalSourceStore implements AutoCloseable {
             String title = requireString(input, "title").trim();
             String body = requireString(input, "body");
             validateContent(title, body);
+            // New writes must remain exportable to the desktop UTF-16 title limit.
+            // The reader keeps accepting legacy titles without rewriting their original bytes.
+            if (title.length() > 200) throw validation("标题最多 200 个字符（emoji 等字符可能占两位），请缩短后保存。");
             String id = null;
             if (input.has("id")) {
                 id = requireString(input, "id");
@@ -519,11 +522,19 @@ public class LocalSourceStore implements AutoCloseable {
     public JSONObject restoreBackup(String token, String conflictPolicy) throws StoreException {
         synchronized (LOCK) {
             JSONObject result = backups.restore(token, conflictPolicy);
-            try { rebuildIndex(readAll()); }
-            catch (IOException | JSONException exception) { throw new StoreException("STORE_ERROR", "恢复已提交，索引将在重新打开时重建。"); }
+            try { refreshAfterRestore(); }
+            catch (IOException | JSONException | StoreException exception) {
+                // Replay has already returned a durable commit; readback is not another restore.
+                discardIndex();
+                try { result.put("readbackPending", true); }
+                catch (JSONException impossible) { throw new IllegalStateException(impossible); }
+            }
             return result;
         }
     }
+
+    // Package-private seam for a transient read failure after durable restore replay.
+    void refreshAfterRestore() throws IOException, JSONException, StoreException { rebuildIndex(readAll()); }
 
     File notesDirectory() { return notesDirectory; }
     File originalsDirectory() { return originalsDirectory; }
