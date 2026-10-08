@@ -1127,6 +1127,11 @@ async function renderMerge(note, relatedId = "") {
   } catch (error) { handleError(error); }
 }
 
+function androidSourceVersionSummary(version) {
+  const fields = [["platform", "来源平台"], ["author", "作者"], ["url", "原始链接"], ["date", "日期"], ["locator", "原文位置"], ["topic", "主题"]];
+  return [`标题：${version.title || "未命名"}`, ...fields.map(([key, label]) => `${label}：${version.meta?.[key] || "（空，恢复时清除当前值）"}`)].join("\n");
+}
+
 async function renderHistory(note, { returnToSourceId = "" } = {}) {
   refs.drawerBody.dataset.tour = "note-history";
   try {
@@ -1139,16 +1144,20 @@ async function renderHistory(note, { returnToSourceId = "" } = {}) {
         el("div", { class: "item-copy" }, [
           el("h3", { text: formatDate(version.createdAt || version.updatedAt, true) }),
           el("p", { text: isMobilePrototype() ? version.id === "original" ? "最初收集的原文" : "修改前保留的版本" : version.reason || version.hash || "历史版本" }),
+          ...(isMobilePrototype() && note.kind === "source" ? [el("p", { text: "恢复将同时替换标题、正文和以下来源信息；空字段会清除当前值。" }), el("pre", { class: "mono-block", text: version.meta ? androidSourceVersionSummary(version) : "未取得此版本的来源信息，暂不能恢复。" })] : []),
           el("details", {}, [el("summary", { text: "审阅旧版本正文" }), el("pre", { class: "mono-block", text: version.raw || version.body || "此版本没有可显示的正文快照" })]),
         ]),
-        button("恢复此版本", { onClick: () => restoreVersion(note, version, returnToSourceId) }),
+        button("恢复此版本", { disabled: isMobilePrototype() && note.kind === "source" && !version.meta, onClick: () => restoreVersion(note, version, returnToSourceId) }),
       ]))) : emptyState("没有可用的历史版本", "首次修改后，旧版本会出现在这里。"),
     );
   } catch (error) { handleError(error); }
 }
 
 async function restoreVersion(note, version, returnToSourceId = "") {
-  const ok = await confirmAction({ title: "恢复这个版本？", message: "恢复前会检查资料是否又有修改，并保留当前版本。", confirmText: "恢复" });
+  const sourceVersion = isMobilePrototype() && note.kind === "source";
+  if (sourceVersion && !version.meta) return;
+  const message = sourceVersion ? `标题、正文和来源信息将一起恢复为此版本，当前版本会另行保留。请核对来源；空字段会清除当前值。\n\n${androidSourceVersionSummary(version)}` : "恢复前会检查资料是否又有修改，并保留当前版本。";
+  const ok = await confirmAction({ title: "恢复这个版本？", message, confirmText: "恢复" });
   if (!ok) return;
   try {
     const restored = await api.restoreVersion(note.id, { versionId: version.versionId || version.id, expectedHash: note.hash });

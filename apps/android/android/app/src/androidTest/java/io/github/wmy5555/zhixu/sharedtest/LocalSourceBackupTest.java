@@ -178,9 +178,11 @@ public class LocalSourceBackupTest extends AndroidTestCase {
     public void testRestoreVersionArchivesCurrentAndEnforcesHashAndMetadataClearing() throws Exception {
         JSONObject first = save("原始版本", "第一次保存");
         JSONObject second = store.save(edit(first, "新版本", "编辑后内容")
-            .put("meta", new JSONObject().put("author", "后来补充的合成作者")));
+            .put("meta", new JSONObject().put("author", "后来补充的合成作者").put("platform", "合成平台")
+                .put("url", "https://example.test/new").put("date", "2024年春").put("locator", "第 2 段").put("topic", "新主题")));
         String id = first.getString("id");
         assertEquals("original", store.history(id).getJSONObject(0).getString("id"));
+        assertEquals(first.getJSONObject("meta").toString(), store.history(id).getJSONObject(0).getJSONObject("meta").toString());
         expect("CONFLICT", () -> store.restoreVersion(id, "original", first.getString("hash")));
         expect("VALIDATION", () -> store.restoreVersion(id, "../notes/x.md", second.getString("hash")));
         JSONObject restored = store.restoreVersion(id, "original", second.getString("hash"));
@@ -190,7 +192,10 @@ public class LocalSourceBackupTest extends AndroidTestCase {
         assertEquals(3, history.length());
         boolean hasPrevious = false;
         for (int index = 1; index < history.length(); index++) {
-            if ("编辑后内容".equals(history.getJSONObject(index).getString("body"))) hasPrevious = true;
+            if ("编辑后内容".equals(history.getJSONObject(index).getString("body"))) {
+                hasPrevious = true;
+                assertEquals(second.getJSONObject("meta").toString(), history.getJSONObject(index).getJSONObject("meta").toString());
+            }
         }
         assertTrue(hasPrevious);
         expect("CONFLICT", () -> store.restoreVersion(id, "original", second.getString("hash")));
