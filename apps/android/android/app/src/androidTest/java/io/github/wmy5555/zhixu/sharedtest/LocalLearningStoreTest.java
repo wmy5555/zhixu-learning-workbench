@@ -97,6 +97,184 @@ public class LocalLearningStoreTest extends AndroidTestCase {
         assertEquals(2, new LocalLearningStore(root, "formal").backup().getJSONArray("documents").length());
     }
 
+    public void testCommitAndRestoreReturnKnownRevisionWhenPostCommitCleanupIoIsDeferred() throws Exception {
+        JSONObject firstNote = note("knowledge", "合成提交清理回归", "旧版合成正文", "old");
+        JSONObject first = formal.commit("empty", state(firstNote));
+        JSONObject nextNote = new JSONObject(firstNote.toString()).put("body", "已保存的新版合成正文").put("hash", "next");
+        formal.commit(first.getString("revision"), state(nextNote));
+        JSONObject incoming = formal.backup();
+        for (boolean restore : new boolean[] { false, true }) {
+            for (String operation : Arrays.asList("list", "delete", "sync")) {
+                File parent = new File(root, "deferred-" + restore + "-" + operation);
+                LocalLearningStore target = new LocalLearningStore(parent, "formal");
+                File directory = new File(parent, "formal/objects");
+                String orphan = repeated('f', 64) + ".md";
+                File unknown = new File(directory, "unrecognized.txt");
+                int[] failures = { 0 };
+                target.setFailurePoint(stage -> {
+                    if ("after-manifest".equals(stage)) {
+                        for (String suffix : Arrays.asList("", ".new", ".bak")) writeText(new File(directory, orphan + suffix), "未引用的合成暂存");
+                        writeText(unknown, "未知文件保持原样");
+                        target.setCleanupFailurePointForTests(point -> {
+                            if (operation.equals(point)) {
+                                failures[0]++;
+                                throw new IOException("Synthetic persistent learning cleanup " + operation + " failure");
+                            }
+                        });
+                    }
+                });
+                String token = restore ? target.previewRestore(incoming).getString("token") : null;
+                JSONObject result = restore ? target.restoreBackup(token) : target.commit("empty", state(nextNote));
+                assertTrue(failures[0] > 0);
+                String revision = result.getString("revision");
+                assertFalse("empty".equals(revision));
+                assertEquals(revision, new JSONObject(readText(new File(parent, "formal/manifest.json"))).getString("revision"));
+                target.setFailurePoint(stage -> {
+                    if ("before-recovery-sync".equals(stage)) throw new IOException("Unchanged known-durable authority must not need another recovery sync");
+                });
+                assertEquals(revision, target.load().getString("revision"));
+                assertEquals(result.getJSONObject("state").toString(), target.load().getJSONObject("state").toString());
+                assertEquals(1, target.load().getJSONObject("state").getJSONArray("notes").length());
+                assertEquals(restore ? 2 : 1, target.backup().getJSONArray("documents").length());
+                assertEquals(revision, target.commit(revision, result.getJSONObject("state")).getString("revision"));
+                JSONObject duplicateAttempt = state(nextNote, note("knowledge", "新的UUID操作", "不能使用过时版本重试", "duplicate"));
+                expectCode("CONFLICT", () -> target.commit("empty", duplicateAttempt));
+                assertEquals(revision, target.load().getString("revision"));
+                if (restore) {
+                    assertTrue(result.getBoolean("restored"));
+                    expectCode("INVALID_PREVIEW", () -> target.restoreBackup(token));
+                    JSONObject identical = target.previewRestore(incoming);
+                    JSONObject unchanged = target.restoreBackup(identical.getString("token"));
+                    assertTrue(unchanged.getBoolean("unchanged"));
+                    assertEquals(revision, unchanged.getString("revision"));
+                }
+                // A real new write must clear/sync owned residue first even while read/no-op/backup stay usable.
+                JSONObject newState = state(nextNote, note("topic", "新写入须严格清理", "未提交的合成专题", "new-topic"));
+                String manifestBefore = readText(new File(parent, "formal/manifest.json"));
+                expectCode("STORE_ERROR", () -> target.commit(revision, newState));
+                assertEquals(manifestBefore, readText(new File(parent, "formal/manifest.json")));
+                assertEquals(1, target.load().getJSONObject("state").getJSONArray("notes").length());
+                assertEquals("未知文件保持原样", readText(unknown));
+                target.setFailurePoint(null);
+                target.setCleanupFailurePointForTests(null);
+                LocalLearningStore reopened = new LocalLearningStore(parent, "formal");
+                assertEquals(revision, reopened.load().getString("revision"));
+                for (String suffix : Arrays.asList("", ".new", ".bak")) assertFalse(new File(directory, orphan + suffix).exists());
+                assertEquals("未知文件保持原样", readText(unknown));
+                assertEquals(restore ? 2 : 1, reopened.backup().getJSONArray("documents").length());
+            }
+        }
+    }
+
+    public void testResetReturnsKnownEmptyRevisionWhenPostCommitCleanupIoIsDeferred() throws Exception {
+        for (String operation : Arrays.asList("list", "delete", "sync")) {
+            File parent = new File(root, "reset-deferred-" + operation);
+            LocalLearningStore practice = new LocalLearningStore(parent, "practice");
+            JSONObject saved = practice.commit("empty", state(note("source", "合成待清空原文", "清空提交后允许延后清理", "reset")));
+            File directory = new File(parent, "practice/objects");
+            File unknown = new File(directory, "unrecognized.txt");
+            writeText(unknown, "练习清空不删除未知文件");
+            int[] failures = { 0 };
+            practice.setFailurePoint(stage -> {
+                if ("after-manifest".equals(stage)) {
+                    practice.setCleanupFailurePointForTests(point -> {
+                        if (operation.equals(point)) {
+                            failures[0]++;
+                            throw new IOException("Synthetic persistent reset cleanup " + operation + " failure");
+                        }
+                    });
+                }
+            });
+            JSONObject result = practice.reset(saved.getString("revision"));
+            assertTrue(failures[0] > 0);
+            String revision = result.getString("revision");
+            assertFalse(saved.getString("revision").equals(revision));
+            assertEquals(revision, new JSONObject(readText(new File(parent, "practice/manifest.json"))).getString("revision"));
+            practice.setFailurePoint(stage -> {
+                if ("before-recovery-sync".equals(stage)) throw new IOException("Known-durable reset must not require another recovery sync");
+            });
+            assertEquals(revision, practice.load().getString("revision"));
+            assertEquals(0, practice.load().getJSONObject("state").getJSONArray("notes").length());
+            assertEquals(0, practice.backup().getJSONArray("documents").length());
+            assertEquals(revision, practice.commit(revision, result.getJSONObject("state")).getString("revision"));
+            expectCode("CONFLICT", () -> practice.reset(saved.getString("revision")));
+            JSONObject newState = state(note("topic", "清空后的新写入", "清理恢复前不能积累残留", "reset-next"));
+            String manifestBefore = readText(new File(parent, "practice/manifest.json"));
+            expectCode("STORE_ERROR", () -> practice.commit(revision, newState));
+            assertEquals(manifestBefore, readText(new File(parent, "practice/manifest.json")));
+            assertEquals("练习清空不删除未知文件", readText(unknown));
+            practice.setFailurePoint(null);
+            practice.setCleanupFailurePointForTests(null);
+            LocalLearningStore reopened = new LocalLearningStore(parent, "practice");
+            assertEquals(revision, reopened.load().getString("revision"));
+            assertEquals(0, reopened.backup().getJSONArray("documents").length());
+            assertEquals(1, directory.listFiles().length);
+            assertEquals("练习清空不删除未知文件", readText(unknown));
+            assertEquals(1, reopened.commit(revision, newState).getJSONObject("state").getJSONArray("notes").length());
+        }
+    }
+
+    public void testCleanupRejectsDangerousEntriesBeforeDeletingAnyRecognizedObject() throws Exception {
+        for (boolean linked : new boolean[] { false, true }) {
+            File parent = new File(root, "unsafe-cleanup-" + linked);
+            LocalLearningStore target = new LocalLearningStore(parent, "formal");
+            File directory = new File(parent, "formal/objects");
+            File safe = new File(directory, repeated('d', 64) + ".md.new");
+            File unsafe = new File(directory, repeated('c', 64) + ".md");
+            File outside = new File(root, "outside-learning-cleanup-" + linked + ".txt");
+            writeText(outside, "不能跟随链接删除的合成文件");
+            JSONObject savedNote = note("knowledge", "安全错误仍保留", "已经提交但清理路径不安全", "safe-note");
+            target.setFailurePoint(stage -> {
+                if ("after-manifest".equals(stage)) {
+                    writeText(safe, "整个删除集合确认安全之前必须保留");
+                    if (linked) {
+                        try { Os.symlink(outside.getPath(), unsafe.getPath()); }
+                        catch (android.system.ErrnoException exception) { throw new IOException(exception); }
+                    } else if (!unsafe.mkdir()) throw new IOException("Cannot create synthetic unsafe object entry");
+                }
+            });
+            try {
+                expectCode("STORE_ERROR", () -> target.commit("empty", state(savedNote)));
+                assertEquals("整个删除集合确认安全之前必须保留", readText(safe));
+                assertEquals("不能跟随链接删除的合成文件", readText(outside));
+                expectCode("STORE_ERROR", target::load);
+                assertTrue(safe.isFile());
+            } finally { assertTrue(unsafe.delete()); } // Remove only the test link/directory itself.
+            target.setFailurePoint(null);
+            JSONObject saved = target.load();
+            assertEquals(savedNote.getString("id"), saved.getJSONObject("state").getJSONArray("notes").getJSONObject(0).getString("id"));
+            assertFalse(safe.exists());
+            JSONObject unknownReference = target.backup();
+            unknownReference.getJSONObject("manifest").getJSONArray("notes").getJSONObject(0).put("file", "unknown.md");
+            expectCode("VALIDATION", () -> target.previewRestore(unknownReference));
+            assertEquals(saved.toString(), target.load().toString());
+        }
+    }
+
+    public void testRecoveredManifestMustSyncBeforeCollectingPreviousAuthorityObjects() throws Exception {
+        LocalLearningStore practice = new LocalLearningStore(root, "practice");
+        JSONObject saved = practice.commit("empty", state(note("source", "合成练习原文", "不能在提交目录同步前清理", "practice")));
+        File objects = new File(root, "practice/objects");
+        assertEquals(1, objects.listFiles().length);
+        practice.setFailurePoint(stage -> {
+            if ("before-manifest-directory-sync".equals(stage)) throw new SimulatedLearningProcessExit();
+        });
+        try { practice.reset(saved.getString("revision")); fail("Expected process interruption before directory sync"); }
+        catch (SimulatedLearningProcessExit expected) { /* New manifest is visible, but its rename was not synced. */ }
+        assertEquals(1, objects.listFiles().length);
+        practice.setFailurePoint(stage -> {
+            if ("before-recovery-sync".equals(stage)) throw new IOException("Synthetic recovery directory sync failure");
+        });
+        expectCode("STORE_ERROR", practice::load);
+        assertEquals(1, objects.listFiles().length);
+        practice.setFailurePoint(null);
+        LocalLearningStore reopened = new LocalLearningStore(root, "practice");
+        assertEquals(0, reopened.load().getJSONObject("state").getJSONArray("notes").length());
+        assertEquals(0, objects.listFiles().length);
+    }
+
+    private static final class SimulatedLearningProcessExit extends Error { private static final long serialVersionUID = 1L; }
+
     public void testInterruptedFirstCommitAndAtomicPreviousManifestRecovery() throws Exception {
         formal.setFailurePoint(stage -> { if ("before-manifest".equals(stage)) throw new IOException("Synthetic failure"); });
         expectCode("STORE_ERROR", () -> formal.commit("empty", state(note("topic", "专题", "合成正文", "v1"))));

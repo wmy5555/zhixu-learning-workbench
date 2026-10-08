@@ -1640,7 +1640,30 @@ async function topicEditor(topic, create) {
   const minutes = el("input", { name: "minutes", type: "number", min: 5, max: 300, value: topic?.minutes || meta.minutes || 20 });
   const originalPrerequisites = topic?.prerequisites ?? meta.prerequisites ?? [];
   const prerequisiteText = Array.isArray(originalPrerequisites) ? originalPrerequisites.join("，") : String(originalPrerequisites);
-  const prerequisites = el("input", { name: "prerequisites", value: prerequisiteText });
+  const prerequisites = isMobilePrototype() ? el("div", { class: "page-stack" }) : el("input", { name: "prerequisites", value: prerequisiteText });
+  const prerequisiteIds = new Set(Array.isArray(originalPrerequisites) ? originalPrerequisites : originalPrerequisites ? [String(originalPrerequisites)] : []);
+  const prerequisiteOptions = notes.filter(note => note.meta?.stage !== "retired" && !note.meta?.supersededBy && !asArray(note.limitations).length && !asArray(note.meta?.researchLimitations).length);
+  const invalidPrerequisites = () => [...prerequisiteIds].filter(id => !prerequisiteOptions.some(note => note.id === id));
+  let saving = false;
+  const submit = button(create ? "创建主题学习包" : "保存主题学习包", { kind: "primary", type: "submit" });
+  const syncPrerequisites = () => { submit.disabled = saving || (isMobilePrototype() && invalidPrerequisites().length > 0); };
+  function renderPrerequisites() {
+    if (!isMobilePrototype()) return;
+    clear(prerequisites);
+    const invalid = invalidPrerequisites();
+    if (invalid.length) prerequisites.append(el("div", { class: "notice warning", text: "原有前置中有未找到或暂不可用的知识，仍保留在下面。请选择可用知识替代并移除失效项后再保存；标题、正文和成员草稿会保留。" }));
+    for (const id of invalid) {
+      const oldNote = notes.find(note => note.id === id);
+      prerequisites.append(el("div", { class: "list-item no-icon", dataset: { prerequisiteId: id } }, [el("span", { text: oldNote ? `${oldNote.title || id}（当前不可用，保留原有前置）` : `${id}（未找到对应知识，保留原有前置）` }), button("移除此失效前置", { kind: "danger compact", onClick: () => { prerequisiteIds.delete(id); renderPrerequisites(); } })]));
+    }
+    if (!prerequisiteOptions.length) prerequisites.append(el("p", { text: "当前没有可用的前置知识。可先保存知识并处理其研究限制；新主题也可以暂不设置前置。既有失效项不会自动清除。" }));
+    for (const note of prerequisiteOptions) {
+      const choice = el("input", { type: "checkbox", name: "topicPrerequisite", value: note.id, checked: prerequisiteIds.has(note.id) });
+      choice.addEventListener("change", () => { if (choice.checked) prerequisiteIds.add(note.id); else prerequisiteIds.delete(note.id); syncPrerequisites(); });
+      prerequisites.append(el("label", { class: "check-field" }, [choice, el("span", { text: note.title || "未命名知识" })]));
+    }
+    syncPrerequisites();
+  }
   const order = el("div", { class: "list" });
   const available = el("div", { class: "list" });
   const query = el("input", { type: "search", placeholder: "筛选可添加的知识", ariaLabel: "筛选可添加的知识" });
@@ -1660,11 +1683,12 @@ async function topicEditor(topic, create) {
     if (matches.length > 50) available.append(el("p", { class: "fine-print", text: `另有 ${matches.length - 50} 条，请输入标题或主题缩小范围。` }));
   }
   query.addEventListener("input", renderMembers);
-  form.append(el("div", { class: "notice", text: create && topic ? "这是新学习包的副本。选择要保留的成员并调整顺序后保存，原包保持不变；可用于拆分主题。" : "学习顺序由你调整。成员变化不会删除原知识；保存时检查是否有外部修改。" }), field("学习包标题", title), field("问题、顺序与边界", body), el("div", { class: "form-grid" }, [field("预计投入（分钟）", minutes), field("前置知识", prerequisites, "可以继续保留现有文本缺口；逗号分隔新条目")]), sectionHeading("学习顺序", "上移、下移只调整本包中的顺序"), order, field("添加已有知识", query), available, el("div", { class: "form-actions" }, [button(create ? "创建主题学习包" : "保存主题学习包", { kind: "primary", type: "submit" }), button("取消", { onClick: () => topic ? openTopic(topic) : closeDrawer() })]));
+  form.append(el("div", { class: "notice", text: create && topic ? "这是新学习包的副本。选择要保留的成员并调整顺序后保存，原包保持不变；可用于拆分主题。" : "学习顺序由你调整。成员变化不会删除原知识；保存时检查是否有外部修改。" }), field("学习包标题", title), field("问题、顺序与边界", body), el("div", { class: "form-grid" }, [field("预计投入（分钟）", minutes), field("前置知识", prerequisites, isMobilePrototype() ? "勾选需要先学习的知识。尚缺少的资料请写在问题说明中；失效的原有前置需要主动修正。" : "可以继续保留现有文本缺口；逗号分隔新条目")]), sectionHeading("学习顺序", "上移、下移只调整本包中的顺序"), order, field("添加已有知识", query), available, el("div", { class: "form-actions" }, [submit, button("取消", { onClick: () => topic ? openTopic(topic) : closeDrawer() })]));
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const submit = form.querySelector("button[type='submit']"); submit.disabled = true;
-    const nextPrerequisites = prerequisites.value === prerequisiteText ? originalPrerequisites : prerequisites.value.split(/[,，]/).map(value => value.trim()).filter(Boolean);
+    if (submit.disabled) return;
+    saving = true; syncPrerequisites();
+    const nextPrerequisites = isMobilePrototype() ? [...prerequisiteIds] : prerequisites.value === prerequisiteText ? originalPrerequisites : prerequisites.value.split(/[,，]/).map(value => value.trim()).filter(Boolean);
     try {
       const values = { minutes: number(minutes.value), prerequisites: nextPrerequisites, noteIds: [...selected] };
       const updated = create ? await api.createTopic({ title: title.value, body: body.value, ...values }) : await api.updateTopic(topic.id, { title: title.value, body: body.value + (topicManagedBlock(topic.body) ? "\n\n" + topicManagedBlock(topic.body) : ""), expectedHash: topic.hash, meta: values });
@@ -1675,8 +1699,9 @@ async function topicEditor(topic, create) {
       toast(create ? "主题学习包已创建" : "主题成员与顺序已保存", "success");
       await refreshBootstrap(); await renderTopics(); await openTopic(updated);
     } catch (error) { handleError(error); }
-    finally { submit.disabled = false; }
+    finally { saving = false; syncPrerequisites(); }
   });
+  renderPrerequisites();
   renderMembers();
   refs.drawerBody.dataset.tour = "topic-editor";
   refs.drawerBody.dataset.tourSubject = topic?.id || "";

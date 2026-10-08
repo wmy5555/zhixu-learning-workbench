@@ -54,12 +54,23 @@ public final class LocalLearningStore {
     private final File manifestFile;
     private Preview preview;
     private FailurePoint failurePoint;
+    private CleanupFailurePoint cleanupFailurePoint;
+    private String durableManifestHash;
     private LongSupplier clock = SystemClock::elapsedRealtime;
 
     // Only synthetic device regressions inject failures. No plugin or web entry point can set this.
     interface FailurePoint { void at(String stage) throws IOException; }
+    interface CleanupFailurePoint { void at(String operation) throws IOException; }
     void setFailurePoint(FailurePoint value) { synchronized (LOCK) { failurePoint = value; } }
+    void setCleanupFailurePointForTests(CleanupFailurePoint value) { synchronized (LOCK) { cleanupFailurePoint = value; } }
     void setClockForTests(LongSupplier value) { synchronized (LOCK) { clock = value; } }
+
+    /** Only ordinary housekeeping I/O is deferrable; path/type checks keep their original hard failures. */
+    private static final class DeferredCleanupException extends IOException {
+        private static final long serialVersionUID = 1L;
+        DeferredCleanupException(String message) { super(message); }
+        DeferredCleanupException(IOException cause) { super(cause); }
+    }
 
     private static final class Snapshot {
         final JSONObject manifest;
@@ -151,7 +162,7 @@ public final class LocalLearningStore {
                 }
                 Snapshot next = snapshot(makeManifest(UUID.randomUUID().toString(), refs, retained, nextState), documents);
                 ensureExportable(next);
-                persist(next);
+                persist(next, current);
                 return envelope(next);
             } catch (IOException | JSONException exception) { throw storageError(); }
         }
@@ -164,9 +175,8 @@ public final class LocalLearningStore {
                 Snapshot current = readSnapshot();
                 requireRevision(current, expectedRevision);
                 Snapshot next = snapshot(makeManifest(UUID.randomUUID().toString(), new JSONArray(), new JSONArray(), emptyState()), new TreeMap<>());
-                persist(next);
-                // A reset changes the manifest first. Old bytes remain unreachable if cleanup is interrupted.
-                collectUnreferenced(next.documents.keySet());
+                // Reset commits the empty manifest before old objects become eligible for deferred cleanup.
+                persist(next, current);
                 return envelope(next);
             } catch (IOException | JSONException exception) { throw storageError(); }
         }
@@ -215,7 +225,7 @@ public final class LocalLearningStore {
                 manifest.put("revision", UUID.randomUUID().toString());
                 Snapshot next = snapshot(manifest, incoming.documents);
                 ensureExportable(next);
-                persist(next);
+                persist(next, current);
                 return envelope(next).put("restored", true).put("unchanged", false);
             } catch (IOException | JSONException exception) { throw storageError(); }
         }
@@ -242,12 +252,13 @@ public final class LocalLearningStore {
             // AtomicFile .new is uncommitted, including an interrupted first commit.
             try {
                 Snapshot empty = snapshot(makeManifest("empty", new JSONArray(), new JSONArray(), emptyState()), new TreeMap<>());
-                collectUnreferenced(empty.documents.keySet());
+                collectRecoveredSnapshot(empty, false);
                 return empty;
             }
             catch (JSONException exception) { throw corrupt(); }
         }
         try {
+            boolean atomicRecovery = safeChild(root, "manifest.json.bak").exists();
             JSONObject manifest = parseObject(readAtomic(manifestFile, MAX_RUNTIME_BYTES + 1024 * 1024));
             validateManifest(manifest);
             Map<String, String> documents = new TreeMap<>();
@@ -258,6 +269,7 @@ public final class LocalLearningStore {
                     if (!documents.containsKey(name)) {
                         File file = safeChild(objects, name);
                         if (!file.exists() && !safeChild(objects, name + ".bak").exists()) throw corrupt();
+                        if (safeChild(objects, name + ".bak").exists()) atomicRecovery = true;
                         documents.put(name, readAtomic(file, MAX_MARKDOWN_BYTES));
                     }
                 }
@@ -265,12 +277,15 @@ public final class LocalLearningStore {
             Snapshot result = snapshot(manifest, documents);
             ensureExportable(result);
             // All references are proven before cleanup. A corrupt manifest or Markdown never triggers guessing.
-            collectUnreferenced(result.documents.keySet());
+            collectRecoveredSnapshot(result, atomicRecovery);
             return result;
         } catch (LocalSourceStore.StoreException | JSONException exception) { throw corrupt(); }
     }
 
-    private void persist(Snapshot next) throws IOException, LocalSourceStore.StoreException {
+    private void persist(Snapshot next, Snapshot current) throws IOException, LocalSourceStore.StoreException {
+        // A real new write must clear owned residue first, preserving the current authority/history.
+        // Ordinary reads may defer cleanup, but accumulating new orphan bytes is not a capacity strategy.
+        collectUnreferenced(current.documents.keySet(), true);
         for (Map.Entry<String, String> document : next.documents.entrySet()) {
             File file = safeChild(objects, document.getKey());
             safeAtomicPath(file);
@@ -280,31 +295,86 @@ public final class LocalLearningStore {
         }
         syncDirectory(objects);
         inject("before-manifest");
-        writeAtomic(manifestFile, canonical(next.manifest));
+        String rawManifest = canonical(next.manifest);
+        writeAtomic(manifestFile, rawManifest);
+        inject("before-manifest-directory-sync");
         syncDirectory(root);
+        durableManifestHash = digest(rawManifest);
         inject("after-manifest");
         // Orphaned staging documents from a previous pre-commit failure are never exported as history.
-        collectUnreferenced(next.documents.keySet());
+        collectAfterValidation(next.documents.keySet());
     }
 
     private void inject(String stage) throws IOException { if (failurePoint != null) failurePoint.at(stage); }
 
-    private void collectUnreferenced(Set<String> retained) throws IOException {
+    private void collectRecoveredSnapshot(Snapshot snapshot, boolean atomicRecovery) throws IOException, LocalSourceStore.StoreException {
+        // Seeing a renamed manifest is not proof that the rename survived a process/power interruption.
+        // AtomicFile.openRead may also have restored .bak directory entries. Make the verified authority
+        // durable before deleting objects that the previous authority could still reference.
+        String manifestHash = digest(canonical(snapshot.manifest));
+        if (atomicRecovery || !manifestHash.equals(durableManifestHash)) {
+            inject("before-recovery-sync");
+            requireCleanupPath(objects, true);
+            requireCleanupPath(root, true);
+            syncDirectory(objects);
+            syncDirectory(root);
+            durableManifestHash = manifestHash;
+        }
+        // An unchanged authority already synced by this instance needs no new mandatory fsync merely
+        // because an orphan's cleanup sync failed. A fresh instance or any .bak recovery rechecks durability.
+        collectAfterValidation(snapshot.documents.keySet());
+    }
+
+    private void collectAfterValidation(Set<String> retained) throws IOException {
+        try { collectUnreferenced(retained, false); }
+        catch (DeferredCleanupException ignored) {
+            // References have been verified, or the new manifest and directory are already durable.
+            // Cleanup can retry on the next read/reopen without converting the known revision into a failure.
+        }
+    }
+
+    private void collectUnreferenced(Set<String> retained, boolean syncBeforeWrite) throws IOException {
+        requireCleanupPath(objects, true);
+        injectCleanupFailure("list");
         File[] files = objects.listFiles();
-        if (files == null) throw new IOException("Cannot enumerate private documents");
-        boolean removed = false;
+        if (files == null) throw new DeferredCleanupException("Cannot enumerate private documents");
+        List<File> owned = new ArrayList<>();
+        // Check the entire recognized set before deleting any bytes; unknown names remain untouched.
         for (File file : files) {
             String name = file.getName();
             String base = name.endsWith(".new") || name.endsWith(".bak") ? name.substring(0, name.length() - 4) : name;
-            if (base.matches("[0-9a-f]{64}\\.md") && !retained.contains(base)) {
-                safeChild(objects, name);
-                if (file.isFile()) {
-                    if (!file.delete() && file.exists()) throw new IOException("Cannot remove unreferenced private document");
-                    removed = true;
-                }
-            }
+            if (!base.matches("[0-9a-f]{64}\\.md")) continue;
+            File candidate = safeChild(objects, name);
+            requireCleanupPath(candidate, false);
+            if (!retained.contains(base)) owned.add(candidate);
         }
-        if (removed) syncDirectory(objects);
+        boolean removed = false;
+        for (File file : owned) {
+            requireCleanupPath(file, false);
+            injectCleanupFailure("delete");
+            if (!file.delete() && file.exists()) throw new DeferredCleanupException("Cannot remove unreferenced private document");
+            removed = true;
+        }
+        if (removed || syncBeforeWrite) {
+            requireCleanupPath(objects, true);
+            injectCleanupFailure("sync");
+            try { syncDirectory(objects); }
+            catch (IOException exception) { throw new DeferredCleanupException(exception); }
+        }
+    }
+
+    private void injectCleanupFailure(String operation) throws DeferredCleanupException {
+        if (cleanupFailurePoint == null) return;
+        try { cleanupFailurePoint.at(operation); }
+        catch (IOException exception) { throw new DeferredCleanupException(exception); }
+    }
+
+    private static void requireCleanupPath(File file, boolean directory) throws IOException {
+        if (!file.getAbsoluteFile().equals(file.getCanonicalFile())) throw new IOException("Unsafe private learning cleanup path");
+        try {
+            int mode = Os.lstat(file.getPath()).st_mode;
+            if (directory ? !OsConstants.S_ISDIR(mode) : !OsConstants.S_ISREG(mode)) throw new IOException("Unsafe private learning cleanup entry");
+        } catch (ErrnoException exception) { throw new IOException("Cannot inspect private learning cleanup path", exception); }
     }
 
     private Snapshot validatePackage(JSONObject pack) throws LocalSourceStore.StoreException {

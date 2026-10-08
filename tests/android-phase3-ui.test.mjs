@@ -6,6 +6,86 @@ const source = { id: "reflection", kind: "source", title: "合成反思", body: 
 const bootstrap = async () => ({ notes: [], today: { items: [] }, stats: {} });
 const guide = async () => ({ steps: [{ id: "sources", label: "保存原文", completed: true }, { id: "answer", label: "保存回答", completed: false }] });
 
+const prerequisiteA = "11111111-1111-4111-8111-111111111111";
+const prerequisiteB = "22222222-2222-4222-8222-222222222222";
+const retiredPrerequisite = "33333333-3333-4333-8333-333333333333";
+const missingPrerequisite = "44444444-4444-4444-8444-444444444444";
+async function topicPrerequisiteFixture(notes, initialTopic = null) {
+  let topics = initialTopic ? [initialTopic] : [];
+  const requests = [];
+  const fixture = await createAndroidBrowser({ api: {
+    notes: async () => ({ notes }), topics: async () => ({ topics }), bootstrap: async () => ({ notes, topics }),
+    createTopic: async payload => { requests.push({ action: "create", payload }); const saved = { id: "saved-topic", ...payload, members: [], progress: {} }; topics = [saved]; return saved; },
+    updateTopic: async (id, payload) => { requests.push({ action: "edit", id, payload }); const saved = { ...initialTopic, title: payload.title, body: payload.body, meta: { ...initialTopic.meta, ...payload.meta }, prerequisites: payload.meta.prerequisites, members: [], progress: {} }; topics = [saved]; return saved; },
+  } });
+  await fixture.app.navigate("topics");
+  if (initialTopic) { await click(findButton(fixture.app.refs.main, "查看")); await click(findButton(fixture.app.refs.drawerBody, "调整成员与顺序")); }
+  else await click(findButton(fixture.app.refs.main, "新建主题学习包"));
+  return { ...fixture, requests };
+}
+
+test("Android topic creation selects eligible saved knowledge IDs instead of textual prerequisites", async () => {
+  const notes = [
+    { id: prerequisiteA, kind: "knowledge", title: "可用前置", meta: { stage: "candidate" }, limitations: [] },
+    { id: prerequisiteB, kind: "knowledge", title: "尚待核验", meta: { stage: "candidate" }, limitations: ["事实尚待核验"] },
+    { id: retiredPrerequisite, kind: "knowledge", title: "停用前置", meta: { stage: "retired" }, limitations: [] },
+    { id: missingPrerequisite, kind: "knowledge", title: "已被替代", meta: { stage: "learning", supersededBy: prerequisiteA }, limitations: [] },
+  ];
+  const fixture = await topicPrerequisiteFixture(notes);
+  const form = fixture.app.refs.drawerBody.querySelector("form");
+  assert.equal(control(form, "prerequisites"), undefined);
+  const choices = descendants(form).filter(node => node.name === "topicPrerequisite");
+  assert.equal(choices.length, 1);
+  assert.equal(choices[0].value, prerequisiteA);
+  control(form, "title").value = "新主题草稿"; control(form, "body").value = "已写的问题说明";
+  choices[0].checked = true; choices[0].events.change();
+  assert.equal(control(form, "title").value, "新主题草稿");
+  assert.equal(control(form, "body").value, "已写的问题说明");
+  await form.events.submit({ preventDefault() {} });
+  assert.equal(fixture.requests[0].action, "create");
+  assert.deepEqual(Array.from(fixture.requests[0].payload.prerequisites), [prerequisiteA]);
+});
+
+test("Android topic editing keeps old missing text and blocked prerequisites visible until explicitly corrected", async () => {
+  const notes = [
+    { id: prerequisiteA, kind: "knowledge", title: "原有效前置", meta: { stage: "learning" }, limitations: [] },
+    { id: prerequisiteB, kind: "knowledge", title: "替代前置", meta: { stage: "candidate" }, limitations: [] },
+    { id: retiredPrerequisite, kind: "knowledge", title: "已受限前置", meta: { stage: "candidate" }, limitations: ["事实尚待核验"] },
+  ];
+  const topic = { id: "topic", title: "旧主题", body: "旧说明", hash: "expected-topic-hash", meta: {}, prerequisites: [prerequisiteA, "先学方程", missingPrerequisite, retiredPrerequisite], members: [], progress: {} };
+  const fixture = await topicPrerequisiteFixture(notes, topic);
+  const form = fixture.app.refs.drawerBody.querySelector("form"), submit = findButton(form, "保存主题学习包");
+  assert.match(form.textContent, /先学方程（未找到对应知识，保留原有前置）/);
+  assert.match(form.textContent, /已受限前置（当前不可用，保留原有前置）/);
+  assert.match(form.textContent, new RegExp(missingPrerequisite));
+  assert.equal(submit.disabled, true);
+  await form.events.submit({ preventDefault() {} });
+  assert.equal(fixture.requests.length, 0);
+  control(form, "title").value = "未提交的新标题"; control(form, "body").value = "未提交的说明和文字缺口";
+  const replacement = descendants(form).find(node => node.name === "topicPrerequisite" && node.value === prerequisiteB);
+  replacement.checked = true; replacement.events.change();
+  assert.equal(submit.disabled, true, "choosing a replacement must not silently discard old invalid prerequisites");
+  for (let remaining = 3; remaining > 0; remaining--) await click(findButton(form, "移除此失效前置"));
+  assert.equal(control(form, "title").value, "未提交的新标题");
+  assert.equal(control(form, "body").value, "未提交的说明和文字缺口");
+  assert.equal(submit.disabled, false);
+  await form.events.submit({ preventDefault() {} });
+  assert.equal(fixture.requests[0].action, "edit");
+  assert.equal(fixture.requests[0].payload.expectedHash, topic.hash);
+  assert.deepEqual(Array.from(fixture.requests[0].payload.meta.prerequisites), [prerequisiteA, prerequisiteB]);
+});
+
+test("Android topic creation with no eligible prerequisite can explicitly save without new prerequisites", async () => {
+  const fixture = await topicPrerequisiteFixture([{ id: prerequisiteA, kind: "knowledge", title: "待核验知识", meta: { stage: "candidate" }, limitations: ["尚待核验"] }]);
+  const form = fixture.app.refs.drawerBody.querySelector("form");
+  assert.match(form.textContent, /当前没有可用的前置知识/);
+  assert.equal(control(form, "topicPrerequisite"), undefined);
+  control(form, "title").value = "暂不设前置"; control(form, "body").value = "保留真实问题";
+  assert.equal(findButton(form, "创建主题学习包").disabled, false);
+  await form.events.submit({ preventDefault() {} });
+  assert.deepEqual(Array.from(fixture.requests[0].payload.prerequisites), []);
+});
+
 test("Android topic member starts only the current next step and disabled starts make no request", async () => {
   for (const scenario of [
     { label: "A is next", progress: { nextNoteId: "a", nextNoteTitle: "A" }, members: [{ id: "a", available: true }, { id: "b", available: true }], enabled: "a" },

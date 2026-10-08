@@ -604,6 +604,65 @@ public class LocalSourceStoreTest extends AndroidTestCase {
         assertEquals(0, new File(root, "save-transactions-v1").listFiles().length);
     }
 
+    public void testRecoveredVisibleNextKeepsJournalWhenNotesDirectorySyncFails() throws Exception {
+        for (boolean replace : Arrays.asList(false, true)) {
+            File scenario = new File(root, "recovery-directory-sync-" + replace);
+            JSONObject previous = null;
+            try (LocalSourceStore seed = new LocalSourceStore(scenario)) {
+                if (replace) previous = seed.save(source("旧版本", "精确保留的旧原文  \n"));
+            }
+            JSONObject input = replace ? edit(previous, "新版本", "rename 后的新原文  \n")
+                : source("新建版本", "rename 后的新原文  \n");
+            String id, currentBytes, originalBytes, journalBytes;
+            File journal, current, original, snapshot = null;
+            String snapshotBytes = null;
+            try (LocalSourceStore interrupted = new LocalSourceStore(scenario) {
+                @Override void writeAtomically(File file, byte[] bytes) throws IOException {
+                    super.writeAtomically(file, bytes);
+                    if ("notes".equals(file.getParentFile().getName())) throw new SimulatedProcessExit();
+                }
+            }) {
+                try { interrupted.save(input); fail("Expected exit after current rename, before directory sync"); }
+                catch (SimulatedProcessExit expected) { /* The next file is visible; its directory is not yet synced. */ }
+                File[] journals = new File(scenario, "save-transactions-v1").listFiles();
+                assertNotNull(journals);
+                assertEquals(1, journals.length);
+                journal = journals[0]; journalBytes = readText(journal);
+                JSONObject evidence = new JSONObject(journalBytes);
+                id = evidence.getString("id");
+                current = new File(scenario, "notes/" + id + ".md");
+                original = new File(scenario, "originals/" + id + ".md");
+                currentBytes = readText(current); originalBytes = readText(original);
+                if (replace) {
+                    snapshot = new File(scenario, "history/" + id + "/" + evidence.getString("snapshot"));
+                    snapshotBytes = readText(snapshot);
+                }
+                int[] syncAttempts = { 0 };
+                interrupted.setSaveCleanupFailurePointForTests(stage -> {
+                    if ("before-recovery-notes-sync".equals(stage)) {
+                        syncAttempts[0]++;
+                        throw new IOException("Synthetic recovery notes-directory sync failure");
+                    }
+                });
+                expectCode("STORE_ERROR", () -> interrupted.list(""));
+                assertEquals(1, syncAttempts[0]);
+                assertTrue(journal.isFile());
+                assertEquals(journalBytes, readText(journal));
+                assertEquals(currentBytes, readText(current));
+                assertEquals(originalBytes, readText(original));
+                if (replace) assertEquals(snapshotBytes, readText(snapshot));
+            }
+            try (LocalSourceStore reopened = new LocalSourceStore(scenario)) {
+                assertEquals(input.getString("body"), reopened.read(id).getString("body"));
+                assertEquals(currentBytes, readText(current));
+                assertEquals(originalBytes, readText(original));
+                if (replace) assertEquals(snapshotBytes, readText(snapshot));
+                assertFalse(journal.exists());
+                assertEquals(0, new File(scenario, "save-transactions-v1").listFiles().length);
+            }
+        }
+    }
+
     public void testUnmarkedAndAmbiguousOriginalsAreNeverDeleted() throws Exception {
         JSONObject saved = store.save(source("无法判断的旧原文", "没有保存日志的原始资料必须保留"));
         File original = new File(root, "originals/" + saved.getString("id") + ".md");
