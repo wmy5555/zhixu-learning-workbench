@@ -513,7 +513,13 @@ final class LocalSourceBackup {
         validateReplayCapacity(writes);
         requireStagedDatasetCapacity(writes);
         for (StagedFile file : writes.values()) {
-            if (exists(file.target)) continue;
+            if (exists(file.target)) {
+                // Replay may resume just after a rename and before its parent was synced.
+                // A sync failure must leave the commit marker for the next recovery attempt.
+                if (cleanupFailurePoint != null) cleanupFailurePoint.at("replay-parent-sync:" + file.target.getParentFile().getName());
+                syncDirectory(file.target.getParentFile());
+                continue;
+            }
             LocalSourceStore.ensureDirectory(file.target.getParentFile());
             syncDirectory(file.target.getParentFile().getParentFile());
             store.writeAtomically(file.target, stagedBytes(file));

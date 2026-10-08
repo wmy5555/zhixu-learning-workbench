@@ -689,6 +689,66 @@ public class LocalSourceBackupTest extends AndroidTestCase {
         }
     }
 
+    public void testExistingReplayTargetKeepsMarkerWhenParentDirectorySyncFails() throws Exception {
+        JSONObject first = save("恢复目录同步中断", "完整保留的恢复原文  \n");
+        JSONObject saved = store.save(edit(first, "恢复后的当前版本", "完整保留的当前正文  \n"));
+        JSONObject pack = store.backup();
+        String id = saved.getString("id");
+        String version = pack.getJSONArray("notes").getJSONObject(0).getJSONArray("history").getJSONObject(0).getString("id");
+        for (String parent : Arrays.asList("originals", id, "notes")) {
+            File target = new File(root, "recovery-parent-sync-" + parent);
+            File transaction = new File(target, "restore-transaction-v1");
+            File marker = new File(transaction, "committed"), plan = new File(transaction, "plan.json");
+            File current = new File(target, "notes/" + id + ".md");
+            File original = new File(target, "originals/" + id + ".md");
+            File snapshot = new File(target, "history/" + id + "/" + version);
+            String currentBytes, originalBytes, snapshotBytes;
+            try (LocalSourceStore interrupted = new LocalSourceStore(target) {
+                @Override void writeAtomically(File file, byte[] bytes) throws IOException {
+                    super.writeAtomically(file, bytes);
+                    if ("notes".equals(file.getParentFile().getName()))
+                        throw new IOException("Synthetic interruption after replay rename, before parent sync");
+                }
+            }) {
+                String token = interrupted.previewRestore(pack).getString("token");
+                expect("STORE_ERROR", () -> interrupted.restoreBackup(token, "keep-current"));
+                assertTrue(marker.isFile());
+                String markerBytes = raw(marker), planBytes = raw(plan);
+                currentBytes = raw(current); originalBytes = raw(original); snapshotBytes = raw(snapshot);
+                File[] stages = new File(transaction, "files").listFiles();
+                assertNotNull(stages);
+                assertTrue(stages.length > 0);
+                String[] stageBytes = new String[stages.length];
+                for (int index = 0; index < stages.length; index++) stageBytes[index] = raw(stages[index]);
+                int[] syncAttempts = { 0 };
+                backupHelper(interrupted).setCleanupFailurePointForTests(operation -> {
+                    if (("replay-parent-sync:" + parent).equals(operation)) {
+                        syncAttempts[0]++;
+                        throw new IOException("Synthetic existing-target parent sync failure");
+                    }
+                });
+                expect("STORE_ERROR", () -> interrupted.list(""));
+                assertEquals(1, syncAttempts[0]);
+                assertTrue(marker.isFile());
+                assertEquals(markerBytes, raw(marker));
+                assertEquals(planBytes, raw(plan));
+                assertEquals(currentBytes, raw(current));
+                assertEquals(originalBytes, raw(original));
+                assertEquals(snapshotBytes, raw(snapshot));
+                for (int index = 0; index < stages.length; index++) assertEquals(stageBytes[index], raw(stages[index]));
+            }
+            try (LocalSourceStore reopened = new LocalSourceStore(target)) {
+                assertEquals(saved.getString("body"), reopened.read(id).getString("body"));
+                assertEquals(pack.getJSONArray("notes").toString(), reopened.backup().getJSONArray("notes").toString());
+                assertEquals(currentBytes, raw(current));
+                assertEquals(originalBytes, raw(original));
+                assertEquals(snapshotBytes, raw(snapshot));
+                assertFalse(marker.exists());
+                assertEquals(0, new File(transaction, "files").listFiles().length);
+            }
+        }
+    }
+
     public void testUncommittedStagingNeverImportsOnReopen() throws Exception {
         save("未确认提交", "只能留在暂存计划中");
         JSONObject exported = store.backup();

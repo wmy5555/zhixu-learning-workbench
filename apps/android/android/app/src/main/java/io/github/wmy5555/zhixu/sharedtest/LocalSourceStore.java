@@ -336,6 +336,9 @@ public class LocalSourceStore implements AutoCloseable {
                 byte[] originalBytes = readBytes(original);
                 parseMarkdown(id, decode(originalBytes));
                 if (!next.equals(digest(originalBytes))) throw uncertainSave();
+                // An interrupted rename may be visible without a durable directory entry.
+                injectSaveCleanupFailure("before-recovery-notes-sync");
+                syncDirectory(notesDirectory);
                 finishSaveTransaction(transaction);
                 return;
             }
@@ -367,6 +370,8 @@ public class LocalSourceStore implements AutoCloseable {
         }
         if (current != null && next.equals(digest(current))) {
             if (archived == null) throw uncertainSave();
+            injectSaveCleanupFailure("before-recovery-notes-sync");
+            syncDirectory(notesDirectory);
             finishSaveTransaction(transaction); // The replacement committed; the previous snapshot is real history.
             return;
         }
