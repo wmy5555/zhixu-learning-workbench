@@ -297,7 +297,7 @@ export function createLearning(dependencies) {
     const evidence = {
       sessionId: s.id, noteId: s.noteId, day: date, completedAt: timestamp, depth, independent, usedHints, errorObserved: errors, ambiguous,
       explanationPractice: independent && ['explain', 'apply'].includes(depth), applicationPractice: independent && depth === 'apply', spacedRecall: spaced,
-      assessment, turnIds: s.turns.map(t => t.id), reviewSettled, ...practiceTags(s, note),
+      assessment, ...(s.assessmentMode === 'online' ? { assessmentMode: 'online' } : {}), turnIds: s.turns.map(t => t.id), reviewSettled, ...practiceTags(s, note),
     };
     s.status = 'completed'; s.completedAt = timestamp;
     s.completion = { reviewSettled, interval: reviewSettled ? interval : null, sameDayPractice: sameDay, evidence, ...practiceTags(s, note), reason: ambiguous ? '本次存在争议，已保留练习记录，未更新复习间隔。' : usedHints || errors ? '本次使用提示或出现错误，安排近期再练。' : spaced ? '到期后在另一天独立作答，增加复习间隔。' : sameDay ? '同日追加练习不叠加复习间隔。' : '首次独立练习先安排近期复习，之后依据跨日表现调整。' };
@@ -318,7 +318,7 @@ export function createLearning(dependencies) {
     const store = storage(), s = session(id);
     if (!s.turns.length) fail('请先留下至少一次自己的解释。');
     const n = getNote(s.noteId), wasCurrent = n.hash === s.sourceHash;
-    if (dependencies.assessmentMode === 'offline' && !wasCurrent) fail('学习材料已有更新，请按当前材料重新开始；本次回答与当前知识均已保留。', 'SOURCE_CHANGED', 409);
+    if (['offline','online'].includes(dependencies.assessmentMode) && !wasCurrent) fail('学习材料已有更新，请按当前材料重新开始；本次回答与当前知识均已保留。', 'SOURCE_CHANGED', 409);
     const result = confirmNote(n.id, { body, expectedHash: n.hash });
     s.confirmedNoteId = result.id;
     // The explicit confirmation appends the user's own note; the original teaching snapshot stays separate.

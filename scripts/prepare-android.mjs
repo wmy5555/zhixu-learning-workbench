@@ -41,7 +41,7 @@ await writeFile(path.join(target, 'android-entry.mjs'), `import { registerPlugin
 import { configureLocalTransport } from './api.mjs';
 import { createAndroidTransport } from './android-transport.mjs';
 if (Capacitor.getPlatform() !== 'android') throw new Error('Android native runtime is required');
-configureLocalTransport(createAndroidTransport(registerPlugin('ZhixuLocal')));
+configureLocalTransport(createAndroidTransport(registerPlugin('ZhixuLocal'), { online: registerPlugin('ZhixuOnline') }));
 await import('./app.mjs');
 `);
 console.log(`Prepared Android assets from the frozen web baseline ${baseline.webBaselineCommit.slice(0, 7)}; no current public/ or user data included.`);

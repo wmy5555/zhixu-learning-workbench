@@ -94,7 +94,7 @@ export async function createAndroidBrowser({ api = {}, confirmations = [] } = {}
         .map(node => [node.name, String(node.value)]); }
     },
     initSidebar: () => ({ closeMobile() {}, revealTarget() {} }),
-    createProcessFeedback: () => ({ status: () => null, observe() {}, start() {}, dispose() {} }),
+    createProcessFeedback: () => ({ status: () => null, begin: () => true, end() {}, observe() {}, start() {}, dispose() {} }),
     createSourceMap: () => new Element("div"),
     toast: (...args) => { context.toasts.push(args); },
   });

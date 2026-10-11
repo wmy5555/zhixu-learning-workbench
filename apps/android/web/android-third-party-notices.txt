@@ -1,8 +1,10 @@
 Third-party software notices for the Zhixu Android preview
 
 This file is intended to be packaged inside the APK. It covers the known
-Capacitor and Android dependencies recorded on 2026-10-07. The dependency
-inventory is incremental; it does not claim a complete resolution or audit
+Capacitor and Android dependencies, including the online preview added on
+2026-10-12. The dependency
+inventory is incremental; CI resolved the runtime versions listed below, but
+this does not claim a complete audit
 of every transitive Maven, Android SDK, Gradle plugin, or build-tool component.
 
 Capacitor 8.5.2
@@ -40,6 +42,33 @@ License: Apache License 2.0. The upstream AndroidX repository does not
 provide a separate root NOTICE file; no additional AndroidX NOTICE text was
 identified for the known components. This notice preserves their license text
 and source attribution.
+
+OkHttp 5.3.2
+Maven coordinate: com.squareup.okhttp3:okhttp:5.3.2 (Android variant)
+Source: https://github.com/lysine-dev/okhttp/tree/parent-5.3.2
+License: Apache License 2.0
+CI debugRuntimeClasspath also resolved com.squareup.okhttp3:okhttp-android:5.3.2.
+
+Okio 3.16.4
+Maven coordinates: com.squareup.okio:okio:3.16.4 and
+com.squareup.okio:okio-jvm:3.16.4
+Source: https://github.com/lysine-dev/okio/tree/parent-3.16.4
+License: Apache License 2.0
+
+Kotlin standard library 2.2.21
+Maven coordinate: org.jetbrains.kotlin:kotlin-stdlib:2.2.21
+Source: https://github.com/JetBrains/kotlin/tree/v2.2.21
+License: Apache License 2.0
+
+AndroidX Startup Runtime 1.2.0
+Maven coordinate: androidx.startup:startup-runtime:1.2.0
+AndroidX Annotation 1.9.1
+Maven coordinate: androidx.annotation:annotation-jvm:1.9.1
+Source: https://github.com/androidx/androidx
+License: Apache License 2.0
+These versions were resolved in CI by the Android debugRuntimeClasspath
+dependency report.
+The complete Apache License below also applies to these components.
 
 Apache Cordova Android framework 14.0.1
 Maven coordinate: org.apache.cordova:framework:14.0.1

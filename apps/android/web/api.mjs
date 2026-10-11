@@ -1,10 +1,11 @@
 export class ApiError extends Error {
-  constructor(message, { status = 0, code = "REQUEST_FAILED", detail = null } = {}) {
+  constructor(message, { status = 0, code = "REQUEST_FAILED", detail = null, requestId = "" } = {}) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
     this.detail = detail;
+    this.requestId = requestId || detail?.requestId || "";
   }
 }
 
@@ -90,7 +91,7 @@ export async function request(path, options = {}) {
 async function performRequest(path, options = {}) {
   if (localTransport) {
     try { return await localTransport.request(path, options); }
-    catch (error) { throw new ApiError(error.message || "无法读取手机资料", { code: error.code || "LOCAL_STORAGE_FAILED" }); }
+    catch (error) { throw new ApiError(error.message || "无法读取手机资料", { status: error.status || 0, code: error.code || "LOCAL_STORAGE_FAILED", detail: error.detail ?? null, requestId: error.requestId || "" }); }
   }
   const method = options.method || "GET";
   const headers = new Headers(options.headers || {});
@@ -165,6 +166,7 @@ export const api = {
   startStudy: (body) => request("/api/study/start", { method: "POST", body }),
   study: (id) => request(`/api/study/${encodeURIComponent(id)}`),
   answer: (id, body) => request(`/api/study/${encodeURIComponent(id)}/answer`, { method: "POST", body }),
+  evaluateAnswer: (id, turnId) => request(`/api/study/${encodeURIComponent(id)}/evaluate`, { method: "POST", body: { turnId } }),
   hint: (id) => request(`/api/study/${encodeURIComponent(id)}/hint`, { method: "POST", body: {} }),
   confirmStudy: (id, body) => request(`/api/study/${encodeURIComponent(id)}/confirm`, { method: "POST", body }),
   finishStudy: (id) => request(`/api/study/${encodeURIComponent(id)}/finish`, { method: "POST", body: {} }),
@@ -178,6 +180,8 @@ export const api = {
   relations: () => request("/api/relations"),
   relationAction: (id, body) => request(`/api/relations/${encodeURIComponent(id)}/action`, { method: "POST", body }),
   discover: (body = {}) => request("/api/discover", { method: "POST", body }),
+  runAndroidOnlineJob: (jobId) => request("/api/android/online-run", { method: "POST", body: { jobId } }),
+  runOnlineJob: (jobId) => request("/api/android/online-run", { method: "POST", body: { jobId } }),
   jobs: () => request("/api/jobs"),
   jobStatuses: () => request("/api/jobs?view=status"),
   jobAction: (id, body) => request(`/api/jobs/${encodeURIComponent(id)}/action`, { method: "POST", body }),

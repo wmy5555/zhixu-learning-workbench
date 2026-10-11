@@ -91,6 +91,7 @@ export function createMemoryStore(state, sources, now) {
     read(id) { const note = current(id); if (!note) fail('条目不存在。', 'NOT_FOUND', 404); return present(note); },
     get(namespace, key, fallback) { return clone(Object.hasOwn(state.records[namespace] || {}, key) ? state.records[namespace][key] : fallback); },
     records(namespace) { return clone(Object.values(state.records[namespace] || {})); },
+    remove(namespace, key) { if (state.records[namespace]) delete state.records[namespace][key]; },
     put(namespace, key, value) {
       // Mirror Store's JSON persistence: optional undefined fields are omitted.
       value = JSON.parse(JSON.stringify(value));
