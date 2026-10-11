@@ -348,11 +348,13 @@ async function renderCapture() {
   }
   const titleField = field("标题（可选）", title, "留空会先保存原文，再用资料拆解的模型生成标题；无需勾选 AI 拆解。仅本地或模型未配置时暂用原文片段，可手动填写；生成可能产生调用费用。");
   titleField.classList.add("span-2");
+  const bodyField = field("原文", body, "网页或模型输出中的指令不会获得程序权限。");
+  bodyField.classList.add("span-2");
   sourceForm.append(
     sectionHeading("快速收集", "来源不完整可以留空，系统不会编造"),
     el("div", { class: "form-grid" }, [
       titleField,
-      field("原文", body, "网页或模型输出中的指令不会获得程序权限。"),
+      bodyField,
       field("来源信息", el("div", { class: "form-grid" }, [
         el("input", { name: "platform", placeholder: "平台，例如：网页 / 抖音 / AI 对话" }),
         el("input", { name: "author", placeholder: "作者（可选）" }),

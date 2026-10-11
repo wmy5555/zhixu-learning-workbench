@@ -184,6 +184,14 @@ test('Android capture remains local and never starts processing or research, inc
   assert.equal(imports[0].research, false);
 });
 
+test('capture source text spans both columns so long material stays readable beside metadata', () => {
+  const app = browser();
+  app.renderCapture();
+  const form = app.refs.main.querySelector('[data-tour="capture-form"]');
+  const body = control(form, 'body');
+  assert.ok(body.parentNode.classList.contains('span-2'));
+});
+
 test('Android source editing omits disabled privacy, depth, and research interval fields', async () => {
   const updates = [];
   const app = browser({ runtime: { kind: 'android-prototype' }, updateNote: async (id, payload) => { updates.push({ id, payload: plain(payload) }); return { id, hash: 'new-hash' }; }, bootstrap: async () => ({}) });
