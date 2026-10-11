@@ -328,6 +328,23 @@ export function createAndroidOnline(local, native, { clock = () => new Date() } 
     for (const id of ids) await walk(id);
     return [...found.values(), ...extra];
   }
+  async function recoverRequest(context, jobId, name, entry) {
+    if (!native) fail('手机在线能力尚未配置。', 'CAPABILITY_DISABLED');
+    let outcome;
+    try { outcome = await native.requestStatus({ requestId: entry.requestId, context }); }
+    catch (error) { if (error.code !== 'NOT_FOUND' && error.code !== 'REQUEST_NOT_FOUND') throw error; }
+    // A persisted prepared checkpoint may have been exported while sending.
+    // Its missing device-local ledger cannot prove that the request was unsent.
+    if (!outcome || !['succeeded','failed','unknown'].includes(outcome.state)) {
+      outcome = { state: 'unknown', error: { code: 'REQUEST_UNKNOWN', message: '原调用记录无法核对，可能已经计费；不会自动重发，请明确确认新的尝试。' } };
+    }
+    await patch(context, jobId, (_, j) => {
+      if (j.requests[name]?.requestId !== entry.requestId) fail('请求检查点已变化。', 'CONFLICT');
+      j.requests[name].state = outcome.state;
+      if (outcome.state === 'unknown') { j.code = 'REQUEST_UNKNOWN'; j.error = outcome.error?.message || '请求结果不明，可能已计费。'; if (j.state !== 'cancelled') j.state = 'waiting'; }
+    });
+    return outcome;
+  }
   async function step(context, jobId, name, descriptor) {
     if (!native) fail('手机在线能力尚未配置。', 'CAPABILITY_DISABLED');
     let job = await jobRead(context, jobId);
@@ -338,16 +355,20 @@ export function createAndroidOnline(local, native, { clock = () => new Date() } 
       await patch(context, jobId, (_, j) => { if (j.state === 'cancelled') fail('任务已取消。','CANCELLED'); j.requests[name] = entry; });
     }
     let outcome;
-    if (!fresh) {
-      try { outcome = await native.requestStatus({ requestId: entry.requestId, context }); }
-      catch (error) { if (error.code !== 'NOT_FOUND' && error.code !== 'REQUEST_NOT_FOUND') throw error; }
-      if (!outcome && entry.state !== 'prepared') fail('原调用记录无法核对，不会自动重发。', 'REQUEST_UNKNOWN');
-    }
+    if (!fresh) outcome = await recoverRequest(context, jobId, name, entry);
     if (!outcome) {
       const D = { requestId: entry.requestId, context, jobId, ...descriptor };
-      const grant = await native.authorize(D);
-      if (!grant?.authorizationId) fail('没有取得本次请求的外发授权。', 'AUTHORIZATION_DENIED');
-      if ((await jobRead(context, jobId)).state === 'cancelled') fail('任务已取消。', 'CANCELLED');
+      let grant;
+      try {
+        grant = await native.authorize(D);
+        if (!grant?.authorizationId) fail('没有取得本次请求的外发授权。', 'AUTHORIZATION_DENIED');
+        if ((await jobRead(context, jobId)).state === 'cancelled') fail('任务已取消。', 'CANCELLED');
+      } catch (error) {
+        // No request was sent: a denied/failed authorization is safe to retry
+        // explicitly with a new checkpoint and a new authorization.
+        await patch(context, jobId, (_, j) => { j.requests[name].state = 'failed'; });
+        throw error;
+      }
       try { outcome = await native.request({ ...D, authorizationId: grant.authorizationId }); }
       catch (error) {
         const beforeSend=['CAPABILITY_DISABLED','MISSING_CREDENTIALS','BUDGET_EXCEEDED','BUDGET_UNKNOWN','SOURCE_BUDGET','AUTHORIZATION_DENIED','AUTHORIZATION_EXPIRED','VALIDATION','SOURCE_CHANGED','PRACTICE_ISOLATION','DISABLED','KEY_REQUIRED','DAILY_LIMIT','MONTHLY_BUDGET','UNKNOWN_COST','SOURCE_LIMIT','AUTHORIZATION_REQUIRED','STALE_AUTHORIZATION','STALE_MATERIAL','INVALID_INPUT','INVALID_URL','SSRF_BLOCKED','DNS_ERROR','TOO_LARGE','CONFLICT','CONTEXT_MISMATCH','LEDGER_FULL'];
@@ -521,10 +542,12 @@ export function createAndroidOnline(local, native, { clock = () => new Date() } 
   async function action(context,id,input) {
     inputObject(input,['action','confirmUnknown']);if(!['cancel','retry'].includes(input.action))fail('任务操作无效。');
     if(input.confirmUnknown!==undefined&&typeof input.confirmUnknown!=='boolean')fail('重试确认无效。');
-    const job=await jobRead(context,id);
+    let job=await jobRead(context,id);
     if(input.action==='cancel'){const saved=await patch(context,id,(_,j)=>{j.state='cancelled';j.error='用户取消；已保存的输入、回答和证据保留。';});for(const request of Object.values(job.requests))if(request.state==='prepared')await native?.cancel({requestId:request.requestId,context}).catch(()=>{});return saved;}
     if(active.has(`${context}:${id}`))return job;
     if(job.state==='done')fail('已完成任务不需要重试。');
+    for (const [name, entry] of Object.entries(job.requests)) if (['prepared','succeeded'].includes(entry.state)) await recoverRequest(context,id,name,entry);
+    job=await jobRead(context,id);
     const uncertain=Object.values(job.requests).some(r=>r.state==='unknown')||job.code==='REQUEST_UNKNOWN';
     if(uncertain&&input.confirmUnknown!==true)fail('上次调用结果不明，可能已计费；请明确确认后再开始新的调用。','REQUEST_UNKNOWN');
     const saved=await patch(context,id,(service,j)=>{for(const [name,r]of Object.entries(j.requests))if(r.state==='failed'||r.state==='unknown'&&input.confirmUnknown===true)delete j.requests[name];if(['MODEL_FORMAT','INVALID_CITATION','INVALID_EVIDENCE','INVALID_RESPONSE'].includes(j.code)){const last=Object.entries(j.requests).filter(([,r])=>r.state==='succeeded').at(-1);if(last)delete j.requests[last[0]];}if(j.type==='process'&&j.extractionSaved){const claims=[...new Set(j.payload.extracted.candidates.flatMap(c=>c.claims))];const results=records(service,'research');for(let index=0;index<claims.length;index++){const result=results.find(r=>r.sourceId===j.payload.noteId&&r.sourceHash===j.payload.hash&&r.claim===claims[index]);if(result?.result.limitations.length||result&&Date.parse(now())-Date.parse(result.at)>=7*86400000)for(const name of Object.keys(j.requests))if(name.startsWith(`research:${index}:`))delete j.requests[name];}}j.state='queued';j.code=null;j.error='';});start(context,id);return saved;

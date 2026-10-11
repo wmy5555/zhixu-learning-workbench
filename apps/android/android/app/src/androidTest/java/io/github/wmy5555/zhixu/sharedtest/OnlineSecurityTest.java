@@ -1,9 +1,16 @@
 package io.github.wmy5555.zhixu.sharedtest;
 
 import android.test.AndroidTestCase;
+import android.security.keystore.KeyGenParameterSpec;
+import android.security.keystore.KeyProperties;
 import java.io.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
+import java.math.BigInteger;
+import java.security.*;
+import java.security.cert.X509Certificate;
+import javax.net.ssl.*;
+import javax.security.auth.x500.X500Principal;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
@@ -191,23 +198,60 @@ public class OnlineSecurityTest extends AndroidTestCase {
     }
 
     public void testActualOkHttp503RetryAfterZeroWritesBillableBodyOnce() throws Exception {
-        // Low-level client fixture only: production HttpTransport still rejects loopback/HTTP. No validation bypass is exposed.
+        // Runtime-generated test-only TLS identity: production transport and cleartext policy remain unchanged.
+        String alias = "zhixu.online.tls.test." + UUID.randomUUID();
+        KeyStore keys = KeyStore.getInstance("AndroidKeyStore"); keys.load(null);
+        try {
+        KeyPairGenerator generator = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_RSA, "AndroidKeyStore");
+        long now = System.currentTimeMillis();
+        generator.initialize(new KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_SIGN | KeyProperties.PURPOSE_DECRYPT)
+            .setKeySize(2048).setDigests(KeyProperties.DIGEST_SHA256, KeyProperties.DIGEST_SHA384, KeyProperties.DIGEST_SHA512)
+            .setSignaturePaddings(KeyProperties.SIGNATURE_PADDING_RSA_PKCS1, KeyProperties.SIGNATURE_PADDING_RSA_PSS).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_RSA_PKCS1)
+            .setCertificateSubject(new X500Principal("CN=localhost")).setCertificateSerialNumber(new BigInteger(128, new SecureRandom()).add(BigInteger.ONE))
+            .setCertificateNotBefore(new Date(now - 60000)).setCertificateNotAfter(new Date(now + 86400000)).build());
+        generator.generateKeyPair();
+        PrivateKey key = (PrivateKey) keys.getKey(alias, null); X509Certificate certificate = (X509Certificate) keys.getCertificate(alias);
+        certificate.verify(certificate.getPublicKey());
+        X509KeyManager keyManager = new X509KeyManager() {
+            public String[] getClientAliases(String type, Principal[] issuers) { return null; }
+            public String chooseClientAlias(String[] types, Principal[] issuers, Socket socket) { return null; }
+            public String[] getServerAliases(String type, Principal[] issuers) { return "RSA".equals(type) ? new String[] { alias } : null; }
+            public String chooseServerAlias(String type, Principal[] issuers, Socket socket) { return "RSA".equals(type) ? alias : null; }
+            public X509Certificate[] getCertificateChain(String selected) { return alias.equals(selected) ? new X509Certificate[] { certificate } : null; }
+            public PrivateKey getPrivateKey(String selected) { return alias.equals(selected) ? key : null; }
+        };
+        KeyStore trusted = KeyStore.getInstance(KeyStore.getDefaultType()); trusted.load(null); trusted.setCertificateEntry(alias, certificate);
+        TrustManagerFactory trustFactory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm()); trustFactory.init(trusted);
+        X509TrustManager trust = (X509TrustManager) trustFactory.getTrustManagers()[0];
+        SSLContext tls = SSLContext.getInstance("TLS"); tls.init(new KeyManager[] { keyManager }, new TrustManager[] { trust }, new SecureRandom());
         AtomicInteger bodies = new AtomicInteger(); AtomicReference<Throwable> failure = new AtomicReference<>();
-        try (ServerSocket server = new ServerSocket(0, 2, InetAddress.getByName("127.0.0.1"))) {
+        AtomicReference<Socket> active = new AtomicReference<>(); AtomicBoolean closing = new AtomicBoolean();
+        try (ServerSocket server = tls.getServerSocketFactory().createServerSocket(0, 2, InetAddress.getByName("127.0.0.1"))) {
             server.setSoTimeout(1500); Thread fixture = new Thread(() -> {
-                try { while (true) { try (Socket socket = server.accept()) { socket.setSoTimeout(2000); BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8)); String line; int length = 0;
+                try { while (true) { try (Socket socket = server.accept()) { active.set(socket); socket.setSoTimeout(2000); BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8)); String line = in.readLine(); int length = -1;
+                        if (!"POST /synthetic HTTP/1.1".equals(line)) throw new IOException("Unexpected synthetic request");
                         while ((line = in.readLine()) != null && !line.isEmpty()) if (line.toLowerCase(Locale.ROOT).startsWith("content-length:")) length = Integer.parseInt(line.substring(15).trim());
-                        for (int i = 0; i < length; i++) if (in.read() == -1) throw new EOFException("Missing synthetic body"); bodies.incrementAndGet();
+                        if (length != 2 || in.read() != '{' || in.read() != '}') throw new IOException("Unexpected synthetic body"); bodies.incrementAndGet();
                         socket.getOutputStream().write("HTTP/1.1 503 Service Unavailable\r\nRetry-After: 0\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".getBytes(StandardCharsets.US_ASCII)); socket.getOutputStream().flush();
-                    } } } catch (SocketTimeoutException expected) { } catch (Throwable e) { failure.set(e); }
-            }); fixture.start();
-            OkHttpClient client = new OkHttpClient.Builder().proxy(Proxy.NO_PROXY).retryOnConnectionFailure(false).followRedirects(false).callTimeout(4, TimeUnit.SECONDS).build();
-            try { Request request = new Request.Builder().url("http://127.0.0.1:" + server.getLocalPort() + "/synthetic")
+                    } finally { active.set(null); } } } catch (SocketTimeoutException expected) { } catch (Throwable e) { if (!closing.get()) failure.set(e); }
+            }, "zhixu-synthetic-https"); fixture.setDaemon(true);
+            final int port = server.getLocalPort();
+            OkHttpClient client = new OkHttpClient.Builder().sslSocketFactory(tls.getSocketFactory(), trust)
+                .hostnameVerifier((host, session) -> {
+                    try { return "127.0.0.1".equals(host) && session.getPeerPort() == port && certificate.equals(session.getPeerCertificates()[0]); }
+                    catch (SSLPeerUnverifiedException e) { return false; }
+                }).proxy(Proxy.NO_PROXY).retryOnConnectionFailure(false).followRedirects(false).callTimeout(4, TimeUnit.SECONDS).build();
+            try { fixture.start(); Request request = new Request.Builder().url("https://127.0.0.1:" + port + "/synthetic")
                     .post(OnlineNetwork.oneShot(RequestBody.create(MediaType.get("application/json"), "{}"))).build();
                 try (Response response = client.newCall(request).execute()) { assertEquals(503, response.code()); }
                 fixture.join(4000); assertFalse(fixture.isAlive()); assertNull(failure.get()); assertEquals(1, bodies.get());
-            } finally { client.connectionPool().evictAll(); client.dispatcher().executorService().shutdown(); }
+            } finally {
+                closing.set(true); server.close(); Socket socket = active.get(); if (socket != null) socket.close();
+                client.connectionPool().evictAll(); client.dispatcher().executorService().shutdownNow();
+                fixture.join(5000); assertFalse("Synthetic TLS fixture must stop", fixture.isAlive());
+            }
         }
+        } finally { keys.deleteEntry(alias); }
     }
 
     public void testDeepSeekJsonNonThinkingLimitAndGenericDoesNotReceiveProviderField() throws Exception {

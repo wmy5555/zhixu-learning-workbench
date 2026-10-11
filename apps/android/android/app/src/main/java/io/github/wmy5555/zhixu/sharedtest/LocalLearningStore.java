@@ -641,7 +641,7 @@ public final class LocalLearningStore {
     }
 
     private static void validateFeedback(JSONObject feedback) throws LocalSourceStore.StoreException {
-        fields(feedback, "assessment", "feedback", "omission", "correction", "nextQuestion", "suggestion", "disputedMisconception");
+        allowedFields(feedback, "assessment", "feedback", "omission", "correction", "nextQuestion", "suggestion", "disputedMisconception");
         requiredChoice(feedback, "assessment", "correct", "partial", "incorrect", "ambiguous");
         clientText(feedback.opt("feedback"), 16000, false);
         for (String key : Arrays.asList("omission", "correction", "nextQuestion", "suggestion")) if (feedback.has(key)) clientText(feedback.opt(key), 16000, true);
@@ -649,37 +649,53 @@ public final class LocalLearningStore {
     }
 
     private void validateOnlineJob(JSONObject job) throws LocalSourceStore.StoreException {
-        fields(job, "id", "onlineVersion", "type", "context", "state", "phase", "progress", "createdAt", "updatedAt", "payload", "requests", "checkpoint", "error", "code", "extractionSaved", "researchProgress", "result", "dedupKey");
+        allowedFields(job, "id", "onlineVersion", "type", "context", "state", "phase", "progress", "createdAt", "updatedAt", "payload", "requests", "checkpoint", "error", "code", "extractionSaved", "researchProgress", "result", "dedupKey");
         if (!versionOne(job.opt("onlineVersion")) || !context.equals(job.opt("context"))) throw invalid("联网任务版本或学习库不一致。");
         for (String key : Arrays.asList("id", "phase", "createdAt", "updatedAt")) clientText(job.opt(key), 256, false);
+        clientText(job.opt("dedupKey"), 16000, false);
         requiredChoice(job, "type", "process", "structure", "grade", "ask"); requiredChoice(job, "state", "queued", "running", "waiting", "failed", "cancelled", "done");
         integerRange(job.opt("progress"), 0, 100);
         JSONObject payload = object(job, "payload");
         if ("process".equals(job.opt("type"))) {
-            fields(payload, "noteId", "hash", "research", "savedCandidates", "extracted", "reuseExtracted"); clientText(payload.opt("noteId"), 256, false); clientText(payload.opt("hash"), 256, false);
+            allowedFields(payload, "noteId", "hash", "research", "savedCandidates", "extracted", "reuseExtracted"); clientText(payload.opt("noteId"), 256, false); clientText(payload.opt("hash"), 256, false);
             if (!(payload.opt("research") instanceof Boolean)) throw invalid("任务联网核验选项格式不正确。");
             if (payload.has("reuseExtracted") && !(payload.opt("reuseExtracted") instanceof Boolean)) throw invalid("任务复用状态格式不正确。");
             if (payload.has("savedCandidates")) { JSONObject saved = object(payload, "savedCandidates"); fields(saved, "ids"); clientStrings(saved.opt("ids"), 200); }
-            if (payload.has("extracted")) { JSONObject extracted = object(payload, "extracted"); fields(extracted, "sourceTitle", "candidates", "structure"); if (extracted.has("sourceTitle")) clientText(extracted.opt("sourceTitle"), 800, true); if (array(extracted, "candidates").length() > 200) throw invalid("任务候选知识过多。"); }
-        } else if ("structure".equals(job.opt("type"))) { fields(payload, "noteId", "hash", "basis", "structure"); clientText(payload.opt("noteId"), 256, false); clientText(payload.opt("hash"), 256, false); JSONArray basis = array(payload, "basis"); if (basis.length() > 200) throw invalid("结构分析材料过多。"); for (int i = 0; i < basis.length(); i++) { JSONObject ref = objectAt(basis, i); fields(ref, "id", "hash"); clientText(ref.opt("id"), 256, false); clientText(ref.opt("hash"), 256, false); } if (payload.has("structure")) { JSONObject structure = object(payload, "structure"); fields(structure, "hierarchy", "edges"); array(structure, "hierarchy"); array(structure, "edges"); } }
+            if (payload.has("extracted")) { JSONObject extracted = object(payload, "extracted"); allowedFields(extracted, "sourceTitle", "candidates", "structure"); if (extracted.has("sourceTitle")) clientText(extracted.opt("sourceTitle"), 800, true); if (array(extracted, "candidates").length() > 200) throw invalid("任务候选知识过多。"); if (extracted.has("structure")) validateOnlineStructure(object(extracted, "structure")); }
+        } else if ("structure".equals(job.opt("type"))) { allowedFields(payload, "noteId", "hash", "basis", "structure"); clientText(payload.opt("noteId"), 256, false); clientText(payload.opt("hash"), 256, false); validateOnlineBasis(array(payload, "basis")); if (payload.has("structure")) validateOnlineStructure(object(payload, "structure")); }
         else if ("grade".equals(job.opt("type"))) { fields(payload, "sessionId", "turnId"); clientText(payload.opt("sessionId"), 256, false); clientText(payload.opt("turnId"), 256, false); }
-        else { fields(payload, "question", "scope", "mode", "privacy", "draftId", "basis"); clientText(payload.opt("question"), 16000, false); clientText(payload.opt("mode"), 64, false); requiredChoice(payload, "privacy", "local", "cloud"); if (payload.has("draftId")) clientText(payload.opt("draftId"), 256, false); }
+        else { allowedFields(payload, "question", "scope", "mode", "privacy", "draftId", "basis"); clientText(payload.opt("question"), 16000, false); requiredChoice(payload, "mode", "answer", "outline", "draft"); requiredChoice(payload, "privacy", "local", "cloud"); JSONArray scope = array(payload, "scope"); for (int i = 0; i < scope.length(); i++) if (!Arrays.asList("knowledge", "source").contains(scope.opt(i))) throw invalid("问答范围不正确。"); validateOnlineBasis(array(payload, "basis")); if (payload.has("draftId")) clientText(payload.opt("draftId"), 256, false); }
         JSONObject requests = object(job, "requests"); if (requests.length() > 200) throw invalid("联网任务步骤过多。");
         for (Iterator<String> it = requests.keys(); it.hasNext();) { String step = it.next(); clientText(step, 256, false); JSONObject r = object(requests, step); fields(r, "requestId", "state", "capability"); clientText(r.opt("requestId"), 128, false); requiredChoice(r, "state", "prepared", "succeeded", "failed", "unknown"); requiredChoice(r, "capability", "model", "search", "fetch"); }
         if (job.has("extractionSaved") && !(job.opt("extractionSaved") instanceof Boolean)) throw invalid("任务保存状态不正确。");
         if (job.has("researchProgress")) { JSONObject progress = object(job, "researchProgress"); fields(progress, "total", "covered", "verified"); for (String k : Arrays.asList("total", "covered", "verified")) integerRange(progress.opt(k), 0, 200); }
-        for (String k : Arrays.asList("error", "code", "dedupKey")) if (job.has(k) && !job.isNull(k)) clientText(job.opt(k), 16000, true);
+        if (job.has("checkpoint")) object(job, "checkpoint");
+        if (job.has("result")) object(job, "result");
+        for (String k : Arrays.asList("error", "code")) if (job.has(k) && !job.isNull(k)) clientText(job.opt(k), 16000, true);
         rejectOnlineSecrets(job);
     }
 
     private static void validateOnlineRecord(String kind, JSONObject record) throws LocalSourceStore.StoreException {
         if (!versionOne(record.opt("onlineVersion"))) throw invalid("联网记录版本不受支持。");
         clientText(record.opt("id"), 256, false);
-        if ("research".equals(kind)) { fields(record, "id", "onlineVersion", "sourceId", "sourceHash", "claim", "result", "at"); for (String k : Arrays.asList("sourceId", "sourceHash", "claim", "at")) clientText(record.opt(k), 16000, false); JSONObject result = object(record, "result"); fields(result, "claim", "evidence", "limitations", "conclusion", "coverage", "notice"); }
+        if ("research".equals(kind)) { fields(record, "id", "onlineVersion", "sourceId", "sourceHash", "claim", "result", "at"); for (String k : Arrays.asList("sourceId", "sourceHash", "claim", "at")) clientText(record.opt(k), 16000, false); JSONObject result = object(record, "result"); allowedFields(result, "claim", "evidence", "limitations", "conclusion", "coverage", "notice"); clientText(result.opt("claim"), 16000, false); clientText(result.opt("conclusion"), 16384, true); requiredChoice(result, "coverage", "incomplete", "searched", "unsearched"); array(result, "evidence"); validateOnlineTexts(result.opt("limitations"), 200, 16000); if (result.has("notice")) clientText(result.opt("notice"), 16000, true); }
         else if ("proposals".equals(kind)) { fields(record, "id", "onlineVersion", "noteId", "expectedHash", "body", "meta", "state", "reason", "createdAt"); requiredChoice(record, "state", "pending", "accepted", "rejected", "superseded"); for (String k : Arrays.asList("noteId", "expectedHash", "reason", "createdAt")) clientText(record.opt(k), 16000, false); clientText(record.opt("body"), 128 * 1024, false); object(record, "meta"); }
-        else if ("drafts".equals(kind)) { fields(record, "id", "onlineVersion", "mode", "question", "body", "citations", "limitations", "usedIds", "createdAt", "updatedAt"); for (String k : Arrays.asList("mode", "question", "body", "createdAt")) clientText(record.opt(k), 128 * 1024, true); array(record, "citations"); array(record, "limitations"); clientStrings(record.opt("usedIds"), 200); }
+        else if ("drafts".equals(kind)) { allowedFields(record, "id", "onlineVersion", "mode", "question", "body", "citations", "limitations", "usedIds", "createdAt", "updatedAt"); requiredChoice(record, "mode", "answer", "outline", "draft"); for (String k : Arrays.asList("question", "createdAt")) clientText(record.opt(k), 16000, false); clientText(record.opt("body"), 128 * 1024, true); if (record.has("updatedAt")) clientText(record.opt("updatedAt"), 256, false); JSONArray citations = array(record, "citations"); Set<String> cited = new HashSet<>(); if (citations.length() > 200) throw invalid("草稿引用过多。"); for (int i = 0; i < citations.length(); i++) { JSONObject citation = objectAt(citations, i); fields(citation, "id", "title", "excerpt", "sources"); cited.add(clientText(citation.opt("id"), 256, false)); clientText(citation.opt("title"), 800, false); clientText(citation.opt("excerpt"), 16000, true); array(citation, "sources"); } validateOnlineTexts(record.opt("limitations"), 200, 16000); clientStrings(record.opt("usedIds"), 200); JSONArray used = array(record, "usedIds"); for (int i = 0; i < used.length(); i++) if (!cited.contains(used.opt(i))) throw invalid("采用项须来自本草稿引用。"); }
         else { fields(record, "id", "onlineVersion", "draftId", "noteId", "actualUse", "at"); for (String k : Arrays.asList("draftId", "noteId", "at")) clientText(record.opt(k), 256, false); if (!Boolean.TRUE.equals(record.opt("actualUse"))) throw invalid("产出使用记录必须由实际使用确认。"); }
         rejectOnlineSecrets(record);
+    }
+
+    private static void validateOnlineBasis(JSONArray basis) throws LocalSourceStore.StoreException {
+        if (basis.length() > 200) throw invalid("任务依据材料过多。");
+        for (int i = 0; i < basis.length(); i++) { JSONObject ref = objectAt(basis, i); fields(ref, "id", "hash"); clientText(ref.opt("id"), 256, false); clientText(ref.opt("hash"), 256, false); }
+    }
+    private static void validateOnlineStructure(JSONObject structure) throws LocalSourceStore.StoreException {
+        fields(structure, "hierarchy", "edges"); array(structure, "hierarchy"); array(structure, "edges");
+    }
+    private static void validateOnlineTexts(Object value, int maximum, int bytes) throws LocalSourceStore.StoreException {
+        if (!(value instanceof JSONArray) || ((JSONArray) value).length() > maximum) throw invalid("联网文本列表格式不正确。");
+        JSONArray list = (JSONArray) value;
+        for (int i = 0; i < list.length(); i++) clientText(list.opt(i), bytes, true);
     }
 
     private static void rejectOnlineSecrets(Object value) throws LocalSourceStore.StoreException {
@@ -921,10 +937,14 @@ public final class LocalLearningStore {
         } catch (NoSuchAlgorithmException exception) { throw new IllegalStateException(exception); }
     }
 
-    private static void fields(JSONObject input, String... expected) throws LocalSourceStore.StoreException {
+    private static void allowedFields(JSONObject input, String... expected) throws LocalSourceStore.StoreException {
         if (input == null) throw invalid("学习内容不能为空。");
         Set<String> allowed = new HashSet<>(Arrays.asList(expected));
         for (Iterator<String> keys = input.keys(); keys.hasNext();) if (!allowed.contains(keys.next())) throw invalid("学习内容包含不受支持的字段。");
+    }
+
+    private static void fields(JSONObject input, String... expected) throws LocalSourceStore.StoreException {
+        allowedFields(input, expected);
         for (String key : expected) if (!input.has(key) || input.isNull(key)) throw invalid("学习内容缺少必要字段。");
     }
 

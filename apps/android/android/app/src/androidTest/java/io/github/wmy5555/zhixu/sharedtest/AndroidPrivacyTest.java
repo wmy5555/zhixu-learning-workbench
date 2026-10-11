@@ -2,6 +2,7 @@ package io.github.wmy5555.zhixu.sharedtest;
 
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.content.pm.PermissionInfo;
 import android.content.res.XmlResourceParser;
 import android.test.AndroidTestCase;
 import org.xmlpull.v1.XmlPullParser;
@@ -19,7 +20,11 @@ public class AndroidPrivacyTest extends AndroidTestCase {
         String[] permissions = getContext().getPackageManager().getPackageInfo(
             getContext().getPackageName(), PackageManager.GET_PERMISSIONS).requestedPermissions;
         assertNotNull(permissions);
-        assertEquals(new HashSet<>(Arrays.asList("android.permission.INTERNET")), new HashSet<>(Arrays.asList(permissions)));
+        String receiverPermission = getContext().getPackageName() + ".DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION";
+        assertEquals(new HashSet<>(Arrays.asList("android.permission.INTERNET", receiverPermission)), new HashSet<>(Arrays.asList(permissions)));
+        PermissionInfo receiver = getContext().getPackageManager().getPermissionInfo(receiverPermission, 0);
+        assertEquals(getContext().getPackageName(), receiver.packageName);
+        assertEquals(PermissionInfo.PROTECTION_SIGNATURE, receiver.protectionLevel);
     }
 
     public void testCloudAndDeviceTransferExcludeEveryStorageDomain() throws Exception {

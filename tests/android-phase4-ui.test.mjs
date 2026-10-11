@@ -31,6 +31,51 @@ test('Android settings write credentials only, clear password inputs even on sav
   await form.events.submit({ preventDefault() {} }); assert.equal(sent.clearCredentials.model, true); assert.equal(sent.credentials.model, undefined);
 });
 
+test('Android online settings explicitly clear nullable prices after saving values', async () => {
+  const stored = { revision: 2, ai: { enabled: false }, search: { enabled: false }, fetch: { enabled: false } };
+  const calls = [];
+  const f = await createAndroidBrowser({ api: {
+    mainSettings: async () => structuredClone(stored),
+    bootstrap: async () => ({ capabilities }),
+    androidGuide: async () => ({ steps: [] }),
+    updateMainSettings: async payload => {
+      calls.push(structuredClone(payload));
+      for (const capability of ['ai', 'search', 'fetch']) stored[capability] = { ...stored[capability], ...payload[capability] };
+      stored.revision += 1;
+    },
+  } });
+  const form = () => descendants(f.app.refs.main).find(node => node.tagName === 'form' && control(node, 'ai_monthlyBudget'));
+  const save = async () => form().events.submit({ preventDefault() {} });
+
+  await f.app.renderSystem();
+  await save();
+  for (const name of ['monthlyBudget', 'inputPrice', 'outputPrice', 'cachedInputPrice']) assert.equal(calls[0].ai[name], null);
+  assert.equal(calls[0].search.requestPrice, null);
+  assert.equal(calls[0].ai.dailyCallLimit, undefined);
+  assert.equal(calls[0].ai.sourceCallLimit, undefined);
+
+  for (const [name, value] of Object.entries({ monthlyBudget: '25', dailyCallLimit: '30', sourceCallLimit: '4', inputPrice: '1.2', outputPrice: '4.8', cachedInputPrice: '0.3' })) control(form(), `ai_${name}`).value = value;
+  control(form(), 'search_requestPrice').value = '0.02';
+  await save();
+  assert.equal(calls[1].ai.monthlyBudget, 25);
+  assert.equal(calls[1].ai.dailyCallLimit, 30);
+  assert.equal(calls[1].ai.sourceCallLimit, 4);
+  assert.equal(calls[1].ai.inputPrice, 1.2);
+  assert.equal(calls[1].ai.outputPrice, 4.8);
+  assert.equal(calls[1].ai.cachedInputPrice, 0.3);
+  assert.equal(calls[1].search.requestPrice, 0.02);
+
+  for (const name of ['monthlyBudget', 'inputPrice', 'outputPrice', 'cachedInputPrice']) control(form(), `ai_${name}`).value = '';
+  control(form(), 'search_requestPrice').value = '';
+  control(form(), 'ai_dailyCallLimit').value = '';
+  control(form(), 'ai_sourceCallLimit').value = '';
+  await save();
+  for (const name of ['monthlyBudget', 'inputPrice', 'outputPrice', 'cachedInputPrice']) assert.equal(calls[2].ai[name], null);
+  assert.equal(calls[2].search.requestPrice, null);
+  assert.equal(calls[2].ai.dailyCallLimit, undefined);
+  assert.equal(calls[2].ai.sourceCallLimit, undefined);
+});
+
 test('unknown job only retries after explicit possible duplicate fee confirmation', async () => {
   const calls = []; const f = await createAndroidBrowser({ confirmations: [false, true], api: { jobs: async () => ({ jobs: [{ id: 'unknown-job', type: 'ask', state: 'waiting', code: 'REQUEST_UNKNOWN', error: '结果未知' }] }), jobAction: async (id, body) => { calls.push({ id, body }); }, bootstrap: async () => ({ capabilities }), androidGuide: async () => ({ steps: [] }), settings: async () => ({}) } });
   f.app.state.systemTab = 'jobs'; await f.app.renderSystem();

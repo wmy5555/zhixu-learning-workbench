@@ -2115,6 +2115,7 @@ async function androidOnlineSettingsPanel() {
       const row = controls[capability]; payload[capability] = { enabled: row.enabled.checked };
       for (const [name, input] of Object.entries(row.fields)) {
         if (["baseUrl", "model"].includes(name)) payload[capability][name] = input.value.trim();
+        else if (input.value === "" && ((capability === "ai" && ["monthlyBudget", "inputPrice", "outputPrice", "cachedInputPrice"].includes(name)) || (capability === "search" && name === "requestPrice"))) payload[capability][name] = null;
         else if (input.value !== "") payload[capability][name] = Number(input.value);
       }
       const credentialName = capability === "ai" ? "model" : "search";

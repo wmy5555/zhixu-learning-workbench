@@ -58,6 +58,48 @@ test('successful native request is recovered once after a workflow interruption 
   f.ledger.set(requestId,{requestId,state:'succeeded',result:extracted(),usage:{cost:0}});
   const done=await run(f,job);assert.equal(done.state,'done');assert.equal(f.states.formal.state.notes.length,1);assert.equal(f.calls.some(c=>c[0]==='request'),false);
   assert.equal(f.calls.find(c=>c[0]==='status')[1],'formal');
+  const reopened=createAndroidOnline(f.local,f.native,{clock});await reopened.run('formal',job.id);await reopened.wait('formal',job.id);
+  assert.equal(f.states.formal.state.notes.length,1);assert.equal(f.calls.some(c=>c[0]==='authorize'||c[0]==='request'),false);
+});
+
+test('exported prepared requests without the new device ledger stay unknown through cancel and retry until a new attempt is confirmed',async()=>{
+  for(const path of ['run','cancel-retry']){
+    let entered,release;const started=new Promise(resolve=>{entered=resolve;});
+    const original=fixture(async()=>{entered();return new Promise(resolve=>{release=()=>resolve(extracted());});});
+    const job=await original.workflow.process('formal',sourceId,{});await original.workflow.run('formal',job.id);await started;
+    // The learning backup has the prepared checkpoint; the native ledger is
+    // device-local and is deliberately absent from this serialized backup.
+    const backup=JSON.stringify(original.states.formal.state),oldRequest=original.calls.find(c=>c[0]==='request')[1];
+    assert.equal(JSON.parse(backup).records.jobs[job.id].requests.extract.state,'prepared');
+    const restored=fixture(()=>extracted());restored.states.formal={revision:randomUUID(),state:JSON.parse(backup)};
+    if(path==='cancel-retry')restored.native.requestStatus=async({requestId,context})=>{restored.calls.push(['status',context]);assert.equal(requestId,oldRequest.requestId);throw Object.assign(new Error('合成账本未迁移'),{code:'REQUEST_NOT_FOUND'});};
+    const reopened=createAndroidOnline(restored.local,restored.native,{clock});await reopened.snapshot('formal');assert.equal(restored.calls.length,0);
+    if(path==='run'){
+      await reopened.run('formal',job.id);const stopped=await reopened.wait('formal',job.id);
+      assert.equal(stopped.state,'waiting');assert.equal(stopped.code,'REQUEST_UNKNOWN');assert.equal(stopped.requests.extract.state,'unknown');
+    }
+    await reopened.action('formal',job.id,{action:'cancel'});
+    await assert.rejects(reopened.action('formal',job.id,{action:'retry'}),{code:'REQUEST_UNKNOWN'});
+    const checkpoint=restored.states.formal.state.records.jobs[job.id];assert.equal(checkpoint.code,'REQUEST_UNKNOWN');assert.equal(checkpoint.requests.extract.state,'unknown');
+    assert.equal(restored.calls.some(c=>c[0]==='authorize'||c[0]==='request'),false);assert.equal(restored.states.formal.state.notes.length,0);
+    await reopened.action('formal',job.id,{action:'retry',confirmUnknown:true});const done=await reopened.wait('formal',job.id);
+    assert.equal(done.state,'done',done.error);assert.equal(restored.states.formal.state.notes.length,1);
+    const newRequests=restored.calls.filter(c=>c[0]==='request'),newGrants=restored.calls.filter(c=>c[0]==='authorize');
+    assert.equal(newRequests.length,1);assert.equal(newGrants.length,1);assert.notEqual(newRequests[0][1].requestId,oldRequest.requestId);
+    assert.notEqual(newRequests[0][1].authorizationId,oldRequest.authorizationId);assert.equal(newGrants[0][1].requestId,newRequests[0][1].requestId);
+    await original.workflow.action('formal',job.id,{action:'cancel'});release();await original.workflow.wait('formal',job.id);
+    assert.equal(original.states.formal.state.notes.length,0);
+  }
+});
+
+test('confirmation on a restored prepared checkpoint creates a fresh request and grant directly',async()=>{
+  const f=fixture(()=>extracted()),job=await f.workflow.process('formal',sourceId,{}),oldRequestId=randomUUID();
+  f.states.formal.state.records.jobs[job.id].requests.extract={requestId:oldRequestId,state:'prepared',capability:'model'};
+  f.states.formal.state.records.jobs[job.id].state='running';
+  const reopened=createAndroidOnline(f.local,f.native,{clock});await reopened.action('formal',job.id,{action:'cancel'});
+  await reopened.action('formal',job.id,{action:'retry',confirmUnknown:true});const done=await reopened.wait('formal',job.id);
+  assert.equal(done.state,'done',done.error);const requests=f.calls.filter(c=>c[0]==='request');assert.equal(requests.length,1);
+  assert.notEqual(requests[0][1].requestId,oldRequestId);assert.equal(f.calls.filter(c=>c[0]==='authorize').length,1);
 });
 
 test('source version changes during generation leave input intact and cannot create stale candidates',async()=>{
@@ -154,9 +196,23 @@ test('usage shows unknown cost and tokens without inventing zero, and keeps the 
 });
 
 test('native rejection before sending is a budget wait, rather than an uncertain paid request',async()=>{
-  const f=fixture(()=>extracted());f.native.request=async()=>{throw Object.assign(new Error('合成每日上限'),{code:'DAILY_LIMIT'});};
+  const f=fixture(()=>extracted()),send=f.native.request;f.native.request=async()=>{throw Object.assign(new Error('合成每日上限'),{code:'DAILY_LIMIT'});};
   const job=await f.workflow.process('formal',sourceId,{}),waiting=await run(f,job);assert.equal(waiting.state,'waiting');assert.equal(waiting.code,'DAILY_LIMIT');assert.equal(waiting.requests.extract.state,'failed');assert.equal(f.states.formal.state.notes.length,0);
   f.states.practice.state=structuredClone(f.states.formal.state);const reopened=createAndroidOnline(f.local,f.native,{clock});await assert.rejects(reopened.snapshot('practice'),{code:'PRACTICE_ISOLATION'});
+  f.native.request=send;await reopened.action('formal',job.id,{action:'retry'});const done=await reopened.wait('formal',job.id);assert.equal(done.state,'done',done.error);
+  assert.notEqual(done.requests.extract.requestId,waiting.requests.extract.requestId);assert.equal(f.calls.filter(c=>c[0]==='authorize').length,2);assert.equal(f.calls.filter(c=>c[0]==='request').length,1);
+});
+
+test('authorization refusal persists an unsent failed checkpoint and explicit retry uses a new request and authorization',async()=>{
+  for(const refused of ['throw','missing-grant']){
+    const f=fixture(()=>extracted()),authorize=f.native.authorize;
+    f.native.authorize=async()=>{if(refused==='throw')throw Object.assign(new Error('合成用户拒绝授权'),{code:'AUTHORIZATION_DENIED'});return{};};
+    const job=await f.workflow.process('formal',sourceId,{}),failed=await run(f,job);
+    assert.equal(failed.code,'AUTHORIZATION_DENIED');assert.equal(failed.requests.extract.state,'failed');assert.equal(f.calls.some(c=>c[0]==='request'),false);
+    f.native.authorize=authorize;const reopened=createAndroidOnline(f.local,f.native,{clock});await reopened.action('formal',job.id,{action:'retry'});
+    const done=await reopened.wait('formal',job.id);assert.equal(done.state,'done',done.error);assert.notEqual(done.requests.extract.requestId,failed.requests.extract.requestId);
+    assert.equal(f.calls.filter(c=>c[0]==='request').length,1);assert.equal(f.calls.filter(c=>c[0]==='authorize').length,1);
+  }
 });
 
 const structureResult=notes=>({text:JSON.stringify({structure:{hierarchy:notes.map(n=>({child:n.id,parent:null})),edges:[]}})});
