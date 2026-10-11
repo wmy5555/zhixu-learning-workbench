@@ -40,6 +40,17 @@ export function emptyState(title, description, action) {
   ]);
 }
 
+// A calendar day already belongs to the scheduler's timezone; never shift it.
+export function formatCalendarDate(value) {
+  if (!value) return "未记录";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return String(value);
+  const date = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value) return String(value);
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "UTC", year: "numeric", month: "short", day: "numeric",
+  }).format(date);
+}
+
 export function formatDate(value, withTime = false) {
   if (!value) return "未记录";
   const date = new Date(value);
