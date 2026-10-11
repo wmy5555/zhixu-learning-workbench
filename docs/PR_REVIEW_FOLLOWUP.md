@@ -153,4 +153,4 @@ PR #52 [主题前置输入不匹配](https://github.com/wmy5555/zhixu-learning-w
 
 2026-10-12 收尾：[#52 审阅意见](https://github.com/wmy5555/zhixu-learning-workbench/pull/52#discussion_r4219802837) 修复队列非 pending 项的固定计划入口状态展示与禁用行为，处理器不发送请求；[#51 审阅意见](https://github.com/wmy5555/zhixu-learning-workbench/pull/51#discussion_r4219835838) 修复桌面来源日期文本保留和显式清空语义。队列 2 项、日期 4 项定向回归共 6/6 通过，0 失败、0 跳过。Android `ef6a9e4` 专用包新增原生方法及保存重开/学习历史导出恢复共 12 项设备测试通过；这是新增差异证据，不是本轮全量 127 项。详细版本和未验收范围见 ANDROID_SHARED_UI.md。新候选 CI/PR 合并结果待补。
 
-四条先前存储/预览反馈线程已解决；当前仅两条 UI 反馈待最新候选 CI 核对。
+四条先前存储/预览反馈已解决；第二阶段日期修复经最新 CI 核对后解决，PR #51 已合并。第三阶段队列修复的最新候选 CI 与线程状态见 PR #52；各历史记录保留当时的验证范围。
