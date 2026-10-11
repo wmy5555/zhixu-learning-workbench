@@ -1072,6 +1072,48 @@ test('empty daily plans show the actual reasons with working knowledge and budge
   assert.equal(app.refs.drawerTitle.textContent, prerequisite.title);
 });
 
+test('joining learning from Today refreshes the background immediately and keeps the knowledge drawer', async () => {
+  const note = { id: 'today-candidate', kind: 'knowledge', title: '合成候选', body: '合成正文', meta: { stage: 'candidate', depth: 'explain' } };
+  const writes = [];
+  for (const blocked of [false, true]) {
+    let saved = note;
+    const today = () => saved.meta.stage === 'candidate'
+      ? { items: [], unavailable: [{ noteId: note.id, title: note.title, reason: '还未加入学习。' }] }
+      : blocked ? { items: [], unavailable: [{ noteId: note.id, title: note.title, reason: '今日剩余预算 0 分钟。' }] }
+        : { items: [{ id: 'plan', noteId: note.id, title: note.title, state: 'pending', kind: 'learn', minutes: 5 }], unavailable: [], minutes: 5, budget: 25 };
+    const app = browser({
+      note: async () => saved,
+      promote: async (id, body) => { writes.push(plain(body)); saved = { ...note, meta: { ...note.meta, stage: body.stage } }; return saved; },
+      bootstrap: async () => ({ today: today(), notes: [saved], jobs: [] }),
+      generateToday: async () => { assert.fail('joining learning must not submit generate'); },
+    });
+    app.state.view = 'today'; app.state.bootstrap = { today: today() };
+    await app.renderCurrent();
+    await click(findButton(app.refs.main, '查看知识'));
+    const pending = click(findButton(app.refs.drawerBody, '加入学习'));
+    assert.equal(writes.length, Number(blocked), 'nothing is saved before the user confirms');
+    const dialog = app.dialogs.querySelector('form');
+    dialog.querySelector('textarea').value = '合成学习理由';
+    await dialog.events.submit({ preventDefault() {} }); await pending;
+    assert.doesNotMatch(app.refs.main.textContent, /还未加入学习/);
+    assert.match(app.refs.main.textContent, blocked ? /今日剩余预算 0 分钟/ : /今天有 1 项值得投入.*预计 5 分钟/);
+    assert.equal(app.refs.drawerTitle.textContent, note.title);
+    assert.ok(app.refs.drawer.classList.contains('is-open'));
+  }
+  assert.deepEqual(writes.map(write => write.reason), ['合成学习理由', '合成学习理由']);
+});
+
+test('generating Today renders the returned POST plan without waiting for another bootstrap', async () => {
+  let posts = 0;
+  const app = browser({ generateToday: async () => { posts++; return { items: [{ id: 'post-plan', title: '合成已安排知识', noteId: 'post-note', state: 'pending', kind: 'learn', minutes: 5 }], unavailable: [], minutes: 5, budget: 25 }; }, bootstrap: async () => { assert.fail('the POST result is sufficient'); } });
+  app.state.view = 'today'; app.state.bootstrap = { today: { items: [], unavailable: [{ title: '旧候选', reason: '还未加入学习。' }] } };
+  await app.renderCurrent();
+  await click(findButton(app.refs.main, '生成清单'));
+  assert.equal(posts, 1);
+  assert.match(app.refs.main.textContent, /今天有 1 项值得投入.*预计 5 分钟.*合成已安排知识/);
+  assert.doesNotMatch(app.refs.main.textContent, /还未加入学习/);
+});
+
 test('alignment API routes preserve explicit options and write requests use the session CSRF token', async () => {
   const savedFetch = globalThis.fetch; const calls = [];
   globalThis.fetch = async (url, options = {}) => {

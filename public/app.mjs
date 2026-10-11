@@ -1075,6 +1075,7 @@ async function promoteNote(note, stage, returnToSourceId = "") {
     const updated = await api.promote(note.id, { stage, reason, depth: note.meta?.depth || "aware" });
     toast(`已设为${labels.stage(stage)}`, "success");
     await refreshBootstrap();
+    if (state.view === "today") await renderToday();
     if (returnToSourceId) await refreshSourceGroup(returnToSourceId);
     else renderNoteDrawer(updated);
   } catch (error) { handleError(error); }
