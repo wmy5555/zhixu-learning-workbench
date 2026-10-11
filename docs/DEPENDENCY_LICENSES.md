@@ -162,7 +162,7 @@
 | Kotlin standard library | Maven `org.jetbrains.kotlin:kotlin-stdlib:2.2.21`；上述 CI `debugRuntimeClasspath` 成功解析 | Apache-2.0；核对 [上游许可证](https://github.com/JetBrains/kotlin/blob/v2.2.21/license/LICENSE.txt)。 |
 | AndroidX Startup Runtime、Annotation | Maven `androidx.startup:startup-runtime:1.2.0` 与 `androidx.annotation:annotation-jvm:1.9.1`；上述 CI `debugRuntimeClasspath` 成功解析 | Apache-2.0；AndroidX 来源为 [官方源码仓库](https://github.com/androidx/androidx)。 |
 
-CI 的 `debugRuntimeClasspath` 依赖图解析成功，但同一工作流随后因独立 Java 编译错误而失败；这不表示 Android 构建成功。上述版本和来源已写入本次 [Android notice 源文件](../apps/android/web/android-third-party-notices.txt)。2026-10-12 对解析出的 54 个 Maven 包版本调用 [OSV 查询接口](https://google.github.io/osv.dev/post-v1-querybatch/)，54 个结果均无匹配的已知漏洞；此结果只覆盖当次数据库收录，不代表不存在漏洞或完成代码安全审计。最终 APK 是否收录 notice 尚未核实；本记录也不构成对全部 SDK、Gradle 插件或工具链组件的完整审计。
+首次 CI 的 `debugRuntimeClasspath` 依赖图解析成功，但随后因独立 Java 编译错误而失败；修复后的 [8f303b8 构建](https://github.com/wmy5555/zhixu-learning-workbench/actions/runs/38165840646) 已通过。上述版本和来源已写入本次 [Android notice 源文件](../apps/android/web/android-third-party-notices.txt)。2026-10-12 对解析出的 54 个 Maven 包版本调用 [OSV 查询接口](https://google.github.io/osv.dev/post-v1-querybatch/)，54 个结果均无匹配的已知漏洞；此结果只覆盖当次数据库收录，不代表不存在漏洞或完成代码安全审计。同日已检查 `8f303b8` 实际 APK ZIP 条目，notice 与审阅过的源文件字节一致；APK SHA-256 为 `5d59cafb709cc871bf936f4d24b9830260d13b252b4f490dcc75b8789cbcbcea`。本记录不构成对全部 SDK、Gradle 插件或工具链组件的完整审计。
 
 Capacitor 生成的默认图标和启动图属于模板资源，其许可范围随上述 Capacitor MIT 许可说明；本次未重绘、替换或另行引入媒体。2026-10-07 已在 b129246 构建的实际 APK ZIP 条目中确认 [android-third-party-notices.txt](../public/android-third-party-notices.txt) 随包收录；这不扩展上文注明的传递依赖审计范围。
 

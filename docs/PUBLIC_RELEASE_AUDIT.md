@@ -152,4 +152,4 @@
 
 ## Android 第四阶段增量（开发中）
 
-本次说明范围为原创实现与合成测试约定，未包含个人资料、真实密钥、日志或截图；新增 Android 网络能力由用户授权边界控制，AI、Tavily 搜索及网页读取默认关闭。新运行依赖采用 OkHttp `5.3.2` Android 变体；来源、已知传递依赖及许可核对状态见 `DEPENDENCY_LICENSES.md`。最终 Gradle 解析、APK notices 与 CI 检查尚待核实；本段不代表 Secrets、Dependencies 或完整公开审计已通过。在线服务、最终安装包与设备点击均尚未验收。
+本次增量范围为原创实现、合成测试及说明，未包含个人资料、真实密钥、设备日志或截图；新增 Android 网络能力由用户授权边界控制，AI、Tavily 搜索及网页读取默认关闭。新运行依赖采用 OkHttp `5.3.2` Android 变体；实际 Gradle 解析、54 个 Maven 版本的已知漏洞查询及许可核对见 `DEPENDENCY_LICENSES.md`。`8f303b8` 的 Windows/Linux Quality、Secrets、Dependencies 与 Android 构建/lint 已通过，实际 APK 的 notice 与源文件一致。HTTPS 测试证书和私钥仅在运行时临时生成，测试结束删除，不随仓库或安装包分发；生产明文网络限制保留。代码审查提出的预算清空及恢复请求缺少账本问题已修复，定向复审未发现新的主要问题；安全审查尚无独立完成回执。本段是本次增量记录，不代表完整历史公开审计或真实在线服务、最终点击验收完成。

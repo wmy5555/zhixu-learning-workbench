@@ -204,9 +204,11 @@ public class OnlineSecurityTest extends AndroidTestCase {
         try {
         KeyPairGenerator generator = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_RSA, "AndroidKeyStore");
         long now = System.currentTimeMillis();
+        // Conscrypt signs its precomputed TLS digest through a raw RSA private-key operation.
+        // Android documents NONE digest/padding authorization for TLS identities; this alias is disposable and test-only.
         generator.initialize(new KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_SIGN | KeyProperties.PURPOSE_DECRYPT)
-            .setKeySize(2048).setDigests(KeyProperties.DIGEST_SHA256, KeyProperties.DIGEST_SHA384, KeyProperties.DIGEST_SHA512)
-            .setSignaturePaddings(KeyProperties.SIGNATURE_PADDING_RSA_PKCS1, KeyProperties.SIGNATURE_PADDING_RSA_PSS).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_RSA_PKCS1)
+            .setKeySize(2048).setDigests(KeyProperties.DIGEST_NONE, KeyProperties.DIGEST_SHA256, KeyProperties.DIGEST_SHA384, KeyProperties.DIGEST_SHA512)
+            .setSignaturePaddings(KeyProperties.SIGNATURE_PADDING_RSA_PKCS1, KeyProperties.SIGNATURE_PADDING_RSA_PSS).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE, KeyProperties.ENCRYPTION_PADDING_RSA_PKCS1)
             .setCertificateSubject(new X500Principal("CN=localhost")).setCertificateSerialNumber(new BigInteger(128, new SecureRandom()).add(BigInteger.ONE))
             .setCertificateNotBefore(new Date(now - 60000)).setCertificateNotAfter(new Date(now + 86400000)).build());
         generator.generateKeyPair();
