@@ -23,6 +23,7 @@
 .onboarding-open .workspace { margin-right: 350px; }
 .onboarding-panel { position: fixed; inset: 0 0 0 auto; z-index: 65; width: 350px; padding: 22px 20px; overflow-y: auto; background: var(--paper); border-left: 1px solid var(--line); color: var(--ink); box-shadow: -4px 0 20px rgba(0,0,0,.04); }
 .onboarding-open .capture-layout { grid-template-columns: minmax(0, 1fr); }
+.capture-source-grid { grid-template-columns: minmax(0, 1fr); }
 @media (min-width: 1101px) {
   .onboarding-open .workspace:has(.onboarding-panel.is-compact) { margin-right: 0; }
   .onboarding-open .workspace:has(.onboarding-panel.is-compact) .topbar { padding-top: 72px; }

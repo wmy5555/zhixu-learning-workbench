@@ -10,6 +10,7 @@ import { coreSteps, flatSteps } from '../public/onboarding-curriculum.mjs';
 
 import { tutorialFixture } from './fixtures/tutorial-ui.mjs';
 const usageSource = await readFile(new URL('../public/usage.mjs', import.meta.url), 'utf8');
+const onboardingCss = await readFile(new URL('../public/onboarding.css', import.meta.url), 'utf8');
 
 const uiSource = await readFile(new URL('../public/ui.mjs', import.meta.url), 'utf8');
 const appSource = await readFile(new URL('../public/app.mjs', import.meta.url), 'utf8');
@@ -23,7 +24,7 @@ class Element {
     this.open = false; this.dataset = {}; this.style = { setProperty() {} }; this._text = '';
     this.classList = { add: name => { this.className = (this.className || '') + ' ' + name; }, remove: name => { this.className = (this.className || '').split(' ').filter(item => item !== name).join(' '); }, contains: name => (this.className || '').split(' ').includes(name), toggle() {} };
   }
-  set textContent(value) { this._text = String(value); this.children = []; }
+  set textContent(value) { this._text = String(value); this.children = []; if (this.tagName === 'textarea') this.value = String(value); }
   set value(value) { this._value = value; if (this.tagName === 'select') this.children.forEach(child => { child.selected = child.value === value; }); }
   get value() { return this.tagName === 'select' ? this.children.find(child => child.selected)?.value ?? this._value : this._value; }
   get textContent() { return this._text + this.children.map(child => child.textContent ?? String(child)).join(''); }
@@ -65,7 +66,7 @@ function control(node, name) { return descendants(node).find(item => item.name =
 const click = node => node.events.click({ target: node, preventDefault() {} });
 const plain = value => JSON.parse(JSON.stringify(value));
 
-function browser(api = {}) {
+function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
   api = { getContext: () => ({ practiceId: '', version: 0 }), ...api };
   const roots = new Map();
   const document = {
@@ -75,14 +76,14 @@ function browser(api = {}) {
     createElementNS: (_, tag) => new Element(tag),
     createTextNode: value => new Element('text'),
     querySelector(selector) { if (!roots.has(selector)) roots.set(selector, new Element()); return roots.get(selector); },
-    addEventListener() {},
+    events: {}, addEventListener(name, handler) { this.events[name] = handler; },
   };
   document.createTextNode = value => { const node = new Element('text'); node.textContent = value; return node; };
   const context = vm.createContext({
-    api, document, initSidebar, createProcessFeedback, parseSourceFile, TextDecoder, Node: Element, URL, Intl, Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => 'request-ui' },
+    api, document, initSidebar, createProcessFeedback, parseSourceFile, TextDecoder, Node: Element, URL, Intl: Object.assign(Object.create(Intl), { DateTimeFormat: dateTimeFormat }), Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => 'request-ui' },
     FormData: class {
       constructor(form) { this.form = form; }
-      entries() { return descendants(this.form).filter(node => node.name && !node.disabled && ['input', 'textarea', 'select'].includes(node.tagName)).map(node => [node.name, String(node.tagName === 'textarea' ? node.textContent : node.tagName === 'select' ? node.children.find(option => option.selected)?.value || '' : node.value)]); }
+      entries() { return descendants(this.form).filter(node => node.name && !node.disabled && ['input', 'textarea', 'select'].includes(node.tagName)).map(node => [node.name, String(node.tagName === 'select' ? node.children.find(option => option.selected)?.value || '' : node.value)]); }
     },
     ApiError: class extends Error {}, startSession: async () => {},
     window: { zhixuAppearance: { getAccent: () => null, getTheme: () => 'light', resolvedTheme: () => 'light', previewAccent: () => ({}), getMode: () => 'light', palette: () => ({}) }, matchMedia: () => ({ matches: false, addEventListener() {} }), history: { replaceState() {} }, location: { hash: '' }, setTimeout() {}, addEventListener() {} },
@@ -96,11 +97,25 @@ function browser(api = {}) {
   context.app.processFeedback = vm.runInContext('processFeedback', context);
   context.app.renderSourceGroupDrawer = vm.runInContext('renderSourceGroupDrawer', context);
   context.app.toasts = document.querySelector('#toast-region');
+  context.app.document = document;
   context.app.dialogs = document.body;
   context.app.jobsPanel = vm.runInContext('jobsPanel', context);
   context.app.generateToday = vm.runInContext('generateToday', context);
+  context.app.renderToday = vm.runInContext('renderToday', context);
   return context.app;
 }
+
+test('today card preserves the scheduler calendar day in a browser west of UTC', async () => {
+  const app = browser({}, function (locale, options) {
+    return new Intl.DateTimeFormat(locale, { timeZone: 'America/Los_Angeles', ...options });
+  });
+  app.state.bootstrap = { settings: { timezone: 'Asia/Shanghai' }, today: { date: '2026-10-12', items: [] } };
+  await app.renderToday();
+  assert.equal(app.refs.main.querySelector('.hero').querySelector('.eyebrow').textContent, '2026年10月12日');
+  app.state.bootstrap.today.date = '2027-01-01';
+  await app.renderToday();
+  assert.equal(app.refs.main.querySelector('.hero').querySelector('.eyebrow').textContent, '2027年1月1日');
+});
 
 test('recommendations keep complete evidence folded and leave actions outside the details', async () => {
   const reason = '合成说明。'.repeat(80);
@@ -184,7 +199,7 @@ test('Android capture remains local and never starts processing or research, inc
   assert.equal(imports[0].research, false);
 });
 
-test('capture source text spans both columns so long material stays readable beside metadata', () => {
+test('capture form uses the full available column and source metadata stays readable', () => {
   const app = browser();
   app.renderCapture();
   const form = app.refs.main.querySelector('[data-tour="capture-form"]');
@@ -192,7 +207,11 @@ test('capture source text spans both columns so long material stays readable bes
   const platform = control(form, 'platform');
   assert.ok(form.parentNode.classList.contains('capture-layout'));
   assert.ok(body.parentNode.classList.contains('span-2'));
+  assert.ok(form.classList.contains('capture-form'));
   assert.ok(platform.parentNode.parentNode.classList.contains('span-2'));
+  assert.ok(platform.parentNode.classList.contains('capture-source-grid'));
+  assert.match(onboardingCss, /\.onboarding-open \.capture-layout\s*\{\s*grid-template-columns:\s*minmax\(0,\s*1fr\);/);
+  assert.match(onboardingCss, /\.capture-source-grid\s*\{\s*grid-template-columns:\s*minmax\(0,\s*1fr\);/);
 });
 
 test('Android source editing omits disabled privacy, depth, and research interval fields', async () => {
@@ -920,6 +939,71 @@ test('state shortcut ignores stale confirmations after switching libraries or op
     app.renderNoteEditor({ ...note, kind });
     assert.equal(findButton(app.refs.drawerBody, '前往状态操作'), undefined);
   }
+});
+
+test('note editor user drawer exits preserve changed fields until explicit discard and cancel still abandons editing', async () => {
+  for (const kind of ['source', 'knowledge']) {
+    const note = { id: `synthetic-${kind}`, kind, title: '合成标题', body: '合成正文', meta: {} };
+    let reads = 0, writes = 0;
+    const app = browser({ note: async () => { reads++; return note; }, updateNote: async () => { writes++; } });
+    app.refs.drawer.classList.add('is-open');
+    app.renderNoteEditor(note, kind === 'source' ? { returnToSourceId: note.id } : {});
+    const form = app.refs.drawerBody.children[0];
+    const fields = [['title', '修改标题'], ['body', '修改正文'], ['topic', '修改主题'], ['privacy', 'cloud'], ['depth', 'aware']];
+    if (kind === 'source') fields.push(['platform', '合成平台'], ['author', '合成作者'], ['url', 'https://example.com/'], ['date', '2026年春'], ['locator', '第2页'], ['researchIntervalDays', '7']);
+    for (const [name, value] of fields) {
+      const input = control(form, name), original = input.value;
+      input.value = value; // Browser fill changes textarea.value, not textContent.
+      const before = JSON.stringify(app.serializeForm(form));
+      for (const exit of [() => click(app.refs.drawerClose), () => click(app.refs.drawerBackdrop), () => app.document.events.keydown({ key: 'Escape' })]) {
+        const pending = exit();
+        assert.match(app.dialogs.textContent, /放弃未保存的修改/);
+        await click(findButton(app.dialogs, '取消')); await pending;
+        assert.equal(app.refs.drawerBody.children[0], form);
+        assert.equal(JSON.stringify(app.serializeForm(form)), before);
+        assert.equal(app.refs.drawer.classList.contains('is-open'), true);
+      }
+      input.value = original;
+    }
+    assert.equal(reads, 0); assert.equal(writes, 0);
+    control(form, 'body').value = '确认放弃的正文';
+    await click(findButton(form, '取消'));
+    assert.equal(app.dialogs.querySelectorAll('.dialog').length, 0, 'cancel deliberately abandons editing without another confirmation');
+    assert.notEqual(app.refs.drawerBody.children[0], form);
+    assert.equal(reads, kind === 'source' ? 1 : 0); assert.equal(writes, 0);
+    app.renderNoteEditor(note);
+    control(app.refs.drawerBody.children[0], 'title').value = '放弃并关闭';
+    const closing = click(app.refs.drawerClose);
+    await click(findButton(app.dialogs, '放弃修改')); await closing;
+    assert.equal(app.refs.drawer.classList.contains('is-open'), false);
+    app.document.events.keydown({ key: 'Escape' });
+    assert.equal(app.dialogs.querySelectorAll('.dialog').length, 0, 'a discarded hidden editor must not prompt on later Escape');
+  }
+});
+
+test('note editor user close ignores stale confirmations and deduplicates repeated exits', async () => {
+  let version = 0;
+  const app = browser({ getContext: () => ({ practiceId: String(version), version }) });
+  const note = { id: 'synthetic-stale', kind: 'source', title: '合成标题', body: '合成正文', meta: {} };
+  for (const change of ['library', 'editor']) {
+    app.refs.drawer.classList.add('is-open'); app.renderNoteEditor(note);
+    const form = app.refs.drawerBody.children[0]; control(form, 'title').value = '修改';
+    const pending = click(app.refs.drawerClose);
+    await click(app.refs.drawerBackdrop);
+    assert.equal(app.dialogs.querySelectorAll('.dialog').length, 1);
+    if (change === 'library') version++;
+    else app.renderNoteEditor({ ...note, id: 'synthetic-new' });
+    const current = app.refs.drawerBody.children[0];
+    await click(findButton(app.dialogs, '放弃修改')); await pending;
+    assert.equal(app.refs.drawer.classList.contains('is-open'), true);
+    assert.equal(app.refs.drawerBody.children[0], current);
+  }
+  app.renderNoteEditor(note);
+  const title = control(app.refs.drawerBody.children[0], 'title');
+  title.value = '短暂修改'; title.value = note.title;
+  await click(app.refs.drawerClose);
+  assert.equal(app.dialogs.querySelectorAll('.dialog').length, 0);
+  assert.equal(app.refs.drawer.classList.contains('is-open'), false);
 });
 
 test('source editor preserves free text dates on other edits and permits explicit clearing', async () => {

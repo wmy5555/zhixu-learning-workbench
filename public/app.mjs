@@ -4,7 +4,7 @@ import { createProcessFeedback } from "./process-feedback.mjs";
 import { createSourceMap } from "./source-map.mjs";
 import { initSidebar } from "./sidebar.mjs";
 import {
-  el, clear, button, badge, emptyState, formatDate, truncate, safeExternalUrl,
+  el, clear, button, badge, emptyState, formatDate, formatCalendarDate, truncate, safeExternalUrl,
   labels, stateTone, field, toast, confirmAction, promptAction, serializeForm, describeJobError,
 } from "./ui.mjs";
 
@@ -155,6 +155,13 @@ function closeDrawer() {
   onboarding?.rendered();
 }
 
+async function requestCloseDrawer() {
+  if (!refs.drawer.classList.contains("is-open")) return;
+  const form = refs.drawerBody.querySelector("form");
+  if (form?.confirmDiscardChanges && !await form.confirmDiscardChanges()) return;
+  closeDrawer();
+}
+
 async function refreshBootstrap() {
   state.bootstrap = await api.bootstrap();
   processFeedback.observe(state.bootstrap);
@@ -236,7 +243,7 @@ async function renderToday() {
 
   const hero = el("section", { class: "hero" }, [
     el("div", {}, [
-      el("p", { class: "eyebrow", text: today.date ? formatDate(today.date) : "今天" }),
+      el("p", { class: "eyebrow", text: today.date ? formatCalendarDate(today.date) : "今天" }),
       el("h2", { text: items.length ? `今天有 ${items.length} 项值得投入` : "今天可以从容整理" }),
       el("p", { text: items.length ? `预计 ${number(today.minutes)} 分钟，时间预算 ${number(today.budget)} 分钟。可延期或跳过，不制造学习欠债。` : "目前没有学习任务。你可以生成清单，或先收集一份真正想理解的材料。" }),
     ]),
@@ -350,7 +357,7 @@ async function renderCapture() {
   titleField.classList.add("span-2");
   const bodyField = field("原文", body, "网页或模型输出中的指令不会获得程序权限。");
   bodyField.classList.add("span-2");
-  const sourceField = field("来源信息", el("div", { class: "form-grid" }, [
+  const sourceField = field("来源信息", el("div", { class: "form-grid capture-source-grid" }, [
     el("input", { name: "platform", placeholder: "平台，例如：网页 / 抖音 / AI 对话" }),
     el("input", { name: "author", placeholder: "作者（可选）" }),
     el("input", { name: "url", type: "url", placeholder: "https://…" }),
@@ -932,7 +939,20 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
   if (isMobilePrototype()) {
     for (const name of ["privacy", "depth", "researchIntervalDays"]) form.querySelector(`[name="${name}"]`).disabled = true;
   }
-  const originalValues = JSON.stringify(initialFields);
+  const originalValues = JSON.stringify(serializeForm(form));
+  let confirmingDiscard = false;
+  form.confirmDiscardChanges = async () => {
+    if (confirmingDiscard) return false;
+    const context = api.getContext();
+    if (JSON.stringify(serializeForm(form)) !== originalValues) {
+      confirmingDiscard = true;
+      try {
+        if (!await confirmAction({ title: "放弃未保存的修改？", message: "当前修改尚未保存。取消可继续编辑；确认放弃后，本次输入不会保存。", confirmText: "放弃修改", danger: true })) return false;
+      } finally { confirmingDiscard = false; }
+    }
+    const latest = api.getContext();
+    return latest.practiceId === context.practiceId && latest.version === context.version && refs.drawerBody.querySelector("form") === form;
+  };
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const data = serializeForm(form);
@@ -2440,9 +2460,9 @@ refs.refresh.addEventListener("click", async () => {
   catch (error) { handleError(error); }
   finally { refs.refresh.disabled = false; }
 });
-refs.drawerClose.addEventListener("click", closeDrawer);
-refs.drawerBackdrop.addEventListener("click", closeDrawer);
-document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeDrawer(); });
+refs.drawerClose.addEventListener("click", requestCloseDrawer);
+refs.drawerBackdrop.addEventListener("click", requestCloseDrawer);
+document.addEventListener("keydown", (event) => { if (event.key === "Escape") requestCloseDrawer(); });
 
 async function init() {
   const [hashView, systemTab] = window.location.hash.slice(1).split("/");
