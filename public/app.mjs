@@ -892,7 +892,7 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
       field("平台", el("input", { name: "platform", value: meta.platform || "", placeholder: "网页、抖音、AI 对话等" })),
       field("作者", el("input", { name: "author", value: meta.author || "" })),
       field("原始地址", el("input", { name: "url", type: "url", value: meta.url || "", placeholder: "https://…" })),
-      field("资料日期", el("input", { name: "date", type: "date", value: String(meta.date || "").slice(0, 10) })),
+      field("资料日期", el("input", { name: "date", type: "text", value: String(meta.date || ""), placeholder: "保留原始日期格式" })),
       field("原文定位", el("input", { name: "locator", value: meta.locator || "", placeholder: "页码、时间点或段落" })),
       field("本资料下次核验有效天数", el("input", { dataset: { tour: "note-validity" }, name: "researchIntervalDays", type: "number", min: 1, max: 365, step: 1, value: meta.researchIntervalDays ?? 30, required: true }), "仅在后续成功核验时生效；默认 30 天，可设置 1–365 天。"),
     ]),

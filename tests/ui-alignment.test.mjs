@@ -911,6 +911,27 @@ test('state shortcut ignores stale confirmations after switching libraries or op
   }
 });
 
+test('source editor preserves free text dates on other edits and permits explicit clearing', async () => {
+  for (const savedDate of ['2024年春', '2024-03-01T10:20:30Z']) {
+    const source = { id: 'dated-source', kind: 'source', title: '合成来源', body: '合成原文', hash: 'original', meta: { date: savedDate } };
+    const writes = [];
+    const app = browser({ updateNote: async (id, body) => { writes.push(plain(body)); return { ...source, meta: { ...source.meta, ...body.meta } }; }, bootstrap: async () => ({}) });
+    app.renderNoteEditor(source);
+    let form = app.refs.drawerBody.children[0];
+    const date = control(form, 'date');
+    assert.equal(date.type, 'text');
+    assert.equal(date.value, savedDate);
+    control(form, 'author').value = '更正作者';
+    await form.events.submit({ preventDefault() {} });
+    assert.deepEqual(writes[0].meta, { author: '更正作者' }, 'saving another field must not rewrite the imported date');
+    app.renderNoteEditor(source);
+    form = app.refs.drawerBody.children[0];
+    control(form, 'date').value = '';
+    await form.events.submit({ preventDefault() {} });
+    assert.deepEqual(writes[1].meta, { date: '' }, 'explicit clearing must reach the saved metadata');
+  }
+});
+
 test('source research interval defaults to 30, validates 1–365 whole days and saves a numeric value', async () => {
   const writes = [];
   const source = { id: 'source-a', kind: 'source', title: '资料', body: '原文', hash: 'v1', meta: {} };

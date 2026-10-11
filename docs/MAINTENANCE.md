@@ -16,6 +16,16 @@ CI 文件不等于服务器端合并保护。Branch protection 是否可用取�
 
 2026-09-20 实际配置 main 保护时，GitHub 返回 403，当时私有仓库的套餐不支持此功能。2026-10-02 已核对仓库为 Public，所有者确认公开是其本人决定。旧的套餐限制仅是历史记录；公开状态本身不能证明已启用保护，当前规则须另行读取验证，不能将四项 CI 通过误报为服务器强制保护已完成。
 
+## 云端审查的使用时机
+
+为减少开发期间的重复审查，关闭 Codex 仓库设置中的 **Automatic review** 和 **Auto security review**，保留 GitHub 连接与手动审查能力。维护 Agent 根据 [AGENTS.md 的按需触发规则](../AGENTS.md#按需触发云端审查) 自动判断并发评论，你无需每次手动输入。
+
+实质改动准备完成、必要本地检查通过并推送候选提交后，Agent 发起一次代码审查；权限、凭据、资料外发、不可信文件和备份恢复等安全相关改动再加安全审查。纯文案和局部样式调整可跳过。每个 PR 每类默认一轮初审，必要时一轮针对修复的复审；发送前读取现有请求与结果，避免重复或相互触发。仍未解决的问题需记录并继续定向处理，不能因额度上限而宣称通过。
+
+这是执行 Agent 的项目约定，并非无人值守的 GitHub 自动化；没有 Agent 正在维护 PR 时，规则不会自行发评论。评论仍会消耗额度，范围说明也不保证固定成本；四项 CI 和合并前反馈核对继续执行。完整安全报告可能包含未达到 GitHub 显示门槛的发现，不能用“没有评论”代替验收。
+
+官方说明：[项目指令加载](https://learn.chatgpt.com/docs/agent-configuration/agents-md)、[GitHub 手动审查](https://learn.chatgpt.com/docs/third-party/github)、[安全审查与报告门槛](https://learn.chatgpt.com/docs/security/security-review)。
+
 ## 发布 0.x 开发预览
 
 1. 用独立 PR 调整 `package.json` 版本并在 CHANGELOG 新增对应版本及日期。修复为 patch，新能力或 0.x 不兼容变化为 minor；不自动升 1.0。

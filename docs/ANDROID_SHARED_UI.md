@@ -182,3 +182,13 @@ GitHub 的 **Android prototype** 工作流执行相同构建与静态检查，�
 [PR #47](https://github.com/wmy5555/zhixu-learning-workbench/pull/47) 是独立的原生资料交换试验。本批共用网页界面的工程与之分开推进，不修改该试验，也不引用它的构建或功能结果作为本批验收证据。后续若采用其中的交换能力，需要另行检查数据格式、权限和验证覆盖。
 
 更多现有约定见 [架构与接口](ARCHITECTURE.md)、[数据与备份](DATA.md)、[新手实操](ONBOARDING.md) 和 [测试结果](TEST_RESULTS.md)。
+
+### 2026-10-12 收尾验证补充
+
+[#52 审阅意见](https://github.com/wmy5555/zhixu-learning-workbench/pull/52#discussion_r4219802837)修复今日队列中非 pending 项的固定计划入口：入口禁用并显示 done、skipped、deferred 或 paused 状态，处理器不发请求；pending 状态往返及独立学习池保持正常。[#51 审阅意见](https://github.com/wmy5555/zhixu-learning-workbench/pull/51#discussion_r4219835838)将桌面来源日期改为文本输入，保留“2024年春”等原值及完整时间戳；编辑其他字段不会重写日期，明确清空会提交 `date: ''`。
+
+共用界面工作树执行 2 项队列和 2 项日期定向测试；第二阶段工作树执行 2 项日期测试，合计 6/6 通过，0 失败、0 跳过，语法与差异检查通过。MuMu 6.6.4 / Android 15 / x86_64 专用 index2 实际安装 `ef6a9e4` 应用 APK（SHA-256 `0140d173803379e2172eb4cf98414aa813908ac2b9fb5460990eb1d43c5c4cf`）及匹配测试 APK，执行 10 项新增原生方法测试，并执行保存后重开及学习历史导出恢复，共 12 项，退出码 0（`OK (12 tests)`，runner 2.048 秒）。本次证据覆盖新增差异，不代表全量 127 项；此前 `cb00c42` 的 117 项全量结果仍作为其自身历史证据。原始设备日志保存在本机 `.tmp/android-acceptance/phase3/ef6a9e4/native-test.log`，不提交。
+
+第二阶段的 source store、backup、`SourceDocumentFiles` 及对应 3 个测试文件共 6 个文件与共用界面工作树逐文件 SHA 一致，因此复用相同实现的原生证据；没有声称另行安装第二阶段新包。最新版 JavaScript 局部修复未改原生代码、依赖或构建配置。当前只记录已推送旧 head 的 CI 全通过；新候选仍待核对最新 CI 和合并结果，不预填提交号或 APK 哈希。
+
+本阶段仍未进行真实点击验收；真机、软键盘遮挡、旋转、正式签名升级及最新版 SAF 可视恢复均未验收。AI 研究、同步和系统提醒尚未迁移。第三阶段仍为开发测试包。
