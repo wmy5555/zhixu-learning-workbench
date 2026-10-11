@@ -4,7 +4,7 @@ import { createProcessFeedback } from "./process-feedback.mjs";
 import { createSourceMap } from "./source-map.mjs";
 import { initSidebar } from "./sidebar.mjs";
 import {
-  el, clear, button, badge, emptyState, formatDate, truncate, safeExternalUrl,
+  el, clear, button, badge, emptyState, formatDate, formatCalendarDate, truncate, safeExternalUrl,
   labels, stateTone, field, toast, confirmAction, promptAction, serializeForm, describeJobError,
 } from "./ui.mjs";
 
@@ -243,7 +243,7 @@ async function renderToday() {
 
   const hero = el("section", { class: "hero" }, [
     el("div", {}, [
-      el("p", { class: "eyebrow", text: today.date ? formatDate(today.date) : "今天" }),
+      el("p", { class: "eyebrow", text: today.date ? formatCalendarDate(today.date) : "今天" }),
       el("h2", { text: items.length ? `今天有 ${items.length} 项值得投入` : "今天可以从容整理" }),
       el("p", { text: items.length ? `预计 ${number(today.minutes)} 分钟，时间预算 ${number(today.budget)} 分钟。可延期或跳过，不制造学习欠债。` : "目前没有学习任务。你可以生成清单，或先收集一份真正想理解的材料。" }),
     ]),
