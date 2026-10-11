@@ -37,6 +37,7 @@ const pages = {
   capture: ["收集与加工", "先保存原文，再决定如何使用"],
   library: ["知识库", "查看每条内容的来源、学习状态与变更"],
   study: ["学习与错题", "用自己的语言解释，再逐步修正"],
+  mistakes: ["用户错题记录", "保留自己发现的遗漏与修正"],
   topics: ["主题学习包", "围绕问题组织材料与学习顺序"],
   discover: ["检索与发现", "找到材料，也看见有依据的联系"],
   output: ["问答与输出", "从已有资料出发，形成可追溯的答案"],
@@ -59,7 +60,9 @@ const state = {
 };
 let onboarding = null;
 function isMobilePrototype() { return api.runtime?.kind === "android-prototype"; }
-function mobileNotice() { return el("div", { class: "notice info", text: "Android 原文工作台：支持文件收集、来源编辑、版本和手机备份。学习、AI 与自动同步尚未接入。重要修改前请在系统页导出备份。" }); }
+function androidPracticeActive() { return isMobilePrototype() && api.getContext?.().practiceId === "android-local"; }
+function androidResearchBlocked(note) { return isMobilePrototype() && (asArray(note.limitations).length > 0 || asArray(note.meta?.researchLimitations).length > 0 || (note.meta?.claimType === "fact" && !note.meta?.researchedAt)); }
+function mobileNotice() { return el("div", { class: "notice info" }, [el("strong", { text: androidPracticeActive() ? "手机本地练习库 · 与正式资料分开" : "手机本地学习" }), el("p", { text: "支持手动整理、学习回答、用户错题和主题。回答只保存在手机，未批改，不代表答对或掌握。事实核验、AI、问答输出与自动同步尚未接入。" }), button("本地引导与练习库", { onClick: () => navigate("system") })]); }
 const processFeedback = createProcessFeedback({
   getContext: () => api.getContext(), readJobs: () => api.jobStatuses(), notify: toast,
   onChange: changed => {
@@ -73,6 +76,7 @@ const processFeedback = createProcessFeedback({
 });
 function tour(node, id) { node.dataset.tour = id; return node; }
 function recordTourEvent(event) {
+  if (isMobilePrototype()) return;
   const practiceId = api.getContext?.().practiceId;
   if (practiceId) api.onboarding("event", { practiceId, event }).catch(handleError);
 }
@@ -124,6 +128,7 @@ function sectionHeading(title, description = "", action = null) {
 function selectControl(options, value = "", name = "") {
   const select = el("select", { name });
   options.forEach(([optionValue, label]) => select.append(el("option", { value: optionValue, text: label, selected: optionValue === value })));
+  select.value = value;
   return select;
 }
 
@@ -131,6 +136,7 @@ function noteMeta(note) {
   const meta = asObject(note.meta);
   return el("div", { class: "item-meta" }, [
     badge(labels.kind(note.kind)),
+    (note.origin || meta.origin) === "user" ? badge("用户记录") : null,
     badge(labels.stage(meta.stage), stateTone(meta.stage)),
     meta.privacy === "local" ? badge("仅本地", "good") : badge("允许云端", "warn"),
     state.bootstrap?.settings?.mcp?.chatgptEnabled && state.bootstrap?.settings?.mcp?.chatgptAllowRead ? badge("另已授权 ChatGPT 读取", "warn") : null,
@@ -197,11 +203,21 @@ function statCard(label, value, detail = "") {
   return el("div", { class: "stat" }, [el("span", { text: label }), el("strong", { text: String(value) }), detail ? el("small", { text: detail }) : null]);
 }
 
+function androidTopicPlanBlocked(item) {
+  if (!isMobilePrototype() || !item.topicId) return false;
+  const topic = asArray(state.bootstrap?.topics).find(value => value.id === item.topicId);
+  return !topic || topic.paused || topic.meta?.paused || topic.status === "paused" || topic.meta?.status === "paused" || Boolean(topic.progress?.blockedNoteId) || topic.progress?.nextNoteId !== item.noteId;
+}
+
+function androidQueuePlanBlocked(item) {
+  return (isMobilePrototype() && item.inToday && item.state !== "pending") || androidTopicPlanBlocked(item);
+}
+
 function todayItem(item) {
   const actions = el("div", { class: "item-actions" });
   if (item.state === "pending") {
     if (["study", "learn", "review", "mistake"].includes(item.kind)) {
-      actions.append(button("开始", { kind: "primary compact", onClick: () => beginStudy(item.noteId, item.id, item) }));
+      actions.append(button("开始", { kind: "primary compact", disabled: androidTopicPlanBlocked(item), title: androidTopicPlanBlocked(item) ? "请先完成当前可用前置步骤" : "", onClick: () => { if (androidTopicPlanBlocked(item)) return; return beginStudy(item.noteId, item.id, item); } }));
     }
     actions.append(button("延期", { kind: "quiet compact", onClick: () => actToday(item.id, "defer", 1) }));
     actions.append(button("跳过", { kind: "text compact", onClick: () => actToday(item.id, "skip") }));
@@ -234,12 +250,14 @@ async function renderToday() {
   const stats = asObject(boot.stats);
   const jobs = asArray(boot.jobs);
   const pendingJobs = jobs.filter((job) => ["queued", "running", "waiting", "failed"].includes(job.state));
+  const androidPending = items.filter(item => item.state === "pending");
+  const androidCompleted = items.filter(item => item.state === "done").length;
 
   const hero = el("section", { class: "hero" }, [
     el("div", {}, [
       el("p", { class: "eyebrow", text: today.date ? formatDate(today.date) : "今天" }),
-      el("h2", { text: items.length ? `今天有 ${items.length} 项值得投入` : "今天可以从容整理" }),
-      el("p", { text: items.length ? `预计 ${number(today.minutes)} 分钟，时间预算 ${number(today.budget)} 分钟。可延期或跳过，不制造学习欠债。` : "目前没有学习任务。你可以生成清单，或先收集一份真正想理解的材料。" }),
+      el("h2", { text: isMobilePrototype() ? androidPending.length ? `今天还有 ${androidPending.length} 项待学习` : androidCompleted ? `今天已保存 ${androidCompleted} 项学习记录` : "今天可以从容整理" : items.length ? `今天有 ${items.length} 项值得投入` : "今天可以从容整理" }),
+      el("p", { text: isMobilePrototype() ? `待学习预计 ${androidPending.reduce((sum, item) => sum + number(item.minutes), 0)} 分钟，时间预算 ${number(today.budget)} 分钟。已结束并保存 ${androidCompleted} 项记录；保存记录不代表回答正确或掌握。` : items.length ? `预计 ${number(today.minutes)} 分钟，时间预算 ${number(today.budget)} 分钟。可延期或跳过，不制造学习欠债。` : "目前没有学习任务。你可以生成清单，或先收集一份真正想理解的材料。" }),
     ]),
     el("div", { class: "hero-actions" }, [
       button("收集资料", { onClick: () => navigate("capture") }),
@@ -248,7 +266,7 @@ async function renderToday() {
   ]);
 
   const statsRow = el("section", { class: "stats" }, [
-    statCard("已存内容", stats.notes ?? stats.totalNotes ?? 0, "包含原始资料、知识、主题学习包与 AI 整理建议"),
+    statCard("已存内容", stats.notes ?? stats.totalNotes ?? 0, isMobilePrototype() ? "包含本地原文、手工知识、主题及用户记录" : "包含原始资料、知识、主题学习包与 AI 整理建议"),
     statCard("今日待学习", items.filter((item) => item.state === "pending").length, "受每日预算约束"),
     statCard("待处理任务", stats.pending ?? stats.proposals ?? 0, "等待继续或失败的任务"),
     statCard("异常任务", jobs.filter((x) => x.state === "failed").length, "保留失败原因"),
@@ -515,7 +533,7 @@ function evidenceRow(evidence) {
 
 function evidenceDetails(noteId, sources = null) {
   const content = el("div", { class: "page-stack original-body" });
-  const details = el("details", { class: "original-material", dataset: { tour: "note-evidence" } }, [el("summary", { text: "查看核验依据与底层来源" }), content]);
+  const details = el("details", { class: "original-material", dataset: { tour: "note-evidence" } }, [el("summary", { text: isMobilePrototype() ? "查看保留的来源快照与限制" : "查看核验依据与底层来源" }), content]);
   let loaded = false, loading = false;
   const load = async () => {
     if (loaded || loading) return;
@@ -523,6 +541,13 @@ function evidenceDetails(noteId, sources = null) {
     clear(content).append(el("p", { text: "正在读取已保存的证据…" }));
     try {
       const data = sources === null ? await api.evidence(noteId) : { evidence: sources };
+      if (isMobilePrototype()) {
+        clear(content).append(el("p", { text: "这里是整理时保留的原始来源快照，不是联网核验结果。保留来源不表示事实正确，手机尚不能联网核验。" }));
+        if (data.sourceSnapshot) content.append(el("h3", { text: data.sourceSnapshot.title || "保存的原文" }), el("div", { class: "prose", text: data.sourceSnapshot.body || "未保留正文" }));
+        else content.append(el("p", { text: "此条目没有保留原始来源快照。" }));
+        if (asArray(data.limitations).length) content.append(el("ul", {}, data.limitations.map(value => el("li", { text: value }))));
+        loaded = true; return;
+      }
       const evidence = asArray(data.evidence);
       clear(content).append(el("p", { class: "fine-print", text: "这里展示已保存的正文与定位。来源存在不等于结论正确，个人理解仍需你确认。" }));
       if (data.researchedAt) content.append(el("p", { class: "fine-print", text: `上次核验：${formatDate(data.researchedAt, true)}` }));
@@ -533,7 +558,7 @@ function evidenceDetails(noteId, sources = null) {
       clear(content).append(el("p", { text: errorMessage(error) }), button("重新读取依据", { onClick: load }));
     } finally { loading = false; }
   };
-  details.addEventListener("toggle", () => { if (details.open) load(); });
+  details.addEventListener("toggle", () => { if (details.open) return load(); });
   return details;
 }
 
@@ -662,18 +687,19 @@ function renderSourceGroupDrawer(source) {
   const content = el("div", { class: "page-stack source-group-drawer", dataset: { sourceId: source.id } });
   const headActions = el("div", { class: "form-actions" }, [
     button("编辑原始资料", { kind: "primary", onClick: () => renderNoteEditor(source, { returnToSourceId: source.id }) }),
-    button("查看版本", { onClick: () => renderHistory(source, { returnToSourceId: source.id }) }),
-    isMobilePrototype() ? button("导出原文", { onClick: async () => { try { await api.exportSource(source.id); toast("原文和来源已导出", "success"); } catch (error) { handleError(error); } } }) : null,
+    androidPracticeActive() ? null : button("查看版本", { onClick: () => renderHistory(source, { returnToSourceId: source.id }) }),
+    isMobilePrototype() && !androidPracticeActive() ? button("导出原文", { onClick: async () => { try { await api.exportSource(source.id); toast("原文和来源已导出", "success"); } catch (error) { handleError(error); } } }) : null,
     button("删除", { kind: "danger", disabled: isMobilePrototype(), title: isMobilePrototype() ? "样机暂不支持删除" : "", onClick: () => deleteNote(source) }),
   ]);
   content.append(noteMeta(source), headActions);
 
-  if (children.length) {
+  if (children.length && isMobilePrototype()) content.append(...children.map((note, index) => childSection(note, source, index)));
+  if (children.length && !isMobilePrototype()) {
     const key = `${api.getContext().practiceId || ''}:${source.id}`;
     if (!state.sourceMaps.has(key)) state.sourceMaps.set(key, {});
     content.append(createSourceMap({ source, children, view: state.sourceMaps.get(key),
       renderDetail: (note, index) => childSection(note, source, index),
-      analyze: () => analyzeStructure(source),
+      analyze: isMobilePrototype() ? null : () => analyzeStructure(source),
       onExpand: value => refs.drawer.classList.toggle('map-expanded', value),
     }));
   }
@@ -698,7 +724,7 @@ function renderSourceGroupDrawer(source) {
   ]));
 
   if (isMobilePrototype()) {
-    content.append(el("p", { class: "muted", text: "加工、核验和学习尚未迁移到手机，本次保存只保留原文。" }));
+    content.append(el("div", { class: "notice info", text: "可手动整理知识。含事实的内容默认保留待研究限制；手机尚不能联网核验，因此不能加入学习。只有确实属于个人观点的内容才选择观点，不能把事实改标为观点绕过核验。" }), button("手动整理为待选学", { onClick: () => manualExtract(source, source.id) }));
     clear(refs.drawerBody).append(content);
     return;
   }
@@ -767,13 +793,13 @@ async function analyzeStructure(source) {
 
 function childSection(note, source, index) {
   const meta = asObject(note.meta);
-  const limitations = asArray(meta.researchLimitations);
+  const limitations = [...new Set([...asArray(meta.researchLimitations), ...asArray(note.limitations)])];
   const actions = el("div", { class: "child-actions", dataset: { tour: "note-lifecycle" } }, [
-    button("开始学习", { kind: "primary compact", onClick: () => beginStudy(note.id) }),
+    button("开始学习", { kind: "primary compact", disabled: androidResearchBlocked(note), onClick: () => beginStudy(note.id) }),
     button("编辑", { kind: "quiet compact", onClick: () => renderNoteEditor(note, { returnToSourceId: source.id }) }),
     button("设为仅供查阅", { kind: "text compact", onClick: () => promoteNote(note, "reference", source.id) }),
     button("设为待选学", { kind: "text compact", onClick: () => promoteNote(note, "candidate", source.id) }),
-    button("加入学习", { kind: "text compact", onClick: () => promoteNote(note, "learning", source.id) }),
+    button("加入学习", { kind: "text compact", disabled: androidResearchBlocked(note), onClick: () => promoteNote(note, "learning", source.id) }),
   ]);
   const more = el("details", { class: "child-more-actions" }, [
     el("summary", { text: "更多操作" }),
@@ -782,8 +808,8 @@ function childSection(note, source, index) {
       button("标记已整理个人理解", { onClick: () => promoteNote(note, "integrated", source.id) }),
       button("设为重点知识", { onClick: () => promoteNote(note, "core", source.id) }),
       button("不再使用", { kind: "danger", onClick: () => promoteNote(note, "retired", source.id) }),
-      button("查看版本", { onClick: () => renderHistory(note, { returnToSourceId: source.id }) }),
-      button("删除", { kind: "danger", onClick: () => deleteNote(note, source.id) }),
+      isMobilePrototype() ? null : button("查看版本", { onClick: () => renderHistory(note, { returnToSourceId: source.id }) }),
+      button("删除", { kind: "danger", disabled: isMobilePrototype(), onClick: () => deleteNote(note, source.id) }),
     ]),
   ]);
   return el("section", { class: "child-note" }, [
@@ -792,6 +818,7 @@ function childSection(note, source, index) {
       el("div", { class: "item-meta" }, [badge(labels.stage(meta.stage), stateTone(meta.stage)), meta.topic ? badge(meta.topic, "accent") : null]),
     ]),
     el("div", { class: "prose child-note-body", text: readableBody(note.body) || "暂无正文" }),
+    isMobilePrototype() ? el("p", { class: "muted", text: "知识历史保留在学习记录备份中，手机暂不逐版查看或恢复。" }) : null,
     evidenceDetails(note.id),
     limitations.length ? el("div", { class: "notice danger child-limitations" }, [
       el("strong", { text: "尚需补充研究" }),
@@ -799,7 +826,7 @@ function childSection(note, source, index) {
       el("ul", {}, limitations.map((limitation) => el("li", { text: limitation }))),
     ]) : null,
     actions,
-    relationControls(note),
+    isMobilePrototype() ? null : relationControls(note),
     more,
   ]);
 }
@@ -819,13 +846,14 @@ function renderNoteDrawer(note) {
   const content = el("div", { class: "page-stack" });
   const headActions = el("div", { class: "form-actions" }, [
     button("编辑", { kind: "primary", onClick: () => renderNoteEditor(note) }),
-    button("查看版本", { onClick: () => renderHistory(note) }),
-    button("删除", { kind: "danger", onClick: () => deleteNote(note) }),
+    isMobilePrototype() ? null : button("查看版本", { onClick: () => renderHistory(note) }),
+    button("删除", { kind: "danger", disabled: isMobilePrototype(), onClick: () => deleteNote(note) }),
   ]);
-  if (note.kind === "knowledge") headActions.insertBefore(button("合并", { onClick: () => renderMerge(note) }), headActions.lastChild);
+  if (note.kind === "knowledge" && !isMobilePrototype()) headActions.insertBefore(button("合并", { onClick: () => renderMerge(note) }), headActions.lastChild);
   content.append(noteMeta(note), headActions, el("div", { class: "prose", text: readableBody(note.body) || "暂无正文" }));
-  if (note.kind === "knowledge") content.append(evidenceDetails(note.id), relationControls(note));
-  content.append(button("查看 Obsidian 链接更新", { onClick: () => previewNoteLinks(note.id) }));
+  if (isMobilePrototype()) content.append(el("p", { class: "muted", text: "该条目的历史随学习记录备份保留，手机暂不提供逐版查看与恢复。" }));
+  if (note.kind === "knowledge") { content.append(evidenceDetails(note.id)); if (!isMobilePrototype()) content.append(relationControls(note)); }
+  if (!isMobilePrototype()) content.append(button("查看 Obsidian 链接更新", { onClick: () => previewNoteLinks(note.id) }));
   const values = el("dl", { class: "key-values" });
   [
     ["稳定 ID", note.id], ["文件路径", note.path], ["内容哈希", note.hash],
@@ -843,7 +871,8 @@ function renderNoteDrawer(note) {
       savedSource ? button("查看保存的来源", { kind: "text", onClick: () => openNote(source.id) }) : source.id ? el("span", { class: "badge badge-danger", text: "来源不可用" }) : null,
     ]);
   })));
-  const researchLimitations = asArray(meta.researchLimitations);
+  const researchLimitations = [...new Set([...asArray(meta.researchLimitations), ...asArray(note.limitations)])];
+  if (androidResearchBlocked(note) && !researchLimitations.length) researchLimitations.push("含事实的材料需先完成研究核验；手机尚不能联网核验，暂不能加入学习。");
   if (researchLimitations.length) content.append(el("section", { class: "notice danger" }, [
     el("strong", { text: "尚需补充研究" }),
     el("p", { text: "以下限制会阻止这条内容被默认用于学习或有据回答：" }),
@@ -877,10 +906,10 @@ function renderNoteDrawer(note) {
     button("手动整理为待选学", { onClick: () => manualExtract(note) }),
   );
   if (note.kind === "knowledge") nextActions.append(
-    button("开始学习", { kind: "primary", onClick: () => beginStudy(note.id) }),
+    button("开始学习", { kind: "primary", disabled: androidResearchBlocked(note), onClick: () => beginStudy(note.id) }),
     button("设为仅供查阅", { onClick: () => promoteNote(note, "reference") }),
     button("设为待选学", { onClick: () => promoteNote(note, "candidate") }),
-    button("加入学习", { kind: "primary", onClick: () => promoteNote(note, "learning") }),
+    button("加入学习", { kind: "primary", disabled: androidResearchBlocked(note), onClick: () => promoteNote(note, "learning") }),
     button("确认个人理解", { onClick: () => confirmDirect(note) }),
     el("details", {}, [el("summary", { text: "更多学习状态操作" }), el("div", { class: "form-actions" }, [
       button("标记已整理个人理解", { onClick: () => promoteNote(note, "integrated") }),
@@ -942,9 +971,9 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
   );
   const initialFields = serializeForm(form);
   if (isMobilePrototype()) {
-    for (const name of ["privacy", "depth", "researchIntervalDays"]) form.querySelector(`[name="${name}"]`).disabled = true;
+    for (const name of ["privacy", "researchIntervalDays", ...(note.kind === "source" ? ["depth"] : [])]) { const input = form.querySelector(`[name="${name}"]`); if (input) input.disabled = true; }
   }
-  const originalValues = JSON.stringify(initialFields);
+  const originalValues = JSON.stringify(serializeForm(form));
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const data = serializeForm(form);
@@ -952,7 +981,7 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
       if (!isMobilePrototype() && note.kind === "source" && (!Number.isInteger(Number(data.researchIntervalDays)) || Number(data.researchIntervalDays) < 1 || Number(data.researchIntervalDays) > 365)) throw new Error("核验有效天数应为 1–365 的整数。");
       const sourceMeta = note.kind === "source" ? { platform: data.platform || "", author: data.author || "", url: data.url || "", date: data.date || "", locator: data.locator || "", researchIntervalDays: Number(data.researchIntervalDays) } : {};
       const changedMeta = Object.fromEntries(Object.entries({ privacy: data.privacy, topic: data.topic, depth: data.depth, ...sourceMeta }).filter(([key]) => data[key] !== initialFields[key]));
-      if (isMobilePrototype()) for (const key of ["privacy", "depth", "researchIntervalDays"]) delete changedMeta[key];
+      if (isMobilePrototype()) for (const key of ["privacy", "researchIntervalDays", ...(note.kind === "source" ? ["depth"] : [])]) delete changedMeta[key];
       const updated = await api.updateNote(note.id, { body: data.body, title: data.title, expectedHash: note.hash, meta: changedMeta });
       toast(updated.hash === note.hash ? "内容未改变，已确认当前设置" : "已保存，并保留版本记录", "success");
       await refreshBootstrap();
@@ -1031,9 +1060,10 @@ function manualExtract(source, returnToSourceId = "") {
   const topic = el("input", { name: "topic", placeholder: "可选，例如：检索与证据" });
   const reason = el("textarea", { name: "reason", required: true, rows: 4, placeholder: "它为什么值得查找、学习或建立联系？" });
   const depth = learningGoalField("explain");
-  const claimType = selectControl([["fact", "含需查证事实（默认）"], ["opinion", "仅个人观点或虚构练习"]], "fact", "claimType");
+  const claimType = selectControl([["fact", "含需查证事实（默认）"], ["opinion", isMobilePrototype() ? "仅个人观点（非事实）" : "仅个人观点或虚构练习"]], "fact", "claimType");
   form.append(
     el("div", { class: "notice info", text: "此操作不需要 AI。新条目会自动关联这份原始资料，并标记为用户手动整理；它不会因此被宣称已经外部核验或已经掌握。" }),
+    ...(isMobilePrototype() ? [el("div", { class: "notice info", text: "手机尚不能联网核验。含事实的材料不能在核验前加入学习；请如实分类，不能用观点标签绕过事实核验。" })] : []),
     field("待选学知识标题", title), field("整理后的正文", body),
     el("div", { class: "form-grid" }, [field("内容性质", claimType, "含事实的内容会保留待研究限制，不默认进入学习；纯观点或虚构练习可由你主动加入学习。"), depth, field("知识主题", topic)]),
     field("保留与学习理由", reason),
@@ -1041,14 +1071,18 @@ function manualExtract(source, returnToSourceId = "") {
   );
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    const submit = form.querySelector("button[type='submit']");
+    if (submit.disabled) return;
     const data = serializeForm(form);
+    submit.disabled = true;
     try {
-      const knowledge = await api.extractSource(source.id, { title: data.title, body: data.body, topic: data.topic, reason: data.reason, depth: data.depth, claimType: data.claimType });
+      const knowledge = await api.extractSource(source.id, { title: data.title, body: data.body, topic: data.topic, reason: data.reason, depth: data.depth, claimType: data.claimType, ...(isMobilePrototype() ? { expectedHash: source.hash } : {}) });
       toast("待选学知识已创建，并保留原始来源关系", "success");
       await refreshBootstrap();
       if (returnToSourceId) await refreshSourceGroup(returnToSourceId);
       else renderNoteDrawer(knowledge);
     } catch (error) { handleError(error); }
+    finally { submit.disabled = false; }
   });
   clear(refs.drawerBody).append(form);
 }
@@ -1206,6 +1240,7 @@ async function beginStudy(noteId, planId, context = {}) {
     state.studyMaterialVisible = true;
     state.studyTab = "session";
     await navigate("study");
+    if (isMobilePrototype()) closeDrawer();
   } catch (error) { handleError(error); }
 }
 
@@ -1228,6 +1263,10 @@ function tabButton(value, label) {
 async function studyQueuePanel() {
   const [todayData, notesData, sessionsData] = await Promise.all([api.today(), api.notes({ stage: "learning" }), api.studySessions()]);
   const today = asArray(todayData.items).filter((item) => item.noteId);
+  if (isMobilePrototype() && today.some(item => item.topicId)) {
+    const topicData = await api.topics();
+    state.bootstrap = { ...asObject(state.bootstrap), topics: asArray(topicData.topics) };
+  }
   const learning = asArray(notesData.notes);
   const byId = new Map();
   today.forEach((item) => byId.set(item.noteId, { ...item, inToday: true }));
@@ -1239,7 +1278,7 @@ async function studyQueuePanel() {
     items.length ? el("div", { class: "list" }, items.map((item) => el("article", { class: "list-item" }, [
       el("div", { class: "item-symbol", text: item.inToday ? "今" : "学" }),
       el("div", { class: "item-copy" }, [el("h3", { text: item.title || "未命名知识" }), el("p", { text: item.reason || "等待学习" }), el("div", { class: "item-meta" }, [item.minutes ? badge(`${item.minutes} 分钟`) : null, item.inToday ? badge("今日", "accent") : badge("学习池")])]),
-      el("div", { class: "item-actions" }, button("开始学习", { kind: "primary compact", onClick: () => beginStudy(item.noteId, item.inToday ? item.id : undefined, item) })),
+      el("div", { class: "item-actions" }, button(isMobilePrototype() && item.inToday && item.state !== "pending" ? planStateLabel(item.state) : "开始学习", { kind: "primary compact", disabled: androidQueuePlanBlocked(item), title: androidQueuePlanBlocked(item) ? item.inToday && item.state !== "pending" ? "此计划当前不可开始" : "请先完成当前可用前置步骤" : "", onClick: () => { if (androidQueuePlanBlocked(item)) return; return beginStudy(item.noteId, item.inToday ? item.id : undefined, item); } })),
     ]))) : emptyState("学习队列为空", "在知识详情中选择“加入学习”，或先处理一份原始资料。", button("浏览知识", { onClick: () => navigate("library") })),
     tour(sectionHeading("最近学习记录", "服务重启后仍可继续已有会话，原始回答和提示使用不会丢失"), "study-history"),
     sessions.length ? el("div", { class: "list" }, sessions.map((session) => {
@@ -1269,9 +1308,11 @@ async function studySessionPanel() {
   let session = state.currentStudy;
   if (session?.id) {
     try { session = await api.study(session.id); state.currentStudy = session; }
-    catch (error) { if (error.status !== 404) throw error; state.currentStudy = null; }
+    catch (error) { if (error.status !== 404) throw error; state.currentStudy = null; if (isMobilePrototype()) session = null; }
   }
+  if (!session && isMobilePrototype()) return androidSavedStudyEntry();
   if (!session) return emptyState("还没有进行中的学习", "从学习队列开始一次回忆与解释。系统会保留你的原始回答。", button("打开学习队列", { kind: "primary", onClick: () => { state.studyTab = "queue"; renderStudy(); } }));
+  if (isMobilePrototype()) return androidStudySession(session);
   const turns = asArray(session.turns);
   const latest = turns.at(-1);
   const goalPanel = () => el("div", { class: "notice info" }, [
@@ -1367,7 +1408,76 @@ async function studySessionPanel() {
 }
 
 function studyStatusLabel(status) {
-  return ({ reading: "阅读材料", awaiting_feedback: "等待反馈", feedback: "可继续追问", completed: "已完成" })[status] || labels.state(status);
+  return ({ reading: "阅读材料", unassessed: "未批改", awaiting_feedback: "等待反馈", feedback: "可继续追问", completed: isMobilePrototype() ? "记录已保存 · 未批改" : "已完成" })[status] || labels.state(status);
+}
+
+async function androidSavedStudyEntry() {
+  const data = await api.studySessions();
+  const sessions = asArray(data.sessions).slice().sort((a, b) => String(b.updatedAt || b.completedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.completedAt || a.createdAt || "")));
+  const latest = sessions[0];
+  if (!latest) return emptyState("还没有学习记录", "从学习队列开始一次回忆与解释，原答会保存在手机。", button("打开学习队列", { kind: "primary", onClick: async () => { state.studyTab = "queue"; await renderStudy(); } }));
+  return el("section", { class: "panel page-stack" }, [sectionHeading("已保存的学习记录", "重启后原答仍保留。下面打开最近记录；全部记录位于学习队列下方。"), el("h3", { text: latest.question || "最近一次学习" }), badge(studyStatusLabel(latest.status)), button(latest.status === "completed" ? "查看最近记录" : "继续最近学习", { kind: "primary", onClick: async () => {
+    state.currentStudy = { id: latest.id }; state.studyTab = "session";
+    state.studyMaterialVisible = latest.status === "reading" && !asArray(latest.turns).length;
+    try { await renderStudy(); } catch (error) { handleError(error); }
+  } }), button("查看全部已保存记录", { onClick: async () => {
+    state.studyTab = "queue";
+    try { await renderStudy(); const history = refs.main.querySelector('[data-tour="study-history"]'); if (history) { history.tabIndex = -1; history.scrollIntoView({ block: "start" }); history.focus({ preventScroll: true }); } }
+    catch (error) { handleError(error); }
+  } })]);
+}
+
+function androidStudySession(session) {
+  const turns = asArray(session.turns), completed = session.status === "completed";
+  const context = api.getContext();
+  const current = () => api.getContext().version === context.version;
+  const wrapper = el("div", { class: "page-stack" }, [el("div", { class: "notice info", text: completed ? "本轮已结束并保存记录，未批改。记录不表示回答正确或已经掌握。" : turns.length ? "回答已保存在手机 · 未批改。你可以继续回答，也可以结束并保存记录。" : "先阅读材料，再用自己的话回答。手机只保存原答，不生成反馈。" })]);
+  if (state.studyMaterialVisible && !turns.length) {
+    wrapper.append(el("section", { class: "panel" }, [sectionHeading("学习材料"), el("div", { class: "prose", text: session.material || "暂无材料" })]), button("隐藏材料，开始回忆", { kind: "primary", onClick: async () => { state.studyMaterialVisible = false; await renderStudy(); } }));
+    return wrapper;
+  }
+  const form = el("form", { class: "page-stack" });
+  const answer = el("textarea", { name: "answer", rows: 7, disabled: completed, placeholder: "用自己的语言解释，并写下不确定之处。" });
+  const submit = button("保存回答", { kind: "primary", type: "submit", disabled: completed });
+  const finish = button("结束并保存记录", { kind: "primary", disabled: completed || !turns.length, onClick: async () => {
+    finish.disabled = true;
+    try { const result = await api.finishStudy(session.id); if (!current()) return; state.currentStudy = result; await refreshBootstrap(); await renderStudy(); toast("本轮记录已保存在手机，未批改", "success"); }
+    catch (error) { if (current()) handleError(error); }
+    finally { if (current()) finish.disabled = completed || !turns.length; }
+  } });
+  form.append(el("h2", { text: session.question || "请用自己的话解释这项知识。" }), field("你的回答", answer), el("div", { class: "form-actions" }, [submit, finish]));
+  form.addEventListener("submit", async event => {
+    event.preventDefault();
+    if (completed || submit.disabled) return;
+    if (!answer.value.trim()) { toast("请先写下你的理解", "error"); return; }
+    submit.disabled = true; finish.disabled = true;
+    try { const result = await api.answer(session.id, { answer: answer.value.trim(), hintUsed: false, requestId: crypto.randomUUID() }); if (!current()) return; state.currentStudy = result; await renderStudy(); toast("回答已保存在手机，未批改", "success"); }
+    catch (error) { if (current()) handleError(error); }
+    finally { if (current()) { submit.disabled = completed; finish.disabled = completed || !turns.length; } }
+  });
+  if (turns.length) form.append(el("div", { class: "form-actions" }, [button("整理并确认个人理解", { onClick: () => confirmUnderstanding(session) }), button("记录自己的遗漏或误解", { onClick: () => androidMistakeForm(session) })]));
+  wrapper.append(form);
+  if (turns.length) wrapper.append(el("section", {}, [sectionHeading("学习记录", "每轮原答保留，全部未批改"), ...turns.map((turn, index) => el("article", { class: "panel" }, [el("h3", { text: `第 ${index + 1} 轮 · 未批改` }), el("div", { class: "prose", text: turn.answer || "" })]))]));
+  if (completed) wrapper.append(button("回到学习队列", { onClick: async () => { state.studyTab = "queue"; await renderStudy(); } }));
+  return wrapper;
+}
+
+function androidMistakeForm(session) {
+  const form = el("form", { class: "page-stack" });
+  const context = api.getContext();
+  for (const [name, label] of [["omission", "我的遗漏或误解"], ["correction", "我的修正与依据"], ["reason", "记录理由"], ["nextQuestion", "下次想检查的问题（可选）"]]) form.append(field(label, el("textarea", { name, rows: 4, required: name !== "nextQuestion" })));
+  const save = button("保存用户记录", { kind: "primary", type: "submit" });
+  form.append(el("div", { class: "notice info", text: "这是你主动写下的用户记录；手机没有生成 AI 反馈，也没有判断答案对错。" }), save);
+  form.addEventListener("submit", async event => {
+    event.preventDefault(); if (save.disabled) return;
+    const data = serializeForm(form);
+    if (["omission", "correction", "reason"].some(key => !data[key]?.trim())) { toast("请填写遗漏、修正和记录理由", "error"); return; }
+    save.disabled = true;
+    try { await api.recordStudyMistake(session.id, { ...data, origin: "user" }); if (api.getContext().version !== context.version) return; toast("用户错题记录已保存", "success"); closeDrawer(); }
+    catch (error) { if (api.getContext().version === context.version) handleError(error); }
+    finally { save.disabled = false; }
+  });
+  openDrawer("记录自己的遗漏或误解", "用户记录", form);
 }
 
 function renderFeedback(feedback, title) {
@@ -1418,7 +1528,7 @@ function mistakeRow(mistake) {
   const meta = asObject(mistake.meta);
   const status = mistake.status || meta.correctionState || meta.status || "open";
   const actions = el("div", { class: "item-actions wrap" }, [
-    button("查看", { kind: "quiet compact", onClick: () => { recordTourEvent("mistake-open"); return mistake.noteId || mistake.kind ? openNote(mistake.noteId || mistake.id) : showMistake(mistake); } }),
+    button("查看", { kind: "quiet compact", onClick: () => { recordTourEvent("mistake-open"); if (isMobilePrototype()) return showMistake(mistake); return mistake.noteId || mistake.kind ? openNote(mistake.noteId || mistake.id) : showMistake(mistake); } }),
     status === "open" ? button("专项练习", { kind: "primary compact", disabled: !(meta.noteId || mistake.noteId), onClick: () => beginStudy(meta.noteId || mistake.noteId, undefined, { mistakeId: mistake.id }) }) : null,
     status === "disputed" ? button("重新打开", { kind: "text compact", onClick: () => actMistake(mistake.id, "reopen") }) : status !== "revoked" ? button("质疑判定", { kind: "text compact", onClick: () => actMistake(mistake.id, "dispute") }) : null,
     status !== "resolved" && status !== "revoked" ? button("手动标记已纠正", { kind: "primary compact", onClick: () => actMistake(mistake.id, "resolve") }) : status === "resolved" ? badge("已标记纠正", "good") : null,
@@ -1426,17 +1536,23 @@ function mistakeRow(mistake) {
   ]);
   return el("article", { class: "list-item" }, [
     el("div", { class: "item-symbol", text: "错" }),
-    el("div", { class: "item-copy" }, [el("h3", { text: mistake.title || mistake.question || "未命名错误记录" }), el("p", { text: truncate(mistake.error || mistake.body || mistake.feedback, 160) || "等待补充错误说明" }), el("div", { class: "item-meta" }, [badge(labels.state(status), stateTone(status)), meta.category ? badge(meta.category) : null])]),
+    el("div", { class: "item-copy" }, [el("h3", { text: mistake.title || mistake.question || "未命名错误记录" }), el("p", { text: truncate(mistake.omission || meta.omission || mistake.error || mistake.body || mistake.feedback, 160) || "等待补充错误说明" }), el("div", { class: "item-meta" }, [badge(labels.state(status), stateTone(status)), (mistake.origin || meta.origin) === "user" ? badge("用户记录") : null, meta.category ? badge(meta.category) : null])]),
     actions,
   ]);
 }
 
 function showMistake(mistake) {
+  if (isMobilePrototype() && mistake.body) {
+    openDrawer(mistake.title || "错误记录", "用户记录 · 未批改", el("div", { class: "page-stack" }, [badge("用户记录"), el("p", { text: "以下是完整保留的原始回答、用户记录的遗漏、修正与理由；没有 AI 批改。历史随学习备份保留。" }), el("div", { class: "prose", text: mistake.body })]));
+    return;
+  }
   openDrawer(mistake.title || "错误记录", "错题详情", el("div", { class: "page-stack" }, [
     el("section", {}, [el("h3", { text: "当时的问题" }), el("div", { class: "prose", text: mistake.question || "未记录" })]),
     el("section", {}, [el("h3", { text: "实际回答" }), el("div", { class: "prose", text: mistake.answer || "未记录" })]),
-    el("section", {}, [el("h3", { text: "错误或遗漏" }), el("div", { class: "prose", text: mistake.error || mistake.feedback || "未记录" })]),
+    el("section", {}, [el("h3", { text: "错误或遗漏" }), el("div", { class: "prose", text: mistake.omission || mistake.error || mistake.feedback || "未记录" })]),
     el("section", {}, [el("h3", { text: "修正与依据" }), el("div", { class: "prose", text: mistake.correction || "未记录" })]),
+    mistake.origin === "user" ? badge("用户记录") : null,
+    mistake.nextQuestion ? el("section", {}, [el("h3", { text: "下次想检查的问题" }), el("div", { class: "prose", text: mistake.nextQuestion })]) : null,
   ]));
 }
 
@@ -1447,7 +1563,8 @@ async function actMistake(id, action) {
   try {
     await api.mistakeAction(id, { action, ...(reason ? { reason } : {}) });
     toast("错误记录已更新", "success");
-    if (state.studyTab === "mistakes") await renderStudy();
+    if (state.view === "mistakes") await navigate("mistakes");
+    else if (state.studyTab === "mistakes") await renderStudy();
   } catch (error) { handleError(error); }
 }
 
@@ -1455,13 +1572,12 @@ async function renderTopics() {
   const data = await api.topics();
   const topics = asArray(data.topics);
   const create = button("新建主题学习包", { kind: "primary", onClick: () => createTopicDrawer() });
-  const actions = el("div", { class: "item-actions" }, [button("AI 建议学习包", { onClick: suggestTopics }), create]);
+  const actions = el("div", { class: "item-actions" }, [isMobilePrototype() ? null : button("AI 建议学习包", { onClick: suggestTopics }), create]);
   clear(refs.main).append(el("div", { class: "page-stack", dataset: { tour: "topics-list" } }, [
     sectionHeading("主题学习包", "跨日期组织相关内容，也允许零散材料仅供查阅", actions),
-    el("div", { class: "notice info", text: "AI 建议只使用明确允许外发的材料，并以“AI 整理建议”呈现建议顺序和前置缺口；不会自动创建或确认主题学习包。你可以审阅后用“新建主题学习包”手动采用。" }),
-    topics.length ? el("div", { class: "card-grid" }, topics.map(topicCard)) : emptyState("还没有主题学习包", "创建一个真实想解决的问题，再选择涉及的知识和前置内容。", create.cloneNode(true)),
+    el("div", { class: "notice info", text: isMobilePrototype() ? "手机支持手动组织主题学习包。请选择可学习的知识，记录真实问题与前置条件；AI 建议尚未接入。" : "AI 建议只使用明确允许外发的材料，并以“AI 整理建议”呈现建议顺序和前置缺口；不会自动创建或确认主题学习包。你可以审阅后用“新建主题学习包”手动采用。" }),
+    topics.length ? el("div", { class: "card-grid" }, topics.map(topicCard)) : emptyState("还没有主题学习包", "创建一个真实想解决的问题，再选择涉及的知识和前置内容。", button("新建主题学习包", { kind: "primary", onClick: () => createTopicDrawer() })),
   ]));
-  if (!topics.length) refs.main.querySelector(".empty-state button")?.addEventListener("click", createTopicDrawer);
 }
 
 async function suggestTopics() {
@@ -1502,20 +1618,22 @@ async function openTopic(topic) {
     const prerequisites = topic.prerequisites ?? meta.prerequisites;
     const members = asArray(topic.members);
     const paused = topic.paused === true || meta.paused === true;
+    const canStartNext = !paused && Boolean(progress.nextNoteId) && (!isMobilePrototype() || !progress.blockedNoteId);
+    const canStartMember = member => !paused && member.available && (!isMobilePrototype() || (!progress.blockedNoteId && member.id === progress.nextNoteId));
     openDrawer(topic.title || "主题学习包", "主题学习包", el("div", { class: "page-stack" }, [
       el("div", { class: "prose", text: readableBody(topic.body) || "暂无说明" }),
       el("dl", { class: "key-values" }, [
         el("div", { class: "key-value" }, [el("dt", { text: "预计投入" }), el("dd", { text: `${number(topic.minutes || meta.minutes || 20)} 分钟` })]),
         el("div", { class: "key-value" }, [el("dt", { text: "前置知识" }), el("dd", { text: Array.isArray(prerequisites) ? prerequisites.join("、") || "未标记缺口" : prerequisites || "未标记缺口" })]),
-        el("div", { class: "key-value" }, [el("dt", { text: "本包进度" }), el("dd", { text: `${number(progress.completedCount)} / ${number(progress.total || members.length)} 条已有练习结束或理解确认记录` })]),
+        el("div", { class: "key-value" }, [el("dt", { text: "本包进度" }), el("dd", { text: `${number(progress.completedCount)} / ${number(progress.total || members.length)} 条${isMobilePrototype() ? "已有个人理解确认" : "已有练习结束或理解确认记录"}` })]),
       ]),
-      el("div", { class: "notice info", text: "按下面的顺序学习。下方成员列表为当前顺序，说明原文可自行编辑。进度表示已有学习记录，不代表永久掌握；文本前置缺口仍需补充材料。" }),
+      el("div", { class: "notice info", text: isMobilePrototype() ? "按下面的顺序学习。离线结束只保留回答，不计入本包进度；整理并确认个人理解后才可推进后续内容。确认也不代表已通过批改或永久掌握。" : "按下面的顺序学习。下方成员列表为当前顺序，说明原文可自行编辑。进度表示已有学习记录，不代表永久掌握；文本前置缺口仍需补充材料。" }),
       progress.blockedNoteId ? el("div", { class: "notice" }, [el("p", { text: "下一项知识或前置内容暂不可学习，请先查看其研究限制或状态。" }), button("查看待处理知识", { kind: "text", onClick: () => openNote(progress.blockedNoteId) })]) : null,
-      button(progress.nextNoteId ? `开始下一条：${progress.nextNoteTitle || "前置知识"}` : "本包暂无待继续内容", { kind: "primary", disabled: paused || !progress.nextNoteId, onClick: () => beginStudy(progress.nextNoteId, undefined, { topicId: topic.id }) }),
+      button(progress.nextNoteId ? `开始下一条：${progress.nextNoteTitle || "前置知识"}` : "本包暂无待继续内容", { kind: "primary", disabled: !canStartNext, onClick: () => { if (!canStartNext) return; return beginStudy(progress.nextNoteId, undefined, { topicId: topic.id }); } }),
       el("ol", { class: "list" }, members.map((member, index) => el("li", { class: "list-item" }, [
         el("div", { class: "item-symbol", text: String(index + 1) }),
         el("div", { class: "item-copy" }, [el("h3", { text: member.title || "知识暂不可读" }), el("div", { class: "item-meta" }, [badge(depthLabel(member.depth || "explain")), badge(member.completed ? "已有学习记录" : member.available ? "待学习" : "暂不可学习", member.completed ? "good" : "neutral")])]),
-        el("div", { class: "item-actions wrap" }, [button("查看", { kind: "text compact", onClick: () => openNote(member.id) }), button("开始", { kind: "quiet compact", disabled: paused || !member.available, onClick: () => beginStudy(member.id, undefined, { topicId: topic.id }) })]),
+        el("div", { class: "item-actions wrap" }, [button("查看", { kind: "text compact", onClick: () => openNote(member.id) }), button("开始", { kind: "quiet compact", disabled: !canStartMember(member), title: isMobilePrototype() && !canStartMember(member) ? "请先完成当前可用前置步骤；受限或已完成的成员不能从本包重新开始" : "", onClick: () => { if (!canStartMember(member)) return; return beginStudy(member.id, undefined, { topicId: topic.id }); } })]),
       ]))),
       el("div", { class: "form-actions" }, [button("调整成员与顺序", { kind: "primary", onClick: () => editTopic(topic).catch(handleError) }), button("复制或拆分为新学习包", { onClick: () => createTopicDrawer(topic).catch(handleError) }), button(paused ? "恢复" : "暂停", { onClick: () => actTopic(topic.id, paused ? "resume" : "pause") })]),
     ]));
@@ -1535,7 +1653,30 @@ async function topicEditor(topic, create) {
   const minutes = el("input", { name: "minutes", type: "number", min: 5, max: 300, value: topic?.minutes || meta.minutes || 20 });
   const originalPrerequisites = topic?.prerequisites ?? meta.prerequisites ?? [];
   const prerequisiteText = Array.isArray(originalPrerequisites) ? originalPrerequisites.join("，") : String(originalPrerequisites);
-  const prerequisites = el("input", { name: "prerequisites", value: prerequisiteText });
+  const prerequisites = isMobilePrototype() ? el("div", { class: "page-stack" }) : el("input", { name: "prerequisites", value: prerequisiteText });
+  const prerequisiteIds = new Set(Array.isArray(originalPrerequisites) ? originalPrerequisites : originalPrerequisites ? [String(originalPrerequisites)] : []);
+  const prerequisiteOptions = notes.filter(note => note.meta?.stage !== "retired" && !note.meta?.supersededBy && !asArray(note.limitations).length && !asArray(note.meta?.researchLimitations).length);
+  const invalidPrerequisites = () => [...prerequisiteIds].filter(id => !prerequisiteOptions.some(note => note.id === id));
+  let saving = false;
+  const submit = button(create ? "创建主题学习包" : "保存主题学习包", { kind: "primary", type: "submit" });
+  const syncPrerequisites = () => { submit.disabled = saving || (isMobilePrototype() && invalidPrerequisites().length > 0); };
+  function renderPrerequisites() {
+    if (!isMobilePrototype()) return;
+    clear(prerequisites);
+    const invalid = invalidPrerequisites();
+    if (invalid.length) prerequisites.append(el("div", { class: "notice warning", text: "原有前置中有未找到或暂不可用的知识，仍保留在下面。请选择可用知识替代并移除失效项后再保存；标题、正文和成员草稿会保留。" }));
+    for (const id of invalid) {
+      const oldNote = notes.find(note => note.id === id);
+      prerequisites.append(el("div", { class: "list-item no-icon", dataset: { prerequisiteId: id } }, [el("span", { text: oldNote ? `${oldNote.title || id}（当前不可用，保留原有前置）` : `${id}（未找到对应知识，保留原有前置）` }), button("移除此失效前置", { kind: "danger compact", onClick: () => { prerequisiteIds.delete(id); renderPrerequisites(); } })]));
+    }
+    if (!prerequisiteOptions.length) prerequisites.append(el("p", { text: "当前没有可用的前置知识。可先保存知识并处理其研究限制；新主题也可以暂不设置前置。既有失效项不会自动清除。" }));
+    for (const note of prerequisiteOptions) {
+      const choice = el("input", { type: "checkbox", name: "topicPrerequisite", value: note.id, checked: prerequisiteIds.has(note.id) });
+      choice.addEventListener("change", () => { if (choice.checked) prerequisiteIds.add(note.id); else prerequisiteIds.delete(note.id); syncPrerequisites(); });
+      prerequisites.append(el("label", { class: "check-field" }, [choice, el("span", { text: note.title || "未命名知识" })]));
+    }
+    syncPrerequisites();
+  }
   const order = el("div", { class: "list" });
   const available = el("div", { class: "list" });
   const query = el("input", { type: "search", placeholder: "筛选可添加的知识", ariaLabel: "筛选可添加的知识" });
@@ -1555,11 +1696,12 @@ async function topicEditor(topic, create) {
     if (matches.length > 50) available.append(el("p", { class: "fine-print", text: `另有 ${matches.length - 50} 条，请输入标题或主题缩小范围。` }));
   }
   query.addEventListener("input", renderMembers);
-  form.append(el("div", { class: "notice", text: create && topic ? "这是新学习包的副本。选择要保留的成员并调整顺序后保存，原包保持不变；可用于拆分主题。" : "学习顺序由你调整。成员变化不会删除原知识；保存时检查是否有外部修改。" }), field("学习包标题", title), field("问题、顺序与边界", body), el("div", { class: "form-grid" }, [field("预计投入（分钟）", minutes), field("前置知识", prerequisites, "可以继续保留现有文本缺口；逗号分隔新条目")]), sectionHeading("学习顺序", "上移、下移只调整本包中的顺序"), order, field("添加已有知识", query), available, el("div", { class: "form-actions" }, [button(create ? "创建主题学习包" : "保存主题学习包", { kind: "primary", type: "submit" }), button("取消", { onClick: () => topic ? openTopic(topic) : closeDrawer() })]));
+  form.append(el("div", { class: "notice", text: create && topic ? "这是新学习包的副本。选择要保留的成员并调整顺序后保存，原包保持不变；可用于拆分主题。" : "学习顺序由你调整。成员变化不会删除原知识；保存时检查是否有外部修改。" }), field("学习包标题", title), field("问题、顺序与边界", body), el("div", { class: "form-grid" }, [field("预计投入（分钟）", minutes), field("前置知识", prerequisites, isMobilePrototype() ? "勾选需要先学习的知识。尚缺少的资料请写在问题说明中；失效的原有前置需要主动修正。" : "可以继续保留现有文本缺口；逗号分隔新条目")]), sectionHeading("学习顺序", "上移、下移只调整本包中的顺序"), order, field("添加已有知识", query), available, el("div", { class: "form-actions" }, [submit, button("取消", { onClick: () => topic ? openTopic(topic) : closeDrawer() })]));
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const submit = form.querySelector("button[type='submit']"); submit.disabled = true;
-    const nextPrerequisites = prerequisites.value === prerequisiteText ? originalPrerequisites : prerequisites.value.split(/[,，]/).map(value => value.trim()).filter(Boolean);
+    if (submit.disabled) return;
+    saving = true; syncPrerequisites();
+    const nextPrerequisites = isMobilePrototype() ? [...prerequisiteIds] : prerequisites.value === prerequisiteText ? originalPrerequisites : prerequisites.value.split(/[,，]/).map(value => value.trim()).filter(Boolean);
     try {
       const values = { minutes: number(minutes.value), prerequisites: nextPrerequisites, noteIds: [...selected] };
       const updated = create ? await api.createTopic({ title: title.value, body: body.value, ...values }) : await api.updateTopic(topic.id, { title: title.value, body: body.value + (topicManagedBlock(topic.body) ? "\n\n" + topicManagedBlock(topic.body) : ""), expectedHash: topic.hash, meta: values });
@@ -1570,8 +1712,9 @@ async function topicEditor(topic, create) {
       toast(create ? "主题学习包已创建" : "主题成员与顺序已保存", "success");
       await refreshBootstrap(); await renderTopics(); await openTopic(updated);
     } catch (error) { handleError(error); }
-    finally { submit.disabled = false; }
+    finally { saving = false; syncPrerequisites(); }
   });
+  renderPrerequisites();
   renderMembers();
   refs.drawerBody.dataset.tour = "topic-editor";
   refs.drawerBody.dataset.tourSubject = topic?.id || "";
@@ -1818,7 +1961,8 @@ function systemTabButton(value, label) {
 async function renderSystem() {
   const wrapper = el("div", { class: "page-stack" });
   if (isMobilePrototype()) {
-    wrapper.append(createAndroidDataPanel({ api, onRestored: refreshBootstrap, onError: handleError }));
+    wrapper.append(await androidLocalGuidePanel(), await androidLearningSettingsPanel(), androidLearningBackupPanel());
+    if (!androidPracticeActive()) wrapper.append(createAndroidDataPanel({ api, onRestored: refreshBootstrap, onError: handleError }));
     clear(refs.main).append(wrapper);
     return;
   }
@@ -1841,6 +1985,114 @@ async function renderSystem() {
   else if (state.systemTab === "conflicts") wrapper.append(conflictsPanel());
   else wrapper.append(await settingsPanel());
   clear(refs.main).append(wrapper);
+}
+
+let androidSwitchPending = false;
+async function androidLearningSettingsPanel() {
+  const panel = el("section", { class: "panel" }, [sectionHeading("本地学习设置", "每日安排按预算和日程时区生成，暂停的内容可以随时恢复")]);
+  let settings;
+  try { settings = typeof api.settings === "function" ? await api.settings() : asObject(state.bootstrap?.settings); }
+  catch (error) { panel.append(el("p", { text: `学习设置暂不可读：${errorMessage(error)}` })); return panel; }
+  const context = api.getContext(), current = () => api.getContext().version === context.version;
+  const form = el("form", { class: "page-stack" });
+  form.append(field("每天计划学习多久（分钟）", el("input", { name: "dailyMinutes", type: "number", min: 5, max: 240, step: 1, value: settings.dailyMinutes ?? 25, required: true }), "设置 5–240 分钟，未排入的内容留待以后。"), field("日程时区", el("input", { name: "timezone", value: settings.timezone || "Asia/Shanghai", required: true }), "例如 Asia/Shanghai 或 Asia/Singapore，用于当天日期和复习日程。"), field("日程生成时间", el("input", { name: "scheduleTime", type: "time", value: settings.scheduleTime || "08:00", required: true })));
+  const save = button("保存本地学习设置", { kind: "primary", type: "submit" });
+  form.append(save);
+  form.addEventListener("submit", async event => {
+    event.preventDefault(); if (save.disabled || !current()) return;
+    const data = serializeForm(form), dailyMinutes = Number(data.dailyMinutes);
+    if (!Number.isInteger(dailyMinutes) || dailyMinutes < 5 || dailyMinutes > 240) { toast("每日时间应为 5–240 分钟的整数", "error"); return; }
+    save.disabled = true;
+    try { await api.updateSettings({ dailyMinutes, timezone: data.timezone.trim(), scheduleTime: data.scheduleTime }); if (!current()) return; await refreshBootstrap(); toast("本地学习设置已保存", "success"); }
+    catch (error) { if (current()) handleError(error); }
+    finally { if (current()) save.disabled = false; }
+  });
+  panel.append(form);
+  const paused = asArray(settings.pausedIds);
+  panel.append(sectionHeading("已暂停的学习内容", "恢复后可重新参与每日安排，已有原答和记录保留"));
+  if (!paused.length) panel.append(el("p", { text: "当前没有暂停的内容。" }));
+  for (const id of paused) {
+    const resume = button("恢复安排", { kind: "quiet compact", onClick: async () => {
+      if (!current() || resume.disabled) return; resume.disabled = true;
+      try { await api.updateSettings({ pausedIds: paused.filter(value => value !== id) }); if (!current()) return; await refreshBootstrap(); await renderSystem(); toast("已恢复学习安排", "success"); }
+      catch (error) { if (current()) handleError(error); }
+      finally { if (current()) resume.disabled = false; }
+    } });
+    panel.append(el("div", { class: "list-item no-icon" }, [el("span", { text: asArray(state.bootstrap?.notes).find(note => note.id === id)?.title || "已暂停知识" }), resume]));
+  }
+  return panel;
+}
+
+async function switchAndroidLibrary(practiceId) {
+  if (androidSwitchPending) return;
+  androidSwitchPending = true;
+  const context = api.getContext();
+  try {
+  const ok = await confirmAction({ title: practiceId ? "进入独立练习库？" : "返回正式知识库？", message: "请先保存正在编辑的草稿。切换后关闭当前内容窗口；正式资料和练习资料分别保留。", confirmText: practiceId ? "进入练习库" : "返回正式库" });
+  if (!ok || api.getContext().version !== context.version) return;
+  if (practiceId) await api.androidPractice("start");
+  if (api.getContext().version !== context.version) return;
+  api.setContext(practiceId);
+  closeDrawer(); state.currentStudy = null; state.studyMaterialVisible = true; state.studyTab = "queue";
+  state.lastOutput = null; state.restoreBackup = null; state.restoreToken = ""; state.sourceMaps.clear();
+  state.libraryFilters = { q: "", kind: "", stage: "" };
+  state.searchFilters = { q: "", mode: "keyword", kind: "", stage: "", topic: "", source: "", from: "", to: "", privacy: "local" };
+  await refreshBootstrap(); await navigate("system");
+  } finally { androidSwitchPending = false; }
+}
+
+async function androidLocalGuidePanel() {
+  const panel = el("section", { class: "panel" }, [sectionHeading("手机本地引导", androidPracticeActive() ? "当前为独立练习库，正式资料不会被修改" : "可直接操作正式资料，也可进入独立练习库")]);
+  panel.append(el("p", { text: "先保存原文，再手动整理，回答后结束并保存记录。练习库只准备一份明确标记的合成个人学习反思原文；知识、回答和完成记录都要由你实际操作产生。" }), el("p", { text: "整理内容时默认选择含事实；只有确实属于个人观点的反思才选择观点。事实不能通过改标为观点绕过核验，手机尚不能核验事实。" }));
+  try {
+    const guide = await api.androidGuide();
+    panel.append(el("ol", { class: "step-list" }, asArray(guide.steps).map(step => el("li", { class: step.completed ? "step is-done" : "step" }, [el("strong", { text: step.label }), badge(step.completed ? "已实际完成" : "待操作", step.completed ? "good" : "neutral")]))));
+  } catch (error) { panel.append(el("p", { text: `引导进度暂不可读：${errorMessage(error)}` })); }
+  panel.append(el("div", { class: "form-actions" }, [button("收集原文", { onClick: () => navigate("capture") }), button("打开知识库", { onClick: () => navigate("library") }), button("打开学习队列", { onClick: () => navigate("study") }), button(androidPracticeActive() ? "返回正式知识库" : "进入独立练习库", { onClick: () => switchAndroidLibrary(androidPracticeActive() ? "" : "android-local").catch(handleError) })]));
+  if (androidPracticeActive()) panel.append(button("重置当前练习库", { kind: "danger", onClick: async () => {
+    if (!androidPracticeActive()) return;
+    const context = api.getContext();
+    if (!await confirmAction({ title: "重置当前练习库？", message: "只清除独立练习库的原文和学习记录，正式知识库保留。操作前可导出练习学习备份。", confirmText: "重置练习库", danger: true })) return;
+    if (!androidPracticeActive() || api.getContext().version !== context.version) return;
+    try { await api.androidPractice("reset"); closeDrawer(); state.currentStudy = null; state.sourceMaps.clear(); await refreshBootstrap(); await renderSystem(); toast("练习库已重置", "success"); }
+    catch (error) { handleError(error); }
+  } }));
+  return panel;
+}
+
+function androidLearningBackupPanel() {
+  const context = api.getContext();
+  const current = () => api.getContext().version === context.version;
+  const panel = el("section", { class: "panel" }, [sectionHeading("学习记录备份", androidPracticeActive() ? "包含当前练习库的原文、知识及学习记录" : "包含当前正式库的知识、主题及学习记录，与原文备份分别管理"), el("p", { text: "恢复前先预览目标知识库及内容数量。仅完全空的学习库可以恢复，已有知识、学习记录、学习设置或引导记录时均不能覆盖。备份不包含 API 凭据。" }), el("p", { text: androidPracticeActive() ? "此学习备份包含练习库原文和学习记录。" : "正式资料的完整备份需要另行导出下方的原文备份。请将原文备份与学习记录备份两个文件一起保管，换机时分别恢复。" })]);
+  const preview = el("div", { role: "status" });
+  const reviewed = el("input", { name: "learningRestoreReviewed", type: "checkbox", disabled: true });
+  let pending = null, busy = false;
+  const update = () => { restore.disabled = busy || !pending?.canRestore || !reviewed.checked; reviewed.disabled = busy || !pending?.canRestore; };
+  const restore = button("确认恢复学习记录", { kind: "danger", disabled: true, onClick: async () => {
+    if (busy || !pending?.canRestore || !reviewed.checked || !current()) return;
+    const selected = pending;
+    if (!await confirmAction({ title: "恢复预览中的学习记录？", message: "仅向当前空学习库恢复预览内容。请核对正式库或练习库目标。", confirmText: "确认恢复", danger: true })) return;
+    if (!current() || pending !== selected || busy) return;
+    busy = true; update();
+    try {
+      const result = await api.restoreAndroidLearningBackup(selected.token); if (!current()) return;
+      pending = null; reviewed.checked = false;
+      clear(preview).append(el("p", { text: result.unchanged ? "已有相同学习记录，无需恢复。" : result.restored ? "学习记录恢复完成。" : "本次没有恢复学习记录。" }));
+      try { await refreshBootstrap(); }
+      catch { if (current()) { preview.append(el("p", { text: "页面刷新未完成。已恢复的学习记录仍保留，请使用顶部刷新按钮或重新打开应用查看，无需再次恢复备份。" })); toast("学习备份已处理，请刷新页面或重新打开应用查看", "info"); } }
+    }
+    catch (error) { if (current()) { pending = null; reviewed.checked = false; handleError(error); } }
+    finally { busy = false; update(); }
+  } });
+  reviewed.addEventListener("change", update);
+  panel.append(el("div", { class: "form-actions" }, [button("导出学习记录备份", { onClick: async () => { try { await api.exportAndroidLearningBackup(); if (current()) toast("学习记录备份已导出", "success"); } catch (error) { if (current()) handleError(error); } } }), button("选择学习备份并预览", { onClick: async () => {
+    if (busy || !current()) return;
+    pending = null; reviewed.checked = false; busy = true; clear(preview); update();
+    try { const result = await api.previewAndroidLearningBackup(); if (!current()) return; pending = result; const contextLabel = typeof result.context === "string" ? result.context === "practice" || result.context === "android-local" ? "练习库" : result.context === "formal" ? "正式库" : "目标未知，请重新核对" : result.context?.practiceId ? "练习库" : "正式库"; preview.append(el("p", { text: `目标：${contextLabel}；内容 ${typeof result.notes === "number" ? result.notes : asArray(result.notes).length} 项；历史 ${typeof result.history === "number" ? result.history : asArray(result.history).length} 项。` }), el("p", { text: result.identical ? "当前已有相同记录，无需恢复。" : result.canRestore ? "当前学习库完全为空，核对后可以恢复。" : "当前学习库已有内容、设置或引导记录，不能恢复覆盖。" })); }
+    catch (error) { if (current()) handleError(error); }
+    finally { busy = false; update(); }
+  } })]), preview, field("我已核对学习备份目标及内容", reviewed), restore);
+  return panel;
 }
 
 function appearancePanel() {
@@ -2328,11 +2580,11 @@ function conflictsPanel() {
 }
 
 async function renderCurrent() {
-  if (isMobilePrototype() && !["capture", "library", "system"].includes(state.view)) {
-    clear(refs.main).append(emptyState("这项功能尚未迁移到手机", "当前样机支持原文收集、查看、搜索和编辑。", button("打开知识库", { onClick: () => navigate("library") })));
+  if (isMobilePrototype() && !["today", "capture", "library", "study", "mistakes", "topics", "system"].includes(state.view)) {
+    clear(refs.main).append(emptyState("这项功能尚未迁移到手机", "手机支持本地整理与学习；AI、问答输出和联网核验尚未接入。", button("打开知识库", { onClick: () => navigate("library") })));
     return;
   }
-  const renderers = { today: renderToday, capture: renderCapture, library: renderLibrary, study: renderStudy, topics: renderTopics, discover: renderDiscover, output: renderOutput, system: renderSystem };
+  const renderers = { today: renderToday, capture: renderCapture, library: renderLibrary, study: renderStudy, mistakes: async () => clear(refs.main).append(await mistakesPanel()), topics: renderTopics, discover: renderDiscover, output: renderOutput, system: renderSystem };
   await (renderers[state.view] || renderSystem)();
   onboarding?.rendered();
 }
@@ -2473,13 +2725,14 @@ document.addEventListener("keydown", (event) => { if (event.key === "Escape") cl
 async function init() {
   const [hashView, systemTab] = window.location.hash.slice(1).split("/");
   if (hashView === "system" && ["settings", "usage", "appearance", "jobs", "data", "diagnostics", "proposals", "conflicts"].includes(systemTab)) state.systemTab = systemTab;
-  setPage(pages[hashView] ? hashView : isMobilePrototype() ? "library" : "today");
+  setPage(pages[hashView] ? hashView : "today");
   if (isMobilePrototype()) {
     document.documentElement.classList.add("android-prototype");
     refs.nav.querySelectorAll("[data-view]").forEach(item => {
-      item.disabled = !["capture", "library", "system"].includes(item.dataset.view);
+      item.disabled = !["today", "capture", "library", "study", "mistakes", "topics", "system"].includes(item.dataset.view);
       if (item.disabled) item.title = "后续版本接入";
     });
+    if (!refs.nav.querySelector('[data-view="mistakes"]')) refs.nav.append(el("button", { class: "nav-item", dataset: { view: "mistakes" }, text: "用户错题记录" }));
     for (const id of ["onboarding-launcher", "onboarding-reset"]) { const control = document.querySelector(`#${id}`); if (control) { control.disabled = true; control.title = "新手引导尚未迁移到手机"; } }
   }
   try {
