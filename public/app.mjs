@@ -155,6 +155,12 @@ function closeDrawer() {
   onboarding?.rendered();
 }
 
+async function requestCloseDrawer() {
+  const form = refs.drawerBody.querySelector("form");
+  if (form?.confirmDiscardChanges && !await form.confirmDiscardChanges()) return;
+  closeDrawer();
+}
+
 async function refreshBootstrap() {
   state.bootstrap = await api.bootstrap();
   processFeedback.observe(state.bootstrap);
@@ -922,13 +928,30 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
       field("知识主题", el("input", { name: "topic", value: meta.topic || "", placeholder: "可留空" })),
       learningGoalField(meta.depth),
     ]),
-    el("div", { class: "form-actions" }, [button("保存修改", { kind: "primary", type: "submit" }), button("取消", { onClick: () => returnToSourceId ? refreshSourceGroup(returnToSourceId).catch(handleError) : renderNoteDrawer(note) })]),
+    el("div", { class: "form-actions" }, [button("保存修改", { kind: "primary", type: "submit" }), button("取消", { onClick: async () => {
+      if (!await form.confirmDiscardChanges()) return;
+      if (returnToSourceId) await refreshSourceGroup(returnToSourceId).catch(handleError);
+      else renderNoteDrawer(note);
+    } })]),
   );
   const initialFields = serializeForm(form);
   if (isMobilePrototype()) {
     for (const name of ["privacy", "depth", "researchIntervalDays"]) form.querySelector(`[name="${name}"]`).disabled = true;
   }
-  const originalValues = JSON.stringify(initialFields);
+  const originalValues = JSON.stringify(serializeForm(form));
+  let confirmingDiscard = false;
+  form.confirmDiscardChanges = async () => {
+    if (confirmingDiscard) return false;
+    const context = api.getContext();
+    if (JSON.stringify(serializeForm(form)) !== originalValues) {
+      confirmingDiscard = true;
+      try {
+        if (!await confirmAction({ title: "放弃未保存的修改？", message: "当前修改尚未保存。取消可继续编辑；确认放弃后，本次输入不会保存。", confirmText: "放弃修改", danger: true })) return false;
+      } finally { confirmingDiscard = false; }
+    }
+    const latest = api.getContext();
+    return latest.practiceId === context.practiceId && latest.version === context.version && refs.drawerBody.querySelector("form") === form;
+  };
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const data = serializeForm(form);
@@ -2436,9 +2459,9 @@ refs.refresh.addEventListener("click", async () => {
   catch (error) { handleError(error); }
   finally { refs.refresh.disabled = false; }
 });
-refs.drawerClose.addEventListener("click", closeDrawer);
-refs.drawerBackdrop.addEventListener("click", closeDrawer);
-document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeDrawer(); });
+refs.drawerClose.addEventListener("click", requestCloseDrawer);
+refs.drawerBackdrop.addEventListener("click", requestCloseDrawer);
+document.addEventListener("keydown", (event) => { if (event.key === "Escape") requestCloseDrawer(); });
 
 async function init() {
   const [hashView, systemTab] = window.location.hash.slice(1).split("/");
