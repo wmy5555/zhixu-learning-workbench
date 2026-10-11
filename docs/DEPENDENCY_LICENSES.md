@@ -145,9 +145,9 @@
 - 设计与接口文档包含 MDN、Obsidian、PubMed、Microsoft、MCP、OWASP、OpenAI 和 Tavily 的来源链接；未打包其网页、课程、论文或书籍全文。供应商接口兼容不等于获得商标背书或外部服务使用权。
 - 所有者已确认源码、界面、默认提示词和文档由本项目编写或 AI 辅助生成，没有另行复制的受限内容；这项是来源声明，不是代码相似度或法律鉴定。
 
-## Android / Capacitor 增量记录（2026-10-07）
+## Android / Capacitor 增量记录（2026-10-12）
 
-上方 93 个 npm 包清单是 2026-09-20 的旧基线，不涵盖此后新增的 Capacitor runtime、CLI、Android Gradle 插件、Gradle distribution、AndroidX 或 Maven 依赖。本节只记录本次 Android 原型中已能从清单文件和本地包核对的直接依赖及其已知许可；没有解析 Maven 传递依赖树或审计 SDK/插件工具链的全部二进制，因此不表示全部 Android 组件已审计。
+上方 93 个 npm 包清单是 2026-09-20 的旧基线，不涵盖此后新增的 Capacitor runtime、CLI、Android Gradle 插件、Gradle distribution、AndroidX 或 Maven 依赖。本节记录已核对的直接依赖及已知许可，后续新增运行组件已按 CI 的 Maven 依赖图确认版本；未审计 SDK/插件工具链的全部二进制，因此不表示全部 Android 组件已审计。
 
 | 组件 | 版本/来源 | 许可证与核验范围 |
 |---|---|---|
@@ -157,8 +157,12 @@
 | AndroidX | AndroidX AOSP/Google Maven；项目明确引用 AppCompat `1.7.1`、CoordinatorLayout `1.3.0`、Core Splashscreen `1.2.0`；Capacitor 还依赖 Activity `1.11.0`、Core `1.17.0`、Fragment `1.8.9`、Webkit `1.14.0` | AndroidX 源码仓库声明 Apache-2.0；各 Maven 发布物来自 Google Maven。官方 [AndroidX 源码](https://github.com/androidx/androidx) 与 [Android 内容许可说明](https://source.android.com/license)为核验来源。未在该上游仓库找到独立 `NOTICE` 文件；APK notice 保留其 Apache-2.0 正文及来源说明。 |
 | Apache Cordova Android framework | Maven `org.apache.cordova:framework:14.0.1` | Apache-2.0；核对 [14.0.1 上游 LICENSE](https://github.com/apache/cordova-android/blob/14.0.1/LICENSE) 与 [NOTICE](https://github.com/apache/cordova-android/blob/14.0.1/NOTICE)。上游 NOTICE 的 Apache Software Foundation 归属声明已复制到 APK notice。 |
 | Android Gradle Plugin | `com.android.tools.build:gradle:8.13.0` | 构建工具，不是应用运行时依赖。此处记录坐标但未展开其传递组件许可证。 |
-| OkHttp | Maven `com.squareup.okhttp3:okhttp:5.3.2`，官方 [parent-5.3.2 发布](https://github.com/lysine-dev/okhttp/releases/tag/parent-5.3.2)；该 Android 变体要求 compileSdk 35、minSdk 21，适配本项目 compileSdk 36 | Apache-2.0；核对该 tag 的[上游许可证](https://github.com/lysine-dev/okhttp/blob/parent-5.3.2/LICENSE.txt)。上游版本清单列出 Okio `3.16.4`、Kotlin `2.2.21`、AndroidX Startup `1.2.0`、AndroidX Annotation `1.9.1`；最终运行版本以 CI 的 `debugRuntimeClasspath` 解析报告为准。 |
-| Okio、Kotlin standard library | OkHttp 引入的 Maven 运行依赖；本轮尚待实际 Gradle 解析 | Apache-2.0；核对 [Okio 许可证](https://github.com/lysine-dev/okio/blob/parent-3.16.4/LICENSE.txt)和 [Kotlin 许可证](https://github.com/JetBrains/kotlin/blob/v2.2.21/license/LICENSE.txt)。来源说明与完整 Apache-2.0 文本已纳入本次 [Android notice 源文件](../apps/android/web/android-third-party-notices.txt)，最终 APK 收录须在构建后确认。未完成依赖图和 APK 核验前，不代表 Android 全部组件已审计。 |
+| OkHttp / OkHttp Android | Maven `com.squareup.okhttp3:okhttp:5.3.2` 与 `com.squareup.okhttp3:okhttp-android:5.3.2`；CI `debugRuntimeClasspath` 成功解析，见 [CI run 38163946842](https://github.com/wmy5555/zhixu-learning-workbench/actions/runs/38163946842) | Apache-2.0；核对 [上游许可证](https://github.com/lysine-dev/okhttp/blob/parent-5.3.2/LICENSE.txt)。该 Android 变体要求 compileSdk 35、minSdk 21，适配本项目 compileSdk 36。 |
+| Okio | Maven `com.squareup.okio:okio:3.16.4` 与 `com.squareup.okio:okio-jvm:3.16.4`；上述 CI `debugRuntimeClasspath` 成功解析 | Apache-2.0；核对 [上游许可证](https://github.com/lysine-dev/okio/blob/parent-3.16.4/LICENSE.txt)。 |
+| Kotlin standard library | Maven `org.jetbrains.kotlin:kotlin-stdlib:2.2.21`；上述 CI `debugRuntimeClasspath` 成功解析 | Apache-2.0；核对 [上游许可证](https://github.com/JetBrains/kotlin/blob/v2.2.21/license/LICENSE.txt)。 |
+| AndroidX Startup Runtime、Annotation | Maven `androidx.startup:startup-runtime:1.2.0` 与 `androidx.annotation:annotation-jvm:1.9.1`；上述 CI `debugRuntimeClasspath` 成功解析 | Apache-2.0；AndroidX 来源为 [官方源码仓库](https://github.com/androidx/androidx)。 |
+
+CI 的 `debugRuntimeClasspath` 依赖图解析成功，但同一工作流随后因独立 Java 编译错误而失败；这不表示 Android 构建成功。上述版本和来源已写入本次 [Android notice 源文件](../apps/android/web/android-third-party-notices.txt)。2026-10-12 对解析出的 54 个 Maven 包版本调用 [OSV 查询接口](https://google.github.io/osv.dev/post-v1-querybatch/)，54 个结果均无匹配的已知漏洞；此结果只覆盖当次数据库收录，不代表不存在漏洞或完成代码安全审计。最终 APK 是否收录 notice 尚未核实；本记录也不构成对全部 SDK、Gradle 插件或工具链组件的完整审计。
 
 Capacitor 生成的默认图标和启动图属于模板资源，其许可范围随上述 Capacitor MIT 许可说明；本次未重绘、替换或另行引入媒体。2026-10-07 已在 b129246 构建的实际 APK ZIP 条目中确认 [android-third-party-notices.txt](../public/android-third-party-notices.txt) 随包收录；这不扩展上文注明的传递依赖审计范围。
 

@@ -93,7 +93,8 @@ final class OnlineSupport {
         } catch (Exception e) { if (out != null) a.failWrite(out); throw e; }
     }
     static void syncDir(File root) throws Exception {
-        java.io.FileDescriptor fd = Os.open(root.getAbsolutePath(), OsConstants.O_RDONLY | OsConstants.O_DIRECTORY, 0);
+        if (!root.getAbsoluteFile().equals(root.getCanonicalFile()) || !root.isDirectory()) throw fail("STORE_ERROR", "在线存储目录不安全。");
+        java.io.FileDescriptor fd = Os.open(root.getAbsolutePath(), OsConstants.O_RDONLY, 0);
         try { Os.fsync(fd); } finally { Os.close(fd); }
     }
     static String at(long now) { return new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.ROOT) {{ setTimeZone(TimeZone.getTimeZone("UTC")); }}.format(new Date(now)); }
