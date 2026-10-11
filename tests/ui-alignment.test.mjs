@@ -912,7 +912,7 @@ test('state shortcut ignores stale confirmations after switching libraries or op
   }
 });
 
-test('note editor cancel and user drawer exits preserve changed fields until explicit discard', async () => {
+test('note editor user drawer exits preserve changed fields until explicit discard and cancel still abandons editing', async () => {
   for (const kind of ['source', 'knowledge']) {
     const note = { id: `synthetic-${kind}`, kind, title: '合成标题', body: '合成正文', meta: {} };
     let reads = 0, writes = 0;
@@ -926,7 +926,7 @@ test('note editor cancel and user drawer exits preserve changed fields until exp
       const input = control(form, name), original = input.value;
       input.value = value; // Browser fill changes textarea.value, not textContent.
       const before = JSON.stringify(app.serializeForm(form));
-      for (const exit of [() => click(findButton(form, '取消')), () => click(app.refs.drawerClose), () => click(app.refs.drawerBackdrop), () => app.document.events.keydown({ key: 'Escape' })]) {
+      for (const exit of [() => click(app.refs.drawerClose), () => click(app.refs.drawerBackdrop), () => app.document.events.keydown({ key: 'Escape' })]) {
         const pending = exit();
         assert.match(app.dialogs.textContent, /放弃未保存的修改/);
         await click(findButton(app.dialogs, '取消')); await pending;
@@ -938,8 +938,8 @@ test('note editor cancel and user drawer exits preserve changed fields until exp
     }
     assert.equal(reads, 0); assert.equal(writes, 0);
     control(form, 'body').value = '确认放弃的正文';
-    const pending = click(findButton(form, '取消'));
-    await click(findButton(app.dialogs, '放弃修改')); await pending;
+    await click(findButton(form, '取消'));
+    assert.equal(app.dialogs.querySelectorAll('.dialog').length, 0, 'cancel deliberately abandons editing without another confirmation');
     assert.notEqual(app.refs.drawerBody.children[0], form);
     assert.equal(reads, kind === 'source' ? 1 : 0); assert.equal(writes, 0);
     app.renderNoteEditor(note);

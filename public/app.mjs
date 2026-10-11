@@ -928,11 +928,7 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
       field("知识主题", el("input", { name: "topic", value: meta.topic || "", placeholder: "可留空" })),
       learningGoalField(meta.depth),
     ]),
-    el("div", { class: "form-actions" }, [button("保存修改", { kind: "primary", type: "submit" }), button("取消", { onClick: async () => {
-      if (!await form.confirmDiscardChanges()) return;
-      if (returnToSourceId) await refreshSourceGroup(returnToSourceId).catch(handleError);
-      else renderNoteDrawer(note);
-    } })]),
+    el("div", { class: "form-actions" }, [button("保存修改", { kind: "primary", type: "submit" }), button("取消", { onClick: () => returnToSourceId ? refreshSourceGroup(returnToSourceId).catch(handleError) : renderNoteDrawer(note) })]),
   );
   const initialFields = serializeForm(form);
   if (isMobilePrototype()) {
