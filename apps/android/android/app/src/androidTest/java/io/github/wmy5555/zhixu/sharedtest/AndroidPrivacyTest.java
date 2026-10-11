@@ -14,11 +14,12 @@ import java.util.Set;
 /** Read the installed APK's effective manifest and compiled backup rules. */
 @SuppressWarnings("deprecation")
 public class AndroidPrivacyTest extends AndroidTestCase {
-    public void testInstalledPrototypeHasNoNetworkPermissionOrAutomaticBackup() throws Exception {
+    public void testOnlinePrototypeHasOnlyInternetPermissionAndNoAutomaticBackup() throws Exception {
         assertEquals(0, getContext().getApplicationInfo().flags & ApplicationInfo.FLAG_ALLOW_BACKUP);
         String[] permissions = getContext().getPackageManager().getPackageInfo(
             getContext().getPackageName(), PackageManager.GET_PERMISSIONS).requestedPermissions;
-        if (permissions != null) assertFalse(Arrays.asList(permissions).contains("android.permission.INTERNET"));
+        assertNotNull(permissions);
+        assertEquals(new HashSet<>(Arrays.asList("android.permission.INTERNET")), new HashSet<>(Arrays.asList(permissions)));
     }
 
     public void testCloudAndDeviceTransferExcludeEveryStorageDomain() throws Exception {

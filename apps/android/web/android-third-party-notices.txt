@@ -1,7 +1,8 @@
 Third-party software notices for the Zhixu Android preview
 
 This file is intended to be packaged inside the APK. It covers the known
-Capacitor and Android dependencies recorded on 2026-10-07. The dependency
+Capacitor and Android dependencies, including the online preview added on
+2026-10-12. The dependency
 inventory is incremental; it does not claim a complete resolution or audit
 of every transitive Maven, Android SDK, Gradle plugin, or build-tool component.
 
@@ -40,6 +41,25 @@ License: Apache License 2.0. The upstream AndroidX repository does not
 provide a separate root NOTICE file; no additional AndroidX NOTICE text was
 identified for the known components. This notice preserves their license text
 and source attribution.
+
+OkHttp 5.3.2
+Maven coordinate: com.squareup.okhttp3:okhttp:5.3.2 (Android variant)
+Source: https://github.com/lysine-dev/okhttp/tree/parent-5.3.2
+License: Apache License 2.0
+
+Okio
+Source: https://github.com/lysine-dev/okio
+License: Apache License 2.0
+
+Kotlin standard library
+Source: https://github.com/JetBrains/kotlin
+License: Apache License 2.0
+
+AndroidX Startup and Annotation
+Source: https://github.com/androidx/androidx
+License: Apache License 2.0
+Resolved runtime versions are recorded in the Android build dependency report.
+The complete Apache License below also applies to these components.
 
 Apache Cordova Android framework 14.0.1
 Maven coordinate: org.apache.cordova:framework:14.0.1

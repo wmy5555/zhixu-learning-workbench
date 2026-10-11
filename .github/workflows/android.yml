@@ -33,7 +33,7 @@ jobs:
       - run: pnpm android:sync
       - name: Build prototype and storage tests
         working-directory: apps/android/android
-        run: bash gradlew --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug
+        run: bash gradlew --no-daemon :app:dependencies --configuration debugRuntimeClasspath :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug
       - name: Check out the fixed Android upgrade baseline
         if: (github.event_name == 'workflow_dispatch' && inputs.upgrade_baseline) || github.head_ref == 'feat/android-data-recovery'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
