@@ -65,7 +65,7 @@ function control(node, name) { return descendants(node).find(item => item.name =
 const click = node => node.events.click({ target: node, preventDefault() {} });
 const plain = value => JSON.parse(JSON.stringify(value));
 
-function browser(api = {}) {
+function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
   api = { getContext: () => ({ practiceId: '', version: 0 }), ...api };
   const roots = new Map();
   const document = {
@@ -79,7 +79,7 @@ function browser(api = {}) {
   };
   document.createTextNode = value => { const node = new Element('text'); node.textContent = value; return node; };
   const context = vm.createContext({
-    api, document, initSidebar, createProcessFeedback, parseSourceFile, TextDecoder, Node: Element, URL, Intl, Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => 'request-ui' },
+    api, document, initSidebar, createProcessFeedback, parseSourceFile, TextDecoder, Node: Element, URL, Intl: Object.assign(Object.create(Intl), { DateTimeFormat: dateTimeFormat }), Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => 'request-ui' },
     FormData: class {
       constructor(form) { this.form = form; }
       entries() { return descendants(this.form).filter(node => node.name && !node.disabled && ['input', 'textarea', 'select'].includes(node.tagName)).map(node => [node.name, String(node.tagName === 'textarea' ? node.textContent : node.tagName === 'select' ? node.children.find(option => option.selected)?.value || '' : node.value)]); }
@@ -99,8 +99,21 @@ function browser(api = {}) {
   context.app.dialogs = document.body;
   context.app.jobsPanel = vm.runInContext('jobsPanel', context);
   context.app.generateToday = vm.runInContext('generateToday', context);
+  context.app.renderToday = vm.runInContext('renderToday', context);
   return context.app;
 }
+
+test('today card preserves the scheduler calendar day in a browser west of UTC', async () => {
+  const app = browser({}, function (locale, options) {
+    return new Intl.DateTimeFormat(locale, { timeZone: 'America/Los_Angeles', ...options });
+  });
+  app.state.bootstrap = { settings: { timezone: 'Asia/Shanghai' }, today: { date: '2026-10-12', items: [] } };
+  await app.renderToday();
+  assert.equal(app.refs.main.querySelector('.hero').querySelector('.eyebrow').textContent, '2026年10月12日');
+  app.state.bootstrap.today.date = '2027-01-01';
+  await app.renderToday();
+  assert.equal(app.refs.main.querySelector('.hero').querySelector('.eyebrow').textContent, '2027年1月1日');
+});
 
 test('recommendations keep complete evidence folded and leave actions outside the details', async () => {
   const reason = '合成说明。'.repeat(80);
