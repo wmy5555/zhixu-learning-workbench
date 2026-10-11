@@ -125,6 +125,24 @@ async function webSession(app) {
   };
 }
 
+test('Today reflects an explicitly promoted candidate and generate POST returns its current plan', async t => {
+  const app = await startApp(t), session = await webSession(app);
+  const note = app.service.store.create({ kind: 'knowledge', title: '合成今日候选', body: '合成个人观点', meta: { stage: 'candidate', depth: 'explain', privacy: 'local', epistemicType: 'personal_view' } });
+  const before = await request(app.baseUrl, '/api/bootstrap', { headers: session.headers });
+  assert.equal(before.body.today.items.length, 0);
+  assert.equal(before.body.today.unavailable.find(item => item.noteId === note.id).code, 'stage');
+  const promoted = await request(app.baseUrl, `/api/notes/${note.id}/promote`, { method: 'POST', headers: session.headers, body: { stage: 'learning', depth: 'explain', reason: '合成主动选择理由' } });
+  assert.equal(promoted.status, 200); assert.equal(promoted.body.meta.stage, 'learning');
+  const after = await request(app.baseUrl, '/api/bootstrap', { headers: session.headers });
+  assert.equal(after.body.today.items[0].noteId, note.id);
+  assert.equal(after.body.today.items[0].minutes, 5);
+  const generated = await request(app.baseUrl, '/api/today/generate', { method: 'POST', headers: session.headers, body: {} });
+  assert.equal(generated.status, 200);
+  assert.deepEqual(generated.body.items, after.body.today.items);
+  assert.equal(generated.body.unavailable.length, 0);
+  assert.equal(app.service.store.records('jobs').length, 0, 'no model or research work is submitted');
+});
+
 test('process status polling requires a session, omits task bodies and changes revision after backup restoration', async t => {
   const app = await startApp(t);
   assert.equal((await request(app.baseUrl, '/api/jobs?view=status')).status, 401);
