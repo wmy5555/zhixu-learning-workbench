@@ -62,6 +62,9 @@
 .onboarding-controls button { font-size: 11px; }
 .onboarding-open .drawer { right: 350px; width: min(760px, calc(100vw - 366px)); }
 .onboarding-open .drawer.map-expanded:has(.source-map) { width: min(1280px, calc(100vw - 366px)); }
+@media (min-width: 1101px) {
+  .onboarding-open .drawer:not(.is-open) { transform: translateX(calc(105% + 350px)); pointer-events: none; }
+}
 .tour-target { outline: 3px solid var(--accent); outline-offset: -3px; border-radius: 4px; scroll-margin: 22px; }
 /* Revealing the sidebar must not animate inherited visibility on its buttons. */
 .onboarding-open .nav-item { transition-property: background-color, color, border-color, transform; }
@@ -85,6 +88,7 @@
   .onboarding-open main, .onboarding-open .drawer-body { padding-bottom: 140px; }
   .onboarding-open .drawer { right: 0; width: min(760px, 96vw); }
   .onboarding-open .drawer.map-expanded:has(.source-map) { width: min(1280px, 98vw); }
+  .onboarding-open .drawer:not(.is-open) { transform: translateX(105%); pointer-events: none; }
   .onboarding-entry { flex-direction: column; align-items: stretch; }
   .practice-banner { padding: 10px 18px; flex-wrap: wrap; }
   .onboarding-actions button { flex: 1 1 auto; }
@@ -94,4 +98,5 @@
   .practice-banner span { display: block; margin-top: 4px; }
   .onboarding-catalog button { white-space: normal; }
 }
+.onboarding-open .drawer.is-open { transform: translateX(0); pointer-events: auto; }
 @media (prefers-reduced-motion: reduce) { .tour-target { scroll-behavior: auto; } }
