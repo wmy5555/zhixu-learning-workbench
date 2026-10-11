@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "webBaselineCommit": "5e7bbd80c4f1d5e54e830f87ce09aca324d8141c",
+  "androidStartingCommit": "ea0303aba16d081309a98df1810cc157735ebd12",
+  "sourceDirectory": "apps/android/web",
+  "updatePolicy": "manual-major-release-opt-in",
+  "note": "Android uses the web baseline from this development session plus Android-specific changes. Ordinary main changes are not synchronized. Ask the owner before adopting a major web release."
+}

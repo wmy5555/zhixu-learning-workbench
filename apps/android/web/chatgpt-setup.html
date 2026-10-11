@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ChatGPT 连接指南 · 知序</title>
+  <link rel="stylesheet" href="/styles.css">
+  <style>body{display:block;overflow:auto}main{max-width:880px;margin:0 auto;padding:32px 24px 64px}h1{font-size:2rem}h2{margin-top:32px}p,li{line-height:1.8}pre{overflow:auto;padding:16px;border:1px solid var(--line);border-radius:12px}code{overflow-wrap:anywhere}a{color:var(--accent)}.guide-note{padding:16px;border-left:3px solid var(--accent);background:var(--panel);margin:20px 0}ol{padding-left:24px}@media(max-width:600px){main{padding:20px 16px}h1{font-size:1.5rem}}</style>
+</head>
+<body><main>
+  <a href="/#system/settings">← 返回知序设置</a>
+  <h1>在 ChatGPT 里，把会话收进知序</h1>
+  <p>连接完成后，在选用了知序插件的对话中说：<strong>“将该会话内容整理进知序”</strong>。ChatGPT 会整理摘要，并把当前可见的角色原文一起送入第一层原始资料。</p>
+  <div class="guide-note"><strong>保存什么，什么时候算成功？</strong><p>保存的是本次传入的消息，不保证包含完整历史或附件。摘要会明确标注为 ChatGPT 生成。只有返回资料编号和“已保存”回执，才算知序完成写入；在知识库中打开记录是最后的核对步骤。</p></div>
+  <h2>1. 在知序选择权限</h2>
+  <p>进入「系统 → 能力设置 → MCP 接入」，勾选「启用 ChatGPT 接入，允许新增第一层会话资料」，然后保存。</p>
+  <p>如果还想在聊天中查找已有知识，再勾选「允许 ChatGPT 检索和读取知识库」。<strong>这个独立授权包含标为“仅本地”的资料，读到的内容会进入 ChatGPT 上下文。</strong>它不会替其他模型、搜索或向量服务打开外发权限。取消读取许可后仍可收集；关闭接入后两项能力立即停止。</p>
+  <h2>2. 建立通往这台电脑的私有连接</h2>
+  <p>网页端不能直接访问这台电脑的 <code>127.0.0.1</code>。使用 OpenAI 的 <a href="https://developers.openai.com/api/docs/guides/secure-mcp-tunnels" target="_blank" rel="noopener noreferrer">Secure MCP Tunnel（私有连接隧道）</a>，让本机主动连接 OpenAI。知序仍只监听本机地址。</p>
+  <ol>
+    <li>打开 <a href="https://platform.openai.com/settings/organization/tunnels" target="_blank" rel="noopener noreferrer">OpenAI Platform 隧道设置</a>，创建私有隧道，并关联你使用的 ChatGPT 工作区。需要相应的隧道管理与使用权限，以及 ChatGPT 开发者模式。以账户实际显示为准。</li>
+    <li>从该设置页的官方链接下载 <code>tunnel-client</code>。在本机私密环境配置该隧道的运行凭据。不要将任何密钥发到聊天、写入插件包或提交到仓库；知序模型 API 密钥不会自动用于隧道。</li>
+    <li>保持知序运行。在终端进入本项目目录，按官方客户端的 <code>help quickstart</code> 设置一个 stdio 配置。下面命令中的 <code>你的隧道ID</code> 需换成真实 ID；这里不包含任何密钥：</li>
+  </ol>
+  <pre><code>tunnel-client init --sample sample_mcp_stdio_local --profile zhixu-chatgpt --tunnel-id 你的隧道ID --mcp-command "node src/mcp-chatgpt.mjs"
+tunnel-client doctor --profile zhixu-chatgpt --explain
+tunnel-client run --profile zhixu-chatgpt</code></pre>
+  <p>以上命令始终从知序项目目录运行；Node 需为 24 或更高版本。使用自定义知序数据目录或端口时，为本机隧道进程设置对应的 <code>LEARNING_DATA_DIR</code> 和 <code>LEARNING_BASE_URL</code>。不要连接旧的 <code>src/mcp.mjs</code>，它是供本机客户端使用的另一套权限。</p>
+  <h2>3. 在 ChatGPT 网页端添加知序</h2>
+  <ol>
+    <li>打开 <a href="https://chatgpt.com/plugins" target="_blank" rel="noopener noreferrer">ChatGPT 插件页面</a>，使用开发者模式创建应用。名称可填「知序」。</li>
+    <li>连接方式选 <strong>Tunnel</strong>，选择刚才创建的隧道或填入其 ID，完成创建。若看不到隧道，请检查工作区关联和账户权限。</li>
+    <li>进入一段对话并选用知序。先说“检查知序连接”，应返回可收集以及当前是否允许读取。工具能列出来不等于已经成功存储。</li>
+  </ol>
+  <h2>4. 用一段无敏感信息的会话验收</h2>
+  <p>先聊一句“这是知序连接测试，请记下今天学习要保留出处”，再说“将该会话内容整理进知序”。ChatGPT 可能要求确认写入；按页面提示确认。看到保存回执后，打开知序「知识库 → 原始资料」，按回执中的资料编号和标题核对原文、摘要与范围说明。</p>
+  <p>再次发送相同请求，应返回已有回执；新增聊天后的收集会保存新快照。知序不会自动联网核验、调用付费模型、覆盖旧笔记或把资料晋级为个人理解。之后可在知序主动选择加工。</p>
+  <h2>如果没有成功</h2>
+  <ul>
+    <li>“未启用”或“未允许读取”：回到知序设置勾选所需权限并保存。</li>
+    <li>“凭据不可用”：确认知序已启动，且隧道使用与它相同的数据目录。凭据只在本机读取，无需复制到 ChatGPT。</li>
+    <li>“无法连接”：检查电脑是否休眠、知序是否运行、隧道是否保持运行；先看官方客户端的健康检查结果。</li>
+    <li>“内容改变”或“已删除”：先在知序核对。重试必须使用同一编号和原始内容；新内容使用新编号，删除过的快照不会因旧请求重试被悄悄复活。</li>
+    <li>账户没有 Tunnel 或开发者模式：这一步尚未具备条件。不要把本机地址当作公网地址，也不要直接公开知序整个 Web 服务。</li>
+  </ul>
+  <p><a href="https://developers.openai.com/plugins/deploy/connect-chatgpt" target="_blank" rel="noopener noreferrer">OpenAI 官方插件连接说明</a> · 本地自动测试与网页端实测分别记录，不能互相代替。</p>
+</main></body></html>

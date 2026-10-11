@@ -3,9 +3,13 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-// Only public UI assets are packaged. Never traverse the repository/data directories.
+// Package the explicitly frozen Android UI only. Never follow current public/ or user data.
 const root = fileURLToPath(new URL('../', import.meta.url));
-const source = path.join(root, 'public');
+const source = path.join(root, 'apps/android/web');
+const baseline = JSON.parse(await readFile(path.join(root, 'apps/android/web-baseline.json'), 'utf8'));
+if (baseline.schemaVersion !== 1 || baseline.sourceDirectory !== 'apps/android/web'
+  || baseline.updatePolicy !== 'manual-major-release-opt-in'
+  || !/^[a-f0-9]{40}$/.test(baseline.webBaselineCommit)) throw new Error('Invalid Android web baseline');
 const target = path.join(root, 'dist/android-web');
 for (const directory of [path.join(root, 'dist'), target]) {
   const info = await lstat(directory).catch(error => { if (error.code !== 'ENOENT') throw error; return null; });
@@ -17,12 +21,13 @@ if (await realpath(target) !== expected) throw new Error('Android output escaped
 // This fixed, resolved build-only directory is safe to replace; remove obsolete packaged assets too.
 await rm(target, { recursive: true, force: true });
 await mkdir(target, { recursive: true });
-const assets = execFileSync('git', ['ls-files', '-z', '--', 'public'], { cwd: root, encoding: 'utf8' }).split('\0').filter(Boolean);
+const assets = execFileSync('git', ['ls-files', '-z', '--', 'apps/android/web'], { cwd: root, encoding: 'utf8' }).split('\0').filter(Boolean);
+if (!assets.length) throw new Error('Android web snapshot must be tracked before packaging');
 for (const asset of assets) {
   const input = path.join(root, asset), relative = path.relative(source, input);
   if (relative.startsWith('..') || path.isAbsolute(relative) || (await lstat(input)).isSymbolicLink()) throw new Error('Invalid UI asset path');
   const resolved = await realpath(input);
-  if (path.relative(await realpath(source), resolved).startsWith('..')) throw new Error('UI asset escaped the public directory');
+  if (path.relative(await realpath(source), resolved).startsWith('..')) throw new Error('UI asset escaped the Android web snapshot');
   const output = path.join(target, relative);
   await mkdir(path.dirname(output), { recursive: true });
   await copyFile(input, output);
@@ -39,4 +44,4 @@ if (Capacitor.getPlatform() !== 'android') throw new Error('Android native runti
 configureLocalTransport(createAndroidTransport(registerPlugin('ZhixuLocal')));
 await import('./app.mjs');
 `);
-console.log('Prepared Android assets from the shared public UI; no user data included.');
+console.log(`Prepared Android assets from the frozen web baseline ${baseline.webBaselineCommit.slice(0, 7)}; no current public/ or user data included.`);

@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      upgrade_baseline:
+        description: Build the fixed phase-one APK with the same temporary debug signer for upgrade acceptance
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -29,6 +34,22 @@ jobs:
       - name: Build prototype and storage tests
         working-directory: apps/android/android
         run: bash gradlew --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug
+      - name: Check out the fixed Android upgrade baseline
+        if: (github.event_name == 'workflow_dispatch' && inputs.upgrade_baseline) || github.head_ref == 'feat/android-data-recovery'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ea0303aba16d081309a98df1810cc157735ebd12
+          path: .tmp/android-upgrade-baseline
+          persist-credentials: false
+      - name: Build baseline with this run's temporary debug signer
+        if: (github.event_name == 'workflow_dispatch' && inputs.upgrade_baseline) || github.head_ref == 'feat/android-data-recovery'
+        working-directory: .tmp/android-upgrade-baseline
+        run: |
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm android:sync
+          cd apps/android/android
+          bash gradlew --no-daemon :app:assembleDebug
+          cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/apps/android/android/app/build/outputs/apk/debug/upgrade-baseline.apk"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: android-shared-ui-prototype

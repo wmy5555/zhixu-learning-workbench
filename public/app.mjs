@@ -1,4 +1,5 @@
 import { api, ApiError, startSession } from "./api.mjs";
+import { parseSourceFile } from "./source-exchange.mjs";
 import { createProcessFeedback } from "./process-feedback.mjs";
 import { createSourceMap } from "./source-map.mjs";
 import { initSidebar } from "./sidebar.mjs";
@@ -404,7 +405,15 @@ async function renderCapture() {
   importButton.addEventListener("click", async () => {
     try {
       importButton.disabled = true;
-      const items = await Promise.all([...fileInput.files].map(async (file) => ({ title: file.name.replace(/\.(md|txt)$/i, ""), body: await file.text(), platform: "本地文件", author: "", url: "", date: "", locator: file.name, privacy: "local" })));
+      const items = await Promise.all([...fileInput.files].map(async (file) => {
+        if (file.size > 2 * 1024 * 1024) throw new Error(`${file.name} 过大；每份原文最多 500000 个字符。`);
+        let text;
+        try {
+          text = new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer());
+        }
+        catch { throw new Error(`${file.name} 不是有效的 UTF-8 文件。`); }
+        return parseSourceFile({ name: file.name, text });
+      }));
       const result = await api.import({ items, captureMode: "files", process: false });
       toast(`已导入 ${asArray(result.notes).length || items.length} 个文件`, "success");
       fileInput.value = "";
@@ -883,7 +892,7 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
       field("平台", el("input", { name: "platform", value: meta.platform || "", placeholder: "网页、抖音、AI 对话等" })),
       field("作者", el("input", { name: "author", value: meta.author || "" })),
       field("原始地址", el("input", { name: "url", type: "url", value: meta.url || "", placeholder: "https://…" })),
-      field("资料日期", el("input", { name: "date", type: "date", value: String(meta.date || "").slice(0, 10) })),
+      field("资料日期", el("input", { name: "date", type: "text", value: String(meta.date || ""), placeholder: "保留原始日期格式" })),
       field("原文定位", el("input", { name: "locator", value: meta.locator || "", placeholder: "页码、时间点或段落" })),
       field("本资料下次核验有效天数", el("input", { dataset: { tour: "note-validity" }, name: "researchIntervalDays", type: "number", min: 1, max: 365, step: 1, value: meta.researchIntervalDays ?? 30, required: true }), "仅在后续成功核验时生效；默认 30 天，可设置 1–365 天。"),
     ]),

@@ -1,0 +1,112 @@
+第三方原文来源与许可
+本文件仅说明新手教程材料中的第三方摘录，不变更知序项目的许可证。
+摘录日期：2026-10-03。节选、网页排版与省略标记是本教程材料的编辑变动，模拟心得和练习设计不属于原作者原文。
+
+1. 《国中数学》七年级（课程场景主材料及独立伴读）
+作者：维基教科书两页的贡献者；作者记录可由各来源页“查看历史”访问。
+主材料：https://zh.wikibooks.org/zh-hans/%E5%9C%8B%E4%B8%AD%E6%95%B8%E5%AD%B8/%E5%9C%8B%E4%B8%AD%E6%95%B8%E5%AD%B8%E4%B8%83%E5%B9%B4%E7%B4%9A/3-2_%E8%A7%A3%E4%B8%80%E5%85%83%E4%B8%80%E6%AC%A1%E6%96%B9%E7%A8%8B%E5%BC%8F
+主材料固定修订：https://zh.wikibooks.org/w/index.php?title=%E5%9C%8B%E4%B8%AD%E6%95%B8%E5%AD%B8%2F%E5%9C%8B%E4%B8%AD%E6%95%B8%E5%AD%B8%E4%B8%83%E5%B9%B4%E7%B4%9A%2F3-2_%E8%A7%A3%E4%B8%80%E5%85%83%E4%B8%80%E6%AC%A1%E6%96%B9%E7%A8%8B%E5%BC%8F&oldid=181895
+伴读：https://zh.wikibooks.org/zh-hans/%E5%9C%8B%E4%B8%AD%E6%95%B8%E5%AD%B8/%E5%9C%8B%E4%B8%AD%E6%95%B8%E5%AD%B8%E4%B8%83%E5%B9%B4%E7%B4%9A/3-3_%E4%B8%80%E5%85%83%E4%B8%80%E6%AC%A1%E6%96%B9%E7%A8%8B%E5%BC%8F%E7%9A%84%E6%87%89%E7%94%A8%E5%95%8F%E9%A1%8C
+伴读固定修订：https://zh.wikibooks.org/w/index.php?title=%E5%9C%8B%E4%B8%AD%E6%95%B8%E5%AD%B8%2F%E5%9C%8B%E4%B8%AD%E6%95%B8%E5%AD%B8%E4%B8%83%E5%B9%B4%E7%B4%9A%2F3-3_%E4%B8%80%E5%85%83%E4%B8%80%E6%AC%A1%E6%96%B9%E7%A8%8B%E5%BC%8F%E7%9A%84%E6%87%89%E7%94%A8%E5%95%8F%E9%A1%8C&oldid=174397
+许可：CC BY-SA 4.0，署名—相同方式共享。
+许可说明：https://creativecommons.org/licenses/by-sa/4.0/deed.zh-hans
+完整条款：https://creativecommons.org/licenses/by-sa/4.0/legalcode.zh-hans
+两来源页页脚的文字许可已核对。上述第三方选段及其简体、纯文本和排版改编继续按 CC BY-SA 4.0 提供；来源、作者记录链接与本许可说明应随摘录保留。
+编辑调整：非连续摘录处有明确省略标记；采用简体字展示，数学公式转为等价纯文本，移除公式着色，双栏解法和步骤表格改为上下排列。正文措辞、题目数字、解法与验算不改写。未采用天平图、复杂分数、小数与多重括号题。
+这一许可说明仅覆盖上述摘录及其改编，不表示整份汇编或知序程序改用该许可证。模拟心得、学习问题、文具价格练习与空白确认提示不属于教材原文。
+
+2. Python 官方中文文档
+来源：https://docs.python.org/zh-cn/3/tutorial/errors.html
+伴读：https://docs.python.org/zh-cn/3/tutorial/inputoutput.html
+版权说明：https://docs.python.org/zh-cn/3/copyright.html
+完整许可：https://docs.python.org/zh-cn/3/license.html
+Copyright © 2001 Python Software Foundation; All Rights Reserved.
+Copyright © 2000 BeOpen.com; All Rights Reserved.
+Copyright © 1995-2000 Corporation for National Research Initiatives; All Rights Reserved.
+Copyright © 1991-1995 Stichting Mathematisch Centrum; All Rights Reserved.
+
+### PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2¶
+
+```
+1. This LICENSE AGREEMENT is between the Python Software Foundation ("PSF"), and
+   the Individual or Organization ("Licensee") accessing and otherwise using this
+   software ("Python") in source or binary form and its associated documentation.
+
+2. Subject to the terms and conditions of this License Agreement, PSF hereby
+   grants Licensee a nonexclusive, royalty-free, world-wide license to reproduce,
+   analyze, test, perform and/or display publicly, prepare derivative works,
+   distribute, and otherwise use Python alone or in any derivative
+   version, provided, however, that PSF's License Agreement and PSF's notice of
+   copyright, i.e., "Copyright © 2001 Python Software Foundation; All Rights
+   Reserved" are retained in Python alone or in any derivative version
+   prepared by Licensee.
+
+3. In the event Licensee prepares a derivative work that is based on or
+   incorporates Python or any part thereof, and wants to make the
+   derivative work available to others as provided herein, then Licensee hereby
+   agrees to include in any such work a brief summary of the changes made to Python.
+
+4. PSF is making Python available to Licensee on an "AS IS" basis.
+   PSF MAKES NO REPRESENTATIONS OR WARRANTIES, EXPRESS OR IMPLIED.  BY WAY OF
+   EXAMPLE, BUT NOT LIMITATION, PSF MAKES NO AND DISCLAIMS ANY REPRESENTATION OR
+   WARRANTY OF MERCHANTABILITY OR FITNESS FOR ANY PARTICULAR PURPOSE OR THAT THE
+   USE OF PYTHON WILL NOT INFRINGE ANY THIRD PARTY RIGHTS.
+
+5. PSF SHALL NOT BE LIABLE TO LICENSEE OR ANY OTHER USERS OF PYTHON
+   FOR ANY INCIDENTAL, SPECIAL, OR CONSEQUENTIAL DAMAGES OR LOSS AS A RESULT OF
+   MODIFYING, DISTRIBUTING, OR OTHERWISE USING PYTHON, OR ANY DERIVATIVE
+   THEREOF, EVEN IF ADVISED OF THE POSSIBILITY THEREOF.
+
+6. This License Agreement will automatically terminate upon a material breach of
+   its terms and conditions.
+
+7. Nothing in this License Agreement shall be deemed to create any relationship
+   of agency, partnership, or joint venture between PSF and Licensee.  This License
+   Agreement does not grant permission to use PSF trademarks or trade name in a
+   trademark sense to endorse or promote products or services of Licensee, or any
+   third party.
+
+8. By copying, installing or otherwise using Python, Licensee agrees
+   to be bound by the terms and conditions of this License Agreement.
+
+```
+
+### ZERO-CLAUSE BSD LICENSE FOR CODE IN THE PYTHON DOCUMENTATION¶
+
+```
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.
+
+```
+
+3. GitHub Open Source Guides
+作者：GitHub 及 Open Source Guides 贡献者
+来源：https://opensource.guide/zh-hans/building-community/
+项目许可：https://github.com/github/opensource.guide/blob/main/LICENSE
+正文按 Creative Commons Attribution 4.0 International 授权。
+许可链接：https://creativecommons.org/licenses/by/4.0/
+本教程材料截取中文正文、保留列表，并明确标注省略的示例截图；没有复制该截图。
+
+4. EFF Surveillance Self-Defense
+作者：Electronic Frontier Foundation
+来源：https://ssd.eff.org/zh-hans/module/your-security-plan
+许可政策：https://www.eff.org/copyright
+原文标注最后更新 2023-10-27。正文按 CC BY 4.0 授权。
+许可链接：https://creativecommons.org/licenses/by/4.0/
+本教程材料节选中文正文并调整网页排版，没有将历史描述更新为未经核验的当前事实。
+
+
+5. 鲁迅原作（公有领域）
+《读书杂谈》：https://zh.wikisource.org/zh-hans/%E8%AE%80%E6%9B%B8%E9%9B%9C%E8%AB%87
+《随便翻翻》：https://zh.wikisource.org/zh-hans/%E9%9A%A8%E4%BE%BF%E7%BF%BB%E7%BF%BB
+原著作者：鲁迅（1936 年逝世）。来源页标明原作属于公有领域。
+《读书杂谈》有两段节选，中间省略单独标明；《随便翻翻》只摘开篇，不冒充全文。
+本教程材料使用维基文库的原作正文，不复制网站界面或编辑说明。

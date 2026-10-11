@@ -1,0 +1,87 @@
+.practice-banner { padding: 12px 24px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 12px; background: var(--panel-soft); }
+.practice-banner strong { color: var(--accent); }
+.onboarding-material-dialog { width: min(900px, 100%); max-height: 88dvh; overflow-y: auto; border-radius: 8px; }
+.onboarding-material-layout { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(0, 1.3fr); gap: 24px; }
+.onboarding-material-options { min-width: 0; padding: 0; border: 0; }
+.onboarding-material-options legend { font-size: 13px; margin-bottom: 10px; }
+.onboarding-material-option { display: flex; gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+.onboarding-material-option input { width: 16px; height: 16px; flex: 0 0 16px; margin-top: 3px; }
+.onboarding-material-option strong, .onboarding-material-option .fine-print { display: block; }
+.onboarding-material-option strong { font-size: 14px; margin-bottom: 4px; }
+.onboarding-material-preview { min-width: 0; font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+.onboarding-material-preview h3 { font-size: 16px; }
+.onboarding-material-preview details { margin-top: 16px; }
+.onboarding-material-preview summary { cursor: pointer; }
+.onboarding-material-preview pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+@media (max-width: 650px) { .onboarding-material-layout { grid-template-columns: minmax(0, 1fr); gap: 16px; } }
+.practice-date { display: block; margin-top: 4px; color: var(--muted); }
+.practice-banner[hidden], .onboarding-panel[hidden], .onboarding-content[hidden] { display: none; }
+.onboarding-entry { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.onboarding-entry h2 { margin: 5px 0 8px; font-size: 20px; }
+.onboarding-entry p { margin-bottom: 0; }
+.onboarding-entry-compact { padding: 14px 20px; }
+.onboarding-open .workspace { margin-right: 350px; }
+.onboarding-panel { position: fixed; inset: 0 0 0 auto; z-index: 65; width: 350px; padding: 22px 20px; overflow-y: auto; background: var(--paper); border-left: 1px solid var(--line); color: var(--ink); box-shadow: -4px 0 20px rgba(0,0,0,.04); }
+.onboarding-heading { display: flex; gap: 8px; justify-content: space-between; align-items: flex-start; }
+.onboarding-heading h2 { font-size: 19px; margin: 5px 0 14px; }
+.onboarding-heading button { white-space: nowrap; }
+.onboarding-content { display: grid; gap: 12px; }
+.onboarding-content p { margin: 0; }
+.onboarding-content select { width: 100%; min-width: 0; }
+.onboarding-verification-help { margin-top: 8px; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.onboarding-verification-help summary { cursor: help; text-decoration: underline dotted; text-underline-offset: 3px; }
+.onboarding-verification-help summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+.onboarding-verification-help[open] p { padding-top: 8px; }
+.onboarding-catalog { padding: 10px 12px; background: var(--panel-soft); border-radius: 10px; }
+.onboarding-catalog summary, .onboarding-clock summary { cursor: pointer; font-size: 12px; }
+.onboarding-catalog button { display: block; width: 100%; text-align: left; font-size: 12px; margin-top: 3px; }
+.onboarding-catalog button.is-current { color: var(--accent); background: var(--accent-soft); }
+.onboarding-step-head { display: flex; gap: 8px; align-items: flex-start; justify-content: space-between; }
+.onboarding-step-head h3 { margin: 3px 0; font-size: 17px; }
+.onboarding-step-head .badge { flex-shrink: 0; }
+.onboarding-instruction { line-height: 1.85; font-size: 13px; white-space: pre-line; overflow-wrap: anywhere; }
+.onboarding-overview { display: grid; gap: 14px; margin: 0; padding: 0; list-style: none; font-size: 13px; line-height: 1.85; overflow-wrap: anywhere; }
+.onboarding-overview strong { display: block; margin-bottom: 3px; }
+.onboarding-expected { padding: 12px; border-left: 3px solid var(--accent); background: var(--panel-soft); font-size: 12px; line-height: 1.7; }
+.onboarding-expected strong { display: block; margin-bottom: 4px; }
+.onboarding-actions, .onboarding-controls { display: flex; gap: 8px; flex-wrap: wrap; }
+.onboarding-actions button { font-size: 12px; padding: 9px 11px; }
+.onboarding-step-nav { display: flex; justify-content: space-between; border-top: 1px solid var(--line); padding-top: 8px; }
+.onboarding-clock { padding: 12px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.onboarding-clock[open] > * + * { margin-top: 10px; }
+.onboarding-controls button { font-size: 11px; }
+.onboarding-open .drawer { right: 350px; width: min(760px, calc(100vw - 366px)); }
+.onboarding-open .drawer.map-expanded:has(.source-map) { width: min(1280px, calc(100vw - 366px)); }
+.tour-target { outline: 3px solid var(--accent); outline-offset: -3px; border-radius: 4px; scroll-margin: 22px; }
+/* Revealing the sidebar must not animate inherited visibility on its buttons. */
+.onboarding-open .nav-item { transition-property: background-color, color, border-color, transform; }
+.practice-settings-note { margin-bottom: 16px; }
+.practice-readonly { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 24px; }
+.practice-readonly:disabled { opacity: .65; }
+@media (max-width: 1100px) {
+  .onboarding-open .workspace { margin-right: 0; }
+  .onboarding-panel { inset: auto max(14px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) auto; width: min(380px, calc(100vw - 28px)); max-height: min(580px, 65vh); max-height: min(580px, 65dvh); padding: 0; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 18px; box-shadow: 0 12px 42px rgba(0,0,0,.2); }
+  .onboarding-heading { flex-shrink: 0; padding: 14px 16px 12px; border-bottom: 1px solid var(--line); }
+  .onboarding-heading-copy { min-width: 0; }
+  .onboarding-heading h2 { margin: 5px 0 8px; font-size: 17px; }
+  .onboarding-heading .eyebrow { letter-spacing: .04em; font-size: 10px; }
+  .onboarding-heading-progress { margin: 0; }
+  .onboarding-heading button { flex-shrink: 0; padding-inline: 8px; }
+  .onboarding-content { padding: 14px 16px 18px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+  .onboarding-panel.is-compact { width: min(350px, calc(100vw - 76px)); }
+  .onboarding-panel.is-compact .onboarding-heading { align-items: center; padding: 10px 12px; border-bottom: 0; }
+  .onboarding-panel.is-compact h2 { font-size: 13px; margin: 4px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .onboarding-panel.is-compact .onboarding-heading-progress { display: none; }
+  .onboarding-open main, .onboarding-open .drawer-body { padding-bottom: 140px; }
+  .onboarding-open .drawer { right: 0; width: min(760px, 96vw); }
+  .onboarding-open .drawer.map-expanded:has(.source-map) { width: min(1280px, 98vw); }
+  .onboarding-entry { flex-direction: column; align-items: stretch; }
+  .practice-banner { padding: 10px 18px; flex-wrap: wrap; }
+  .onboarding-actions button { flex: 1 1 auto; }
+}
+@media (max-width: 520px) {
+  .onboarding-heading h2 { font-size: 17px; }
+  .practice-banner span { display: block; margin-top: 4px; }
+  .onboarding-catalog button { white-space: normal; }
+}
+@media (prefers-reduced-motion: reduce) { .tour-target { scroll-behavior: auto; } }

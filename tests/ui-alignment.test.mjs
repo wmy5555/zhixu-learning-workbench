@@ -4,6 +4,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 import { createProcessFeedback } from '../public/process-feedback.mjs';
 import { initSidebar } from '../public/sidebar.mjs';
+import { parseSourceFile } from '../public/source-exchange.mjs';
 import { describeJobError } from '../public/ui.mjs';
 import { coreSteps, flatSteps } from '../public/onboarding-curriculum.mjs';
 
@@ -78,7 +79,7 @@ function browser(api = {}) {
   };
   document.createTextNode = value => { const node = new Element('text'); node.textContent = value; return node; };
   const context = vm.createContext({
-    api, document, initSidebar, createProcessFeedback, Node: Element, URL, Intl, Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => 'request-ui' },
+    api, document, initSidebar, createProcessFeedback, parseSourceFile, TextDecoder, Node: Element, URL, Intl, Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => 'request-ui' },
     FormData: class {
       constructor(form) { this.form = form; }
       entries() { return descendants(this.form).filter(node => node.name && !node.disabled && ['input', 'textarea', 'select'].includes(node.tagName)).map(node => [node.name, String(node.tagName === 'textarea' ? node.textContent : node.tagName === 'select' ? node.children.find(option => option.selected)?.value || '' : node.value)]); }
@@ -702,7 +703,7 @@ test('capture research requires AI processing and clears on deselection, clear, 
   assert.equal(writes[1].process, false);
   assert.equal(writes[1].research, false);
   const fileInput = descendants(app.refs.main).find(node => node.type === 'file');
-  fileInput.files = [{ name: '合成伴读.txt', size: 20, text: async () => '仅测试单文件导入的入口标识。' }];
+  fileInput.files = [{ name: '合成伴读.txt', size: 20, arrayBuffer: async () => new TextEncoder().encode('仅测试单文件导入的入口标识。').buffer }];
   fileInput.events.change();
   await click(findButton(app.refs.main, '导入所选文件'));
   assert.equal(writes[2].captureMode, 'files');
@@ -907,6 +908,27 @@ test('state shortcut ignores stale confirmations after switching libraries or op
   for (const kind of ['source', 'mistake']) {
     app.renderNoteEditor({ ...note, kind });
     assert.equal(findButton(app.refs.drawerBody, '前往状态操作'), undefined);
+  }
+});
+
+test('source editor preserves free text dates on other edits and permits explicit clearing', async () => {
+  for (const savedDate of ['2024年春', '2024-03-01T10:20:30Z']) {
+    const source = { id: 'dated-source', kind: 'source', title: '合成来源', body: '合成原文', hash: 'original', meta: { date: savedDate } };
+    const writes = [];
+    const app = browser({ updateNote: async (id, body) => { writes.push(plain(body)); return { ...source, meta: { ...source.meta, ...body.meta } }; }, bootstrap: async () => ({}) });
+    app.renderNoteEditor(source);
+    let form = app.refs.drawerBody.children[0];
+    const date = control(form, 'date');
+    assert.equal(date.type, 'text');
+    assert.equal(date.value, savedDate);
+    control(form, 'author').value = '更正作者';
+    await form.events.submit({ preventDefault() {} });
+    assert.deepEqual(writes[0].meta, { author: '更正作者' }, 'saving another field must not rewrite the imported date');
+    app.renderNoteEditor(source);
+    form = app.refs.drawerBody.children[0];
+    control(form, 'date').value = '';
+    await form.events.submit({ preventDefault() {} });
+    assert.deepEqual(writes[1].meta, { date: '' }, 'explicit clearing must reach the saved metadata');
   }
 });
 
