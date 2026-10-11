@@ -947,6 +947,8 @@ test('note editor user drawer exits preserve changed fields until explicit disca
     const closing = click(app.refs.drawerClose);
     await click(findButton(app.dialogs, '放弃修改')); await closing;
     assert.equal(app.refs.drawer.classList.contains('is-open'), false);
+    app.document.events.keydown({ key: 'Escape' });
+    assert.equal(app.dialogs.querySelectorAll('.dialog').length, 0, 'a discarded hidden editor must not prompt on later Escape');
   }
 });
 

@@ -156,6 +156,7 @@ function closeDrawer() {
 }
 
 async function requestCloseDrawer() {
+  if (!refs.drawer.classList.contains("is-open")) return;
   const form = refs.drawerBody.querySelector("form");
   if (form?.confirmDiscardChanges && !await form.confirmDiscardChanges()) return;
   closeDrawer();
