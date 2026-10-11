@@ -10,6 +10,7 @@ import { coreSteps, flatSteps } from '../public/onboarding-curriculum.mjs';
 
 import { tutorialFixture } from './fixtures/tutorial-ui.mjs';
 const usageSource = await readFile(new URL('../public/usage.mjs', import.meta.url), 'utf8');
+const onboardingCss = await readFile(new URL('../public/onboarding.css', import.meta.url), 'utf8');
 
 const uiSource = await readFile(new URL('../public/ui.mjs', import.meta.url), 'utf8');
 const appSource = await readFile(new URL('../public/app.mjs', import.meta.url), 'utf8');
@@ -196,6 +197,27 @@ test('Android capture remains local and never starts processing or research, inc
   assert.equal(imports[0].items[0].privacy, 'local');
   assert.equal(imports[0].process, false);
   assert.equal(imports[0].research, false);
+});
+
+test('capture form uses the full available column and source metadata stays readable', () => {
+  const app = browser();
+  app.renderCapture();
+  const form = app.refs.main.querySelector('[data-tour="capture-form"]');
+  const body = control(form, 'body');
+  const platform = control(form, 'platform');
+  assert.ok(form.parentNode.classList.contains('capture-layout'));
+  assert.ok(body.parentNode.classList.contains('span-2'));
+  assert.ok(form.classList.contains('capture-form'));
+  assert.ok(platform.parentNode.parentNode.classList.contains('span-2'));
+  assert.ok(platform.parentNode.classList.contains('capture-source-grid'));
+  assert.match(onboardingCss, /\.onboarding-open \.capture-layout\s*\{\s*grid-template-columns:\s*minmax\(0,\s*1fr\);/);
+  assert.match(onboardingCss, /\.capture-source-grid\s*\{\s*grid-template-columns:\s*minmax\(0,\s*1fr\);/);
+});
+
+test('closed drawer clears the onboarding offset without disabling its open state', () => {
+  assert.match(onboardingCss, /@media\s*\(min-width:\s*1101px\)\s*\{[^}]*\.onboarding-open \.drawer:not\(\.is-open\)\s*\{[^}]*translateX\(calc\(105% \+ 350px\)\);\s*pointer-events:\s*none;/s);
+  assert.match(onboardingCss, /@media\s*\(max-width:\s*1100px\)\s*\{[\s\S]*?\.onboarding-open \.drawer:not\(\.is-open\)\s*\{[^}]*translateX\(105%\);\s*pointer-events:\s*none;/);
+  assert.match(onboardingCss, /\.onboarding-open \.drawer\.is-open\s*\{\s*transform:\s*translateX\(0\);\s*pointer-events:\s*auto;/);
 });
 
 test('Android source editing omits disabled privacy, depth, and research interval fields', async () => {
