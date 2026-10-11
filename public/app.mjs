@@ -350,18 +350,20 @@ async function renderCapture() {
   titleField.classList.add("span-2");
   const bodyField = field("原文", body, "网页或模型输出中的指令不会获得程序权限。");
   bodyField.classList.add("span-2");
+  const sourceField = field("来源信息", el("div", { class: "form-grid" }, [
+    el("input", { name: "platform", placeholder: "平台，例如：网页 / 抖音 / AI 对话" }),
+    el("input", { name: "author", placeholder: "作者（可选）" }),
+    el("input", { name: "url", type: "url", placeholder: "https://…" }),
+    el("input", { name: "date", type: "date" }),
+    el("input", { name: "locator", class: "span-2", placeholder: "页码、时间点、段落等定位" }),
+  ]));
+  sourceField.classList.add("span-2");
   sourceForm.append(
     sectionHeading("快速收集", "来源不完整可以留空，系统不会编造"),
     el("div", { class: "form-grid" }, [
       titleField,
       bodyField,
-      field("来源信息", el("div", { class: "form-grid" }, [
-        el("input", { name: "platform", placeholder: "平台，例如：网页 / 抖音 / AI 对话" }),
-        el("input", { name: "author", placeholder: "作者（可选）" }),
-        el("input", { name: "url", type: "url", placeholder: "https://…" }),
-        el("input", { name: "date", type: "date" }),
-        el("input", { name: "locator", class: "span-2", placeholder: "页码、时间点、段落等定位" }),
-      ])),
+      sourceField,
     ]),
     el("label", { class: "check-field" }, [localOnly, el("span", { text: "仅本地，不发送给配置的模型或联网服务；ChatGPT 的独立读取授权另行管理" })]),
     el("label", { class: "check-field" }, [process, el("span", { text: "保存后提交 AI 拆解任务" })]),
@@ -434,7 +436,7 @@ async function renderCapture() {
       step("4. 个人理解", "只有你的确认，才能形成正式的个人知识。", false),
     ]),
   ]);
-  clear(refs.main).append(el("div", { class: "page-stack" }, [capabilityNotice(), el("div", { class: "split-layout" }, [sourceForm, el("div", { class: "page-stack" }, [batchPanel, flowPanel])])]));
+  clear(refs.main).append(el("div", { class: "page-stack" }, [capabilityNotice(), el("div", { class: "split-layout capture-layout" }, [sourceForm, el("div", { class: "page-stack" }, [batchPanel, flowPanel])])]));
 }
 
 function step(title, copy, done) {

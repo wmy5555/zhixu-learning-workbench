@@ -22,10 +22,12 @@
 .onboarding-entry-compact { padding: 14px 20px; }
 .onboarding-open .workspace { margin-right: 350px; }
 .onboarding-panel { position: fixed; inset: 0 0 0 auto; z-index: 65; width: 350px; padding: 22px 20px; overflow-y: auto; background: var(--paper); border-left: 1px solid var(--line); color: var(--ink); box-shadow: -4px 0 20px rgba(0,0,0,.04); }
+.onboarding-open .capture-layout { grid-template-columns: minmax(0, 1fr); }
 @media (min-width: 1101px) {
-  .onboarding-open .workspace:has(.onboarding-panel.is-compact) { margin-right: 190px; }
-  .onboarding-open .onboarding-panel.is-compact { inset: 16px 16px auto auto; width: 190px; max-height: min(65vh, 580px); padding: 10px 12px; overflow-y: auto; border: 1px solid var(--line-strong); border-radius: 14px; box-shadow: 0 12px 42px rgba(0,0,0,.16); }
-  .onboarding-open .onboarding-panel.is-compact .onboarding-heading { align-items: center; padding: 8px 10px; border-bottom: 0; }
+  .onboarding-open .workspace:has(.onboarding-panel.is-compact) { margin-right: 0; }
+  .onboarding-open .workspace:has(.onboarding-panel.is-compact) .topbar { padding-top: 72px; }
+  .onboarding-open .onboarding-panel.is-compact { inset: 16px 16px auto auto; width: 190px; max-height: min(65vh, 580px); padding: 4px 8px; overflow-y: auto; border: 1px solid var(--line-strong); border-radius: 14px; box-shadow: 0 12px 42px rgba(0,0,0,.16); }
+  .onboarding-open .onboarding-panel.is-compact .onboarding-heading { align-items: center; padding: 0; border-bottom: 0; }
   .onboarding-open .onboarding-panel.is-compact h2 { margin: 4px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
   .onboarding-open .onboarding-panel.is-compact .onboarding-heading-progress { display: none; }
 }

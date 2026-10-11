@@ -189,7 +189,10 @@ test('capture source text spans both columns so long material stays readable bes
   app.renderCapture();
   const form = app.refs.main.querySelector('[data-tour="capture-form"]');
   const body = control(form, 'body');
+  const platform = control(form, 'platform');
+  assert.ok(form.parentNode.classList.contains('capture-layout'));
   assert.ok(body.parentNode.classList.contains('span-2'));
+  assert.ok(platform.parentNode.parentNode.classList.contains('span-2'));
 });
 
 test('Android source editing omits disabled privacy, depth, and research interval fields', async () => {
