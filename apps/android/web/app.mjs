@@ -209,6 +209,10 @@ function androidTopicPlanBlocked(item) {
   return !topic || topic.paused || topic.meta?.paused || topic.status === "paused" || topic.meta?.status === "paused" || Boolean(topic.progress?.blockedNoteId) || topic.progress?.nextNoteId !== item.noteId;
 }
 
+function androidQueuePlanBlocked(item) {
+  return (isMobilePrototype() && item.inToday && item.state !== "pending") || androidTopicPlanBlocked(item);
+}
+
 function todayItem(item) {
   const actions = el("div", { class: "item-actions" });
   if (item.state === "pending") {
@@ -1274,7 +1278,7 @@ async function studyQueuePanel() {
     items.length ? el("div", { class: "list" }, items.map((item) => el("article", { class: "list-item" }, [
       el("div", { class: "item-symbol", text: item.inToday ? "今" : "学" }),
       el("div", { class: "item-copy" }, [el("h3", { text: item.title || "未命名知识" }), el("p", { text: item.reason || "等待学习" }), el("div", { class: "item-meta" }, [item.minutes ? badge(`${item.minutes} 分钟`) : null, item.inToday ? badge("今日", "accent") : badge("学习池")])]),
-      el("div", { class: "item-actions" }, button("开始学习", { kind: "primary compact", disabled: androidTopicPlanBlocked(item), title: androidTopicPlanBlocked(item) ? "请先完成当前可用前置步骤" : "", onClick: () => { if (androidTopicPlanBlocked(item)) return; return beginStudy(item.noteId, item.inToday ? item.id : undefined, item); } })),
+      el("div", { class: "item-actions" }, button(isMobilePrototype() && item.inToday && item.state !== "pending" ? planStateLabel(item.state) : "开始学习", { kind: "primary compact", disabled: androidQueuePlanBlocked(item), title: androidQueuePlanBlocked(item) ? item.inToday && item.state !== "pending" ? "此计划当前不可开始" : "请先完成当前可用前置步骤" : "", onClick: () => { if (androidQueuePlanBlocked(item)) return; return beginStudy(item.noteId, item.inToday ? item.id : undefined, item); } })),
     ]))) : emptyState("学习队列为空", "在知识详情中选择“加入学习”，或先处理一份原始资料。", button("浏览知识", { onClick: () => navigate("library") })),
     tour(sectionHeading("最近学习记录", "服务重启后仍可继续已有会话，原始回答和提示使用不会丢失"), "study-history"),
     sessions.length ? el("div", { class: "list" }, sessions.map((session) => {

@@ -148,6 +148,31 @@ test("Android today and queue topic plans disable later steps while unbound sing
   }
 });
 
+test("Android queue follows fixed plan state transitions while pending plans and the learning pool stay startable", async () => {
+  const calls = [], item = { id: "fixed-plan", noteId: "fixed-note", title: "固定学习计划", kind: "study", state: "pending", minutes: 5 };
+  const session = { id: "session", noteId: item.noteId, status: "reading", turns: [], material: "合成材料" };
+  const fixture = await createAndroidBrowser({ api: {
+    bootstrap: async () => ({ today: { items: [item] }, stats: {} }),
+    today: async () => ({ items: [item] }), notes: async () => ({ notes: [{ id: item.noteId, title: item.title }, { id: "pool-note", title: "独立学习池" }] }),
+    studySessions: async () => ({ sessions: [] }), startStudy: async body => { calls.push({ ...body }); return session; }, study: async () => session,
+  } });
+  for (const [state, label] of [["pending", "开始学习"], ["done", "已完成"], ["skipped", "已跳过"], ["deferred", "已延期"], ["paused", "已暂停"], ["pending", "开始学习"]]) {
+    item.state = state;
+    fixture.app.state.studyTab = "queue";
+    await fixture.app.navigate("study");
+    const rows = descendants(fixture.app.refs.main).filter(node => node.tagName === "article");
+    const start = descendants(rows[0]).find(node => node.tagName === "button");
+    const poolStart = descendants(rows[1]).find(node => node.tagName === "button");
+    assert.equal(start.textContent, label);
+    assert.equal(start.disabled, state !== "pending");
+    assert.equal(poolStart.disabled, false, "unbound learning pool entries stay available");
+    const before = calls.length;
+    await click(start);
+    if (state === "pending") assert.deepEqual(calls.at(-1), { noteId: item.noteId, planId: item.id });
+    else assert.equal(calls.length, before, "a non-pending fixed plan must never send a start request");
+  }
+});
+
 test("Android learning restore keeps committed success when bootstrap refresh fails and does not repeat restore", async () => {
   let nativeCalls = 0, refreshCalls = 0;
   const fixture = await createAndroidBrowser({ api: { androidGuide: guide,
