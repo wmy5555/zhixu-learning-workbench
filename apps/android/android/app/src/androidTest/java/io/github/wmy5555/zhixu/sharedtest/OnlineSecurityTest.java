@@ -228,12 +228,14 @@ public class OnlineSecurityTest extends AndroidTestCase {
         AtomicReference<Socket> active = new AtomicReference<>(); AtomicBoolean closing = new AtomicBoolean();
         try (ServerSocket server = tls.getServerSocketFactory().createServerSocket(0, 2, InetAddress.getByName("127.0.0.1"))) {
             server.setSoTimeout(1500); Thread fixture = new Thread(() -> {
-                try { while (true) { try (Socket socket = server.accept()) { active.set(socket); socket.setSoTimeout(2000); BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8)); String line = in.readLine(); int length = -1;
+                try { while (true) {
+                    Socket accepted; try { accepted = server.accept(); } catch (SocketTimeoutException idle) { break; }
+                    try (Socket socket = accepted) { active.set(socket); socket.setSoTimeout(2000); ((SSLSocket) socket).startHandshake(); BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8)); String line = in.readLine(); int length = -1;
                         if (!"POST /synthetic HTTP/1.1".equals(line)) throw new IOException("Unexpected synthetic request");
                         while ((line = in.readLine()) != null && !line.isEmpty()) if (line.toLowerCase(Locale.ROOT).startsWith("content-length:")) length = Integer.parseInt(line.substring(15).trim());
                         if (length != 2 || in.read() != '{' || in.read() != '}') throw new IOException("Unexpected synthetic body"); bodies.incrementAndGet();
                         socket.getOutputStream().write("HTTP/1.1 503 Service Unavailable\r\nRetry-After: 0\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".getBytes(StandardCharsets.US_ASCII)); socket.getOutputStream().flush();
-                    } finally { active.set(null); } } } catch (SocketTimeoutException expected) { } catch (Throwable e) { if (!closing.get()) failure.set(e); }
+                    } finally { active.set(null); } } } catch (Throwable e) { if (!closing.get()) failure.set(e); }
             }, "zhixu-synthetic-https"); fixture.setDaemon(true);
             final int port = server.getLocalPort();
             OkHttpClient client = new OkHttpClient.Builder().sslSocketFactory(tls.getSocketFactory(), trust)
@@ -245,6 +247,11 @@ public class OnlineSecurityTest extends AndroidTestCase {
                     .post(OnlineNetwork.oneShot(RequestBody.create(MediaType.get("application/json"), "{}"))).build();
                 try (Response response = client.newCall(request).execute()) { assertEquals(503, response.code()); }
                 fixture.join(4000); assertFalse(fixture.isAlive()); assertNull(failure.get()); assertEquals(1, bodies.get());
+            } catch (Exception clientFailure) {
+                fixture.join(2500);
+                Throwable serverFailure = failure.get();
+                if (serverFailure != null) clientFailure.addSuppressed(serverFailure);
+                throw clientFailure;
             } finally {
                 closing.set(true); server.close(); Socket socket = active.get(); if (socket != null) socket.close();
                 client.connectionPool().evictAll(); client.dispatcher().executorService().shutdownNow();
