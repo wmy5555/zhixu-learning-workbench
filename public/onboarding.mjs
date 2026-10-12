@@ -214,18 +214,19 @@ export function createOnboarding(adapter) {
     return true;
   }
   async function goTo(target = step()) {
-    selected = target.id; rememberStep(selected); compact = false; errorText = ""; checkErrorStepId = ""; location = null;
-    if (current?.practiceId) adopt(await api.onboarding("checkpoint", stateBody({ stepId: target.id, mode: "check" })));
     const chapter = stepChapter(target);
     const first = chapters[0]?.id;
+    const id = ["settings-model", "settings-capabilities", "settings-mcp", "settings-save"].includes(target.target) ? "" : current?.practiceId;
+    if (current?.practiceId && (chapter?.id === first || current.modelReady)
+      && api.getContext().practiceId !== (id || "") && !await switchContext(id || "")) return;
+    selected = target.id; rememberStep(selected); compact = false; errorText = ""; checkErrorStepId = ""; location = null;
+    if (current?.practiceId) adopt(await api.onboarding("checkpoint", stateBody({ stepId: target.id, mode: "check" })));
     if (chapter?.id !== first && !current?.modelReady) {
       location = { target: "onboarding-prerequisite", prerequisite: "setup-model", message: "请先在第一章保存 AI 配置并测试成功，再进入实操。" };
       render();
       return;
     }
-    const id = ["settings-model", "settings-capabilities", "settings-mcp", "settings-save"].includes(target.target) ? "" : current?.practiceId;
     if (!current?.practiceId) return;
-    if (api.getContext().practiceId !== (id || "") && !await switchContext(id || "")) return;
     location = await adapter.navigate(target, current);
     render(); locate(true);
   }

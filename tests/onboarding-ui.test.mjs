@@ -212,6 +212,26 @@ test('onboarding start resume pause and shared settings allow cancelling before 
   }
 });
 
+test('cancelled goTo keeps the visible tutorial step and does not checkpoint or navigate to the shared settings', async () => {
+  const ui = await tutorialBrowser({ currentStepId: 'setup-welcome' });
+  await ui.tutorial.open();
+  const oldContext = ui.api.getContext(), switches = ui.contexts.length, navigations = ui.navigations.length;
+  const panel = descend(ui.workspace).find(node => node.classList.contains('onboarding-panel'));
+  assert.equal(panel.dataset.stepId, 'setup-welcome');
+  ui.adapter.beforeContextChange = async () => false;
+  await click(findButton(ui.body, '先看下一步'));
+  assert.deepEqual(ui.api.getContext(), oldContext); assert.equal(ui.contexts.length, switches);
+  assert.equal(ui.navigations.length, navigations);
+  assert.equal(panel.dataset.stepId, 'setup-welcome'); assert.equal(ui.state.currentStepId, 'setup-welcome');
+  assert.equal(ui.requests.filter(call => call.action === 'checkpoint' && call.data.stepId === 'setup-model').length, 0);
+  ui.adapter.beforeContextChange = async () => true;
+  await click(findButton(ui.body, '先看下一步'));
+  assert.equal(ui.api.getContext().practiceId, '');
+  assert.equal(panel.dataset.stepId, 'setup-model'); assert.equal(ui.state.currentStepId, 'setup-model');
+  assert.equal(ui.navigations.at(-1), 'setup-model');
+  ui.tutorial.dispose();
+});
+
 test('the AI decomposition step shows waiting progress without changing evidence or notifying preset completion', async () => {
   const ui = await tutorialBrowser({ currentStepId: 'process-ai' });
   ui.setState({ roles: { capturedSource: 'synthetic-source' } });
