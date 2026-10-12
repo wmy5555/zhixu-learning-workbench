@@ -4,6 +4,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import test from 'node:test';
+import { parseDocument } from 'yaml';
 import { createService } from '../src/service.mjs';
 import { createApp } from '../src/server.mjs';
 
@@ -145,6 +146,51 @@ test('an interruption after the success receipt is written can finish its sessio
   const anotherRequest = f.service.chatgpt.capture({ ...value, requestId: randomUUID() });
   assert.equal(anotherRequest.noteId, retry.noteId); assert.equal(anotherRequest.importedItems, 1);
   assert.equal(store.list().length, 2);
+});
+
+test('review regression: partial append requires the stored tail as its final common message', t => {
+  const f = fixture(t), c = { id: 'message_c', role: 'user', content: '旧末尾消息。' }, d = { id: 'message_d', role: 'assistant', content: '位置未知的新消息。' };
+  const value = snapshot({ messages: [...messages, c], sync: { ...snapshot().sync, readerEvidence: evidence(3) } });
+  const first = f.service.chatgpt.capture(value), before = f.service.store.read(first.noteId);
+  for (const incoming of [[messages[0], d], [d]]) {
+    assert.throws(() => f.service.chatgpt.capture(snapshot({ messages: incoming, coverage: 'current_context',
+      sync: { ...value.sync, snapshotId: 'partial_next', mode: 'delta', complete: false, baseRevision: 1 } })), { code: 'CHATGPT_BRANCH_CONFLICT' });
+    assert.equal(f.service.store.read(first.noteId).hash, before.hash);
+  }
+  const next = f.service.chatgpt.capture(snapshot({ messages: [c, d], coverage: 'current_context',
+    sync: { ...value.sync, snapshotId: 'anchored_next', mode: 'delta', complete: false, baseRevision: 1 } }));
+  assert.equal(next.addedMessages, 1);
+  assert.deepEqual(f.service.store.read(first.noteId).meta.chatgptSync.snapshot.messages.map(m => m.id), ['message_a', 'message_b', 'message_c', 'message_d']);
+});
+
+test('review regression: externally deleting a written source during an interrupted import cannot recreate it', t => {
+  const f = fixture(t), value = snapshot({ structured: structure() }), store = f.service.store, create = store.create.bind(store);
+  store.create = input => { if (input.kind === 'knowledge') throw new Error('synthetic interruption'); return create(input); };
+  assert.throws(() => f.service.chatgpt.capture(value), /synthetic interruption/);
+  store.create = create;
+  const state = store.records('chatgptSyncSessions')[0], note = store.list()[0];
+  assert.ok(state.noteHash); assert.equal(state.previousHash, null); assert.equal(store.get('deleted', note.id), null);
+  const file = path.resolve(f.config.vaultDir, note.path);
+  assert.ok(file.startsWith(path.resolve(f.config.vaultDir) + path.sep)); fs.unlinkSync(file);
+  f.restart();
+  assert.throws(() => f.service.chatgpt.capture(value), { code: 'CHATGPT_CAPTURE_UNAVAILABLE' });
+  assert.equal(fs.existsSync(file), false); assert.equal(f.service.store.list().length, 0);
+});
+
+test('review regression: a lone moved and renamed source marker blocks missing-state recovery', t => {
+  const f = fixture(t), value = snapshot(), saved = f.service.chatgpt.capture(value), store = f.service.store, note = store.read(saved.noteId);
+  const original = path.resolve(f.config.vaultDir, note.path), moved = path.join(path.dirname(original), 'externally-moved-source.md');
+  assert.ok(moved.startsWith(path.resolve(f.config.vaultDir) + path.sep));
+  const previousRaw = fs.readFileSync(original, 'utf8'), frontmatter = previousRaw.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  const document = parseDocument(frontmatter[1]); document.set('id', 'externally-moved-source');
+  const raw = `---\n${document.toString().trimEnd()}\n---\n${previousRaw.slice(frontmatter[0].length)}`;
+  fs.renameSync(original, moved); fs.writeFileSync(moved, raw);
+  store.db.exec("DELETE FROM records WHERE namespace IN ('chatgptSyncSessions','chatgptCaptures')");
+  f.restart();
+  assert.equal(f.service.store.list()[0].id, 'externally-moved-source');
+  assert.throws(() => f.service.chatgpt.capture(value), { code: 'CHATGPT_CAPTURE_UNVERIFIABLE' });
+  assert.equal(fs.existsSync(original), false); assert.equal(fs.readFileSync(moved, 'utf8'), raw);
+  assert.equal(f.service.store.list().length, 1); assert.equal(f.service.store.list()[0].id, 'externally-moved-source');
 });
 
 test('HTTP sync uses the existing credential and read boundary and returns updated receipt without exposing local paths', async t => {

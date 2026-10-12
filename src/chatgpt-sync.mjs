@@ -90,7 +90,8 @@ function mergeSnapshot(previous, value) {
   });
   const added = value.messages.filter(m => !oldIds.has(m.id));
   // A partial reading cannot insert messages into an unknown historical position.
-  if (!value.sync.complete && added.length && common.length && value.messages.findIndex(m => !oldIds.has(m.id)) < value.messages.findLastIndex(m => oldIds.has(m.id))) fail('新消息出现在旧消息中间，顺序无法核对；请读取完整分支或另存分支。', 'CHATGPT_BRANCH_CONFLICT', 409);
+  if (!value.sync.complete && added.length && (common.at(-1) !== old.at(-1).id ||
+    value.messages.findIndex(m => !oldIds.has(m.id)) < value.messages.findLastIndex(m => oldIds.has(m.id)))) fail('新增消息未接在已保存的末尾之后，顺序无法核对；请包含旧末尾消息或读取完整分支。', 'CHATGPT_BRANCH_CONFLICT', 409);
   messages.push(...added);
   const snapshot = { ...value, messages: value.sync.complete ? value.messages : messages,
     limitations: [...new Set([previous.snapshot.limitations, value.limitations].filter(Boolean))].join('\n'), sync: { ...value.sync, complete: value.sync.complete } };
@@ -118,7 +119,7 @@ export function captureIncremental(store, value, render) {
   let state = store.get('chatgptSyncSessions', key);
   const copies = store.list().filter(n => n.meta.chatgptSync?.sessionHash === key);
   if (copies.length > 1) fail('发现会话副本，不能选择任一副本更新。', 'CHATGPT_CAPTURE_AMBIGUOUS', 409);
-  if (!state && (store.row(noteId) || ownsPath(store, noteId))) fail('增量运行记录缺失，无法核对旧版本；请在知序检查，不会自动覆盖或重建。', 'CHATGPT_CAPTURE_UNVERIFIABLE', 409);
+  if (!state && (copies.length || store.row(noteId) || ownsPath(store, noteId))) fail('增量运行记录缺失，无法核对旧版本；请在知序检查，不会自动覆盖或重建。', 'CHATGPT_CAPTURE_UNVERIFIABLE', 409);
   if (!state && store.get('deleted', noteId)) fail('原资料已删除，不会自动重新创建。', 'CHATGPT_CAPTURE_UNAVAILABLE', 409);
   if (state && !state.pending && !store.row(noteId)) fail('原资料已删除或存在冲突，不会自动重建。', 'CHATGPT_CAPTURE_UNAVAILABLE', 409);
   if (state?.pending && (state.requestHash !== requestHash || state.payloadHash !== payloadHash)) fail('上次导入尚未完成，请先使用原请求重试。', 'CHATGPT_IMPORT_PENDING', 409);
@@ -146,7 +147,7 @@ export function captureIncremental(store, value, render) {
   if (note?.meta.chatgptSync?.revision === state.revision) checkSource(note, state, render);
   else {
     if (note && note.hash !== state.previousHash) fail('导入过程中原资料发生变化，不会覆盖。', 'CHATGPT_SOURCE_EDITED', 409);
-    if (!note && (state.previousHash || ownsPath(store, noteId) || store.get('deleted', noteId))) fail('原资料缺失或存在冲突，不会重建。', 'CHATGPT_CAPTURE_UNAVAILABLE', 409);
+    if (!note && (state.noteHash || state.previousHash || ownsPath(store, noteId) || store.get('deleted', noteId))) fail('原资料缺失或存在冲突，不会重建。', 'CHATGPT_CAPTURE_UNAVAILABLE', 409);
     const origin = { platform: 'ChatGPT', url: state.snapshot.conversationUrl, author: '', date: '', acquiredAt: state.savedAt, locator: `会话分支版本 ${state.revision}；累计 ${state.snapshot.messages.length} 条消息` };
     const meta = { privacy: 'local', stage: 'reference', ...origin, origins: [origin], fingerprint: hash(body.trim()),
       chatgptSync: { version: 1, sessionHash: key, revision: state.revision, requestHash, payloadHash, snapshot: state.snapshot } };
