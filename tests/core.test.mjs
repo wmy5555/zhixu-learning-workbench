@@ -363,6 +363,9 @@ test('local-only search and ask stay offline even when model settings are enable
   assert.equal(result.citations[0]?.id, note.id);
   assert.match(result.answer, /模型未启用或材料仅限本地/);
   assert.equal(result.limitations.includes('未进行 AI 生成。'), true);
+  assert.equal(result.generated, false);
+  assert.equal(h.service.store.get('drafts', result.draftId)?.mode, 'answer');
+  assert.equal(h.service.store.get('drafts', result.draftId)?.body, result.answer);
 });
 
 test('deletion keeps explicit history but cannot silently restore into current search', async t => {
