@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import path from 'node:path';
+import { createApp } from '../src/server.mjs';
 import test from 'node:test';
 import vm from 'node:vm';
 import { createProcessFeedback } from '../public/process-feedback.mjs';
@@ -1429,4 +1431,49 @@ test('failed study start releases the lock and button so an explicit retry can p
   assert.equal(count, 2);
   rejectStart(new Error('合成重试失败')); await retry;
   assert.equal(control.disabled, false);
+});
+
+
+test('study retry after a committed POST loses its response reuses the real stored session, then a new start is independent', async t => {
+  const tempRoot = path.resolve(import.meta.dirname, '..', '.tmp');
+  await mkdir(tempRoot, { recursive: true });
+  const root = await mkdtemp(path.join(tempRoot, 'study-ui-'));
+  const backend = createApp({ dataDir: path.join(root, 'data'), vaultDir: path.join(root, 'vault'), scheduler: false });
+  t.after(async () => { await backend.close(); assert.ok(root.startsWith(tempRoot + path.sep)); await rm(root, { recursive: true, force: true }); });
+  const note = backend.service.store.create({ kind: 'knowledge', title: '合成响应丢失观点', body: '合成测试正文', meta: { stage: 'learning', privacy: 'local' } });
+  const requests = [];
+  let loseReply = true, committed;
+  const app = browser({ startStudy: async input => {
+    requests.push(plain(input));
+    committed = backend.service.startStudy(plain(input));
+    if (loseReply) { loseReply = false; throw new Error('合成：服务端已保存但响应丢失'); }
+    return committed;
+  }, study: async id => backend.service.session(id) });
+  await app.beginStudy(note.id);
+  const firstId = committed.id;
+  assert.equal(backend.service.store.records('sessions').length, 1);
+  await app.beginStudy(note.id);
+  assert.equal(requests[1].requestId, requests[0].requestId);
+  assert.equal(app.state.currentStudy.id, firstId);
+  assert.equal(backend.service.store.records('sessions').length, 1);
+  await app.beginStudy(note.id);
+  assert.notEqual(requests[2].requestId, requests[0].requestId);
+  assert.notEqual(app.state.currentStudy.id, firstId);
+  assert.equal(backend.service.store.records('sessions').length, 2);
+});
+
+test('uncertain start keys are retained per note, plan, topic, mistake and library intent', async () => {
+  const requests = [];
+  let practiceId = '', version = 0;
+  const app = browser({ getContext: () => ({ practiceId, version }), startStudy: async input => { requests.push(plain(input)); throw new Error('合成响应失败'); } });
+  const begin = (note = 'note', plan, context = {}) => app.beginStudy(note, plan, context);
+  await begin(); await begin('another'); await begin();
+  assert.equal(requests[2].requestId, requests[0].requestId);
+  for (const [note, plan, context] of [['note', 'plan', {}], ['note', undefined, { topicId: 'topic' }], ['note', undefined, { mistakeId: 'mistake' }]]) {
+    await begin(note, plan, context); const original = requests.at(-1).requestId;
+    assert.notEqual(original, requests[0].requestId);
+    await begin(note, plan, context); assert.equal(requests.at(-1).requestId, original);
+  }
+  practiceId = 'practice'; version++;
+  await begin(); assert.notEqual(requests.at(-1).requestId, requests[0].requestId);
 });
