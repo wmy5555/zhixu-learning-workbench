@@ -1743,7 +1743,7 @@ async function renderOutput() {
       const result = await api.ask({ question: question.value, scope, mode: mode.value, privacy: allowCloudQuestion.checked ? "cloud" : "local" });
       state.lastOutput = result;
       renderAnswer(answerArea, result);
-      try { await refreshDraftsPanel(draftsPanel); }
+      try { await refreshDraftsPanel(); }
       catch { toast("结果已保存，但输出工作区暂时未能刷新。", "error"); }
     } catch (error) { clear(answerArea).append(emptyState("本次生成未完成", errorMessage(error), button("重试", { onClick: () => form.requestSubmit() }))); }
   });
@@ -1754,9 +1754,10 @@ async function renderOutput() {
 function renderAnswer(container, result) {
   container.dataset.tour = "output-result";
   const citations = asArray(result.citations);
-  const limitations = asArray(result.limitations);
+  const limitations = [...asArray(result.limitations)];
+  if (result.generated !== true && !limitations.includes("未进行 AI 生成。")) limitations.push("未进行 AI 生成。");
   clear(container).append(el("section", { class: "panel" }, [
-    sectionHeading("生成结果", result.draftId ? "已保存到输出工作区，可继续编辑" : "本次结果尚未成为个人知识"),
+    sectionHeading(result.generated === true ? "AI 生成结果" : "本地检索结果（未进行 AI 生成）", result.draftId ? "已保存到输出工作区，可继续编辑" : "本次结果尚未成为个人知识"),
     el("div", { class: "prose", text: result.answer || "没有生成可用内容" }),
     limitations.length ? el("div", { class: "notice", text: `限制：${limitations.join("；")}` }) : null,
     citations.length ? el("div", {}, [sectionHeading("实际引用", "关键主张应能回到笔记与底层来源"), el("div", { class: "list" }, citations.map((citation) => el("div", { class: "citation" }, [el("strong", { text: citation.title || citation.noteId || citation.id || "引用材料" }), citation.excerpt ? el("p", { text: citation.excerpt }) : null, citation.locator ? el("p", { text: `定位：${citation.locator}` }) : null, citation.noteId || citation.id ? button("打开材料", { kind: "text", onClick: () => openNote(citation.noteId || citation.id) }) : null, evidenceDetails(citation.noteId || citation.id, asArray(citation.sources))])))]) : el("div", { class: "notice danger", text: "本次结果没有返回可追溯引用，请不要把它视为有据回答。" }),
@@ -1769,10 +1770,12 @@ async function renderDraftsPanel() {
   return panel;
 }
 
-async function refreshDraftsPanel(panel) {
+async function refreshDraftsPanel(panel = null) {
   const data = await api.drafts();
+  const target = panel || refs.main.querySelector('[data-tour="output-drafts"]');
+  if (!target) return;
   const drafts = asArray(data.drafts);
-  clear(panel).append(
+  clear(target).append(
     sectionHeading("输出工作区", "编辑素材、提纲和草稿；只有主动采集后才回到知识流程"),
     drafts.length ? el("div", { class: "card-grid" }, drafts.map((draft) => el("article", { class: "card" }, [
       el("div", { class: "card-head" }, [badge(draft.mode === "draft" ? "草稿" : draft.mode === "outline" ? "提纲" : "回答"), badge(formatDate(draft.updatedAt))]),
