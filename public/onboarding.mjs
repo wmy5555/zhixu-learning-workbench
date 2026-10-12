@@ -207,48 +207,55 @@ export function createOnboarding(adapter) {
   }
   async function switchContext(id, destination) {
     if (current?.busy) throw new Error("练习任务仍在处理，请先等待完成或到任务页取消，再切换知识库。");
+    if (await adapter.beforeContextChange?.() === false) return false;
     api.setContext(id);
     await adapter.contextChanged?.();
     if (destination) await adapter.navigate(destination, current);
+    return true;
   }
   async function goTo(target = step()) {
-    selected = target.id; rememberStep(selected); compact = false; errorText = ""; checkErrorStepId = ""; location = null;
-    if (current?.practiceId) adopt(await api.onboarding("checkpoint", stateBody({ stepId: target.id, mode: "check" })));
     const chapter = stepChapter(target);
     const first = chapters[0]?.id;
+    const id = ["settings-model", "settings-capabilities", "settings-mcp", "settings-save"].includes(target.target) ? "" : current?.practiceId;
+    if (current?.practiceId && (chapter?.id === first || current.modelReady)
+      && api.getContext().practiceId !== (id || "") && !await switchContext(id || "")) return;
+    selected = target.id; rememberStep(selected); compact = false; errorText = ""; checkErrorStepId = ""; location = null;
+    if (current?.practiceId) adopt(await api.onboarding("checkpoint", stateBody({ stepId: target.id, mode: "check" })));
     if (chapter?.id !== first && !current?.modelReady) {
       location = { target: "onboarding-prerequisite", prerequisite: "setup-model", message: "请先在第一章保存 AI 配置并测试成功，再进入实操。" };
       render();
       return;
     }
-    const id = ["settings-model", "settings-capabilities", "settings-mcp", "settings-save"].includes(target.target) ? "" : current?.practiceId;
     if (!current?.practiceId) return;
-    if (api.getContext().practiceId !== (id || "")) await switchContext(id || "");
     location = await adapter.navigate(target, current);
     render(); locate(true);
   }
   async function start() {
     const choice = await chooseMaterial();
     if (!choice) return;
+    if (await adapter.beforeContextChange?.() === false) return;
     adopt(await api.onboarding("start", typeof choice === 'string' ? { materialId: choice } : choice)); visible = true;
     selected = flatSteps[0]?.id;
     await goTo(step());
   }
   async function resume() {
     if (!current?.practiceId) return start();
+    if (await adapter.beforeContextChange?.() === false) return;
     adopt(await api.onboarding("resume", stateBody({})));
     visible = true;
-    if (current.modelReady) await switchContext(current.practiceId);
+    if (current.modelReady && !await switchContext(current.practiceId)) return;
     await goTo(step());
   }
   async function pause() {
     if (current?.busy) throw new Error("练习任务仍在处理，请先等待完成或到任务页取消。");
+    if (await adapter.beforeContextChange?.() === false) return;
     adopt(await api.onboarding("pause", stateBody({})));
-    await switchContext(""); visible = false;
+    if (!await switchContext("")) return;
+    visible = false;
     await adapter.navigate({ view: "today" }, current);
   }
   async function openSettings() {
-    if (inPractice()) await switchContext("");
+    if (inPractice() && !await switchContext("")) return;
     visible = Boolean(current?.practiceId);
     await adapter.navigate({ view: "system", tab: "settings" }, current);
     render();
