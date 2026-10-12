@@ -8,7 +8,8 @@ import { createProcessFeedback } from '../public/process-feedback.mjs';
 import { initSidebar } from '../public/sidebar.mjs';
 import { parseSourceFile } from '../public/source-exchange.mjs';
 import { describeJobError } from '../public/ui.mjs';
-import { coreSteps, flatSteps } from '../public/onboarding-curriculum.mjs';
+import { chapters, coreSteps, flatSteps, getCurriculum } from '../public/onboarding-curriculum.mjs';
+import { materials, customMaterial, customSample, getMaterial, materialSample } from '../public/onboarding-materials.mjs';
 
 import { tutorialFixture } from './fixtures/tutorial-ui.mjs';
 const usageSource = await readFile(new URL('../public/usage.mjs', import.meta.url), 'utf8');
@@ -16,6 +17,7 @@ const onboardingCss = await readFile(new URL('../public/onboarding.css', import.
 
 const uiSource = await readFile(new URL('../public/ui.mjs', import.meta.url), 'utf8');
 const appSource = await readFile(new URL('../public/app.mjs', import.meta.url), 'utf8');
+const onboardingSource = await readFile(new URL('../public/onboarding.mjs', import.meta.url), 'utf8');
 const sourceMapSource = (await readFile(new URL('../public/source-map.mjs', import.meta.url), 'utf8')).replace(/^import.*;$/m, '').replaceAll('export ', '');
 
 class Element {
@@ -182,6 +184,81 @@ test('unsaved-input confirmations cannot discard a replacement form or cross lib
   assert.equal(control(form, 'body').value, '合成正式库输入');
 });
 
+test('library change preparation keeps dirty forms on cancellation and removes them only after discard', async () => {
+  for (const kind of ['capture', 'answer']) {
+    const session = { id: 'synthetic-context-answer', status: 'reading', turns: [] };
+    const app = browser({ study: async () => session });
+    if (kind === 'capture') await app.renderCapture();
+    else { app.state.currentStudy = session; app.state.studyTab = 'session'; app.state.studyMaterialVisible = false; await app.renderStudy(); }
+    const form = app.refs.main.querySelector(kind === 'capture' ? '[data-tour="capture-form"]' : '[data-tour="study-session"]');
+    const input = control(form, kind === 'capture' ? 'body' : 'answer'); input.value = '合成原库草稿';
+    const cancel = app.prepareContextChange();
+    await click(findButton(app.dialogs, '取消'));
+    assert.equal(await cancel, false);
+    assert.equal(input.value, '合成原库草稿'); assert.equal(unloadRequested(app), true);
+    const discard = app.prepareContextChange();
+    await click(findButton(app.dialogs, '放弃输入'));
+    assert.equal(await discard, true);
+    assert.equal(unloadRequested(app), false);
+    assert.equal(app.refs.main.querySelector('[data-tour="capture-form"]'), null);
+    assert.equal(app.refs.main.querySelector('[data-tour="study-session"]'), null);
+  }
+});
+
+test('global refresh removes the pristine form before waiting for bootstrap so later typing cannot be lost', async () => {
+  for (const kind of ['capture', 'answer']) {
+    let finishBootstrap;
+    const session = { id: 'synthetic-refresh-answer', status: 'reading', turns: [] };
+    const app = browser({ bootstrap: () => new Promise(resolve => { finishBootstrap = resolve; }), study: async () => session });
+    if (kind === 'capture') { app.state.view = 'capture'; await app.renderCapture(); }
+    else { app.state.view = 'study'; app.state.currentStudy = session; app.state.studyTab = 'session'; app.state.studyMaterialVisible = false; await app.renderStudy(); }
+    const pending = click(app.refs.refresh);
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    assert.equal(typeof finishBootstrap, 'function');
+    assert.equal(app.refs.main.querySelector('[data-tour="capture-form"]'), null);
+    assert.equal(app.refs.main.querySelector('[data-tour="study-session"]'), null);
+    assert.equal(app.refs.refresh.disabled, true);
+    finishBootstrap({}); await pending;
+    assert.equal(app.refs.refresh.disabled, false);
+    assert.equal(unloadRequested(app), false);
+  }
+});
+
+test('dirty capture through real onboarding resume cancels in the original library and discards before the target switch', async () => {
+  let practiceId = '', version = 0;
+  const switches = [], navigations = [];
+  let tutorialState = { practiceId: 'synthetic-practice', status: 'paused', modelReady: true, currentStepId: 'capture-save', progress: {}, clock: {} };
+  const app = browser({
+    getContext: () => ({ practiceId, version, pending: 0 }),
+    setContext: id => { switches.push(id); practiceId = id; version++; },
+    onboarding: async (action, data) => {
+      if (action === 'resume') tutorialState = { ...tutorialState, status: 'active' };
+      if (action === 'checkpoint') tutorialState = { ...tutorialState, currentStepId: data.stepId };
+      return tutorialState;
+    },
+  });
+  const tutorial = app.createOnboarding({ beforeContextChange: app.prepareContextChange, contextChanged: async () => app.renderCapture(), navigate: async target => navigations.push(target.id || target.view) });
+  await tutorial.init();
+  app.state.view = 'capture'; await app.renderCapture();
+  const form = app.refs.main.querySelector('[data-tour="capture-form"]');
+  control(form, 'body').value = '合成正式库草稿';
+  const cancelled = tutorial.open();
+  await click(findButton(app.dialogs, '取消')); await cancelled;
+  assert.equal(practiceId, ''); assert.equal(version, 0);
+  assert.deepEqual(switches, []); assert.deepEqual(navigations, []);
+  assert.equal(app.refs.main.querySelector('[data-tour="capture-form"]'), form);
+  assert.equal(control(form, 'body').value, '合成正式库草稿');
+  assert.equal(tutorial.state.status, 'paused');
+  const accepted = tutorial.open();
+  await click(findButton(app.dialogs, '放弃输入')); await accepted;
+  assert.deepEqual(switches, ['synthetic-practice']);
+  assert.equal(practiceId, 'synthetic-practice'); assert.deepEqual(navigations, ['capture-save']);
+  const targetForm = app.refs.main.querySelector('[data-tour="capture-form"]');
+  assert.notEqual(targetForm, form); assert.equal(targetForm.draftPracticeId, 'synthetic-practice');
+  assert.equal(control(targetForm, 'body').value, '');
+  tutorial.dispose();
+});
+
 function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
   api = { getContext: () => ({ practiceId: '', version: 0 }), ...api };
   let requestSequence = 0;
@@ -193,6 +270,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
     createElementNS: (_, tag) => new Element(tag),
     createTextNode: value => new Element('text'),
     querySelector(selector) { if (!roots.has(selector)) roots.set(selector, new Element()); return roots.get(selector); },
+    querySelectorAll() { return []; },
     events: {}, addEventListener(name, handler) { this.events[name] = handler; },
   };
   document.createTextNode = value => { const node = new Element('text'); node.textContent = value; return node; };
@@ -221,6 +299,13 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
   context.app.jobsPanel = vm.runInContext('jobsPanel', context);
   context.app.generateToday = vm.runInContext('generateToday', context);
   context.app.renderToday = vm.runInContext('renderToday', context);
+  context.app.prepareContextChange = vm.runInContext('prepareContextChange', context);
+  Object.assign(context, { chapters, getCurriculum, materials, customMaterial, customSample, getMaterial, materialSample, URLSearchParams,
+    localStorage: { getItem() { return null; }, setItem() {} }, sessionStorage: { getItem() { return null; }, setItem() {} },
+    MutationObserver: class { observe() {} disconnect() {} },
+  });
+  Object.assign(context.window, { setInterval() {}, clearInterval() {}, clearTimeout() {} });
+  context.app.createOnboarding = vm.runInContext('(function () {\n' + onboardingSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn createOnboarding;\n})()', context);
   return context.app;
 }
 
