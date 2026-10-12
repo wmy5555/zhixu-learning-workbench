@@ -1729,6 +1729,7 @@ async function renderOutput() {
   const allowCloudQuestion = el("input", { type: "checkbox", checked: false });
   form.append(sectionHeading("有依据的问答与输出", "默认优先个人知识，并让你看见实际使用了哪些资料"), field("问题或输出目标", question), el("div", { class: "form-grid" }, [field("输出方式", mode), field("取材范围", el("div", { class: "segmented" }, [el("label", { class: "check-field" }, [knowledgeScope, "知识笔记"]), el("label", { class: "check-field" }, [sourceScope, "原始来源"])]))]), el("label", { class: "check-field" }, [allowCloudQuestion, el("span", { text: "允许将本次问题发给已配置的外部模型" })]), el("p", { class: "fine-print", text: "默认关闭：只在本机检索并列出已有材料。开启后，本次问题与标为允许云端的相关材料可发送给模型；仅本地材料不会外发。" }), el("div", { class: "notice info", text: "找不到、证据冲突或内容过期时，回答应明确说明。问答和草稿不会自动成为个人知识。" }), button("开始生成", { kind: "primary", type: "submit" }));
   const answerArea = el("section", { dataset: { tour: "output-result" } });
+  const draftsPanel = await renderDraftsPanel();
   if (state.lastOutput) renderAnswer(answerArea, state.lastOutput);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1742,9 +1743,10 @@ async function renderOutput() {
       const result = await api.ask({ question: question.value, scope, mode: mode.value, privacy: allowCloudQuestion.checked ? "cloud" : "local" });
       state.lastOutput = result;
       renderAnswer(answerArea, result);
+      try { await refreshDraftsPanel(draftsPanel); }
+      catch { toast("结果已保存，但输出工作区暂时未能刷新。", "error"); }
     } catch (error) { clear(answerArea).append(emptyState("本次生成未完成", errorMessage(error), button("重试", { onClick: () => form.requestSubmit() }))); }
   });
-  const draftsPanel = await renderDraftsPanel();
   wrapper.append(...[capabilityNotice(), form, answerArea, draftsPanel].filter(Boolean));
   clear(refs.main).append(wrapper);
 }
@@ -1762,9 +1764,15 @@ function renderAnswer(container, result) {
 }
 
 async function renderDraftsPanel() {
+  const panel = el("section", { dataset: { tour: "output-drafts" } });
+  await refreshDraftsPanel(panel);
+  return panel;
+}
+
+async function refreshDraftsPanel(panel) {
   const data = await api.drafts();
   const drafts = asArray(data.drafts);
-  return el("section", { dataset: { tour: "output-drafts" } }, [
+  clear(panel).append(
     sectionHeading("输出工作区", "编辑素材、提纲和草稿；只有主动采集后才回到知识流程"),
     drafts.length ? el("div", { class: "card-grid" }, drafts.map((draft) => el("article", { class: "card" }, [
       el("div", { class: "card-head" }, [badge(draft.mode === "draft" ? "草稿" : draft.mode === "outline" ? "提纲" : "回答"), badge(formatDate(draft.updatedAt))]),
@@ -1772,7 +1780,7 @@ async function renderDraftsPanel() {
       el("p", { text: truncate(draft.body || draft.answer, 150) }),
       el("div", { class: "card-foot" }, [el("span", { text: `${asArray(draft.usedIds).length} 条已采用知识` }), button("编辑", { kind: "text", onClick: () => openDraft(draft) })]),
     ]))) : emptyState("还没有输出草稿", "提出一个问题或写作目标后，结果会保留在这里继续编辑。"),
-  ]);
+  );
 }
 
 function openDraft(draft) {
