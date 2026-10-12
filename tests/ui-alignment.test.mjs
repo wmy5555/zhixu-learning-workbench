@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import path from 'node:path';
+import { createApp } from '../src/server.mjs';
 import test from 'node:test';
 import vm from 'node:vm';
 import { createProcessFeedback } from '../public/process-feedback.mjs';
@@ -68,6 +70,7 @@ const plain = value => JSON.parse(JSON.stringify(value));
 
 function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
   api = { getContext: () => ({ practiceId: '', version: 0 }), ...api };
+  let requestSequence = 0;
   const roots = new Map();
   const document = {
     documentElement: new Element('html'),
@@ -80,7 +83,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
   };
   document.createTextNode = value => { const node = new Element('text'); node.textContent = value; return node; };
   const context = vm.createContext({
-    api, document, initSidebar, createProcessFeedback, parseSourceFile, TextDecoder, Node: Element, URL, Intl: Object.assign(Object.create(Intl), { DateTimeFormat: dateTimeFormat }), Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => 'request-ui' },
+    api, document, initSidebar, createProcessFeedback, parseSourceFile, TextDecoder, Node: Element, URL, Intl: Object.assign(Object.create(Intl), { DateTimeFormat: dateTimeFormat }), Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => `request-ui-${++requestSequence}` },
     FormData: class {
       constructor(form) { this.form = form; }
       entries() { return descendants(this.form).filter(node => node.name && !node.disabled && ['input', 'textarea', 'select'].includes(node.tagName)).map(node => [node.name, String(node.tagName === 'select' ? node.children.find(option => option.selected)?.value || '' : node.value)]); }
@@ -90,6 +93,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
   });
   const stripped = appSource.replace(/import[\s\S]*?from "\.\/api\.mjs";\s*/, '').replace(/import[\s\S]*?from "\.\/ui\.mjs";\s*/, '').replace(/^init\(\);\s*$/m, '').replace('const { createUsagePanel } = await import("./usage.mjs");', '');
   vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + sourceMapSource + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { renderSourceGroupDrawer, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
+  context.app.beginStudy = vm.runInContext('beginStudy', context);
   context.app.manualExtract = vm.runInContext('manualExtract', context);
   context.app.serializeForm = vm.runInContext('serializeForm', context);
   context.app.processControls = vm.runInContext('processControls', context);
@@ -1376,4 +1380,126 @@ test('capture accepts blank titles independently of decomposition and explains l
     assert.equal(writes[0].process, false);
     assert.equal(writes[0].research, false);
   }
+});
+
+
+test('source drawer start blocks double clicks and other entries until navigation settles, then permits a new intent', async () => {
+  let resolveStart, resolveRead;
+  const requests = [];
+  const session = { id: 'session-one', noteId: 'child', status: 'reading', turns: [], material: '合成正文', depth: 'explain' };
+  const app = browser({
+    startStudy: input => { requests.push(plain(input)); return new Promise(resolve => { resolveStart = resolve; }); },
+    study: () => new Promise(resolve => { resolveRead = resolve; }),
+  });
+  const child = { id: 'child', title: '合成观点', kind: 'knowledge', body: '合成正文', meta: { stage: 'learning' } };
+  const source = { id: 'source', kind: 'source', title: '合成来源', body: '合成原文', meta: {}, children: [child] };
+  app.renderSourceGroupDrawer(source);
+  const start = findButton(app.refs.drawerBody, '开始学习');
+  assert.ok(start);
+  const first = click(start);
+  assert.equal(start.disabled, true);
+  await click(start);
+  await app.beginStudy('another-child');
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].noteId, child.id);
+  assert.ok(requests[0].requestId);
+  resolveStart(session);
+  await new Promise(resolve => setImmediate(resolve));
+  await app.beginStudy(child.id);
+  assert.equal(requests.length, 1, 'lock includes rendering/navigation after POST');
+  resolveRead(session); await first;
+  assert.equal(start.disabled, false);
+  const next = click(start);
+  assert.equal(requests.length, 2);
+  assert.notEqual(requests[1].requestId, requests[0].requestId);
+  resolveStart({ ...session, id: 'session-two' });
+  await new Promise(resolve => setImmediate(resolve));
+  resolveRead({ ...session, id: 'session-two' }); await next;
+  assert.equal(app.state.currentStudy.id, 'session-two');
+});
+
+test('failed study start releases the lock and button so an explicit retry can proceed', async () => {
+  let rejectStart, count = 0;
+  const app = browser({ startStudy: () => { count++; return new Promise((resolve, reject) => { rejectStart = reject; }); } });
+  const control = new Element('button');
+  const pending = app.beginStudy('synthetic-note', undefined, {}, control);
+  assert.equal(control.disabled, true);
+  await app.beginStudy('synthetic-note'); assert.equal(count, 1);
+  rejectStart(new Error('合成失败')); await pending;
+  assert.equal(control.disabled, false);
+  const retry = app.beginStudy('synthetic-note', undefined, {}, control);
+  assert.equal(count, 2);
+  rejectStart(new Error('合成重试失败')); await retry;
+  assert.equal(control.disabled, false);
+});
+
+
+test('study retry after a committed POST loses its response reuses the real stored session, then a new start is independent', async t => {
+  const tempRoot = path.resolve(import.meta.dirname, '..', '.tmp');
+  await mkdir(tempRoot, { recursive: true });
+  const root = await mkdtemp(path.join(tempRoot, 'study-ui-'));
+  const backend = createApp({ dataDir: path.join(root, 'data'), vaultDir: path.join(root, 'vault'), scheduler: false });
+  t.after(async () => { await backend.close(); assert.ok(root.startsWith(tempRoot + path.sep)); await rm(root, { recursive: true, force: true }); });
+  const note = backend.service.store.create({ kind: 'knowledge', title: '合成响应丢失观点', body: '合成测试正文', meta: { stage: 'learning', privacy: 'local' } });
+  const requests = [];
+  let loseReply = true, committed;
+  const app = browser({ startStudy: async input => {
+    requests.push(plain(input));
+    committed = backend.service.startStudy(plain(input));
+    if (loseReply) { loseReply = false; throw new Error('合成：服务端已保存但响应丢失'); }
+    return committed;
+  }, study: async id => backend.service.session(id) });
+  await app.beginStudy(note.id);
+  const firstId = committed.id;
+  assert.equal(backend.service.store.records('sessions').length, 1);
+  await app.beginStudy(note.id);
+  assert.equal(requests[1].requestId, requests[0].requestId);
+  assert.equal(app.state.currentStudy.id, firstId);
+  assert.equal(backend.service.store.records('sessions').length, 1);
+  await app.beginStudy(note.id);
+  assert.notEqual(requests[2].requestId, requests[0].requestId);
+  assert.notEqual(app.state.currentStudy.id, firstId);
+  assert.equal(backend.service.store.records('sessions').length, 2);
+});
+
+test('uncertain start keys are retained per note, plan, topic, mistake and library intent', async () => {
+  const requests = [];
+  let practiceId = '', version = 0;
+  const app = browser({ getContext: () => ({ practiceId, version }), startStudy: async input => { requests.push(plain(input)); throw new Error('合成响应失败'); } });
+  const begin = (note = 'note', plan, context = {}) => app.beginStudy(note, plan, context);
+  await begin(); await begin('another'); await begin();
+  assert.equal(requests[2].requestId, requests[0].requestId);
+  for (const [note, plan, context] of [['note', 'plan', {}], ['note', undefined, { topicId: 'topic' }], ['note', undefined, { mistakeId: 'mistake' }]]) {
+    await begin(note, plan, context); const original = requests.at(-1).requestId;
+    assert.notEqual(original, requests[0].requestId);
+    await begin(note, plan, context); assert.equal(requests.at(-1).requestId, original);
+  }
+  practiceId = 'practice'; version++;
+  await begin(); assert.notEqual(requests.at(-1).requestId, requests[0].requestId);
+});
+
+
+test('confirm understanding blocks simultaneous and completed-form submissions while failed writes can retry', async () => {
+  let resolveWrite, rejectWrite;
+  const writes = [];
+  const app = browser({ confirmStudy: (id, input) => { writes.push({ id, ...plain(input) }); return new Promise((resolve, reject) => { resolveWrite = resolve; rejectWrite = reject; }); } });
+  app.confirmUnderstanding({ id: 'synthetic-session', turns: [{ answer: '合成个人理解' }] });
+  const form = app.refs.drawerBody.querySelector('form'), submit = findButton(form, '确认写入');
+  const send = () => form.events.submit({ preventDefault() {} });
+  const failed = send();
+  assert.equal(submit.disabled, true);
+  await send(); assert.equal(writes.length, 1);
+  rejectWrite(new Error('合成写入失败')); await failed;
+  assert.equal(submit.disabled, false);
+  assert.equal(form.querySelector('textarea').value, '合成个人理解');
+  const retry = send(); await send();
+  assert.equal(writes.length, 2);
+  resolveWrite({}); await retry;
+  assert.equal(submit.disabled, true);
+  await send(); assert.equal(writes.length, 2, 'detached old form cannot confirm twice after success');
+  app.confirmUnderstanding({ id: 'synthetic-session', turns: [{ answer: '新的主动确认' }] });
+  const nextForm = app.refs.drawerBody.querySelector('form');
+  const next = nextForm.events.submit({ preventDefault() {} });
+  assert.equal(writes.length, 3, 'a new confirmation form remains independently usable');
+  resolveWrite({}); await next;
 });
