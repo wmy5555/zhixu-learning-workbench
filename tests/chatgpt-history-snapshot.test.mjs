@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
 import { createService } from '../src/service.mjs';
-import { snapshotPipePath, verifiedHistoryCapture } from '../src/chatgpt-history-snapshot.mjs';
+import { authenticateHistoryEnvelope, receiveHistorySnapshot, snapshotPipePath, verifiedHistoryCapture } from '../src/chatgpt-history-snapshot.mjs';
 
 const tempRoot = path.resolve(import.meta.dirname, '../.tmp');
 fs.mkdirSync(tempRoot, { recursive: true });
@@ -20,22 +20,26 @@ function snapshot() {
     units, pages: [
       { range: { start: { message: 0, offset: 0 }, end: { message: 1, offset: 3 } }, hasMore: true },
       { range: { start: { message: 1, offset: 3 }, end: { message: 2, offset: 0 } }, hasMore: false },
-    ], coverage: { text: 'complete_visible_active_branch' }, warnings: [], expires_at: Date.now() + 60000 };
+    ], coverage: { text: 'complete_visible_active_branch' }, warnings: [], issued_at: Date.now(), expires_at: Date.now() + 60000 };
 }
+const signed = (reference, payload, key) => ({ payload,
+  mac: createHmac('sha256', key).update(reference + '\n' + JSON.stringify(payload)).digest('hex') });
 const input = ref => ({ requestId: randomUUID(), historySnapshotRef: ref, summary: '模型生成的独立摘要。',
   structured: { version: 1, items: [{ id: 'item_one', title: '合成候选', body: '待核验的建议。', type: 'knowledge', sourceMessageIds: ['message_b'], uncertainties: ['尚未核验。'] }] } });
 
 test('local snapshot transfer saves exact source and separate unverified candidate; retry is idempotent', async t => {
   const root = fs.mkdtempSync(path.join(tempRoot, 'chatgpt-handoff-'));
-  const service = createService({ dataDir: path.join(root, 'data'), vaultDir: path.join(root, 'vault') });
+  const key = randomBytes(32);
+  const service = createService({ dataDir: path.join(root, 'data'), vaultDir: path.join(root, 'vault'),
+    receiveHistorySnapshot: ref => receiveHistorySnapshot(ref, { readAuthKey: async () => Buffer.from(key) }) });
   service.updateSettings({ mcp: { chatgptEnabled: true } });
   const reference = 'zhixu-history-v1:' + randomBytes(32).toString('hex');
   const payload = snapshot();
-  const server = createServer(socket => socket.end(JSON.stringify(payload)));
+  const server = createServer(socket => socket.end(JSON.stringify(signed(reference, payload, key))));
   const pipePath = snapshotPipePath(reference);
   if (process.platform !== 'win32') fs.mkdirSync(path.dirname(pipePath), { mode: 0o700 });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(pipePath, resolve); });
-  t.after(async () => { await new Promise(resolve => server.close(resolve)); if (process.platform !== 'win32') fs.rmdirSync(path.dirname(pipePath)); service.store.db.close(); assert.ok(root.startsWith(tempRoot + path.sep)); fs.rmSync(root, { recursive: true, force: true }); });
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); if (process.platform !== 'win32') fs.rmdirSync(path.dirname(pipePath)); service.store.db.close(); key.fill(0); assert.ok(root.startsWith(tempRoot + path.sep)); fs.rmSync(root, { recursive: true, force: true }); });
   const request = input(reference);
   const receipt = await service.chatgpt.captureHistorySnapshot(request);
   assert.equal(receipt.status, 'saved'); assert.equal(receipt.complete, true); assert.equal(receipt.importedItems, 1);
@@ -56,6 +60,18 @@ test('tampered text, missing pages, duplicate IDs and expired snapshots fail bef
     { ...valid, pages: valid.pages.slice(1) },
     { ...valid, units: [valid.units[0], { ...valid.units[1], message_id: 'message_a' }] },
     { ...valid, expires_at: Date.now() - 1 },
+    { ...valid, expires_at: valid.issued_at + 5 * 60 * 1000 + 1 },
+    { ...valid, issued_at: Date.now() - 6 * 60 * 1000 },
   ]) assert.throws(() => verifiedHistoryCapture(changed, input(reference)));
   assert.throws(() => snapshotPipePath('http://127.0.0.1/private'), { code: 'CHATGPT_HISTORY_REF_INVALID' });
+});
+
+test('reader signature binds the complete payload to the private key and exact reference', () => {
+  const key = randomBytes(32), ref = 'zhixu-history-v1:' + randomBytes(32).toString('hex');
+  const payload = snapshot(), envelope = signed(ref, payload, key);
+  assert.deepEqual(authenticateHistoryEnvelope(envelope, ref, key), payload);
+  assert.throws(() => authenticateHistoryEnvelope({ ...envelope, payload: { ...payload, title: '伪造标题' } }, ref, key), { code: 'CHATGPT_HISTORY_AUTH' });
+  assert.throws(() => authenticateHistoryEnvelope(envelope, 'zhixu-history-v1:' + randomBytes(32).toString('hex'), key), { code: 'CHATGPT_HISTORY_AUTH' });
+  assert.throws(() => authenticateHistoryEnvelope(envelope, ref, randomBytes(32)), { code: 'CHATGPT_HISTORY_AUTH' });
+  key.fill(0);
 });

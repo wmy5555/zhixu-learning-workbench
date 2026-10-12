@@ -1,8 +1,9 @@
-import { createHash } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fail } from './store.mjs';
+import { readHistoryHandoffKey } from './chatgpt-history-auth.mjs';
 
 const referencePattern = /^zhixu-history-v1:([a-f0-9]{64})$/;
 const idPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -16,12 +17,25 @@ export function snapshotPipePath(reference, { platform = process.platform, temp 
   return platform === 'win32' ? `\\\\.\\pipe\\zhixu-history-${match[1]}` : join(temp, `zhixu-history-${match[1]}`, 'handoff.sock');
 }
 
-export async function receiveHistorySnapshot(reference, { timeout = 65000, maxBytes = 2 * 1024 * 1024 } = {}) {
+export function authenticateHistoryEnvelope(envelope, reference, key) {
+  if (!envelope || typeof envelope !== 'object' || !envelope.payload || typeof envelope.payload !== 'object' ||
+    Array.isArray(envelope.payload) || typeof envelope.mac !== 'string' || !/^[a-f0-9]{64}$/.test(envelope.mac) ||
+    !Buffer.isBuffer(key) || key.length !== 32) {
+    fail('历史快照来源无法认证；不会保存。', 'CHATGPT_HISTORY_AUTH');
+  }
+  const expected = createHmac('sha256', key).update(reference + '\n' + JSON.stringify(envelope.payload)).digest();
+  if (!timingSafeEqual(expected, Buffer.from(envelope.mac, 'hex'))) {
+    fail('历史快照来源无法认证；不会保存。', 'CHATGPT_HISTORY_AUTH');
+  }
+  return envelope.payload;
+}
+
+export async function receiveHistorySnapshot(reference, { timeout = 65000, maxBytes = 2 * 1024 * 1024, readAuthKey = readHistoryHandoffKey } = {}) {
   const path = snapshotPipePath(reference);
   return new Promise((resolve, reject) => {
     const socket = connect({ path });
     const chunks = [];
-    let size = 0, settled = false;
+    let size = 0, settled = false, ended = false;
     const finish = (error, value) => {
       if (settled) return;
       settled = true;
@@ -30,21 +44,28 @@ export async function receiveHistorySnapshot(reference, { timeout = 65000, maxBy
     };
     socket.setTimeout(timeout, () => finish(new Error('历史快照传输超时。')));
     socket.on('error', () => finish(new Error('历史快照不可用或已过期；请重新读取。')));
-    socket.on('close', () => finish(new Error('历史快照传输提前中断；请重新读取。')));
+    socket.on('close', () => { if (!ended) finish(new Error('历史快照传输提前中断；请重新读取。')); });
     socket.on('data', chunk => {
       size += chunk.length;
       if (size > maxBytes) return finish(new Error('历史快照超过本地导入上限。'));
       chunks.push(chunk);
     });
-    socket.on('end', () => {
-      try { finish(null, JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
-      catch { finish(new Error('历史快照传输格式无效。')); }
+    socket.on('end', async () => {
+      ended = true;
+      let key;
+      try {
+        const envelope = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        key = await readAuthKey();
+        finish(null, authenticateHistoryEnvelope(envelope, reference, key));
+      } catch { finish(new Error('历史快照格式或来源认证无效；请重新读取。')); }
+      finally { key?.fill(0); }
     });
   });
 }
 
 export function verifiedHistoryCapture(snapshot, input) {
   const { requestId, summary, structured, baseRevision } = input;
+  const receivedAt = Date.now();
   if (snapshot?.version !== 1 || !idPattern.test(snapshot.conversation_id || '') ||
     !/^[a-f0-9]{32}$/.test(snapshot.snapshot_id || '') ||
     !/^[a-f0-9]{64}$/.test(snapshot.transcript_sha256 || '') ||
@@ -52,7 +73,10 @@ export function verifiedHistoryCapture(snapshot, input) {
     snapshot.branch !== 'active' || snapshot.coverage?.text !== 'complete_visible_active_branch' ||
     !Array.isArray(snapshot.units) || snapshot.units.length < 1 || snapshot.units.length > 200 ||
     !Array.isArray(snapshot.pages) || snapshot.pages.length < 1 || snapshot.pages.length > 1000 ||
-    !Number.isFinite(snapshot.expires_at) || snapshot.expires_at <= Date.now()) {
+    !Number.isSafeInteger(snapshot.issued_at) || snapshot.issued_at > receivedAt ||
+    snapshot.issued_at < receivedAt - 5 * 60 * 1000 ||
+    !Number.isSafeInteger(snapshot.expires_at) || snapshot.expires_at <= receivedAt ||
+    snapshot.expires_at > snapshot.issued_at + 5 * 60 * 1000) {
     fail('历史快照不完整、过期或格式无效；不会保存。', 'CHATGPT_HISTORY_INVALID');
   }
   const ids = new Set();

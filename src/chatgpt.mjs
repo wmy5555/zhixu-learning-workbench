@@ -47,7 +47,7 @@ function renderConversation(value) {
   const scope = value.coverage === 'selected_excerpt' ? '用户选定片段' : value.coverage === 'visible_history' ? '调用方分页读取的当前可见历史分支' : 'ChatGPT 当前可见上下文';
   return [
     '## 收集范围', scope,
-    '只保存本次实际收到的消息；收集范围由调用路径及权限决定，不保证覆盖完整历史、附件或其他会话。',
+    '只保存本次实际收到的消息；知序本身未独立核对网页记录。手动传入的原文没有读取器核对证据；经本机历史读取器传输的原文仅由该读取器在发送前核对当前可见分支。两种方式均不保证覆盖完整历史、隐藏分支、附件或其他会话。',
     value.sync ? `累计保留 ${value.messages.length} 条已收到消息；本次${value.sync.complete ? '声明已读到当前可见分支末尾' : '范围不完整，保留此前收到的消息，不推断缺失部分'}。` : '',
     value.limitations ? `补充限制：\n\n${literalBlock(value.limitations)}` : '',
     '## 整理摘要（ChatGPT 生成，未经独立核验）', literalBlock(value.summary),
