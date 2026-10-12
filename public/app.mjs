@@ -180,6 +180,7 @@ async function refreshCompletedSource(sourceId) {
 }
 
 async function navigate(view, options = {}) {
+  if (!await confirmUnsavedInputDiscard()) return;
   setPage(view);
   if (!options.keepDrawer) closeDrawer();
   showLoading();
@@ -333,6 +334,7 @@ function groupJobSummary(job) {
 }
 
 async function renderCapture() {
+  if (unsavedInputForm()?.hasUnsavedChanges() && !await confirmUnsavedInputDiscard()) return;
   const sourceForm = el("form", { class: "panel capture-form", dataset: { tour: "capture-form" } });
   const title = el("input", { name: "title", placeholder: "可留空，根据原文生成便于检索的标题" });
   const body = el("textarea", { name: "body", placeholder: "粘贴原文。系统会保留这份原始快照，不用摘要替代。", required: true, rows: 12 });
@@ -377,6 +379,8 @@ async function renderCapture() {
     el("label", { class: "check-field" }, [research, el("span", { text: "拆解时联网检验正确性并寻找反例（可选，需同时勾选 AI 拆解）" })]),
     el("div", { class: "form-actions" }, [button("保存原始资料", { kind: "primary", type: "submit" }), button("清空", { onClick: () => sourceForm.reset() })]),
   );
+  const draftValues = () => JSON.stringify({ ...serializeForm(sourceForm), localOnly: localOnly.checked, process: process.checked, research: research.checked });
+  protectUnsavedInput(sourceForm, draftValues, "收集内容");
   sourceForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const data = serializeForm(sourceForm);
@@ -1223,6 +1227,11 @@ async function beginStudy(noteId, planId, context = {}, control) {
 }
 
 async function renderStudy() {
+  const context = api.getContext();
+  const currentForm = refs.main.querySelector('[data-tour="study-session"]');
+  const keepDraft = state.studyTab === "session" && currentForm?.dataset.sessionId === state.currentStudy?.id
+    && currentForm?.draftContextVersion === context.version && currentForm.draftPracticeId === context.practiceId;
+  if (!keepDraft && !await confirmUnsavedInputDiscard()) { state.studyTab = "session"; return; }
   const wrapper = el("div", { class: "page-stack" });
   const tabs = el("div", { class: "tabs" }, [
     tabButton("queue", "学习队列"), tabButton("session", "当前学习"), tabButton("mistakes", "错题库"),
@@ -1231,11 +1240,17 @@ async function renderStudy() {
   if (state.studyTab === "session") wrapper.append(await studySessionPanel());
   else if (state.studyTab === "mistakes") wrapper.append(await mistakesPanel());
   else wrapper.append(await studyQueuePanel());
+  if (keepDraft) {
+    const latest = api.getContext(), nextForm = wrapper.querySelector('[data-tour="study-session"]');
+    if (latest.version !== context.version || latest.practiceId !== context.practiceId || unsavedInputForm() !== currentForm) return;
+    if (!nextForm || nextForm.dataset.sessionId !== currentForm.dataset.sessionId) return;
+    nextForm.restoreAnswerDraft(currentForm.readAnswerDraft());
+  }
   clear(refs.main).append(wrapper);
 }
 
 function tabButton(value, label) {
-  return el("button", { class: `tab${state.studyTab === value ? " is-active" : ""}`, text: label, on: { click: () => { state.studyTab = value; renderStudy().catch(handleError); } } });
+  return el("button", { class: `tab${state.studyTab === value ? " is-active" : ""}`, text: label, on: { click: async () => { state.studyTab = value; await renderStudy().catch(handleError); } } });
 }
 
 async function studyQueuePanel() {
@@ -1350,6 +1365,10 @@ async function studySessionPanel() {
       } }), "study-finish"),
     ]),
   ]);
+  protectUnsavedInput(form, () => answer.value, "回答");
+  form.dataset.sessionId = session.id;
+  form.readAnswerDraft = () => ({ answer: answer.value, hintUsed: hintUsed.value });
+  form.restoreAnswerDraft = draft => { answer.value = draft.answer; hintUsed.value = draft.hintUsed; };
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (awaiting || completed) return;
@@ -1358,6 +1377,7 @@ async function studySessionPanel() {
     submit.disabled = true;
     try {
       state.currentStudy = await api.answer(session.id, { answer: answer.value.trim(), hintUsed: hintUsed.value, requestId: crypto.randomUUID() });
+      answer.value = "";
       toast(state.currentStudy.pendingJobId ? "回答已保存，反馈任务正在处理" : "回答已保存", "success");
       await renderStudy();
     } catch (error) { handleError(error); }
@@ -1748,6 +1768,7 @@ async function renderOutput() {
   const allowCloudQuestion = el("input", { type: "checkbox", checked: false });
   form.append(sectionHeading("有依据的问答与输出", "默认优先个人知识，并让你看见实际使用了哪些资料"), field("问题或输出目标", question), el("div", { class: "form-grid" }, [field("输出方式", mode), field("取材范围", el("div", { class: "segmented" }, [el("label", { class: "check-field" }, [knowledgeScope, "知识笔记"]), el("label", { class: "check-field" }, [sourceScope, "原始来源"])]))]), el("label", { class: "check-field" }, [allowCloudQuestion, el("span", { text: "允许将本次问题发给已配置的外部模型" })]), el("p", { class: "fine-print", text: "默认关闭：只在本机检索并列出已有材料。开启后，本次问题与标为允许云端的相关材料可发送给模型；仅本地材料不会外发。" }), el("div", { class: "notice info", text: "找不到、证据冲突或内容过期时，回答应明确说明。问答和草稿不会自动成为个人知识。" }), button("开始生成", { kind: "primary", type: "submit" }));
   const answerArea = el("section", { dataset: { tour: "output-result" } });
+  const draftsPanel = await renderDraftsPanel();
   if (state.lastOutput) renderAnswer(answerArea, state.lastOutput);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1761,9 +1782,10 @@ async function renderOutput() {
       const result = await api.ask({ question: question.value, scope, mode: mode.value, privacy: allowCloudQuestion.checked ? "cloud" : "local" });
       state.lastOutput = result;
       renderAnswer(answerArea, result);
+      try { await refreshDraftsPanel(); }
+      catch { toast("结果已保存，但输出工作区暂时未能刷新。", "error"); }
     } catch (error) { clear(answerArea).append(emptyState("本次生成未完成", errorMessage(error), button("重试", { onClick: () => form.requestSubmit() }))); }
   });
-  const draftsPanel = await renderDraftsPanel();
   wrapper.append(...[capabilityNotice(), form, answerArea, draftsPanel].filter(Boolean));
   clear(refs.main).append(wrapper);
 }
@@ -1771,9 +1793,10 @@ async function renderOutput() {
 function renderAnswer(container, result) {
   container.dataset.tour = "output-result";
   const citations = asArray(result.citations);
-  const limitations = asArray(result.limitations);
+  const limitations = [...asArray(result.limitations)];
+  if (result.generated !== true && !limitations.includes("未进行 AI 生成。")) limitations.push("未进行 AI 生成。");
   clear(container).append(el("section", { class: "panel" }, [
-    sectionHeading("生成结果", result.draftId ? "已保存到输出工作区，可继续编辑" : "本次结果尚未成为个人知识"),
+    sectionHeading(result.generated === true ? "AI 生成结果" : "本地检索结果（未进行 AI 生成）", result.draftId ? "已保存到输出工作区，可继续编辑" : "本次结果尚未成为个人知识"),
     el("div", { class: "prose", text: result.answer || "没有生成可用内容" }),
     limitations.length ? el("div", { class: "notice", text: `限制：${limitations.join("；")}` }) : null,
     citations.length ? el("div", {}, [sectionHeading("实际引用", "关键主张应能回到笔记与底层来源"), el("div", { class: "list" }, citations.map((citation) => el("div", { class: "citation" }, [el("strong", { text: citation.title || citation.noteId || citation.id || "引用材料" }), citation.excerpt ? el("p", { text: citation.excerpt }) : null, citation.locator ? el("p", { text: `定位：${citation.locator}` }) : null, citation.noteId || citation.id ? button("打开材料", { kind: "text", onClick: () => openNote(citation.noteId || citation.id) }) : null, evidenceDetails(citation.noteId || citation.id, asArray(citation.sources))])))]) : el("div", { class: "notice danger", text: "本次结果没有返回可追溯引用，请不要把它视为有据回答。" }),
@@ -1781,9 +1804,17 @@ function renderAnswer(container, result) {
 }
 
 async function renderDraftsPanel() {
+  const panel = el("section", { dataset: { tour: "output-drafts" } });
+  await refreshDraftsPanel(panel);
+  return panel;
+}
+
+async function refreshDraftsPanel(panel = null) {
   const data = await api.drafts();
+  const target = panel || refs.main.querySelector('[data-tour="output-drafts"]');
+  if (!target) return;
   const drafts = asArray(data.drafts);
-  return el("section", { dataset: { tour: "output-drafts" } }, [
+  clear(target).append(
     sectionHeading("输出工作区", "编辑素材、提纲和草稿；只有主动采集后才回到知识流程"),
     drafts.length ? el("div", { class: "card-grid" }, drafts.map((draft) => el("article", { class: "card" }, [
       el("div", { class: "card-head" }, [badge(draft.mode === "draft" ? "草稿" : draft.mode === "outline" ? "提纲" : "回答"), badge(formatDate(draft.updatedAt))]),
@@ -1791,7 +1822,7 @@ async function renderDraftsPanel() {
       el("p", { text: truncate(draft.body || draft.answer, 150) }),
       el("div", { class: "card-foot" }, [el("span", { text: `${asArray(draft.usedIds).length} 条已采用知识` }), button("编辑", { kind: "text", onClick: () => openDraft(draft) })]),
     ]))) : emptyState("还没有输出草稿", "提出一个问题或写作目标后，结果会保留在这里继续编辑。"),
-  ]);
+  );
 }
 
 function openDraft(draft) {
@@ -2475,7 +2506,9 @@ refs.nav.addEventListener("click", (event) => {
 });
 refs.quickCapture.addEventListener("click", () => navigate("capture"));
 refs.refresh.addEventListener("click", async () => {
+  if (!await confirmUnsavedInputDiscard()) return;
   refs.refresh.disabled = true;
+  showLoading();
   try { await refreshBootstrap(); await renderCurrent(); toast("已读取最新状态", "success"); }
   catch (error) { handleError(error); }
   finally { refs.refresh.disabled = false; }
@@ -2483,6 +2516,49 @@ refs.refresh.addEventListener("click", async () => {
 refs.drawerClose.addEventListener("click", requestCloseDrawer);
 refs.drawerBackdrop.addEventListener("click", requestCloseDrawer);
 document.addEventListener("keydown", (event) => { if (event.key === "Escape") requestCloseDrawer(); });
+
+function unsavedInputForm() {
+  return refs.main.querySelector('[data-tour="capture-form"]') || refs.main.querySelector('[data-tour="study-session"]');
+}
+
+function protectUnsavedInput(form, values, description) {
+  form.draftContextVersion = api.getContext().version;
+  form.draftPracticeId = api.getContext().practiceId;
+  const original = values();
+  form.hasUnsavedChanges = () => values() !== original;
+  let confirming = false;
+  form.confirmDiscardChanges = async () => {
+    if (confirming) return false;
+    const context = api.getContext();
+    if (form.hasUnsavedChanges()) {
+      confirming = true;
+      try {
+        if (!await confirmAction({ title: `放弃未保存的${description}？`, message: "当前输入尚未保存。取消可继续填写；确认放弃后，本次输入不会保存。", confirmText: "放弃输入", danger: true })) return false;
+      } finally { confirming = false; }
+    }
+    const latest = api.getContext();
+    return context.version === latest.version && context.practiceId === latest.practiceId && unsavedInputForm() === form;
+  };
+}
+
+async function confirmUnsavedInputDiscard() {
+  const form = unsavedInputForm();
+  return !form?.confirmDiscardChanges || await form.confirmDiscardChanges();
+}
+
+async function prepareContextChange() {
+  if (!await confirmUnsavedInputDiscard()) return false;
+  showLoading();
+  return true;
+}
+
+// Only inspect the live form; sensitive draft text never enters browser storage.
+window.addEventListener("beforeunload", (event) => {
+  if (!unsavedInputForm()?.hasUnsavedChanges()) return;
+  event.preventDefault();
+  // Legacy Chrome/Edge also require a nonempty returnValue to request the prompt.
+  event.returnValue = "unsaved";
+});
 
 async function init() {
   const [hashView, systemTab] = window.location.hash.slice(1).split("/");
@@ -2506,6 +2582,7 @@ async function init() {
         navigate: navigateTutorial,
         fillSample: fillTutorialSample,
         refresh: async () => { await refreshBootstrap(); await renderCurrent(); },
+        beforeContextChange: prepareContextChange,
         contextChanged: async () => {
           closeDrawer(); state.currentStudy = null; state.studyMaterialVisible = true; state.studyTab = "queue";
           state.lastOutput = null;
