@@ -1405,15 +1405,21 @@ function confirmUnderstanding(session) {
   const latest = asArray(session.turns).at(-1);
   const form = el("form", { class: "page-stack" });
   const body = el("textarea", { rows: 16, textContent: latest?.answer || "", placeholder: "这是你的个人理解。你可以参考反馈，但请亲自确认最终文字。" });
-  form.append(el("div", { class: "notice", text: "只有点击确认后，这段文字才会作为个人理解写入知识层。" }), field("个人理解", body), el("div", { class: "form-actions" }, [button("确认写入", { kind: "primary", type: "submit" }), button("暂不确认", { onClick: closeDrawer })]));
+  let submitting = false, confirmed = false;
+  const submit = button("确认写入", { kind: "primary", type: "submit" });
+  form.append(el("div", { class: "notice", text: "只有点击确认后，这段文字才会作为个人理解写入知识层。" }), field("个人理解", body), el("div", { class: "form-actions" }, [submit, button("暂不确认", { onClick: closeDrawer })]));
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (submitting || confirmed) return;
+    submitting = true; submit.disabled = true;
     try {
       const note = await api.confirmStudy(session.id, { body: body.value });
+      confirmed = true;
       toast("个人理解已由你确认并保存", "success");
       closeDrawer();
       if (note?.id) openNote(note.id);
     } catch (error) { handleError(error); }
+    finally { submitting = false; if (!confirmed) submit.disabled = false; }
   });
   openDrawer("确认个人理解", "学习收尾", form);
 }

@@ -1477,3 +1477,29 @@ test('uncertain start keys are retained per note, plan, topic, mistake and libra
   practiceId = 'practice'; version++;
   await begin(); assert.notEqual(requests.at(-1).requestId, requests[0].requestId);
 });
+
+
+test('confirm understanding blocks simultaneous and completed-form submissions while failed writes can retry', async () => {
+  let resolveWrite, rejectWrite;
+  const writes = [];
+  const app = browser({ confirmStudy: (id, input) => { writes.push({ id, ...plain(input) }); return new Promise((resolve, reject) => { resolveWrite = resolve; rejectWrite = reject; }); } });
+  app.confirmUnderstanding({ id: 'synthetic-session', turns: [{ answer: '合成个人理解' }] });
+  const form = app.refs.drawerBody.querySelector('form'), submit = findButton(form, '确认写入');
+  const send = () => form.events.submit({ preventDefault() {} });
+  const failed = send();
+  assert.equal(submit.disabled, true);
+  await send(); assert.equal(writes.length, 1);
+  rejectWrite(new Error('合成写入失败')); await failed;
+  assert.equal(submit.disabled, false);
+  assert.equal(form.querySelector('textarea').value, '合成个人理解');
+  const retry = send(); await send();
+  assert.equal(writes.length, 2);
+  resolveWrite({}); await retry;
+  assert.equal(submit.disabled, true);
+  await send(); assert.equal(writes.length, 2, 'detached old form cannot confirm twice after success');
+  app.confirmUnderstanding({ id: 'synthetic-session', turns: [{ answer: '新的主动确认' }] });
+  const nextForm = app.refs.drawerBody.querySelector('form');
+  const next = nextForm.events.submit({ preventDefault() {} });
+  assert.equal(writes.length, 3, 'a new confirmation form remains independently usable');
+  resolveWrite({}); await next;
+});
