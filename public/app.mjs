@@ -2545,7 +2545,8 @@ async function prepareContextChange() {
 window.addEventListener("beforeunload", (event) => {
   if (!unsavedInputForm()?.hasUnsavedChanges()) return;
   event.preventDefault();
-  event.returnValue = "";
+  // Legacy Chrome/Edge also require a nonempty returnValue to request the prompt.
+  event.returnValue = "unsaved";
 });
 
 async function init() {

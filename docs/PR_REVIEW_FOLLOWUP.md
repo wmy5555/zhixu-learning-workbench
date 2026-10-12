@@ -1,5 +1,7 @@
 # PR 审阅核对与后续事项
 
+2026-10-12 PR #61 浏览器级刷新调查：重新读取当前 PR 评论与 cd7ad8d/main，未有新未处理审阅。监听在 app 模块顶层挂载，卸载时直接读取当前表单；定向回归未发现挂载或 dirty 判断遗漏。将 legacy returnValue 改为非空，覆盖 Chrome/Edge 119 之前需要的回退，并在现有 dirty/pristine/保存回归中同时断言现代与旧式请求。该兼容修正不能证明受管浏览器无提示的根因。依据 [MDN](https://developer.mozilla.org/en-US/docs/Web/API/Window/beforeunload_event) 与 [HTML 标准](https://html.spec.whatwg.org/multipage/browsing-the-web.html#prompt-to-unload-a-document)，提示还受先前真实交互、sandbox allow-modals、浏览器判断及自动化提示处理影响。需主会话用前台 Chrome/Edge、合成输入、实际点击/键盘输入后分别刷新与 Ctrl+R，确认选择留在页内保持输入、明确离开可丢弃、未改动/已保存不提示；受管浏览器结果尚不能替代这一验收。实际执行收集/回答卸载定向回归 4 项（0 失败/跳过）、242 个跟踪文件仓库检查与差异检查通过。没有启动服务或操作真实资料。
+
 2026-10-12 PR #61 切库边界补证：新增真实 createOnboarding → resume → switchContext 与实际收集表单保护钩子的组合回归。取消时 api.setContext 调用为零，原库版本、同一表单及原文、引导暂停状态和导航均保持；明确放弃后仅切到指定练习库，目标表单不携带原库草稿。另核实 goTo 原先先改所选步骤与保存位置再确认，取消后引导会显示目标步骤；已将切库确认移到这些改变之前。目标 checkpoint、页面导航与可见步骤均由回归确认取消时不变。UI/引导 236 项通过，0 失败/跳过；未重跑无关测试或发起云端审查。
 
 2026-10-12 PR #61 首轮代码审查两项已采纳：[切库前确认](https://github.com/wmy5555/zhixu-learning-workbench/pull/61#discussion_r4244669146)与[刷新等待期间保护](https://github.com/wmy5555/zhixu-learning-workbench/pull/61#discussion_r4244669149)。引导开始/恢复/暂停在变更服务器引导状态前确认，所有切库在 setContext 前确认；取消不切库、不导航、不改变相关引导状态。明确放弃后先移除旧表单，再进行异步切换，避免旧库输入留在新库下。全局刷新同样在等待读取前显示加载页，用户不会继续在即将被移除的输入框打字。新增回归覆盖四个引导入口取消/允许、两类表单取消/明确放弃、两类初始空表单的延迟刷新；UI/引导 234 项全部通过，0 失败/跳过。真实浏览器、当前提交 CI 和必要定向复审由主会话核对，子任务未请求新审查或合并。

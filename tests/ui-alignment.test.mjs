@@ -72,6 +72,8 @@ const plain = value => JSON.parse(JSON.stringify(value));
 function unloadRequested(app) {
   const event = { prevented: false, preventDefault() { this.prevented = true; } };
   app.window.events.beforeunload(event);
+  // Exercise both the modern cancellation path and the legacy browser fallback.
+  assert.equal(Boolean(event.returnValue), event.prevented);
   return event.prevented;
 }
 
