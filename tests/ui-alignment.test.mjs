@@ -68,6 +68,7 @@ const plain = value => JSON.parse(JSON.stringify(value));
 
 function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
   api = { getContext: () => ({ practiceId: '', version: 0 }), ...api };
+  let requestSequence = 0;
   const roots = new Map();
   const document = {
     documentElement: new Element('html'),
@@ -80,7 +81,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
   };
   document.createTextNode = value => { const node = new Element('text'); node.textContent = value; return node; };
   const context = vm.createContext({
-    api, document, initSidebar, createProcessFeedback, parseSourceFile, TextDecoder, Node: Element, URL, Intl: Object.assign(Object.create(Intl), { DateTimeFormat: dateTimeFormat }), Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => 'request-ui' },
+    api, document, initSidebar, createProcessFeedback, parseSourceFile, TextDecoder, Node: Element, URL, Intl: Object.assign(Object.create(Intl), { DateTimeFormat: dateTimeFormat }), Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => `request-ui-${++requestSequence}` },
     FormData: class {
       constructor(form) { this.form = form; }
       entries() { return descendants(this.form).filter(node => node.name && !node.disabled && ['input', 'textarea', 'select'].includes(node.tagName)).map(node => [node.name, String(node.tagName === 'select' ? node.children.find(option => option.selected)?.value || '' : node.value)]); }
@@ -90,6 +91,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
   });
   const stripped = appSource.replace(/import[\s\S]*?from "\.\/api\.mjs";\s*/, '').replace(/import[\s\S]*?from "\.\/ui\.mjs";\s*/, '').replace(/^init\(\);\s*$/m, '').replace('const { createUsagePanel } = await import("./usage.mjs");', '');
   vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + sourceMapSource + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { renderSourceGroupDrawer, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
+  context.app.beginStudy = vm.runInContext('beginStudy', context);
   context.app.manualExtract = vm.runInContext('manualExtract', context);
   context.app.serializeForm = vm.runInContext('serializeForm', context);
   context.app.processControls = vm.runInContext('processControls', context);
@@ -1376,4 +1378,55 @@ test('capture accepts blank titles independently of decomposition and explains l
     assert.equal(writes[0].process, false);
     assert.equal(writes[0].research, false);
   }
+});
+
+
+test('source drawer start blocks double clicks and other entries until navigation settles, then permits a new intent', async () => {
+  let resolveStart, resolveRead;
+  const requests = [];
+  const session = { id: 'session-one', noteId: 'child', status: 'reading', turns: [], material: '合成正文', depth: 'explain' };
+  const app = browser({
+    startStudy: input => { requests.push(plain(input)); return new Promise(resolve => { resolveStart = resolve; }); },
+    study: () => new Promise(resolve => { resolveRead = resolve; }),
+  });
+  const child = { id: 'child', title: '合成观点', kind: 'knowledge', body: '合成正文', meta: { stage: 'learning' } };
+  const source = { id: 'source', kind: 'source', title: '合成来源', body: '合成原文', meta: {}, children: [child] };
+  app.renderSourceGroupDrawer(source);
+  const start = findButton(app.refs.drawerBody, '开始学习');
+  assert.ok(start);
+  const first = click(start);
+  assert.equal(start.disabled, true);
+  await click(start);
+  await app.beginStudy('another-child');
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].noteId, child.id);
+  assert.ok(requests[0].requestId);
+  resolveStart(session);
+  await new Promise(resolve => setImmediate(resolve));
+  await app.beginStudy(child.id);
+  assert.equal(requests.length, 1, 'lock includes rendering/navigation after POST');
+  resolveRead(session); await first;
+  assert.equal(start.disabled, false);
+  const next = click(start);
+  assert.equal(requests.length, 2);
+  assert.notEqual(requests[1].requestId, requests[0].requestId);
+  resolveStart({ ...session, id: 'session-two' });
+  await new Promise(resolve => setImmediate(resolve));
+  resolveRead({ ...session, id: 'session-two' }); await next;
+  assert.equal(app.state.currentStudy.id, 'session-two');
+});
+
+test('failed study start releases the lock and button so an explicit retry can proceed', async () => {
+  let rejectStart, count = 0;
+  const app = browser({ startStudy: () => { count++; return new Promise((resolve, reject) => { rejectStart = reject; }); } });
+  const control = new Element('button');
+  const pending = app.beginStudy('synthetic-note', undefined, {}, control);
+  assert.equal(control.disabled, true);
+  await app.beginStudy('synthetic-note'); assert.equal(count, 1);
+  rejectStart(new Error('合成失败')); await pending;
+  assert.equal(control.disabled, false);
+  const retry = app.beginStudy('synthetic-note', undefined, {}, control);
+  assert.equal(count, 2);
+  rejectStart(new Error('合成重试失败')); await retry;
+  assert.equal(control.disabled, false);
 });
