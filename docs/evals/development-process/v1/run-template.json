@@ -55,6 +55,17 @@
     "variantId": null,
     "caseId": null,
     "repetition": null,
+    "sessionIsolation": {
+      "sessionId": null,
+      "freshSession": null,
+      "preloadedHistoryHash": null,
+      "taskPromptHash": null,
+      "commonContextHash": null,
+      "loadedRuleManifestPath": null,
+      "loadedRuleManifestHash": null,
+      "loadedRuleEvidenceStatus": "not_measured",
+      "note": "每个案例×规则版本×重复编号独立记录；O02 恢复实验的预置历史两侧必须相同。仅计划中的规则快照不算实际加载证据。"
+    },
     "startCommit": null,
     "startStatusReceipt": null,
     "startIndexAndFileHashes": {},
@@ -103,6 +114,15 @@
         "status": "not_measured",
         "source": null,
         "scope": "含可见子调用；不可见部分写明"
+      },
+      "workflowCounts": {
+        "cloudCodeReviewRequests": null,
+        "cloudSecurityReviewRequests": null,
+        "reviewThreadReplies": null,
+        "ciRuns": null,
+        "status": "not_measured",
+        "source": null,
+        "note": "四类分开计数；合成评估禁止真实外部请求，只有完整轨迹可核对时才填写实际 0"
       },
       "tokens": {
         "input": null,
