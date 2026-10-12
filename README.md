@@ -68,7 +68,7 @@ pnpm verify
 pnpm audit --prod --audit-level high
 ```
 
-`verify` 运行语法/配置/上传边界检查、全部测试和本地中文检索检查。Linux/macOS 加密测试需临时随机主密钥，勿使用真实密钥。测试仅在 `.tmp/` 创建合成数据。项目无需构建，无 TypeScript 类型检查；真实模型和联网质量须单独验收。
+`verify` 运行语法/配置/上传边界检查、全部测试和本地中文检索检查。Linux/macOS 加密测试需临时随机主密钥，勿使用真实密钥。测试仅在 `.tmp/` 创建合成数据。网页版无需构建、无 TypeScript 类型检查；Android 样机有独立构建与 lint。真实模型和联网质量须单独验收。
 
 参与修改请读 [CONTRIBUTING](CONTRIBUTING.md)；AI Agent 先读 [AGENTS](AGENTS.md)。版本、PR、自动检查和发布步骤见 [维护说明](docs/MAINTENANCE.md)，版本变化见 [CHANGELOG](CHANGELOG.md)，漏洞报告见 [SECURITY](SECURITY.md)。
 

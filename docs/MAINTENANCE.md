@@ -6,7 +6,7 @@
 
 `pnpm-workspace.yaml` 禁止 pnpm 在运行脚本前隐式重装依赖。安装始终显式执行 `pnpm install --frozen-lockfile`；CI 使用干净环境重新安装，而本机验证不会擅自替换正在使用的依赖目录。
 
-必需检查名称：`Quality (ubuntu-latest)`、`Quality (windows-latest)`、`Secrets`、`Dependencies`。Quality 使用 Node 24、固定 pnpm、锁定依赖，运行仓库检查、全部 Node 测试和小型中文检索质量检查。Linux 临时加密密钥仅用于合成测试。电脑端没有构建/类型系统，因此不设置虚假的构建/类型检查。
+必需检查名称：`Quality (ubuntu-latest)`、`Quality (windows-latest)`、`Secrets`、`Dependencies`。Quality 使用 Node 24、固定 pnpm、锁定依赖，运行仓库检查、全部 Node 测试和小型中文检索质量检查。Linux 临时加密密钥仅用于合成测试。Web/Node 部分没有构建/类型系统，因此不设置虚假的 Web 构建/类型检查；Android 构建另按下述检查执行。
 
 Android 共用界面样机另有 `Android build and lint` 检查，使用 JDK 21、Android SDK 36 和固定 Gradle Wrapper，构建应用及本项目设备测试 APK 并执行 lint。涉及样机的 PR 还需此项通过；设备测试 APK 构建成功不等于已在模拟器执行。首次功能交付的视觉和真实点击结果须单独记录，参见 [Android 共用界面](ANDROID_SHARED_UI.md)。
 
@@ -28,13 +28,17 @@ Android 的独立实验进展、错误和待办留在 Android 任务及其 dot �
 
 交接不扩展权限；不得把任务特批、具体额度或自定义确认写入公开仓库。接收方按当前任务授权和项目边界执行。
 
+开发流程规则大修可使用[版本化评估集](evals/development-process/v1/README.md)做同条件对照；普通局部修改仍按影响范围验证。评估文件的静态检查不等于模型行为评估，合成结果不等于真实产品验收。
+
 ## 云端审查的使用时机
 
-为减少开发期间的重复审查，关闭 Codex 仓库设置中的 **Automatic review** 和 **Auto security review**，保留 GitHub 连接与手动审查能力。维护 Agent 根据 [AGENTS.md 的按需触发规则](../AGENTS.md#按需触发云端审查) 自动判断并发评论，你无需每次手动输入。
+Codex 仓库设置中的 **Automatic review** 和 **Auto security review** 保持关闭，保留 GitHub 连接与手动审查能力。本节是[根目录维护指令](../AGENTS.md#按需触发云端审查)引用的唯一详细流程：仅在本仓库当前开发任务中，具备 GitHub 评论权限的主执行 Agent 可按条件在当前 PR 发请求。所有者已授权这些必要请求，无需逐次确认；不包括其他仓库、历史 PR 补审或云端代改。审阅任务、只读评估、独立审阅者和子 Agent 不再发起。用户明确要求停止、节省本轮额度或暂缓时优先遵守。规则本身不切换云端开关，也不是后台定时器。
 
-实质改动准备完成、必要本地检查通过并推送候选提交后，Agent 发起一次代码审查；权限、凭据、资料外发、不可信文件和备份恢复等安全相关改动再加安全审查。纯文案和局部样式调整可跳过。每个 PR 每类默认一轮初审，必要时一轮针对修复的复审；发送前读取现有请求与结果，避免重复或相互触发。仍未解决的问题需记录并继续定向处理，不能因额度上限而宣称通过。
+**触发。** 实际功能、数据或执行配置变更，在基本完成、必要本地检查通过且候选提交已推送后，请求一次 `@codex review`；开发中每次 push 不重新触发。纯文案、注释、普通说明文档和不改变交互的局部 CSS 可跳过；涉及权限、执行方式或安全边界的规则/配置不能按纯文档跳过。仅调整审查频率的说明可跳过。改动触及认证/授权、会话/CSRF/Host、凭据/加密、资料外发/网络/SSRF、文件导入或备份恢复的路径与不可信输入、Android 自动备份/迁移、CI 执行不可信代码或敏感权限时，另请求一次 `@codex security review` 并说明风险范围。普通 UI、学习算法或只读文案不自动加安全审查；依赖更新先看依赖审计及实际安全影响。
 
-这是执行 Agent 的项目约定，并非无人值守的 GitHub 自动化；没有 Agent 正在维护 PR 时，规则不会自行发评论。评论仍会消耗额度，范围说明也不保证固定成本；四项 CI 和合并前反馈核对继续执行。完整安全报告可能包含未达到 GitHub 显示门槛的发现，不能用“没有评论”代替验收。
+**去重与上限。** 发送前读取当前 PR 的请求评论、行内意见及 Code/Security 总结；同类请求已存在或正在运行就等待或读取，不重发。完成的审查若已覆盖当前实质改动可复用；仅 SHA、rebase、合并 main 或说明文字变化不构成重审理由。请求附带 `<!-- zhixu-cloud-review kind=code|security phase=initial|followup head=<完整提交SHA> -->` 标记，替换为实际类型、阶段与 SHA，并用简短文字注明范围；无标记的既有请求也计入。每个 PR 每类默认最多一次初审和一次仅针对已修复具体缺陷、确有必要的复审；代码复审可写 `@codex review for the backup restore fixes`，安全复审仍用 `@codex security review` 并注明修复范围。超过默认轮数须所有者明确要求，不能自动扩大为全仓审查。真实问题继续定向修复并记录；必要检查或验收缺失时不合并，轮数用尽不等于通过。
+
+**失败与记录。** 发送超时或回执不明，先重读 PR 确认评论是否创建；权限、套餐或额度不足则说明阻塞，不换账号或另启审阅者规避。在既有 PR 或审阅跟进记录中留下触发或跳过原因、提交和范围、请求链接、结果与待处理项。主执行 Agent 核实意见并按影响范围修复验证；不发送 `@codex fix`、`@codex address that feedback` 等云端代改指令，也不在评论中放真实资料或凭据。手动请求仅控制触发时机，范围提示不保证云端只读指定文件或固定额度；完整安全报告可能有未达 GitHub 显示门槛的发现，不能把“已完成”或“无评论”当完整安全验收。四项 CI、反馈处理和合并前新增意见检查继续执行。
 
 官方说明：[项目指令加载](https://learn.chatgpt.com/docs/agent-configuration/agents-md)、[GitHub 手动审查](https://learn.chatgpt.com/docs/third-party/github)、[安全审查与报告门槛](https://learn.chatgpt.com/docs/security/security-review)。
 

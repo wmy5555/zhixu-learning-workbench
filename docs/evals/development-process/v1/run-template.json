@@ -1,0 +1,174 @@
+{
+  "suiteId": "zhixu-development-process",
+  "suiteVersion": "1.0.0",
+  "runId": null,
+  "status": "not_executed",
+  "fixedConditions": {
+    "suiteCommit": null,
+    "suiteFileHashes": {},
+    "projectCodeBaselineCommit": null,
+    "variants": [
+      {
+        "id": "baseline",
+        "ruleSnapshotHash": null,
+        "allowedRuleDifference": null
+      },
+      {
+        "id": "candidate",
+        "ruleSnapshotHash": null,
+        "allowedRuleDifference": null
+      }
+    ],
+    "model": null,
+    "reasoningEffort": null,
+    "clientVersion": null,
+    "runtimeVersion": null,
+    "toolAllowlist": [],
+    "permissions": null,
+    "networkPolicy": "offline-no-external-actions",
+    "seed": {
+      "value": null,
+      "status": "not_measured",
+      "reason": "填写固定值或工具不支持的原因"
+    },
+    "startingContextHash": null,
+    "fixtureHashes": {},
+    "executionAuthorizationReference": null,
+    "budgetAndTimeouts": null
+  },
+  "selection": {
+    "coreCaseIds": [
+      "C01",
+      "C02",
+      "C03",
+      "C04",
+      "C05"
+    ],
+    "optionalVariants": [],
+    "highRiskVariants": [],
+    "reasonsForSelectedAndOmitted": null,
+    "repetitionsPerCase": null,
+    "pairedExecutionOrder": null,
+    "predeclaredAcceptanceAndCostCriteria": null
+  },
+  "caseResultTemplate": {
+    "variantId": null,
+    "caseId": null,
+    "repetition": null,
+    "startCommit": null,
+    "startStatusReceipt": null,
+    "startIndexAndFileHashes": {},
+    "endStatusReceipt": null,
+    "endIndexAndFileHashes": {},
+    "outcome": "not_executed",
+    "redLines": {
+      "status": "not_assessed",
+      "violations": [],
+      "unobservedBoundaries": []
+    },
+    "qualityDimensions": {
+      "task_completion": null,
+      "constraint_adherence": null,
+      "task_routing_dirty_workspace": null,
+      "reasonable_stop": null,
+      "evidence_truthfulness": null,
+      "completion_judgment": null
+    },
+    "checkFindings": [],
+    "omissions": [],
+    "rework": {
+      "rounds": null,
+      "status": "not_measured",
+      "reason": null
+    },
+    "metrics": {
+      "candidateWallTimeMs": {
+        "value": null,
+        "status": "not_measured",
+        "source": null
+      },
+      "preparationAndEvaluationWallTimeMs": {
+        "value": null,
+        "status": "not_measured",
+        "source": null
+      },
+      "toolCalls": {
+        "value": null,
+        "status": "not_measured",
+        "source": null,
+        "scope": "候选全部调用，含失败与重试"
+      },
+      "modelCalls": {
+        "value": null,
+        "status": "not_measured",
+        "source": null,
+        "scope": "含可见子调用；不可见部分写明"
+      },
+      "tokens": {
+        "input": null,
+        "output": null,
+        "cachedInput": null,
+        "status": "not_measured",
+        "source": null
+      },
+      "actualCost": {
+        "amount": null,
+        "currency": null,
+        "status": "not_measured",
+        "source": null,
+        "reason": null
+      }
+    },
+    "evidence": {
+      "fullTracePath": null,
+      "finalDiffPath": null,
+      "finalAnswerPath": null,
+      "actualChecks": [],
+      "reusedChecks": [],
+      "unverified": [],
+      "fixtureOnlyClaims": [],
+      "evaluatorCheckReceipts": [],
+      "missingEvidence": []
+    },
+    "rerunOrExpansionReason": null,
+    "limitations": null
+  },
+  "caseResults": [],
+  "pairedComparisonTemplate": {
+    "caseId": null,
+    "repetition": null,
+    "baselineResultReference": null,
+    "candidateResultReference": null,
+    "baselineAnswerReference": null,
+    "candidateAnswerReference": null,
+    "bothSidesActuallyExecuted": false,
+    "qualityRegression": null,
+    "redLineComparison": null,
+    "costDifference": null,
+    "missingCostEvidence": [],
+    "limitations": null
+  },
+  "pairedComparisons": [],
+  "decision": {
+    "qualityEligible": null,
+    "costComparison": null,
+    "unresolvedItems": [],
+    "adoptionRecommendation": "not_assessed",
+    "smallSampleLimit": null
+  },
+  "allowedStatuses": [
+    "measured",
+    "not_measured",
+    "not_assessed",
+    "blocked"
+  ],
+  "allowedOutcomes": [
+    "completed",
+    "correctly_stopped",
+    "completed_with_pending_acceptance",
+    "failed",
+    "blocked",
+    "not_executed"
+  ],
+  "note": "这是未填写模板。null 表示未测，不等于 0；evidence 中的合成回执必须和候选实际执行分开。准备/评价明细单独留轨迹，不混入候选工具调用数。"
+}
