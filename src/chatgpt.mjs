@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { fail, hash, now } from './store.mjs';
 import { syncSchema, structuredSchema, validateSync, captureIncremental, literalBlock } from './chatgpt-sync.mjs';
+import { receiveHistorySnapshot, verifiedHistoryCapture } from './chatgpt-history-snapshot.mjs';
 
 const text = max => z.string().max(max);
 const captureId = requestHash => `chatgpt_${requestHash}`;
@@ -13,6 +14,13 @@ export const conversationSchema = z.object({
   limitations: text(4000).default(''),
   conversationUrl: text(2048).default(''),
   sync: syncSchema.optional(),
+  structured: structuredSchema.optional(),
+}).strict();
+export const historyCaptureSchema = z.object({
+  requestId: z.string().trim().min(8).max(128),
+  historySnapshotRef: z.string().regex(/^zhixu-history-v1:[a-f0-9]{64}$/),
+  summary: z.string().trim().min(1).max(30000),
+  baseRevision: z.number().int().min(1).optional(),
   structured: structuredSchema.optional(),
 }).strict();
 
@@ -39,7 +47,7 @@ function renderConversation(value) {
   const scope = value.coverage === 'selected_excerpt' ? '用户选定片段' : value.coverage === 'visible_history' ? '调用方分页读取的当前可见历史分支' : 'ChatGPT 当前可见上下文';
   return [
     '## 收集范围', scope,
-    '只保存本次实际收到的消息；不保证覆盖完整历史、附件或其他会话。原文由 ChatGPT 传入，知序未独立核对网页记录。',
+    '只保存本次实际收到的消息；收集范围由调用路径及权限决定，不保证覆盖完整历史、附件或其他会话。',
     value.sync ? `累计保留 ${value.messages.length} 条已收到消息；本次${value.sync.complete ? '声明已读到当前可见分支末尾' : '范围不完整，保留此前收到的消息，不推断缺失部分'}。` : '',
     value.limitations ? `补充限制：\n\n${literalBlock(value.limitations)}` : '',
     '## 整理摘要（ChatGPT 生成，未经独立核验）', literalBlock(value.summary),
@@ -50,7 +58,7 @@ function renderConversation(value) {
 }
 
 // This recipient-specific permission is deliberately separate from provider privacy.
-export function createChatgptBridge({ getStore, settings, search, getNote, related }) {
+export function createChatgptBridge({ getStore, settings, search, getNote, related, receiveSnapshot = receiveHistorySnapshot }) {
   const enabled = () => {
     if (settings().mcp.chatgptEnabled !== true) fail('请在知序「系统 → 能力设置」启用 ChatGPT 接入。', 'CHATGPT_DISABLED', 403);
   };
@@ -66,7 +74,7 @@ export function createChatgptBridge({ getStore, settings, search, getNote, relat
   return {
     status() {
       enabled();
-      return { ready: true, canCapture: true, canSync: true, structuredSchemaVersion: 1, canRead: settings().mcp.chatgptAllowRead === true, maxCharacters: 500000, maxMessages: 200 };
+      return { ready: true, canCapture: true, canSync: true, canHistorySnapshot: true, structuredSchemaVersion: 1, canRead: settings().mcp.chatgptAllowRead === true, maxCharacters: 500000, maxMessages: 200 };
     },
     capture(input) {
       enabled();
@@ -118,6 +126,17 @@ export function createChatgptBridge({ getStore, settings, search, getNote, relat
       } });
       store.put('chatgptCaptures', requestHash, { ...saved, noteId: note.id });
       return receipt({ ...saved, noteId: note.id }, false);
+    },
+    async captureHistorySnapshot(input) {
+      enabled();
+      const parsed = historyCaptureSchema.safeParse(input);
+      if (!parsed.success) fail('历史导入参数无效；请重新读取并确认摘要。', 'CHATGPT_HISTORY_INVALID');
+      const snapshot = await receiveSnapshot(parsed.data.historySnapshotRef);
+      enabled(); // Permission may have been revoked during the local transfer.
+      const value = verifiedHistoryCapture(snapshot, parsed.data);
+      const receipt = this.capture(value);
+      return { ...receipt, sourceVerification: 'local_history_reader_rechecked',
+        notice: '本机历史读取器在传输前重新核对了当前账户与可见分支正文；隐藏分支、附件字节和模型整理仍未核验。' };
     },
     async search(query) {
       readable();

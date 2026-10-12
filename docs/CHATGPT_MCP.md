@@ -35,11 +35,14 @@ tunnel-client run --profile zhixu-chatgpt
 | --- | --- |
 | `get_zhixu_status` | 仅返回是否就绪、是否允许读取和输入限额 |
 | `save_chatgpt_conversation` | 只在用户要求时保存第一层原文；显式 sync 更新同分支资料，结构化项保存未核验候选，返回版本与导入回执 |
+| `import_chatgpt_history_snapshot` | 用户要求保存已读完的历史聊天时，接收历史插件的短时本机引用；服务端直接取得并核对原文，模型只传摘要和可选未核验候选 |
 | `search_knowledge` | 本地关键词搜索，最多十条标题/短摘录；不调用模型或向量服务 |
 | `read_note` / `read_source` | 按稳定 ID 分页读取正文，默认 12000、最多 20000 字符，返回 `nextOffset` |
 | `related_knowledge` | 返回最多二十条相关资料 ID 与标题，不把关系候选当成已确认知识 |
 
 HTTP 入口是 `/api/chatgpt/*`，仅供 stdio 桥接使用；不是 Streamable HTTP MCP 地址。保留 Host/Origin 检查，所有调用都要求专用凭据；本机旧 MCP 凭据不能调用这里，反向亦然。权限在每次请求检查，异步检索返回前再检查一次。
+
+历史聊天的直接导入需历史读取插件先按顺序读完所有页，再由其签发两分钟内有效的随机本机引用。知序通过本机命名管道接收原文，核对浏览器账户未变、当前分支正文未变、页序和内容摘要；没有新公网地址、持久凭据或模型逐字转写。导入和手动保存沿用同一个接入总开关、版本冲突及防覆盖规则。详情见[增量保存与结构化导入](CHATGPT_SYNC.md)。
 
 会话参数：`requestId`（8–128 字符）、`title`、`summary`、`messages:[{role:'user'|'assistant',content}]`、`coverage:'current_context'|'selected_excerpt'`；可选 `limitations` 和已知的 `conversationUrl`。只接收 user/assistant 消息，禁止隐藏指令字段与任意元数据。最多 200 条消息，摘要加原文最多 500000 字符，HTTP 请求最多 2 MiB，每分钟最多尝试 30 次新写入（已有回执的重试不占用）。限额由服务端运行记录计算，不采用外部 Markdown 时间。缺失作者、日期、链接留空；不抓取链接、不创建公开分享链接。
 

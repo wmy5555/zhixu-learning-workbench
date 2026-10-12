@@ -61,6 +61,7 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
           service.chatgpt.status();
           if (url.pathname === '/api/chatgpt/status' && method === 'GET') result = service.chatgpt.status();
           else if (url.pathname === '/api/chatgpt/conversations' && method === 'POST') result = service.chatgpt.capture(await readJSON(req, 2 * 1024 * 1024));
+          else if (url.pathname === '/api/chatgpt/history-snapshots' && method === 'POST') result = await service.chatgpt.captureHistorySnapshot(await readJSON(req, 2 * 1024 * 1024));
           else if (url.pathname === '/api/chatgpt/search' && method === 'GET') result = await service.chatgpt.search(query.q);
           else if (parts.length === 4 && ['notes', 'sources'].includes(parts[2]) && method === 'GET') result = service.chatgpt.read(parts[3], { sourceOnly: parts[2] === 'sources', offset: query.offset === undefined ? 0 : Number(query.offset), limit: query.limit === undefined ? 12000 : Number(query.limit) });
           else if (parts.length === 4 && parts[2] === 'related' && method === 'GET') result = service.chatgpt.related(parts[3]);

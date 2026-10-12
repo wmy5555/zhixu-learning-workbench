@@ -86,7 +86,7 @@ export function createKnowledgeClient({
   if (typeof fetchImpl !== "function") throw new TypeError("fetchImpl must be a function");
   const root = normalizeBaseUrl(baseUrl);
 
-  async function request(pathname, { method = "GET", body } = {}) {
+  async function request(pathname, { method = "GET", body, requestTimeoutMs = timeoutMs } = {}) {
     const token = await tokenProvider();
     const url = new URL(pathname, root);
     const headers = { Authorization: `Bearer ${token}`, Accept: "application/json" };
@@ -98,7 +98,7 @@ export function createKnowledgeClient({
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: AbortSignal.timeout(requestTimeoutMs),
         redirect: "error",
       });
     } catch (error) {
@@ -156,6 +156,7 @@ export function createKnowledgeClient({
       return request("/api/mcp/proposals", { method: "POST", body: input });
     },
     captureConversation(input) { return request(`${apiPrefix}/conversations`, { method: "POST", body: input }); },
+    captureHistorySnapshot(input) { return request(`${apiPrefix}/history-snapshots`, { method: "POST", body: input, requestTimeoutMs: 75000 }); },
     status() { return request(`${apiPrefix}/status`); },
   };
 }

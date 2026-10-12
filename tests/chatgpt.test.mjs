@@ -75,6 +75,17 @@ test('ChatGPT HTTP calls never prove that the separate local MCP channel is conn
   assert.deepEqual(state(), observed);
 });
 
+test('history snapshot route keeps the ChatGPT credential, origin and capture permission boundary', async t => {
+  const f = await fixture(t);
+  const body = { requestId: randomUUID(), historySnapshotRef: 'zhixu-history-v1:' + 'a'.repeat(64), summary: '合成摘要。' };
+  assert.equal((await f.request('/api/chatgpt/history-snapshots', { body, credential: '' })).status, 401);
+  assert.equal((await f.request('/api/chatgpt/history-snapshots', { body })).body.code, 'CHATGPT_DISABLED');
+  f.enable();
+  assert.equal((await f.request('/api/chatgpt/history-snapshots', { body, headers: { Origin: 'https://chatgpt.com' } })).body.code, 'ORIGIN_DENIED');
+  assert.equal((await f.request('/api/chatgpt/history-snapshots', { body: { ...body, historySnapshotRef: 'http://127.0.0.1/private' } })).body.code, 'CHATGPT_HISTORY_INVALID');
+  assert.equal(f.app.service.store.list().length, 0);
+});
+
 test('capture preserves role text and summary in layer one without processing or advancing learning', async t => {
   const f = await fixture(t); f.enable();
   const payload = sample();
@@ -199,11 +210,12 @@ test('official SDK discovers the ChatGPT tools and stores a real temporary Markd
   const client = new Client({ name: 'zhixu-chatgpt-test', version: '0.1.0' });
   await client.connect(transport); t.after(() => client.close());
   const tools = (await client.listTools()).tools;
-  assert.deepEqual(tools.map(tool => tool.name).sort(), ['get_zhixu_status', 'save_chatgpt_conversation', 'search_knowledge', 'read_note', 'read_source', 'related_knowledge'].sort());
+  assert.deepEqual(tools.map(tool => tool.name).sort(), ['get_zhixu_status', 'save_chatgpt_conversation', 'import_chatgpt_history_snapshot', 'search_knowledge', 'read_note', 'read_source', 'related_knowledge'].sort());
   assert.equal(tools.find(tool => tool.name === 'save_chatgpt_conversation').annotations.readOnlyHint, false);
   assert.equal(tools.find(tool => tool.name === 'save_chatgpt_conversation').annotations.idempotentHint, true);
   assert.ok(tools.find(tool => tool.name === 'save_chatgpt_conversation').inputSchema.properties.sync);
   assert.ok(tools.find(tool => tool.name === 'save_chatgpt_conversation').inputSchema.properties.structured);
+  assert.ok(tools.find(tool => tool.name === 'import_chatgpt_history_snapshot').inputSchema.properties.historySnapshotRef);
   const call = async (name, args = {}) => client.callTool({ name, arguments: args });
   const status = await call('get_zhixu_status'); assert.equal(status.structuredContent.canRead, true);
   const payload = sample(), saved = await call('save_chatgpt_conversation', payload);
