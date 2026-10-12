@@ -180,6 +180,7 @@ async function refreshCompletedSource(sourceId) {
 }
 
 async function navigate(view, options = {}) {
+  if (!await confirmUnsavedInputDiscard()) return;
   setPage(view);
   if (!options.keepDrawer) closeDrawer();
   showLoading();
@@ -333,6 +334,7 @@ function groupJobSummary(job) {
 }
 
 async function renderCapture() {
+  if (unsavedInputForm()?.hasUnsavedChanges() && !await confirmUnsavedInputDiscard()) return;
   const sourceForm = el("form", { class: "panel capture-form", dataset: { tour: "capture-form" } });
   const title = el("input", { name: "title", placeholder: "可留空，根据原文生成便于检索的标题" });
   const body = el("textarea", { name: "body", placeholder: "粘贴原文。系统会保留这份原始快照，不用摘要替代。", required: true, rows: 12 });
@@ -377,6 +379,8 @@ async function renderCapture() {
     el("label", { class: "check-field" }, [research, el("span", { text: "拆解时联网检验正确性并寻找反例（可选，需同时勾选 AI 拆解）" })]),
     el("div", { class: "form-actions" }, [button("保存原始资料", { kind: "primary", type: "submit" }), button("清空", { onClick: () => sourceForm.reset() })]),
   );
+  const draftValues = () => JSON.stringify({ ...serializeForm(sourceForm), localOnly: localOnly.checked, process: process.checked, research: research.checked });
+  protectUnsavedInput(sourceForm, draftValues, "收集内容");
   sourceForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const data = serializeForm(sourceForm);
@@ -1210,6 +1214,12 @@ async function beginStudy(noteId, planId, context = {}) {
 }
 
 async function renderStudy() {
+  const context = api.getContext();
+  const currentForm = refs.main.querySelector('[data-tour="study-session"]');
+  const keepDraft = state.studyTab === "session" && currentForm?.dataset.sessionId === state.currentStudy?.id
+    && currentForm?.hasUnsavedChanges() && currentForm.draftContextVersion === context.version && currentForm.draftPracticeId === context.practiceId;
+  const draft = keepDraft ? currentForm.readAnswerDraft() : null;
+  if (!keepDraft && !await confirmUnsavedInputDiscard()) { state.studyTab = "session"; return; }
   const wrapper = el("div", { class: "page-stack" });
   const tabs = el("div", { class: "tabs" }, [
     tabButton("queue", "学习队列"), tabButton("session", "当前学习"), tabButton("mistakes", "错题库"),
@@ -1218,11 +1228,17 @@ async function renderStudy() {
   if (state.studyTab === "session") wrapper.append(await studySessionPanel());
   else if (state.studyTab === "mistakes") wrapper.append(await mistakesPanel());
   else wrapper.append(await studyQueuePanel());
+  if (draft) {
+    const latest = api.getContext(), nextForm = wrapper.querySelector('[data-tour="study-session"]');
+    if (latest.version !== context.version || latest.practiceId !== context.practiceId || unsavedInputForm() !== currentForm) return;
+    if (!nextForm || nextForm.dataset.sessionId !== currentForm.dataset.sessionId) return;
+    nextForm.restoreAnswerDraft(draft);
+  }
   clear(refs.main).append(wrapper);
 }
 
 function tabButton(value, label) {
-  return el("button", { class: `tab${state.studyTab === value ? " is-active" : ""}`, text: label, on: { click: () => { state.studyTab = value; renderStudy().catch(handleError); } } });
+  return el("button", { class: `tab${state.studyTab === value ? " is-active" : ""}`, text: label, on: { click: async () => { state.studyTab = value; await renderStudy().catch(handleError); } } });
 }
 
 async function studyQueuePanel() {
@@ -1337,6 +1353,10 @@ async function studySessionPanel() {
       } }), "study-finish"),
     ]),
   ]);
+  protectUnsavedInput(form, () => answer.value, "回答");
+  form.dataset.sessionId = session.id;
+  form.readAnswerDraft = () => ({ answer: answer.value, hintUsed: hintUsed.value });
+  form.restoreAnswerDraft = draft => { answer.value = draft.answer; hintUsed.value = draft.hintUsed; };
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (awaiting || completed) return;
@@ -1345,6 +1365,7 @@ async function studySessionPanel() {
     submit.disabled = true;
     try {
       state.currentStudy = await api.answer(session.id, { answer: answer.value.trim(), hintUsed: hintUsed.value, requestId: crypto.randomUUID() });
+      answer.value = "";
       toast(state.currentStudy.pendingJobId ? "回答已保存，反馈任务正在处理" : "回答已保存", "success");
       await renderStudy();
     } catch (error) { handleError(error); }
@@ -2456,14 +2477,51 @@ refs.nav.addEventListener("click", (event) => {
 });
 refs.quickCapture.addEventListener("click", () => navigate("capture"));
 refs.refresh.addEventListener("click", async () => {
+  if (!await confirmUnsavedInputDiscard()) return;
   refs.refresh.disabled = true;
-  try { await refreshBootstrap(); await renderCurrent(); toast("已读取最新状态", "success"); }
+  try { await refreshBootstrap(); showLoading(); await renderCurrent(); toast("已读取最新状态", "success"); }
   catch (error) { handleError(error); }
   finally { refs.refresh.disabled = false; }
 });
 refs.drawerClose.addEventListener("click", requestCloseDrawer);
 refs.drawerBackdrop.addEventListener("click", requestCloseDrawer);
 document.addEventListener("keydown", (event) => { if (event.key === "Escape") requestCloseDrawer(); });
+
+function unsavedInputForm() {
+  return refs.main.querySelector('[data-tour="capture-form"]') || refs.main.querySelector('[data-tour="study-session"]');
+}
+
+function protectUnsavedInput(form, values, description) {
+  form.draftContextVersion = api.getContext().version;
+  form.draftPracticeId = api.getContext().practiceId;
+  const original = values();
+  form.hasUnsavedChanges = () => values() !== original;
+  let confirming = false;
+  form.confirmDiscardChanges = async () => {
+    if (confirming) return false;
+    const context = api.getContext();
+    if (form.hasUnsavedChanges()) {
+      confirming = true;
+      try {
+        if (!await confirmAction({ title: `放弃未保存的${description}？`, message: "当前输入尚未保存。取消可继续填写；确认放弃后，本次输入不会保存。", confirmText: "放弃输入", danger: true })) return false;
+      } finally { confirming = false; }
+    }
+    const latest = api.getContext();
+    return context.version === latest.version && context.practiceId === latest.practiceId && unsavedInputForm() === form;
+  };
+}
+
+async function confirmUnsavedInputDiscard() {
+  const form = unsavedInputForm();
+  return !form?.confirmDiscardChanges || await form.confirmDiscardChanges();
+}
+
+// Only inspect the live form; sensitive draft text never enters browser storage.
+window.addEventListener("beforeunload", (event) => {
+  if (!unsavedInputForm()?.hasUnsavedChanges()) return;
+  event.preventDefault();
+  event.returnValue = "";
+});
 
 async function init() {
   const [hashView, systemTab] = window.location.hash.slice(1).split("/");
