@@ -2478,7 +2478,8 @@ refs.quickCapture.addEventListener("click", () => navigate("capture"));
 refs.refresh.addEventListener("click", async () => {
   if (!await confirmUnsavedInputDiscard()) return;
   refs.refresh.disabled = true;
-  try { await refreshBootstrap(); showLoading(); await renderCurrent(); toast("已读取最新状态", "success"); }
+  showLoading();
+  try { await refreshBootstrap(); await renderCurrent(); toast("已读取最新状态", "success"); }
   catch (error) { handleError(error); }
   finally { refs.refresh.disabled = false; }
 });
@@ -2515,6 +2516,12 @@ async function confirmUnsavedInputDiscard() {
   return !form?.confirmDiscardChanges || await form.confirmDiscardChanges();
 }
 
+async function prepareContextChange() {
+  if (!await confirmUnsavedInputDiscard()) return false;
+  showLoading();
+  return true;
+}
+
 // Only inspect the live form; sensitive draft text never enters browser storage.
 window.addEventListener("beforeunload", (event) => {
   if (!unsavedInputForm()?.hasUnsavedChanges()) return;
@@ -2544,6 +2551,7 @@ async function init() {
         navigate: navigateTutorial,
         fillSample: fillTutorialSample,
         refresh: async () => { await refreshBootstrap(); await renderCurrent(); },
+        beforeContextChange: prepareContextChange,
         contextChanged: async () => {
           closeDrawer(); state.currentStudy = null; state.studyMaterialVisible = true; state.studyTab = "queue";
           state.lastOutput = null;

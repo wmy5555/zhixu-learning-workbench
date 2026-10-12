@@ -180,8 +180,37 @@ async function tutorialBrowser({ modelReady = true, exists = true, narrow = fals
   vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + stripped + '\nthis.make = createOnboarding; this.progress = getStepProgress;', context);
   const adapter = { navigate: async step => { navigations.push(step.id || step.view); }, contextChanged: async () => {}, refresh: async () => {}, fillSample: async () => {}, processStatus: () => null };
   const tutorial = context.make(adapter); await tutorial.init();
-  return { tutorial, adapter, body, workspace, main, drawer, drawerBody, toasts, requests, navigations, contexts, intervals, document, setNarrow(value) { narrow = value; windowEvents.resize?.(); }, progress: context.progress, get state() { return state; }, setState: value => { state = { ...state, ...value }; } };
+  return { tutorial, adapter, api, body, workspace, main, drawer, drawerBody, toasts, requests, navigations, contexts, intervals, document, setNarrow(value) { narrow = value; windowEvents.resize?.(); }, progress: context.progress, get state() { return state; }, setState: value => { state = { ...state, ...value }; } };
 }
+
+test('onboarding start resume pause and shared settings allow cancelling before any library change', async () => {
+  for (const action of ['start', 'resume', 'pause', 'settings']) {
+    const ui = await tutorialBrowser({ exists: action !== 'start' });
+    if (['pause', 'settings'].includes(action)) await ui.tutorial.open();
+    const beforeContext = ui.api.getContext(), beforeStatus = ui.state.status;
+    const beforeRequests = ui.requests.length, beforeNavigations = ui.navigations.length, beforeSwitches = ui.contexts.length;
+    const confirmedContexts = [];
+    ui.adapter.beforeContextChange = async () => { confirmedContexts.push(ui.api.getContext().practiceId); return false; };
+    const invoke = async () => {
+      if (action === 'start') await startTutorial(ui);
+      else if (action === 'resume') await ui.tutorial.open();
+      else await click(findButton(ui.body, action === 'pause' ? '暂停并回正式库' : '配置共享 API'));
+    };
+    await invoke();
+    assert.equal(confirmedContexts[0], beforeContext.practiceId, action);
+    assert.equal(ui.contexts.length, beforeSwitches, `${action} must not setContext after cancellation`);
+    assert.equal(ui.navigations.length, beforeNavigations, `${action} must not navigate after cancellation`);
+    assert.equal(ui.requests.length, beforeRequests, `${action} must not change server onboarding state after cancellation`);
+    assert.equal(ui.state.status, beforeStatus);
+    assert.deepEqual(ui.api.getContext(), beforeContext);
+    ui.adapter.beforeContextChange = async () => true;
+    await invoke();
+    if (action === 'pause' || action === 'settings') assert.equal(ui.api.getContext().practiceId, '');
+    if (action === 'pause') assert.equal(ui.state.status, 'paused');
+    if (action === 'start' || action === 'resume') assert.ok(ui.requests.some(call => call.action === action));
+    ui.tutorial.dispose();
+  }
+});
 
 test('the AI decomposition step shows waiting progress without changing evidence or notifying preset completion', async () => {
   const ui = await tutorialBrowser({ currentStepId: 'process-ai' });

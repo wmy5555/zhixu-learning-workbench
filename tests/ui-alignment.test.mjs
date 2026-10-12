@@ -180,6 +180,46 @@ test('unsaved-input confirmations cannot discard a replacement form or cross lib
   assert.equal(control(form, 'body').value, '合成正式库输入');
 });
 
+test('library change preparation keeps dirty forms on cancellation and removes them only after discard', async () => {
+  for (const kind of ['capture', 'answer']) {
+    const session = { id: 'synthetic-context-answer', status: 'reading', turns: [] };
+    const app = browser({ study: async () => session });
+    if (kind === 'capture') await app.renderCapture();
+    else { app.state.currentStudy = session; app.state.studyTab = 'session'; app.state.studyMaterialVisible = false; await app.renderStudy(); }
+    const form = app.refs.main.querySelector(kind === 'capture' ? '[data-tour="capture-form"]' : '[data-tour="study-session"]');
+    const input = control(form, kind === 'capture' ? 'body' : 'answer'); input.value = '合成原库草稿';
+    const cancel = app.prepareContextChange();
+    await click(findButton(app.dialogs, '取消'));
+    assert.equal(await cancel, false);
+    assert.equal(input.value, '合成原库草稿'); assert.equal(unloadRequested(app), true);
+    const discard = app.prepareContextChange();
+    await click(findButton(app.dialogs, '放弃输入'));
+    assert.equal(await discard, true);
+    assert.equal(unloadRequested(app), false);
+    assert.equal(app.refs.main.querySelector('[data-tour="capture-form"]'), null);
+    assert.equal(app.refs.main.querySelector('[data-tour="study-session"]'), null);
+  }
+});
+
+test('global refresh removes the pristine form before waiting for bootstrap so later typing cannot be lost', async () => {
+  for (const kind of ['capture', 'answer']) {
+    let finishBootstrap;
+    const session = { id: 'synthetic-refresh-answer', status: 'reading', turns: [] };
+    const app = browser({ bootstrap: () => new Promise(resolve => { finishBootstrap = resolve; }), study: async () => session });
+    if (kind === 'capture') { app.state.view = 'capture'; await app.renderCapture(); }
+    else { app.state.view = 'study'; app.state.currentStudy = session; app.state.studyTab = 'session'; app.state.studyMaterialVisible = false; await app.renderStudy(); }
+    const pending = click(app.refs.refresh);
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    assert.equal(typeof finishBootstrap, 'function');
+    assert.equal(app.refs.main.querySelector('[data-tour="capture-form"]'), null);
+    assert.equal(app.refs.main.querySelector('[data-tour="study-session"]'), null);
+    assert.equal(app.refs.refresh.disabled, true);
+    finishBootstrap({}); await pending;
+    assert.equal(app.refs.refresh.disabled, false);
+    assert.equal(unloadRequested(app), false);
+  }
+});
+
 function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
   api = { getContext: () => ({ practiceId: '', version: 0 }), ...api };
   const roots = new Map();
@@ -217,6 +257,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
   context.app.jobsPanel = vm.runInContext('jobsPanel', context);
   context.app.generateToday = vm.runInContext('generateToday', context);
   context.app.renderToday = vm.runInContext('renderToday', context);
+  context.app.prepareContextChange = vm.runInContext('prepareContextChange', context);
   return context.app;
 }
 
