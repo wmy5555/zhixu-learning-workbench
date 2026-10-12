@@ -67,6 +67,120 @@ function findButton(node, text) { return descendants(node).find(item => item.tag
 function control(node, name) { return descendants(node).find(item => item.name === name); }
 const click = node => node.events.click({ target: node, preventDefault() {} });
 const plain = value => JSON.parse(JSON.stringify(value));
+function unloadRequested(app) {
+  const event = { prevented: false, preventDefault() { this.prevented = true; } };
+  app.window.events.beforeunload(event);
+  return event.prevented;
+}
+
+test('capture protects every field and option on unload without changing the live draft', async () => {
+  const app = browser(); await app.renderCapture();
+  const form = app.refs.main.querySelector('[data-tour="capture-form"]');
+  assert.equal(unloadRequested(app), false);
+  for (const name of ['title', 'body', 'platform', 'author', 'url', 'date', 'locator', 'localOnly', 'process', 'research']) {
+    const input = control(form, name);
+    if (input.type === 'checkbox') input.checked = true; else input.value = '合成草稿';
+    assert.equal(unloadRequested(app), true, name);
+    assert.equal(app.refs.main.querySelector('[data-tour="capture-form"]'), form);
+    if (input.type === 'checkbox') input.checked = false; else input.value = '';
+    assert.equal(unloadRequested(app), false, `reverted ${name}`);
+  }
+  control(form, 'body').value = '合成长原文'.repeat(100);
+  control(form, 'localOnly').checked = true;
+  const pending = click(app.refs.refresh);
+  await click(findButton(app.dialogs, '取消')); await pending;
+  assert.equal(control(form, 'body').value, '合成长原文'.repeat(100));
+  assert.equal(control(form, 'localOnly').checked, true);
+  await click(findButton(form, '清空')); await Promise.resolve();
+  assert.equal(unloadRequested(app), false);
+});
+
+test('capture releases unload protection only after successful save', async () => {
+  let fail = true;
+  const app = browser({ import: async () => { if (fail) throw new Error('受控保存失败'); return { notes: [{}] }; }, bootstrap: async () => ({}) });
+  await app.renderCapture();
+  const form = app.refs.main.querySelector('[data-tour="capture-form"]');
+  control(form, 'body').value = '合成原文';
+  await form.events.submit({ preventDefault() {} });
+  assert.equal(unloadRequested(app), true);
+  fail = false; await form.events.submit({ preventDefault() {} });
+  assert.equal(unloadRequested(app), false);
+});
+
+test('study protects unsubmitted answers and keeps the same live session on redraw', async () => {
+  const session = { id: 'synthetic-session', status: 'reading', turns: [], question: '合成问题' };
+  const app = browser({ study: async () => session, today: async () => ({ items: [] }), notes: async () => ({ notes: [] }), studySessions: async () => ({ sessions: [] }) });
+  app.state.currentStudy = session; app.state.studyTab = 'session'; app.state.studyMaterialVisible = false;
+  await app.renderStudy();
+  let form = app.refs.main.querySelector('[data-tour="study-session"]');
+  assert.equal(unloadRequested(app), false);
+  control(form, 'answer').value = '合成未提交回答';
+  assert.equal(unloadRequested(app), true);
+  await app.renderStudy();
+  form = app.refs.main.querySelector('[data-tour="study-session"]');
+  assert.equal(control(form, 'answer').value, '合成未提交回答');
+  const pending = click(findButton(app.refs.main, '学习队列'));
+  await click(findButton(app.dialogs, '取消')); await pending;
+  assert.equal(app.state.studyTab, 'session');
+  assert.equal(control(form, 'answer').value, '合成未提交回答');
+  const discard = click(findButton(app.refs.main, '学习队列'));
+  await click(findButton(app.dialogs, '放弃输入'));
+  await discard;
+  assert.equal(unloadRequested(app), false);
+});
+
+test('study answer save releases protection while a failed submit retains it', async () => {
+  let fail = true;
+  let session = { id: 'synthetic-answer', status: 'reading', turns: [], question: '合成问题' };
+  const app = browser({ study: async () => session, answer: async (_, data) => { if (fail) throw new Error('受控回答失败'); session = { ...session, status: 'awaiting_feedback', pendingJobId: 'synthetic-job', turns: [{ answer: data.answer }] }; return session; } });
+  app.state.currentStudy = session; app.state.studyTab = 'session'; app.state.studyMaterialVisible = false;
+  await app.renderStudy();
+  const form = app.refs.main.querySelector('[data-tour="study-session"]');
+  control(form, 'answer').value = '合成提交回答';
+  await form.events.submit({ preventDefault() {} });
+  assert.equal(unloadRequested(app), true);
+  fail = false; await form.events.submit({ preventDefault() {} });
+  assert.equal(unloadRequested(app), false);
+  assert.equal(app.state.currentStudy.turns.length, 1);
+  assert.equal(app.state.currentStudy.turns[0].answer, '合成提交回答');
+});
+
+test('study redraw retains text entered while the same-session read is pending', async () => {
+  for (const initial of ['', '合成原有回答']) {
+    const session = { id: 'synthetic-deferred-session', status: 'reading', turns: [], question: '合成问题' };
+    let readPending = false, finishRead;
+    const app = browser({ study: () => readPending ? new Promise(resolve => { finishRead = resolve; }) : Promise.resolve(session) });
+    app.state.currentStudy = session; app.state.studyTab = 'session'; app.state.studyMaterialVisible = false;
+    await app.renderStudy();
+    const oldForm = app.refs.main.querySelector('[data-tour="study-session"]');
+    const answer = control(oldForm, 'answer');
+    answer.value = initial;
+    readPending = true;
+    const pending = app.renderStudy();
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(typeof finishRead, 'function', 'read must be deferred while the original textarea remains live');
+    answer.value += '等待期间新增的最后几个字';
+    finishRead(session); await pending;
+    const newForm = app.refs.main.querySelector('[data-tour="study-session"]');
+    assert.notEqual(newForm, oldForm);
+    assert.equal(control(newForm, 'answer').value, initial + '等待期间新增的最后几个字');
+    assert.equal(unloadRequested(app), true);
+  }
+});
+
+test('unsaved-input confirmations cannot discard a replacement form or cross library contexts', async () => {
+  let version = 0;
+  const app = browser({ getContext: () => ({ practiceId: version ? 'synthetic-practice' : '', version }) });
+  await app.renderCapture();
+  const form = app.refs.main.querySelector('[data-tour="capture-form"]');
+  control(form, 'body').value = '合成正式库输入';
+  const pending = form.confirmDiscardChanges();
+  version++;
+  await click(findButton(app.dialogs, '放弃输入'));
+  assert.equal(await pending, false);
+  assert.equal(control(form, 'body').value, '合成正式库输入');
+});
 
 function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
   api = { getContext: () => ({ practiceId: '', version: 0 }), ...api };
@@ -89,7 +203,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
       entries() { return descendants(this.form).filter(node => node.name && !node.disabled && ['input', 'textarea', 'select'].includes(node.tagName)).map(node => [node.name, String(node.tagName === 'select' ? node.children.find(option => option.selected)?.value || '' : node.value)]); }
     },
     ApiError: class extends Error {}, startSession: async () => {},
-    window: { zhixuAppearance: { getAccent: () => null, getTheme: () => 'light', resolvedTheme: () => 'light', previewAccent: () => ({}), getMode: () => 'light', palette: () => ({}) }, matchMedia: () => ({ matches: false, addEventListener() {} }), history: { replaceState() {} }, location: { hash: '' }, setTimeout() {}, addEventListener() {} },
+    window: { zhixuAppearance: { getAccent: () => null, getTheme: () => 'light', resolvedTheme: () => 'light', previewAccent: () => ({}), getMode: () => 'light', palette: () => ({}) }, matchMedia: () => ({ matches: false, addEventListener() {} }), history: { replaceState() {} }, location: { hash: '' }, setTimeout() {}, events: {}, addEventListener(name, handler) { this.events[name] = handler; } },
   });
   const stripped = appSource.replace(/import[\s\S]*?from "\.\/api\.mjs";\s*/, '').replace(/import[\s\S]*?from "\.\/ui\.mjs";\s*/, '').replace(/^init\(\);\s*$/m, '').replace('const { createUsagePanel } = await import("./usage.mjs");', '');
   vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + sourceMapSource + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { renderSourceGroupDrawer, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
@@ -102,6 +216,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
   context.app.renderSourceGroupDrawer = vm.runInContext('renderSourceGroupDrawer', context);
   context.app.toasts = document.querySelector('#toast-region');
   context.app.document = document;
+  context.app.window = context.window;
   context.app.dialogs = document.body;
   context.app.jobsPanel = vm.runInContext('jobsPanel', context);
   context.app.generateToday = vm.runInContext('generateToday', context);
