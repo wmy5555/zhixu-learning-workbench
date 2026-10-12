@@ -1635,3 +1635,30 @@ test('confirm understanding blocks simultaneous and completed-form submissions w
   assert.equal(writes.length, 3, 'a new confirmation form remains independently usable');
   resolveWrite({}); await next;
 });
+
+
+test('successful start of another intent retires uncertain keys before returning to the original knowledge', async t => {
+  const tempRoot = path.resolve(import.meta.dirname, '..', '.tmp');
+  await mkdir(tempRoot, { recursive: true });
+  const root = await mkdtemp(path.join(tempRoot, 'study-ui-'));
+  const backend = createApp({ dataDir: path.join(root, 'data'), vaultDir: path.join(root, 'vault'), scheduler: false });
+  t.after(async () => { await backend.close(); assert.ok(root.startsWith(tempRoot + path.sep)); await rm(root, { recursive: true, force: true }); });
+  const knowledge = title => backend.service.store.create({ kind: 'knowledge', title, body: '合成测试正文', meta: { stage: 'learning', privacy: 'local' } });
+  const original = knowledge('合成未收到响应观点'), other = knowledge('合成另一观点');
+  const requests = [];
+  let loseReply = true, firstSession;
+  const app = browser({ startStudy: async input => {
+    requests.push(plain(input));
+    const session = backend.service.startStudy(plain(input));
+    if (loseReply) { loseReply = false; firstSession = session; throw new Error('合成：已提交但响应丢失'); }
+    return session;
+  }, study: async id => backend.service.session(id) });
+  await app.beginStudy(original.id);
+  assert.equal(backend.service.store.records('sessions').length, 1);
+  await app.beginStudy(other.id);
+  assert.equal(app.state.currentStudy.noteId, other.id);
+  await app.beginStudy(original.id);
+  assert.notEqual(requests[2].requestId, requests[0].requestId, 'moving on successfully retires old uncertain intent');
+  assert.notEqual(app.state.currentStudy.id, firstSession.id, 'deliberate return starts a new session');
+  assert.equal(backend.service.store.records('sessions').length, 3);
+});
