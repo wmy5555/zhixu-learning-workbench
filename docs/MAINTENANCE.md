@@ -52,4 +52,3 @@ Android 的独立实验进展、错误和待办留在 Android 任务及其 dot �
 建议 squash 合并、自动删除已合并分支、禁用 force push 与删除 main、要求讨论解决和上述四项检查；单维护者不要求自己无法完成的第二人审批。普通 CI token 只读；仅发布 job 有 contents write。不使用 `pull_request_target` 执行外部 PR 代码。
 
 Actions/Dependabot 可自动检查和提议更新，但许可证选择、公开私有内容、生产 Secret 轮换、不可逆数据操作、套餐付费仍由所有者决定。项目不新增第三方 Agent Skill，现有工具与仓库规则足以覆盖当前流程。
-
