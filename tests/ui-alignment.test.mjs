@@ -1387,6 +1387,37 @@ test('a saved local answer appears in the output workspace without reloading and
   assert.equal(app.refs.drawerBody.dataset.tourSubject, saved.id);
 });
 
+test('a delayed saved answer refreshes the output page after the user leaves and returns', async () => {
+  const fixture = tutorialFixture(); const drafts = [];
+  const saved = { id: 'delayed-local-answer', mode: 'answer', question: '青石-1012', body: '延迟保存的本地回答', citations: [], limitations: ['未进行 AI 生成。'], usedIds: [] };
+  let completeAsk;
+  const app = browser({ ...fixture.api, drafts: async () => ({ drafts }), ask: async () => new Promise(resolve => { completeAsk = () => { drafts.unshift(saved); resolve({ answer: saved.body, citations: saved.citations, limitations: saved.limitations, draftId: saved.id, generated: false }); }; }) });
+  app.state.bootstrap = fixture.bootstrap;
+  await app.renderOutput();
+  const submit = app.refs.main.querySelector('[data-tour="output-form"]').events.submit({ preventDefault() {} });
+  await app.renderStudy();
+  assert.equal(app.refs.main.querySelector('[data-tour="output-drafts"]'), null);
+  await app.renderOutput();
+  const activePanel = app.refs.main.querySelector('[data-tour="output-drafts"]');
+  assert.match(activePanel.textContent, /还没有输出草稿/);
+  completeAsk();
+  await submit;
+  assert.match(activePanel.textContent, /延迟保存的本地回答/);
+  await click(findButton(activePanel, '编辑'));
+  assert.equal(app.refs.drawerBody.dataset.tourSubject, saved.id);
+});
+
+test('an empty local answer is labeled as non-AI even without returned limitations', async () => {
+  const fixture = tutorialFixture();
+  const app = browser({ ...fixture.api, drafts: async () => ({ drafts: [] }), ask: async () => ({ answer: '知识库中没有找到材料。', citations: [], limitations: [], generated: false }) });
+  app.state.bootstrap = fixture.bootstrap;
+  await app.renderOutput();
+  await app.refs.main.querySelector('[data-tour="output-form"]').events.submit({ preventDefault() {} });
+  const result = app.refs.main.querySelector('[data-tour="output-result"]').textContent;
+  assert.match(result, /本地检索结果（未进行 AI 生成）/);
+  assert.match(result, /限制：未进行 AI 生成/);
+});
+
 test('a failed new output request cannot restore a previous successful answer', async () => {
   const fixture = tutorialFixture(); let reject = false;
   const app = browser({ ...fixture.api, ask: async () => { if (reject) throw new Error('受控失败'); return { answer: '上一轮旧答案' }; } });
