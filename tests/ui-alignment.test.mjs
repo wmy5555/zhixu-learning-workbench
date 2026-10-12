@@ -143,6 +143,30 @@ test('study answer save releases protection while a failed submit retains it', a
   assert.equal(app.state.currentStudy.turns[0].answer, '合成提交回答');
 });
 
+test('study redraw retains text entered while the same-session read is pending', async () => {
+  for (const initial of ['', '合成原有回答']) {
+    const session = { id: 'synthetic-deferred-session', status: 'reading', turns: [], question: '合成问题' };
+    let readPending = false, finishRead;
+    const app = browser({ study: () => readPending ? new Promise(resolve => { finishRead = resolve; }) : Promise.resolve(session) });
+    app.state.currentStudy = session; app.state.studyTab = 'session'; app.state.studyMaterialVisible = false;
+    await app.renderStudy();
+    const oldForm = app.refs.main.querySelector('[data-tour="study-session"]');
+    const answer = control(oldForm, 'answer');
+    answer.value = initial;
+    readPending = true;
+    const pending = app.renderStudy();
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(typeof finishRead, 'function', 'read must be deferred while the original textarea remains live');
+    answer.value += '等待期间新增的最后几个字';
+    finishRead(session); await pending;
+    const newForm = app.refs.main.querySelector('[data-tour="study-session"]');
+    assert.notEqual(newForm, oldForm);
+    assert.equal(control(newForm, 'answer').value, initial + '等待期间新增的最后几个字');
+    assert.equal(unloadRequested(app), true);
+  }
+});
+
 test('unsaved-input confirmations cannot discard a replacement form or cross library contexts', async () => {
   let version = 0;
   const app = browser({ getContext: () => ({ practiceId: version ? 'synthetic-practice' : '', version }) });

@@ -1217,8 +1217,7 @@ async function renderStudy() {
   const context = api.getContext();
   const currentForm = refs.main.querySelector('[data-tour="study-session"]');
   const keepDraft = state.studyTab === "session" && currentForm?.dataset.sessionId === state.currentStudy?.id
-    && currentForm?.hasUnsavedChanges() && currentForm.draftContextVersion === context.version && currentForm.draftPracticeId === context.practiceId;
-  const draft = keepDraft ? currentForm.readAnswerDraft() : null;
+    && currentForm?.draftContextVersion === context.version && currentForm.draftPracticeId === context.practiceId;
   if (!keepDraft && !await confirmUnsavedInputDiscard()) { state.studyTab = "session"; return; }
   const wrapper = el("div", { class: "page-stack" });
   const tabs = el("div", { class: "tabs" }, [
@@ -1228,11 +1227,11 @@ async function renderStudy() {
   if (state.studyTab === "session") wrapper.append(await studySessionPanel());
   else if (state.studyTab === "mistakes") wrapper.append(await mistakesPanel());
   else wrapper.append(await studyQueuePanel());
-  if (draft) {
+  if (keepDraft) {
     const latest = api.getContext(), nextForm = wrapper.querySelector('[data-tour="study-session"]');
     if (latest.version !== context.version || latest.practiceId !== context.practiceId || unsavedInputForm() !== currentForm) return;
     if (!nextForm || nextForm.dataset.sessionId !== currentForm.dataset.sessionId) return;
-    nextForm.restoreAnswerDraft(draft);
+    nextForm.restoreAnswerDraft(currentForm.readAnswerDraft());
   }
   clear(refs.main).append(wrapper);
 }
