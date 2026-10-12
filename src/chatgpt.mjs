@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { fail, hash, now } from './store.mjs';
+import { syncSchema, structuredSchema, validateSync, captureIncremental, literalBlock } from './chatgpt-sync.mjs';
 
 const text = max => z.string().max(max);
 const captureId = requestHash => `chatgpt_${requestHash}`;
@@ -7,16 +8,19 @@ export const conversationSchema = z.object({
   requestId: z.string().trim().min(8).max(128),
   title: z.string().trim().min(1).max(200),
   summary: z.string().trim().min(1).max(30000),
-  messages: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.string().min(1).max(120000) }).strict()).min(1).max(200),
-  coverage: z.enum(['current_context', 'selected_excerpt']),
+  messages: z.array(z.object({ id: z.string().min(1).max(200).regex(/^[A-Za-z0-9_-]+$/).optional(), role: z.enum(['user', 'assistant']), content: z.string().min(1).max(120000) }).strict()).min(1).max(200),
+  coverage: z.enum(['current_context', 'selected_excerpt', 'visible_history']),
   limitations: text(4000).default(''),
   conversationUrl: text(2048).default(''),
+  sync: syncSchema.optional(),
+  structured: structuredSchema.optional(),
 }).strict();
 
 export function parseConversation(input) {
   const parsed = conversationSchema.safeParse(input);
   if (!parsed.success) fail('会话格式无效：请提供请求编号、标题、摘要、角色原文和收集范围。', 'CHATGPT_INVALID');
   const value = parsed.data;
+  validateSync(value);
   if (value.messages.some(message => !message.content.trim()) || value.messages.reduce((size, message) => size + message.content.length, value.summary.length) > 500000) {
     fail('会话原文不能为空，总长度不能超过 500000 字符；请按主题分段保存。', 'CHATGPT_TOO_LARGE', 413);
   }
@@ -27,25 +31,21 @@ export function parseConversation(input) {
       fail('会话链接只能填写已知的 ChatGPT 会话地址；不知道时请留空，不要创建分享链接。', 'CHATGPT_INVALID_URL');
     }
   }
+  if (JSON.stringify(value).length > 1000000) fail('会话和结构化内容超过保存上限，请分段保存。', 'CHATGPT_TOO_LARGE', 413);
   return value;
 }
 
-function literalBlock(value) {
-  let length = 3;
-  for (const match of value.matchAll(/`+/g)) length = Math.max(length, match[0].length + 1);
-  const fence = '`'.repeat(length);
-  return `${fence}text\n${value}\n${fence}`;
-}
-
 function renderConversation(value) {
-  const scope = value.coverage === 'selected_excerpt' ? '用户选定片段' : 'ChatGPT 当前可见上下文';
+  const scope = value.coverage === 'selected_excerpt' ? '用户选定片段' : value.coverage === 'visible_history' ? '调用方分页读取的当前可见历史分支' : 'ChatGPT 当前可见上下文';
   return [
     '## 收集范围', scope,
     '只保存本次实际收到的消息；不保证覆盖完整历史、附件或其他会话。原文由 ChatGPT 传入，知序未独立核对网页记录。',
+    value.sync ? `累计保留 ${value.messages.length} 条已收到消息；本次${value.sync.complete ? '声明已读到当前可见分支末尾' : '范围不完整，保留此前收到的消息，不推断缺失部分'}。` : '',
     value.limitations ? `补充限制：\n\n${literalBlock(value.limitations)}` : '',
     '## 整理摘要（ChatGPT 生成，未经独立核验）', literalBlock(value.summary),
+    value.structured ? `## 结构化整理（模型建议，未经独立核验）\n\n${literalBlock(JSON.stringify(value.structured, null, 2))}` : '',
     '## 会话原文（按收到的顺序保留）',
-    ...value.messages.map((message, index) => `### ${index + 1}. ${message.role === 'user' ? '用户' : 'ChatGPT'}\n\n${literalBlock(message.content)}`),
+    ...value.messages.map((message, index) => `### ${index + 1}. ${message.role === 'user' ? '用户' : 'ChatGPT'}\n\n${message.id ? `消息编号：${literalBlock(message.id)}\n\n` : ''}${literalBlock(message.content)}`),
   ].filter(Boolean).join('\n\n');
 }
 
@@ -66,11 +66,12 @@ export function createChatgptBridge({ getStore, settings, search, getNote, relat
   return {
     status() {
       enabled();
-      return { ready: true, canCapture: true, canRead: settings().mcp.chatgptAllowRead === true, maxCharacters: 500000, maxMessages: 200 };
+      return { ready: true, canCapture: true, canSync: true, structuredSchemaVersion: 1, canRead: settings().mcp.chatgptAllowRead === true, maxCharacters: 500000, maxMessages: 200 };
     },
     capture(input) {
       enabled();
       const value = parseConversation(input), store = getStore();
+      if (value.sync) return captureIncremental(store, value, renderConversation);
       const requestHash = hash(value.requestId);
       const { requestId: _requestId, ...content } = value;
       const payloadHash = hash(JSON.stringify(content));

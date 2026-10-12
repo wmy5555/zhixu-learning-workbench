@@ -202,6 +202,8 @@ test('official SDK discovers the ChatGPT tools and stores a real temporary Markd
   assert.deepEqual(tools.map(tool => tool.name).sort(), ['get_zhixu_status', 'save_chatgpt_conversation', 'search_knowledge', 'read_note', 'read_source', 'related_knowledge'].sort());
   assert.equal(tools.find(tool => tool.name === 'save_chatgpt_conversation').annotations.readOnlyHint, false);
   assert.equal(tools.find(tool => tool.name === 'save_chatgpt_conversation').annotations.idempotentHint, true);
+  assert.ok(tools.find(tool => tool.name === 'save_chatgpt_conversation').inputSchema.properties.sync);
+  assert.ok(tools.find(tool => tool.name === 'save_chatgpt_conversation').inputSchema.properties.structured);
   const call = async (name, args = {}) => client.callTool({ name, arguments: args });
   const status = await call('get_zhixu_status'); assert.equal(status.structuredContent.canRead, true);
   const payload = sample(), saved = await call('save_chatgpt_conversation', payload);
@@ -211,6 +213,13 @@ test('official SDK discovers the ChatGPT tools and stores a real temporary Markd
   assert.equal((await call('read_note', { id, limit: 10 })).structuredContent.body.length, 10);
   assert.equal((await call('search_knowledge', { query: '出处' })).structuredContent.results[0].id, id);
   assert.deepEqual((await call('related_knowledge', { id })).structuredContent.notes, []);
+  const incremental = sample({ messages: [{ id: 'sdk-message', role: 'user', content: '合成 SDK 增量原文' }],
+    sync: { conversationId: 'sdk-conversation', branchId: 'active', snapshotId: 'sdk-first', mode: 'snapshot', complete: false } });
+  const initialSync = await call('save_chatgpt_conversation', incremental);
+  assert.equal(initialSync.isError, undefined); assert.equal(initialSync.structuredContent.syncRevision, 1);
+  const updateSync = await call('save_chatgpt_conversation', { ...incremental, requestId: randomUUID(), summary: 'SDK 更新摘要',
+    sync: { ...incremental.sync, snapshotId: 'sdk-next', mode: 'delta', baseRevision: 1 } });
+  assert.equal(updateSync.structuredContent.status, 'updated'); assert.equal(updateSync.structuredContent.noteId, initialSync.structuredContent.noteId);
   f.enable(false); assert.equal((await call('read_source', { id })).isError, true);
   assert.equal((await call('save_chatgpt_conversation', payload)).structuredContent.duplicate, true);
   assert.ok(!stderr.includes(f.token())); assert.ok(!JSON.stringify(saved).includes(f.token()));
