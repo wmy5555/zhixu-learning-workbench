@@ -177,6 +177,61 @@ test('review regression: externally deleting a written source during an interrup
   assert.equal(fs.existsSync(file), false); assert.equal(f.service.store.list().length, 0);
 });
 
+test('followup regression: deletion after source creation but before the hash checkpoint cannot recreate it', t => {
+  const f = fixture(t), value = snapshot({ structured: structure() }), store = f.service.store, put = store.put.bind(store);
+  store.put = (namespace, key, record) => {
+    if (namespace === 'chatgptSyncSessions' && record.noteHash) throw new Error('synthetic source hash checkpoint failure');
+    return put(namespace, key, record);
+  };
+  assert.throws(() => f.service.chatgpt.capture(value), /synthetic source hash checkpoint failure/);
+  store.put = put;
+  const state = store.records('chatgptSyncSessions')[0], note = store.list()[0];
+  assert.equal(state.noteHash, undefined); assert.equal(state.previousHash, null); assert.equal(store.get('deleted', note.id), null);
+  const file = path.resolve(f.config.vaultDir, note.path);
+  assert.ok(file.startsWith(path.resolve(f.config.vaultDir) + path.sep)); fs.unlinkSync(file);
+  f.restart();
+  assert.throws(() => f.service.chatgpt.capture(value), { code: 'CHATGPT_CAPTURE_UNAVAILABLE' });
+  assert.equal(fs.existsSync(file), false); assert.equal(f.service.store.list().length, 0);
+});
+
+test('source write checkpoint failure before creating a file can resume the prepared request', t => {
+  const f = fixture(t), value = snapshot({ structured: structure() }), store = f.service.store, put = store.put.bind(store);
+  store.put = (namespace, key, record) => {
+    if (namespace === 'chatgptSyncSessions' && record.sourceWritePhase === 'started') throw new Error('synthetic write intent failure');
+    return put(namespace, key, record);
+  };
+  assert.throws(() => f.service.chatgpt.capture(value), /synthetic write intent failure/);
+  assert.equal(store.records('chatgptSyncSessions')[0].sourceWritePhase, 'prepared'); assert.equal(store.list().length, 0);
+  store.put = put; f.restart();
+  assert.equal(f.service.chatgpt.capture(value).importedItems, 1); assert.equal(f.service.store.list().length, 2);
+});
+
+test('a written source survives a failed hash checkpoint and resumes without duplicate files', t => {
+  const f = fixture(t), value = snapshot({ structured: structure() }), store = f.service.store, put = store.put.bind(store);
+  store.put = (namespace, key, record) => {
+    if (namespace === 'chatgptSyncSessions' && record.noteHash) throw new Error('synthetic source hash checkpoint failure');
+    return put(namespace, key, record);
+  };
+  assert.throws(() => f.service.chatgpt.capture(value), /synthetic source hash checkpoint failure/);
+  const note = store.list()[0]; assert.equal(store.records('chatgptSyncSessions')[0].sourceWritePhase, 'started');
+  store.put = put; f.restart();
+  const saved = f.service.chatgpt.capture(value);
+  assert.equal(saved.noteId, note.id); assert.equal(saved.importedItems, 1); assert.equal(f.service.store.list().length, 2);
+});
+
+test('a pending legacy request without a source write checkpoint cannot guess whether a missing file was deleted', t => {
+  const f = fixture(t), value = snapshot(), store = f.service.store, put = store.put.bind(store);
+  store.put = (namespace, key, record) => {
+    if (namespace === 'chatgptSyncSessions' && record.sourceWritePhase === 'started') throw new Error('synthetic write intent failure');
+    return put(namespace, key, record);
+  };
+  assert.throws(() => f.service.chatgpt.capture(value), /synthetic write intent failure/); store.put = put;
+  const state = store.records('chatgptSyncSessions')[0]; delete state.sourceWritePhase;
+  store.put('chatgptSyncSessions', state.key, state); f.restart();
+  assert.throws(() => f.service.chatgpt.capture(value), { code: 'CHATGPT_CAPTURE_UNAVAILABLE' });
+  assert.equal(f.service.store.list().length, 0);
+});
+
 test('review regression: a lone moved and renamed source marker blocks missing-state recovery', t => {
   const f = fixture(t), value = snapshot(), saved = f.service.chatgpt.capture(value), store = f.service.store, note = store.read(saved.noteId);
   const original = path.resolve(f.config.vaultDir, note.path), moved = path.join(path.dirname(original), 'externally-moved-source.md');

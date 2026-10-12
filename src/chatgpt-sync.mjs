@@ -139,7 +139,7 @@ export function captureIncremental(store, value, render) {
     if (recent.length >= 30) fail('一分钟内保存过于频繁，请稍后继续。', 'CHATGPT_RATE_LIMIT', 429);
     store.put('chatgptCaptureRate', 'recent', [...recent, timestamp]);
     state = { key, requestHash, payloadHash, pending: true, revision: (state?.revision || 0) + 1, snapshot: merged.snapshot,
-      previousHash: state?.noteHash || null, added: merged.added, modified: merged.modified, savedAt: now() };
+      previousHash: state?.noteHash || null, sourceWritePhase: 'prepared', added: merged.added, modified: merged.modified, savedAt: now() };
     store.put('chatgptSyncSessions', key, state);
   }
   const body = render(state.snapshot);
@@ -147,10 +147,13 @@ export function captureIncremental(store, value, render) {
   if (note?.meta.chatgptSync?.revision === state.revision) checkSource(note, state, render);
   else {
     if (note && note.hash !== state.previousHash) fail('导入过程中原资料发生变化，不会覆盖。', 'CHATGPT_SOURCE_EDITED', 409);
-    if (!note && (state.noteHash || state.previousHash || ownsPath(store, noteId) || store.get('deleted', noteId))) fail('原资料缺失或存在冲突，不会重建。', 'CHATGPT_CAPTURE_UNAVAILABLE', 409);
+    if (!note && (state.sourceWritePhase !== 'prepared' || state.noteHash || state.previousHash || ownsPath(store, noteId) || store.get('deleted', noteId))) fail('原资料缺失或写入状态无法核对，不会重建；请在知序核对。', 'CHATGPT_CAPTURE_UNAVAILABLE', 409);
     const origin = { platform: 'ChatGPT', url: state.snapshot.conversationUrl, author: '', date: '', acquiredAt: state.savedAt, locator: `会话分支版本 ${state.revision}；累计 ${state.snapshot.messages.length} 条消息` };
     const meta = { privacy: 'local', stage: 'reference', ...origin, origins: [origin], fingerprint: hash(body.trim()),
       chatgptSync: { version: 1, sessionHash: key, revision: state.revision, requestHash, payloadHash, snapshot: state.snapshot } };
+    // Persist intent before any source write: a missing file afterwards may have been deleted.
+    state = { ...state, sourceWritePhase: 'started' };
+    store.put('chatgptSyncSessions', key, state);
     note = note ? store.update(noteId, { expectedHash: state.previousHash, title: state.snapshot.title, body, meta }) : store.create({ id: noteId, kind: 'source', title: state.snapshot.title, body, meta });
     state.noteHash = note.hash;
     store.put('chatgptSyncSessions', key, state);
