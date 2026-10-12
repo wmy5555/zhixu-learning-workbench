@@ -1198,7 +1198,7 @@ function sourceRole(value) {
 }
 
 let studyStartPending = false;
-// Keep uncertain POST results within this page; a successful reply ends the intent.
+// Retain uncertain POST results for retries; any successful start retires them.
 const studyStartRequests = new Map();
 async function beginStudy(noteId, planId, context = {}, control) {
   if (!noteId) { toast("这项任务没有关联知识，暂时无法开始", "error"); return; }
@@ -1212,7 +1212,7 @@ async function beginStudy(noteId, planId, context = {}, control) {
     let requestId = studyStartRequests.get(intentKey);
     if (!requestId) { requestId = crypto.randomUUID(); studyStartRequests.set(intentKey, requestId); }
     state.currentStudy = await api.startStudy({ requestId, noteId, ...(planId ? { planId } : {}), ...(context.topicId ? { topicId: context.topicId } : {}), ...(context.mistakeId ? { mistakeId: context.mistakeId } : {}) });
-    studyStartRequests.delete(intentKey);
+    studyStartRequests.clear();
     if (context.topicId) recordTourEvent("topic-study");
     closeDrawer();
     state.studyMaterialVisible = true;
