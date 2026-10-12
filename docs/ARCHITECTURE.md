@@ -43,12 +43,11 @@ Vault 中保存 source（原始资料）、knowledge（结构化/个人知识）
 
 服务只绑定 127.0.0.1，限制 Host、Origin，API 使用同源 HttpOnly 会话及写入 CSRF 标记。没有公网部署入口。密钥使用 Windows DPAPI，其他平台需环境密钥或明确配置主密钥。
 
-## 代码模块负责人
+## 模块与协作边界
 
-- 总负责人：src/store.mjs（文件/SQLite）、src/service.mjs（知识业务）、src/server.mjs（HTTP/调度）、集成和最终验收。
-- 界面 Agent：public/（纯浏览器模块，不增设后端接口）。
-- AI Agent：src/ai.mjs、tests/ai.test.mjs（独立服务能力、隐私、真实网页研究）。
-- MCP/测试 Agent：src/mcp.mjs、tests/mcp.test.mjs、docs/MCP.md（真实 SDK 客户端验收）。
+- `src/store.mjs` 负责文件与 SQLite，`src/service.mjs` 编排知识业务，`src/server.mjs` 提供 HTTP 与调度；接口、数据边界和最终验收需在任务负责人处统一核对。
+- `public/` 是浏览器界面；`src/ai.mjs` 负责模型与研究边界；`src/mcp.mjs` 提供 MCP 接口。相关测试和文档随实际改动范围维护，不把这些目录永久分配给固定 Agent。
+- 多任务时由当前负责人按任务独立性、文件冲突和并行收益分派，并统一集成与验收；实际任务归属与交接以[跨任务交接规则](MAINTENANCE.md#跨任务交接)及当前明确指派为准。架构图不代表当前会话分工。
 
 ## 固定内部接口
 
