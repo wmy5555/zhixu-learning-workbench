@@ -8,7 +8,8 @@ import { createProcessFeedback } from '../public/process-feedback.mjs';
 import { initSidebar } from '../public/sidebar.mjs';
 import { parseSourceFile } from '../public/source-exchange.mjs';
 import { describeJobError } from '../public/ui.mjs';
-import { coreSteps, flatSteps } from '../public/onboarding-curriculum.mjs';
+import { chapters, coreSteps, flatSteps, getCurriculum } from '../public/onboarding-curriculum.mjs';
+import { materials, customMaterial, customSample, getMaterial, materialSample } from '../public/onboarding-materials.mjs';
 
 import { tutorialFixture } from './fixtures/tutorial-ui.mjs';
 const usageSource = await readFile(new URL('../public/usage.mjs', import.meta.url), 'utf8');
@@ -16,6 +17,7 @@ const onboardingCss = await readFile(new URL('../public/onboarding.css', import.
 
 const uiSource = await readFile(new URL('../public/ui.mjs', import.meta.url), 'utf8');
 const appSource = await readFile(new URL('../public/app.mjs', import.meta.url), 'utf8');
+const onboardingSource = await readFile(new URL('../public/onboarding.mjs', import.meta.url), 'utf8');
 const sourceMapSource = (await readFile(new URL('../public/source-map.mjs', import.meta.url), 'utf8')).replace(/^import.*;$/m, '').replaceAll('export ', '');
 
 class Element {
@@ -67,6 +69,197 @@ function findButton(node, text) { return descendants(node).find(item => item.tag
 function control(node, name) { return descendants(node).find(item => item.name === name); }
 const click = node => node.events.click({ target: node, preventDefault() {} });
 const plain = value => JSON.parse(JSON.stringify(value));
+function unloadRequested(app) {
+  const event = { prevented: false, preventDefault() { this.prevented = true; } };
+  app.window.events.beforeunload(event);
+  // Exercise both the modern cancellation path and the legacy browser fallback.
+  assert.equal(Boolean(event.returnValue), event.prevented);
+  return event.prevented;
+}
+
+test('capture protects every field and option on unload without changing the live draft', async () => {
+  const app = browser(); await app.renderCapture();
+  const form = app.refs.main.querySelector('[data-tour="capture-form"]');
+  assert.equal(unloadRequested(app), false);
+  for (const name of ['title', 'body', 'platform', 'author', 'url', 'date', 'locator', 'localOnly', 'process', 'research']) {
+    const input = control(form, name);
+    if (input.type === 'checkbox') input.checked = true; else input.value = '合成草稿';
+    assert.equal(unloadRequested(app), true, name);
+    assert.equal(app.refs.main.querySelector('[data-tour="capture-form"]'), form);
+    if (input.type === 'checkbox') input.checked = false; else input.value = '';
+    assert.equal(unloadRequested(app), false, `reverted ${name}`);
+  }
+  control(form, 'body').value = '合成长原文'.repeat(100);
+  control(form, 'localOnly').checked = true;
+  const pending = click(app.refs.refresh);
+  await click(findButton(app.dialogs, '取消')); await pending;
+  assert.equal(control(form, 'body').value, '合成长原文'.repeat(100));
+  assert.equal(control(form, 'localOnly').checked, true);
+  await click(findButton(form, '清空')); await Promise.resolve();
+  assert.equal(unloadRequested(app), false);
+});
+
+test('capture releases unload protection only after successful save', async () => {
+  let fail = true;
+  const app = browser({ import: async () => { if (fail) throw new Error('受控保存失败'); return { notes: [{}] }; }, bootstrap: async () => ({}) });
+  await app.renderCapture();
+  const form = app.refs.main.querySelector('[data-tour="capture-form"]');
+  control(form, 'body').value = '合成原文';
+  await form.events.submit({ preventDefault() {} });
+  assert.equal(unloadRequested(app), true);
+  fail = false; await form.events.submit({ preventDefault() {} });
+  assert.equal(unloadRequested(app), false);
+});
+
+test('study protects unsubmitted answers and keeps the same live session on redraw', async () => {
+  const session = { id: 'synthetic-session', status: 'reading', turns: [], question: '合成问题' };
+  const app = browser({ study: async () => session, today: async () => ({ items: [] }), notes: async () => ({ notes: [] }), studySessions: async () => ({ sessions: [] }) });
+  app.state.currentStudy = session; app.state.studyTab = 'session'; app.state.studyMaterialVisible = false;
+  await app.renderStudy();
+  let form = app.refs.main.querySelector('[data-tour="study-session"]');
+  assert.equal(unloadRequested(app), false);
+  control(form, 'answer').value = '合成未提交回答';
+  assert.equal(unloadRequested(app), true);
+  await app.renderStudy();
+  form = app.refs.main.querySelector('[data-tour="study-session"]');
+  assert.equal(control(form, 'answer').value, '合成未提交回答');
+  const pending = click(findButton(app.refs.main, '学习队列'));
+  await click(findButton(app.dialogs, '取消')); await pending;
+  assert.equal(app.state.studyTab, 'session');
+  assert.equal(control(form, 'answer').value, '合成未提交回答');
+  const discard = click(findButton(app.refs.main, '学习队列'));
+  await click(findButton(app.dialogs, '放弃输入'));
+  await discard;
+  assert.equal(unloadRequested(app), false);
+});
+
+test('study answer save releases protection while a failed submit retains it', async () => {
+  let fail = true;
+  let session = { id: 'synthetic-answer', status: 'reading', turns: [], question: '合成问题' };
+  const app = browser({ study: async () => session, answer: async (_, data) => { if (fail) throw new Error('受控回答失败'); session = { ...session, status: 'awaiting_feedback', pendingJobId: 'synthetic-job', turns: [{ answer: data.answer }] }; return session; } });
+  app.state.currentStudy = session; app.state.studyTab = 'session'; app.state.studyMaterialVisible = false;
+  await app.renderStudy();
+  const form = app.refs.main.querySelector('[data-tour="study-session"]');
+  control(form, 'answer').value = '合成提交回答';
+  await form.events.submit({ preventDefault() {} });
+  assert.equal(unloadRequested(app), true);
+  fail = false; await form.events.submit({ preventDefault() {} });
+  assert.equal(unloadRequested(app), false);
+  assert.equal(app.state.currentStudy.turns.length, 1);
+  assert.equal(app.state.currentStudy.turns[0].answer, '合成提交回答');
+});
+
+test('study redraw retains text entered while the same-session read is pending', async () => {
+  for (const initial of ['', '合成原有回答']) {
+    const session = { id: 'synthetic-deferred-session', status: 'reading', turns: [], question: '合成问题' };
+    let readPending = false, finishRead;
+    const app = browser({ study: () => readPending ? new Promise(resolve => { finishRead = resolve; }) : Promise.resolve(session) });
+    app.state.currentStudy = session; app.state.studyTab = 'session'; app.state.studyMaterialVisible = false;
+    await app.renderStudy();
+    const oldForm = app.refs.main.querySelector('[data-tour="study-session"]');
+    const answer = control(oldForm, 'answer');
+    answer.value = initial;
+    readPending = true;
+    const pending = app.renderStudy();
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(typeof finishRead, 'function', 'read must be deferred while the original textarea remains live');
+    answer.value += '等待期间新增的最后几个字';
+    finishRead(session); await pending;
+    const newForm = app.refs.main.querySelector('[data-tour="study-session"]');
+    assert.notEqual(newForm, oldForm);
+    assert.equal(control(newForm, 'answer').value, initial + '等待期间新增的最后几个字');
+    assert.equal(unloadRequested(app), true);
+  }
+});
+
+test('unsaved-input confirmations cannot discard a replacement form or cross library contexts', async () => {
+  let version = 0;
+  const app = browser({ getContext: () => ({ practiceId: version ? 'synthetic-practice' : '', version }) });
+  await app.renderCapture();
+  const form = app.refs.main.querySelector('[data-tour="capture-form"]');
+  control(form, 'body').value = '合成正式库输入';
+  const pending = form.confirmDiscardChanges();
+  version++;
+  await click(findButton(app.dialogs, '放弃输入'));
+  assert.equal(await pending, false);
+  assert.equal(control(form, 'body').value, '合成正式库输入');
+});
+
+test('library change preparation keeps dirty forms on cancellation and removes them only after discard', async () => {
+  for (const kind of ['capture', 'answer']) {
+    const session = { id: 'synthetic-context-answer', status: 'reading', turns: [] };
+    const app = browser({ study: async () => session });
+    if (kind === 'capture') await app.renderCapture();
+    else { app.state.currentStudy = session; app.state.studyTab = 'session'; app.state.studyMaterialVisible = false; await app.renderStudy(); }
+    const form = app.refs.main.querySelector(kind === 'capture' ? '[data-tour="capture-form"]' : '[data-tour="study-session"]');
+    const input = control(form, kind === 'capture' ? 'body' : 'answer'); input.value = '合成原库草稿';
+    const cancel = app.prepareContextChange();
+    await click(findButton(app.dialogs, '取消'));
+    assert.equal(await cancel, false);
+    assert.equal(input.value, '合成原库草稿'); assert.equal(unloadRequested(app), true);
+    const discard = app.prepareContextChange();
+    await click(findButton(app.dialogs, '放弃输入'));
+    assert.equal(await discard, true);
+    assert.equal(unloadRequested(app), false);
+    assert.equal(app.refs.main.querySelector('[data-tour="capture-form"]'), null);
+    assert.equal(app.refs.main.querySelector('[data-tour="study-session"]'), null);
+  }
+});
+
+test('global refresh removes the pristine form before waiting for bootstrap so later typing cannot be lost', async () => {
+  for (const kind of ['capture', 'answer']) {
+    let finishBootstrap;
+    const session = { id: 'synthetic-refresh-answer', status: 'reading', turns: [] };
+    const app = browser({ bootstrap: () => new Promise(resolve => { finishBootstrap = resolve; }), study: async () => session });
+    if (kind === 'capture') { app.state.view = 'capture'; await app.renderCapture(); }
+    else { app.state.view = 'study'; app.state.currentStudy = session; app.state.studyTab = 'session'; app.state.studyMaterialVisible = false; await app.renderStudy(); }
+    const pending = click(app.refs.refresh);
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    assert.equal(typeof finishBootstrap, 'function');
+    assert.equal(app.refs.main.querySelector('[data-tour="capture-form"]'), null);
+    assert.equal(app.refs.main.querySelector('[data-tour="study-session"]'), null);
+    assert.equal(app.refs.refresh.disabled, true);
+    finishBootstrap({}); await pending;
+    assert.equal(app.refs.refresh.disabled, false);
+    assert.equal(unloadRequested(app), false);
+  }
+});
+
+test('dirty capture through real onboarding resume cancels in the original library and discards before the target switch', async () => {
+  let practiceId = '', version = 0;
+  const switches = [], navigations = [];
+  let tutorialState = { practiceId: 'synthetic-practice', status: 'paused', modelReady: true, currentStepId: 'capture-save', progress: {}, clock: {} };
+  const app = browser({
+    getContext: () => ({ practiceId, version, pending: 0 }),
+    setContext: id => { switches.push(id); practiceId = id; version++; },
+    onboarding: async (action, data) => {
+      if (action === 'resume') tutorialState = { ...tutorialState, status: 'active' };
+      if (action === 'checkpoint') tutorialState = { ...tutorialState, currentStepId: data.stepId };
+      return tutorialState;
+    },
+  });
+  const tutorial = app.createOnboarding({ beforeContextChange: app.prepareContextChange, contextChanged: async () => app.renderCapture(), navigate: async target => navigations.push(target.id || target.view) });
+  await tutorial.init();
+  app.state.view = 'capture'; await app.renderCapture();
+  const form = app.refs.main.querySelector('[data-tour="capture-form"]');
+  control(form, 'body').value = '合成正式库草稿';
+  const cancelled = tutorial.open();
+  await click(findButton(app.dialogs, '取消')); await cancelled;
+  assert.equal(practiceId, ''); assert.equal(version, 0);
+  assert.deepEqual(switches, []); assert.deepEqual(navigations, []);
+  assert.equal(app.refs.main.querySelector('[data-tour="capture-form"]'), form);
+  assert.equal(control(form, 'body').value, '合成正式库草稿');
+  assert.equal(tutorial.state.status, 'paused');
+  const accepted = tutorial.open();
+  await click(findButton(app.dialogs, '放弃输入')); await accepted;
+  assert.deepEqual(switches, ['synthetic-practice']);
+  assert.equal(practiceId, 'synthetic-practice'); assert.deepEqual(navigations, ['capture-save']);
+  const targetForm = app.refs.main.querySelector('[data-tour="capture-form"]');
+  assert.notEqual(targetForm, form); assert.equal(targetForm.draftPracticeId, 'synthetic-practice');
+  assert.equal(control(targetForm, 'body').value, '');
+  tutorial.dispose();
+});
 
 function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
   api = { getContext: () => ({ practiceId: '', version: 0 }), ...api };
@@ -79,6 +272,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
     createElementNS: (_, tag) => new Element(tag),
     createTextNode: value => new Element('text'),
     querySelector(selector) { if (!roots.has(selector)) roots.set(selector, new Element()); return roots.get(selector); },
+    querySelectorAll() { return []; },
     events: {}, addEventListener(name, handler) { this.events[name] = handler; },
   };
   document.createTextNode = value => { const node = new Element('text'); node.textContent = value; return node; };
@@ -89,7 +283,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
       entries() { return descendants(this.form).filter(node => node.name && !node.disabled && ['input', 'textarea', 'select'].includes(node.tagName)).map(node => [node.name, String(node.tagName === 'select' ? node.children.find(option => option.selected)?.value || '' : node.value)]); }
     },
     ApiError: class extends Error {}, startSession: async () => {},
-    window: { zhixuAppearance: { getAccent: () => null, getTheme: () => 'light', resolvedTheme: () => 'light', previewAccent: () => ({}), getMode: () => 'light', palette: () => ({}) }, matchMedia: () => ({ matches: false, addEventListener() {} }), history: { replaceState() {} }, location: { hash: '' }, setTimeout() {}, addEventListener() {} },
+    window: { zhixuAppearance: { getAccent: () => null, getTheme: () => 'light', resolvedTheme: () => 'light', previewAccent: () => ({}), getMode: () => 'light', palette: () => ({}) }, matchMedia: () => ({ matches: false, addEventListener() {} }), history: { replaceState() {} }, location: { hash: '' }, setTimeout() {}, events: {}, addEventListener(name, handler) { this.events[name] = handler; } },
   });
   const stripped = appSource.replace(/import[\s\S]*?from "\.\/api\.mjs";\s*/, '').replace(/import[\s\S]*?from "\.\/ui\.mjs";\s*/, '').replace(/^init\(\);\s*$/m, '').replace('const { createUsagePanel } = await import("./usage.mjs");', '');
   vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + sourceMapSource + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { renderSourceGroupDrawer, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
@@ -102,10 +296,18 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
   context.app.renderSourceGroupDrawer = vm.runInContext('renderSourceGroupDrawer', context);
   context.app.toasts = document.querySelector('#toast-region');
   context.app.document = document;
+  context.app.window = context.window;
   context.app.dialogs = document.body;
   context.app.jobsPanel = vm.runInContext('jobsPanel', context);
   context.app.generateToday = vm.runInContext('generateToday', context);
   context.app.renderToday = vm.runInContext('renderToday', context);
+  context.app.prepareContextChange = vm.runInContext('prepareContextChange', context);
+  Object.assign(context, { chapters, getCurriculum, materials, customMaterial, customSample, getMaterial, materialSample, URLSearchParams,
+    localStorage: { getItem() { return null; }, setItem() {} }, sessionStorage: { getItem() { return null; }, setItem() {} },
+    MutationObserver: class { observe() {} disconnect() {} },
+  });
+  Object.assign(context.window, { setInterval() {}, clearInterval() {}, clearTimeout() {} });
+  context.app.createOnboarding = vm.runInContext('(function () {\n' + onboardingSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn createOnboarding;\n})()', context);
   return context.app;
 }
 
@@ -1253,6 +1455,54 @@ test('scenario output locating keeps the tracked draft instead of newer unrelate
   assert.equal((await app.navigateTutorial(editStep, tutorial)).target, 'output-form');
   assert.equal(app.refs.drawer.classList.contains('is-open'), false);
   assert.ok(fixture.reads.every(read => read.name === 'drafts'));
+});
+
+test('a saved local answer appears in the output workspace without reloading and stays labeled as non-AI', async () => {
+  const fixture = tutorialFixture(); const drafts = [];
+  const saved = { id: 'local-answer-id', mode: 'answer', question: '青石-1012', body: '本地可编辑回答', citations: [{ id: 'source-1', title: '合成来源' }], limitations: ['未进行 AI 生成。'], usedIds: [] };
+  const app = browser({ ...fixture.api, drafts: async () => ({ drafts }), ask: async () => { drafts.unshift(saved); return { answer: saved.body, citations: saved.citations, limitations: saved.limitations, draftId: saved.id, generated: false }; } });
+  app.state.bootstrap = fixture.bootstrap;
+  await app.renderOutput();
+  const panel = app.refs.main.querySelector('[data-tour="output-drafts"]');
+  assert.match(panel.textContent, /还没有输出草稿/);
+  await app.refs.main.querySelector('[data-tour="output-form"]').events.submit({ preventDefault() {} });
+  const result = app.refs.main.querySelector('[data-tour="output-result"]').textContent;
+  assert.match(result, /已保存到输出工作区/);
+  assert.match(result, /未进行 AI 生成/);
+  assert.match(panel.textContent, /本地可编辑回答/);
+  await click(findButton(panel, '编辑'));
+  assert.equal(app.refs.drawerBody.dataset.tourSubject, saved.id);
+});
+
+test('a delayed saved answer refreshes the output page after the user leaves and returns', async () => {
+  const fixture = tutorialFixture(); const drafts = [];
+  const saved = { id: 'delayed-local-answer', mode: 'answer', question: '青石-1012', body: '延迟保存的本地回答', citations: [], limitations: ['未进行 AI 生成。'], usedIds: [] };
+  let completeAsk;
+  const app = browser({ ...fixture.api, drafts: async () => ({ drafts }), ask: async () => new Promise(resolve => { completeAsk = () => { drafts.unshift(saved); resolve({ answer: saved.body, citations: saved.citations, limitations: saved.limitations, draftId: saved.id, generated: false }); }; }) });
+  app.state.bootstrap = fixture.bootstrap;
+  await app.renderOutput();
+  const submit = app.refs.main.querySelector('[data-tour="output-form"]').events.submit({ preventDefault() {} });
+  await app.renderStudy();
+  assert.equal(app.refs.main.querySelector('[data-tour="output-drafts"]'), null);
+  await app.renderOutput();
+  const activePanel = app.refs.main.querySelector('[data-tour="output-drafts"]');
+  assert.match(activePanel.textContent, /还没有输出草稿/);
+  completeAsk();
+  await submit;
+  assert.match(activePanel.textContent, /延迟保存的本地回答/);
+  await click(findButton(activePanel, '编辑'));
+  assert.equal(app.refs.drawerBody.dataset.tourSubject, saved.id);
+});
+
+test('an empty local answer is labeled as non-AI even without returned limitations', async () => {
+  const fixture = tutorialFixture();
+  const app = browser({ ...fixture.api, drafts: async () => ({ drafts: [] }), ask: async () => ({ answer: '知识库中没有找到材料。', citations: [], limitations: [], generated: false }) });
+  app.state.bootstrap = fixture.bootstrap;
+  await app.renderOutput();
+  await app.refs.main.querySelector('[data-tour="output-form"]').events.submit({ preventDefault() {} });
+  const result = app.refs.main.querySelector('[data-tour="output-result"]').textContent;
+  assert.match(result, /本地检索结果（未进行 AI 生成）/);
+  assert.match(result, /限制：未进行 AI 生成/);
 });
 
 test('a failed new output request cannot restore a previous successful answer', async () => {
