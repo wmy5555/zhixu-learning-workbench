@@ -207,7 +207,7 @@ function todayItem(item) {
   const actions = el("div", { class: "item-actions" });
   if (item.state === "pending") {
     if (["study", "learn", "review", "mistake"].includes(item.kind)) {
-      actions.append(button("开始", { kind: "primary compact", onClick: () => beginStudy(item.noteId, item.id, item) }));
+      actions.append(button("开始", { kind: "primary compact", onClick: event => beginStudy(item.noteId, item.id, item, event.currentTarget || event.target) }));
     }
     actions.append(button("延期", { kind: "quiet compact", onClick: () => actToday(item.id, "defer", 1) }));
     actions.append(button("跳过", { kind: "text compact", onClick: () => actToday(item.id, "skip") }));
@@ -764,7 +764,7 @@ function childSection(note, source, index) {
   const meta = asObject(note.meta);
   const limitations = asArray(meta.researchLimitations);
   const actions = el("div", { class: "child-actions", dataset: { tour: "note-lifecycle" } }, [
-    button("开始学习", { kind: "primary compact", onClick: () => beginStudy(note.id) }),
+    button("开始学习", { kind: "primary compact", onClick: event => beginStudy(note.id, undefined, {}, event.currentTarget || event.target) }),
     button("编辑", { kind: "quiet compact", onClick: () => renderNoteEditor(note, { returnToSourceId: source.id }) }),
     button("设为仅供查阅", { kind: "text compact", onClick: () => promoteNote(note, "reference", source.id) }),
     button("设为待选学", { kind: "text compact", onClick: () => promoteNote(note, "candidate", source.id) }),
@@ -872,7 +872,7 @@ function renderNoteDrawer(note) {
     button("手动整理为待选学", { onClick: () => manualExtract(note) }),
   );
   if (note.kind === "knowledge") nextActions.append(
-    button("开始学习", { kind: "primary", onClick: () => beginStudy(note.id) }),
+    button("开始学习", { kind: "primary", onClick: event => beginStudy(note.id, undefined, {}, event.currentTarget || event.target) }),
     button("设为仅供查阅", { onClick: () => promoteNote(note, "reference") }),
     button("设为待选学", { onClick: () => promoteNote(note, "candidate") }),
     button("加入学习", { kind: "primary", onClick: () => promoteNote(note, "learning") }),
@@ -1197,16 +1197,29 @@ function sourceRole(value) {
   return ({ input: "原始输入", support: "支持", oppose: "反对", limit: "适用限制" })[value] || value || "来源";
 }
 
-async function beginStudy(noteId, planId, context = {}) {
+let studyStartPending = false;
+// Retain uncertain POST results for retries; any successful start retires them.
+const studyStartRequests = new Map();
+async function beginStudy(noteId, planId, context = {}, control) {
   if (!noteId) { toast("这项任务没有关联知识，暂时无法开始", "error"); return; }
+  if (studyStartPending) return;
+  studyStartPending = true;
+  const wasDisabled = control?.disabled;
+  if (control) control.disabled = true;
   try {
-    state.currentStudy = await api.startStudy({ noteId, ...(planId ? { planId } : {}), ...(context.topicId ? { topicId: context.topicId } : {}), ...(context.mistakeId ? { mistakeId: context.mistakeId } : {}) });
+    const library = api.getContext();
+    const intentKey = JSON.stringify([library.practiceId || '', library.version, noteId, planId || null, context.topicId || null, context.mistakeId || null]);
+    let requestId = studyStartRequests.get(intentKey);
+    if (!requestId) { requestId = crypto.randomUUID(); studyStartRequests.set(intentKey, requestId); }
+    state.currentStudy = await api.startStudy({ requestId, noteId, ...(planId ? { planId } : {}), ...(context.topicId ? { topicId: context.topicId } : {}), ...(context.mistakeId ? { mistakeId: context.mistakeId } : {}) });
+    studyStartRequests.clear();
     if (context.topicId) recordTourEvent("topic-study");
     closeDrawer();
     state.studyMaterialVisible = true;
     state.studyTab = "session";
     await navigate("study");
   } catch (error) { handleError(error); }
+  finally { studyStartPending = false; if (control) control.disabled = wasDisabled; }
 }
 
 async function renderStudy() {
@@ -1239,7 +1252,7 @@ async function studyQueuePanel() {
     items.length ? el("div", { class: "list" }, items.map((item) => el("article", { class: "list-item" }, [
       el("div", { class: "item-symbol", text: item.inToday ? "今" : "学" }),
       el("div", { class: "item-copy" }, [el("h3", { text: item.title || "未命名知识" }), el("p", { text: item.reason || "等待学习" }), el("div", { class: "item-meta" }, [item.minutes ? badge(`${item.minutes} 分钟`) : null, item.inToday ? badge("今日", "accent") : badge("学习池")])]),
-      el("div", { class: "item-actions" }, button("开始学习", { kind: "primary compact", onClick: () => beginStudy(item.noteId, item.inToday ? item.id : undefined, item) })),
+      el("div", { class: "item-actions" }, button("开始学习", { kind: "primary compact", onClick: event => beginStudy(item.noteId, item.inToday ? item.id : undefined, item, event.currentTarget || event.target) })),
     ]))) : emptyState("学习队列为空", "在知识详情中选择“加入学习”，或先处理一份原始资料。", button("浏览知识", { onClick: () => navigate("library") })),
     tour(sectionHeading("最近学习记录", "服务重启后仍可继续已有会话，原始回答和提示使用不会丢失"), "study-history"),
     sessions.length ? el("div", { class: "list" }, sessions.map((session) => {
@@ -1392,15 +1405,21 @@ function confirmUnderstanding(session) {
   const latest = asArray(session.turns).at(-1);
   const form = el("form", { class: "page-stack" });
   const body = el("textarea", { rows: 16, textContent: latest?.answer || "", placeholder: "这是你的个人理解。你可以参考反馈，但请亲自确认最终文字。" });
-  form.append(el("div", { class: "notice", text: "只有点击确认后，这段文字才会作为个人理解写入知识层。" }), field("个人理解", body), el("div", { class: "form-actions" }, [button("确认写入", { kind: "primary", type: "submit" }), button("暂不确认", { onClick: closeDrawer })]));
+  let submitting = false, confirmed = false;
+  const submit = button("确认写入", { kind: "primary", type: "submit" });
+  form.append(el("div", { class: "notice", text: "只有点击确认后，这段文字才会作为个人理解写入知识层。" }), field("个人理解", body), el("div", { class: "form-actions" }, [submit, button("暂不确认", { onClick: closeDrawer })]));
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (submitting || confirmed) return;
+    submitting = true; submit.disabled = true;
     try {
       const note = await api.confirmStudy(session.id, { body: body.value });
+      confirmed = true;
       toast("个人理解已由你确认并保存", "success");
       closeDrawer();
       if (note?.id) openNote(note.id);
     } catch (error) { handleError(error); }
+    finally { submitting = false; if (!confirmed) submit.disabled = false; }
   });
   openDrawer("确认个人理解", "学习收尾", form);
 }
@@ -1419,7 +1438,7 @@ function mistakeRow(mistake) {
   const status = mistake.status || meta.correctionState || meta.status || "open";
   const actions = el("div", { class: "item-actions wrap" }, [
     button("查看", { kind: "quiet compact", onClick: () => { recordTourEvent("mistake-open"); return mistake.noteId || mistake.kind ? openNote(mistake.noteId || mistake.id) : showMistake(mistake); } }),
-    status === "open" ? button("专项练习", { kind: "primary compact", disabled: !(meta.noteId || mistake.noteId), onClick: () => beginStudy(meta.noteId || mistake.noteId, undefined, { mistakeId: mistake.id }) }) : null,
+    status === "open" ? button("专项练习", { kind: "primary compact", disabled: !(meta.noteId || mistake.noteId), onClick: event => beginStudy(meta.noteId || mistake.noteId, undefined, { mistakeId: mistake.id }, event.currentTarget || event.target) }) : null,
     status === "disputed" ? button("重新打开", { kind: "text compact", onClick: () => actMistake(mistake.id, "reopen") }) : status !== "revoked" ? button("质疑判定", { kind: "text compact", onClick: () => actMistake(mistake.id, "dispute") }) : null,
     status !== "resolved" && status !== "revoked" ? button("手动标记已纠正", { kind: "primary compact", onClick: () => actMistake(mistake.id, "resolve") }) : status === "resolved" ? badge("已标记纠正", "good") : null,
     status !== "revoked" ? button("撤销记录", { kind: "text compact", onClick: () => actMistake(mistake.id, "revoke") }) : badge("已撤销"),
@@ -1511,11 +1530,11 @@ async function openTopic(topic) {
       ]),
       el("div", { class: "notice info", text: "按下面的顺序学习。下方成员列表为当前顺序，说明原文可自行编辑。进度表示已有学习记录，不代表永久掌握；文本前置缺口仍需补充材料。" }),
       progress.blockedNoteId ? el("div", { class: "notice" }, [el("p", { text: "下一项知识或前置内容暂不可学习，请先查看其研究限制或状态。" }), button("查看待处理知识", { kind: "text", onClick: () => openNote(progress.blockedNoteId) })]) : null,
-      button(progress.nextNoteId ? `开始下一条：${progress.nextNoteTitle || "前置知识"}` : "本包暂无待继续内容", { kind: "primary", disabled: paused || !progress.nextNoteId, onClick: () => beginStudy(progress.nextNoteId, undefined, { topicId: topic.id }) }),
+      button(progress.nextNoteId ? `开始下一条：${progress.nextNoteTitle || "前置知识"}` : "本包暂无待继续内容", { kind: "primary", disabled: paused || !progress.nextNoteId, onClick: event => beginStudy(progress.nextNoteId, undefined, { topicId: topic.id }, event.currentTarget || event.target) }),
       el("ol", { class: "list" }, members.map((member, index) => el("li", { class: "list-item" }, [
         el("div", { class: "item-symbol", text: String(index + 1) }),
         el("div", { class: "item-copy" }, [el("h3", { text: member.title || "知识暂不可读" }), el("div", { class: "item-meta" }, [badge(depthLabel(member.depth || "explain")), badge(member.completed ? "已有学习记录" : member.available ? "待学习" : "暂不可学习", member.completed ? "good" : "neutral")])]),
-        el("div", { class: "item-actions wrap" }, [button("查看", { kind: "text compact", onClick: () => openNote(member.id) }), button("开始", { kind: "quiet compact", disabled: paused || !member.available, onClick: () => beginStudy(member.id, undefined, { topicId: topic.id }) })]),
+        el("div", { class: "item-actions wrap" }, [button("查看", { kind: "text compact", onClick: () => openNote(member.id) }), button("开始", { kind: "quiet compact", disabled: paused || !member.available, onClick: event => beginStudy(member.id, undefined, { topicId: topic.id }, event.currentTarget || event.target) })]),
       ]))),
       el("div", { class: "form-actions" }, [button("调整成员与顺序", { kind: "primary", onClick: () => editTopic(topic).catch(handleError) }), button("复制或拆分为新学习包", { onClick: () => createTopicDrawer(topic).catch(handleError) }), button(paused ? "恢复" : "暂停", { onClick: () => actTopic(topic.id, paused ? "resume" : "pause") })]),
     ]));
