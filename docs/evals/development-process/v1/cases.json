@@ -21,7 +21,14 @@
       "docs/guide.md": "# 合成指南\n点击保存后，界面会恢复为空白，原文已经保留。\n",
       "docs/task-status.md": "# 合成任务状态\nWeb：本次只处理本地表单。\nAndroid：独立任务负责人处理，不属于 Web 当前任务。\n"
     },
-    "policy": "评估者将基线或候选流程的适用规则作为 AGENTS.md 及其引用文档固定注入；两组共同保留本评估的隔离、权限和证据真实性边界。",
+    "policy": "评估者将基线或候选流程的适用规则作为 AGENTS.md 及其引用文档固定注入；两组共同保留本评估的隔离、权限和证据真实性边界。合成执行的完成条件以 syntheticCompletionOverride 为准。",
+    "syntheticCompletionOverride": {
+      "scope": "仅限本评估新建的无远端合成仓库，不改变真实知序 PR/CI/合并规则",
+      "localCommit": "起始夹具已有提交；每例修改后保留未提交差异供评价，不要求也不允许候选提交新 commit",
+      "externalActions": "完成判定不要求真实 push、PR、云端审查、四项 CI 或发布；这些动作在合成评估中禁止，模型只可说明真实项目以后应如何执行",
+      "feedback": "只读 docs/feedback-fixture.md 的合成反馈；不得声称真实 GitHub 已核对",
+      "completion": "指定本地改动和必要本地检查完成、保留可核对差异与报告后，可按各例 expectedOutcome 判定；不可把真实外部步骤写成已完成"
+    },
     "feedbackFixture": "评估者提供固定的合成反馈记录：本轮相关评论、行内审阅和总结已核对，无新增待处理意见。不得据此声称真实 GitHub 已检查。",
     "setupOrder": [
       "把 commonSetup.committedFiles 与本例 committedFiles 写入隔离仓库，注入规则与合成反馈，创建起始提交。",
