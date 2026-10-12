@@ -502,3 +502,18 @@ test('HTTP blank-title capture preserves text with no model config and exposes t
   assert.doesNotMatch(status.text, /"body"|"prompt"|"payload"/);
   assert.equal(app.service.store.records('calls').length, 0);
 });
+
+
+test('concurrent start POSTs with one intent return one persisted session and a new intent starts again', async t => {
+  const app = await startApp(t), session = await webSession(app);
+  const note = app.service.store.create({ kind: 'knowledge', title: '合成个人观点', body: '合成测试正文', meta: { stage: 'learning', privacy: 'local' } });
+  const body = { noteId: note.id, requestId: 'synthetic-start-intent' };
+  const send = input => request(app.baseUrl, '/api/study/start', { method: 'POST', headers: session.headers, body: input });
+  const [a, b] = await Promise.all([send(body), send(body)]);
+  assert.equal(a.status, 200); assert.equal(b.status, 200);
+  assert.equal(a.body.id, b.body.id);
+  assert.equal(app.service.store.records('sessions').length, 1);
+  const next = await send({ ...body, requestId: 'synthetic-next-intent' });
+  assert.equal(next.status, 200); assert.notEqual(next.body.id, a.body.id);
+  assert.equal(app.service.store.records('sessions').length, 2);
+});

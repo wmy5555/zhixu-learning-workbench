@@ -418,3 +418,33 @@ test('topic reordering preserves an externally edited managed block and exposes 
   assert.match(updated.linkSyncConflict, /外部修改/);
   assert.equal(h.store.pendingManagedLinks().some(item => item.id === topic.id && item.conflict), true);
 });
+
+
+test('start intent replay keeps one persistent session while new intents and legacy callers may start again', t => {
+  const h = harness(t), note = h.knowledge('同一合成观点');
+  const input = { noteId: note.id, requestId: randomUUID() };
+  const first = h.learning.startStudy(input);
+  assert.equal(h.learning.startStudy(input).id, first.id);
+  assert.equal(h.store.records('sessions').length, 1);
+  h.reopen();
+  assert.equal(h.learning.startStudy(input).id, first.id, 'replay survives storage reopening');
+  h.store.put('sessions', first.id, { ...h.learning.session(first.id), status: 'completed' });
+  assert.equal(h.learning.startStudy(input).id, first.id, 'completed intent is not restarted by replay');
+  const next = h.learning.startStudy({ ...input, requestId: randomUUID() });
+  assert.notEqual(next.id, first.id);
+  const legacyA = h.learning.startStudy({ noteId: note.id }), legacyB = h.learning.startStudy({ noteId: note.id });
+  assert.notEqual(legacyA.id, legacyB.id, 'same-title history is not merged');
+  assert.equal(h.store.records('sessions').length, 4);
+  assert.equal(h.calls.length, 0);
+});
+
+test('start intent cannot be reused for different notes or plan/topic/mistake contexts and invalid keys write nothing', t => {
+  const h = harness(t), note = h.knowledge('合成观点'), other = h.knowledge('另一观点');
+  const input = { noteId: note.id, requestId: randomUUID() };
+  h.learning.startStudy(input);
+  for (const changed of [{ noteId: other.id }, { planId: 'other-plan' }, { topicId: 'other-topic' }, { mistakeId: 'other-mistake' }]) {
+    assert.throws(() => h.learning.startStudy({ ...input, ...changed }), error => error.code === 'START_REQUEST_CONFLICT');
+  }
+  for (const requestId of ['', ' ', 3, {}, 'a'.repeat(129)]) assert.throws(() => h.learning.startStudy({ noteId: note.id, requestId }));
+  assert.equal(h.store.records('sessions').length, 1);
+});
