@@ -1,0 +1,8 @@
+{
+  "appId": "io.github.wmy5555.zhixu.iospreview",
+  "appName": "知序 iOS 开发预览",
+  "webDir": "../../dist/ios-web",
+  "ios": { "path": "ios", "contentInset": "automatic", "limitsNavigationsToAppBoundDomains": true },
+  "server": { "hostname": "localhost", "iosScheme": "capacitor", "cleartext": false },
+  "loggingBehavior": "none"
+}

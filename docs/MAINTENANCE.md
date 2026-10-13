@@ -10,6 +10,8 @@
 
 Android 共用界面样机另有 `Android build and lint` 检查，使用 JDK 21、Android SDK 36 和固定 Gradle Wrapper，构建应用及本项目设备测试 APK 并执行 lint。涉及样机的 PR 还需此项通过；设备测试 APK 构建成功不等于已在模拟器执行。首次功能交付的视觉和真实点击结果须单独记录，参见 [Android 共用界面](ANDROID_SHARED_UI.md)。
 
+iOS 有独立 `iOS unsigned build and native storage tests`，使用 macOS/Xcode、锁定 Capacitor/SPM、原生存储 XCTest 和未签名 Simulator 编译；涉及 iOS 的候选还需此项通过。Windows 的 `ios:prepare`/`ios:copy`、JS 测试和合成浏览器预览均不等于 iOS 编译或设备验收，详见 [IOS](IOS.md)。签名/注册/付费和真实设备按本人授权处理；不改现有 Web/Android 工作树或冻结基线。
+
 Android 网页基线按所有者要求固定在 `apps/android/web/`，清单见 `apps/android/web-baseline.json`。不要从最新 main/public 自动更新这个快照。网页版大版本后先提交同步范围供所有者确认；只有批准后才改基线。原生功能和手机适配可独立继续。手动 Android workflow 的 `upgrade_baseline` 仅在需要覆盖安装验收时开启，固定第一阶段源码与新 APK 共享本次临时 debug 签名，不上传密钥，不移动旧标签，不作为正式发布签名。
 
 CI 文件不等于服务器端合并保护。Branch protection 是否可用取决于 GitHub 套餐和仓库可见性；不为启用功能擅自变更可见性或付费升级。若服务器不支持，维护 Agent 仍须等待四项检查全部通过，且明确说明不是强制阻断。

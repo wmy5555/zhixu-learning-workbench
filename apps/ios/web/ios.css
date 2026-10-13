@@ -1,0 +1,8 @@
+:root { --ios-safe-top: env(safe-area-inset-top, 0px); --ios-safe-bottom: env(safe-area-inset-bottom, 0px); }
+body { padding-top: var(--ios-safe-top); padding-bottom: var(--ios-safe-bottom); }
+.drawer { top: var(--ios-safe-top); bottom: var(--ios-safe-bottom); }
+input, textarea, select { font-size: max(16px, 1rem); }
+.nav-item:disabled, button:disabled { opacity: .5; cursor: not-allowed; }
+.ios-limitations { overflow-wrap: anywhere; }
+.ios-source-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }

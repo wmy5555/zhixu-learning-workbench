@@ -17,11 +17,17 @@
     "verify": "pnpm check && pnpm test && pnpm quality",
     "android:prepare": "node scripts/prepare-android.mjs",
     "android:sync": "node scripts/prepare-android.mjs && node node_modules/@capacitor/cli/bin/capacitor sync android",
-    "android:test-device": "node scripts/test-android-device.mjs"
+    "android:test-device": "node scripts/test-android-device.mjs",
+    "ios:prepare": "node scripts/prepare-ios.mjs",
+    "ios:copy": "node scripts/prepare-ios.mjs && node scripts/ios-capacitor.mjs copy",
+    "ios:sync": "node scripts/prepare-ios.mjs && node scripts/ios-capacitor.mjs sync",
+    "ios:open": "node scripts/ios-capacitor.mjs open",
+    "ios:preview": "node scripts/prepare-ios.mjs && node scripts/preview-ios.mjs"
   },
   "dependencies": {
     "@capacitor/android": "8.5.2",
     "@capacitor/core": "8.5.2",
+    "@capacitor/ios": "8.5.2",
     "@modelcontextprotocol/sdk": "1.31.0",
     "yaml": "2.9.1",
     "zod": "3.25.76"

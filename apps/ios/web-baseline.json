@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "webBaselineCommit": "5fce54da815375583900e2fa14ef41c700dd5a52",
+  "sourceDirectory": "public",
+  "updatePolicy": "explicit-versioned-review",
+  "note": "iOS packages committed Web assets at this exact version with explicitly listed native entry overlays. It does not copy the active Web directory or change Android's frozen baseline. Full functional parity remains pending; see docs/IOS.md."
+}
