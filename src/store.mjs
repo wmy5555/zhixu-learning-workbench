@@ -591,9 +591,20 @@ export class Store {
 
       checkpoint('files-installed');
       const localBillingIds = new Set(this.db.prepare("SELECT key FROM records WHERE namespace IN ('calls','callLedger','callResults')").all().map(row => row.key));
+      const localLedger = this.records('callLedger').filter(row => row.phase !== 'cancelled');
+      const logicalKeys = new Set(localLedger.map(row => row.key).filter(key => typeof key === 'string' && key));
+      const contextKeys = new Set(localLedger.map(row => row.contextKey).filter(key => typeof key === 'string' && key));
+      const gradeJobs = new Set([...this.records('jobs'), ...backup.records.filter(row => row.namespace === 'jobs').map(row => JSON.parse(row.json))].filter(job => job.type === 'grade').map(job => job.id));
+      const singleRequest = row => row.singleRequest === true || typeof row.turnId === 'string' && !!row.turnId || gradeJobs.has(row.jobId);
+      const protectedContexts = new Set(localLedger.filter(row => singleRequest(row) || row.phase === 'resolved_unknown').map(row => row.contextKey).filter(key => typeof key === 'string' && key));
+      // A different machine can assign a different attempt ID to the same logical
+      // operation. Preserve all three local evidence records as one unit; grading
+      // also keeps its original round when the request fingerprint has changed.
+      const foreignCollisionIds = new Set(backup.records.filter(row => row.namespace === 'callLedger').map(row => JSON.parse(row.json))
+        .filter(row => row.key && logicalKeys.has(row.key) || row.contextKey && (protectedContexts.has(row.contextKey) || singleRequest(row) && contextKeys.has(row.contextKey))).map(row => row.id));
       this.db.exec("DELETE FROM notes; DELETE FROM index_chunks; DELETE FROM records WHERE namespace NOT IN ('settings','restore','calls','callLedger','callResults'); DELETE FROM versions;");
       for (const r of backup.records) {
-        if (['calls','callLedger','callResults'].includes(r.namespace) && localBillingIds.has(r.key)) continue;
+        if (['calls','callLedger','callResults'].includes(r.namespace) && (localBillingIds.has(r.key) || foreignCollisionIds.has(r.key))) continue;
         this.db.prepare('INSERT INTO records VALUES(?,?,?) ON CONFLICT(namespace,key) DO NOTHING').run(r.namespace, r.key, r.json);
       }
       for (const v of backup.versions) this.db.prepare('INSERT INTO versions VALUES(?,?,?,?,?,?,?)').run(v.id, v.noteId, v.path, v.hash, v.raw, v.reason, v.createdAt);

@@ -6,6 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import YAML from 'yaml';
 import { Store, hash } from '../src/store.mjs';
+import { createCallLedger } from '../src/call-ledger.mjs';
 import { assertBackupSize, BACKUP_MAX_BYTES, BACKUP_REQUEST_MAX_BYTES } from '../src/backup-contract.mjs';
 
 const tempRoot = path.resolve(import.meta.dirname, '..', '.tmp');
@@ -115,6 +116,57 @@ test('restoring older backups preserves local billing evidence and imports other
   assert.equal(h.store.get('callResults', 'local-call'), null, 'incoming response must not resolve a different local unknown call with a colliding identity');
   assert.deepEqual(h.store.get('calls', 'local-call'), currentCall);
   assert.equal(h.store.get('calls', 'imported-call').cost, 1);
+});
+
+test('restore keeps local logical-call evidence when a different machine uses a different call id', t => {
+  for (const grade of [false, true]) {
+    const h = harness(t), backup = h.store.backup(), at = new Date().toISOString();
+    const local = { id: 'local-unknown', phase: 'unknown', capability: 'model', model: 'model', reservedCost: null,
+      key: hash('local-request'), contextKey: hash('original-task'), ...(grade ? { turnId: 'original-turn' } : {}), createdAt: at, updatedAt: at };
+    h.store.put('callLedger', local.id, local);
+    h.store.put('calls', local.id, { id: local.id, createdAt: at, cost: null });
+    const addRemote = (id, key, contextKey) => {
+      const ledger = { ...local, id, key, contextKey, phase: 'accounted' };
+      const result = { id, response: { status: 200, body: '{}', headers: {} }, entry: { capability: 'model', model: 'model', cost: 1, ok: true, durationMs: 1 }, receivedAt: at };
+      for (const [namespace, value] of [['callLedger', ledger], ['calls', { id, createdAt: at, cost: 1 }], ['callResults', result]]) backup.records.push({ namespace, key: id, json: JSON.stringify(value) });
+    };
+    addRemote('foreign-same-operation', grade ? hash('changed-model-and-prompt') : local.key, local.contextKey);
+    addRemote('foreign-unrelated-operation', hash('unrelated-request'), hash('unrelated-task'));
+    if (!grade) addRemote('foreign-other-step', hash('other-request-in-same-task'), local.contextKey);
+    h.store.restore(backup);
+    assert.deepEqual(h.store.get('callLedger', local.id), local);
+    const recovery = createCallLedger({ store: h.store });
+    assert.throws(() => recovery.replay(grade ? hash('changed-model-and-prompt') : local.key, { contextKey: local.contextKey, singleRequest: grade }), { code: 'CALL_RECOVERY_REQUIRED' });
+    assert.equal(recovery.listPending().find(row => row.id === local.id).phase, 'unknown');
+    assert.equal(h.store.get('calls', local.id).cost, null);
+    for (const namespace of ['callLedger','calls','callResults']) assert.equal(h.store.get(namespace, 'foreign-same-operation'), null, `${namespace} must not import a different attempt over local logical evidence`);
+    assert.equal(h.store.get('callLedger', 'foreign-unrelated-operation').phase, 'accounted');
+    if (!grade) assert.equal(h.store.get('callLedger', 'foreign-other-step').phase, 'accounted', 'different requests of a multi-step task remain importable');
+  }
+});
+
+test('backup and restore accept a maximum-size escaped fetch response while keeping decoded and other record limits', t => {
+  const h = harness(t), at = new Date().toISOString(), body = '"\\'.repeat(3 * 1024 * 1024 / 2), id = 'large-fetch';
+  const ledger = { id, phase: 'accounted', capability: 'fetch', model: null, reservedCost: 0, createdAt: at, updatedAt: at };
+  const result = { id, response: { status: 200, body, headers: { 'content-type': 'text/html' } }, entry: { capability: 'fetch', model: null, cost: 0, ok: true, durationMs: 1 }, receivedAt: at };
+  assert.equal(Buffer.byteLength(body), 3 * 1024 * 1024);
+  assert.ok(Buffer.byteLength(JSON.stringify(result)) > 5_000_000);
+  h.store.put('callLedger', id, ledger); h.store.put('calls', id, { id, createdAt: at, cost: 0 }); h.store.put('callResults', id, result);
+  const controlId = 'control-fetch', controlResult = { ...result, id: controlId, response: { ...result.response, body: '\u0000'.repeat(3 * 1024 * 1024) } };
+  h.store.put('callLedger', controlId, { ...ledger, id: controlId });
+  h.store.put('calls', controlId, { id: controlId, createdAt: at, cost: 0 });
+  h.store.put('callResults', controlId, controlResult);
+  const backup = JSON.parse(assertBackupSize(h.store.backup()));
+  const target = harness(t);
+  target.store.restore(backup);
+  assert.equal(target.store.get('callResults', id).response.body, body);
+  assert.equal(target.store.get('callResults', controlId).response.body, controlResult.response.body, 'six-byte JSON control escapes also fit the accepted decoded body limit');
+  const oversizedBody = structuredClone(backup);
+  oversizedBody.records.find(row => row.namespace === 'callResults').json = JSON.stringify({ ...result, response: { ...result.response, body: body + 'x' } });
+  assert.throws(() => target.store.validateBackup(oversizedBody), /备份调用响应无效/);
+  const oversizedOther = structuredClone(backup);
+  oversizedOther.records.push({ namespace: 'extra', key: 'large-other', json: JSON.stringify({ text: 'x'.repeat(5_000_000) }) });
+  assert.throws(() => target.store.validateBackup(oversizedOther), /备份运行记录不正确/);
 });
 
 test('scan participates in an enclosing settings transaction without committing it', t => {

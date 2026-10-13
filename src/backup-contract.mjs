@@ -5,6 +5,10 @@ import YAML from 'yaml';
 export const BACKUP_MAX_BYTES = 100_000_000;
 export const BACKUP_REQUEST_MAX_BYTES = BACKUP_MAX_BYTES + 65_536;
 export const BACKUP_ITEM_MAX_BYTES = 5_000_000;
+export const BACKUP_RESPONSE_BODY_MAX_BYTES = 3 * 1024 * 1024;
+// A one-byte control character can occupy six bytes in serialized JSON. Keep
+// the existing metadata allowance while measuring response text after decoding.
+const BACKUP_CALL_RESULT_MAX_BYTES = 6 * BACKUP_RESPONSE_BODY_MAX_BYTES + BACKUP_ITEM_MAX_BYTES;
 export const validBackupId = value => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,100}$/.test(value);
 export const backupObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 function invalid(message, code = 'INVALID', status = 400) {
@@ -49,7 +53,8 @@ export function validateBackupMarkdown(raw, id) {
   return meta;
 }
 export function validateBackupRecord(row) {
-  if (!backupObject(row) || typeof row.namespace !== 'string' || !/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(row.namespace) || ['settings','changed','restore'].includes(row.namespace) || typeof row.key !== 'string' || !row.key || row.key.length > 500 || /[\x00-\x1f\x7f]/.test(row.key) || typeof row.json !== 'string' || Buffer.byteLength(row.json) > BACKUP_ITEM_MAX_BYTES) invalid('备份运行记录不正确。');
+  const maxBytes = row?.namespace === 'callResults' ? BACKUP_CALL_RESULT_MAX_BYTES : BACKUP_ITEM_MAX_BYTES;
+  if (!backupObject(row) || typeof row.namespace !== 'string' || !/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(row.namespace) || ['settings','changed','restore'].includes(row.namespace) || typeof row.key !== 'string' || !row.key || row.key.length > 500 || /[\x00-\x1f\x7f]/.test(row.key) || typeof row.json !== 'string' || Buffer.byteLength(row.json) > maxBytes) invalid('备份运行记录不正确。');
   let value;
   try { value = JSON.parse(row.json); } catch { invalid('备份运行记录不是有效 JSON。'); }
   if (row.namespace === 'chatgptCaptureRate') {
@@ -66,8 +71,9 @@ export function validateBackupRecord(row) {
   if (row.namespace === 'topics' && (value.noteIds !== undefined && !stringList(value.noteIds) || value.paused !== undefined && typeof value.paused !== 'boolean')) invalid('备份主题运行记录无效。');
   if (row.namespace === 'vaultRelations' && (!stringList(value.ownerIds) || !Array.isArray(value.ownerPaths) || value.ownerPaths.some(item => !backupObject(item) || !validBackupId(item.id) || typeof item.path !== 'string'))) invalid('备份关系镜像记录无效。');
   if (row.namespace === 'callLedger' && (!validBackupId(value.id) || !['reserved','dispatch','received','unknown','accounted','cancelled','resolved_unknown'].includes(value.phase) || !['model','embedding','search','fetch'].includes(value.capability) || !date(value.createdAt) || !date(value.updatedAt) || value.reservedCost !== null && (!Number.isFinite(value.reservedCost) || value.reservedCost < 0))) invalid('备份调用账本无效。');
-  if (row.namespace === 'callResults' && (!validBackupId(value.id) || !backupObject(value.response) || !Number.isInteger(value.response.status) || value.response.status < 100 || value.response.status > 599 || typeof value.response.body !== 'string' || Buffer.byteLength(value.response.body) > 3 * 1024 * 1024 || !backupObject(value.response.headers) || !backupObject(value.entry) || !date(value.receivedAt))) invalid('备份调用响应无效。');
+  if (row.namespace === 'callResults' && (!validBackupId(value.id) || !backupObject(value.response) || !Number.isInteger(value.response.status) || value.response.status < 100 || value.response.status > 599 || typeof value.response.body !== 'string' || Buffer.byteLength(value.response.body) > BACKUP_RESPONSE_BODY_MAX_BYTES || !backupObject(value.response.headers) || !backupObject(value.entry) || !date(value.receivedAt))) invalid('备份调用响应无效。');
   if (row.namespace === 'callResults') {
+    if (Buffer.byteLength(JSON.stringify({ ...value, response: { ...value.response, body: '' } })) > BACKUP_ITEM_MAX_BYTES) invalid('备份调用响应附加字段超限。');
     const entry = value.entry;
     if (!['model','embedding','search','fetch'].includes(entry.capability) || entry.model !== null && typeof entry.model !== 'string' || entry.cost !== null && (!Number.isFinite(entry.cost) || entry.cost < 0) || typeof entry.ok !== 'boolean' || !Number.isFinite(entry.durationMs) || entry.durationMs < 0) invalid('备份调用响应记账字段无效。');
     for (const key of ['inputTokens','outputTokens','cachedInputTokens','embeddingTokens','searchCount']) if (entry[key] !== undefined && entry[key] !== null && (!Number.isInteger(entry[key]) || entry[key] < 0)) invalid('备份调用响应用量字段无效。');

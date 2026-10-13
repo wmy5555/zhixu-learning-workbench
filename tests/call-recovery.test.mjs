@@ -5,6 +5,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { fork } from 'node:child_process';
 import { once } from 'node:events';
+import { randomUUID } from 'node:crypto';
 import { Store } from '../src/store.mjs';
 import { createAI } from '../src/ai.mjs';
 import { createCallLedger } from '../src/call-ledger.mjs';
@@ -134,6 +135,67 @@ test('multi-request contexts retain separate request identities and replay both 
   const replayed = await run();
   assert.deepEqual(replayed.map(result => result.text), ['First request', 'Second request']);
   assert.ok(replayed.every(result => result.recovered)); assert.equal(h.attempts, 2); assert.equal(h.store.records('calls').length, 2);
+});
+
+test('divergent accounted backup cannot replay over a local unknown call with the same logical key in either order', async t => {
+  for (const localNewest of [false, true]) {
+    const local = harness(t, async () => { throw new Error('synthetic lost response'); });
+    const forked = harness(t);
+    await assert.rejects(local.generate(), { code: 'NETWORK_ERROR' });
+    await forked.generate();
+    const [unknown] = local.store.records('callLedger'), [accounted] = forked.store.records('callLedger');
+    assert.equal(unknown.key, accounted.key);
+    assert.notEqual(unknown.id, accounted.id);
+    if (localNewest) local.store.remove('callLedger', unknown.id);
+    for (const namespace of ['calls', 'callResults', 'callLedger']) local.store.put(namespace, accounted.id, forked.store.get(namespace, accounted.id));
+    if (localNewest) local.store.put('callLedger', unknown.id, unknown);
+    assert.equal(local.store.records('callLedger')[0].phase, localNewest ? 'unknown' : 'accounted');
+    await assert.rejects(local.generate(), { code: 'CALL_RECOVERY_REQUIRED' });
+    assert.equal(local.store.get('calls', unknown.id).cost, null);
+    assert.equal(local.ledger.listPending()[0].id, unknown.id);
+    assert.equal(local.attempts, 1);
+    local.ledger.confirm(unknown.id, { cost: .01, reason: '合成账单金额已核对，原响应仍未知。' });
+    await assert.rejects(local.generate(), { code: 'CALL_RECOVERY_REQUIRED' }, 'cost confirmation cannot select another machine response');
+    assert.equal(local.attempts, 1);
+  }
+});
+
+test('ambiguous accounted responses sharing a logical key are rejected instead of choosing the newest answer', async t => {
+  const h = harness(t);
+  await h.generate();
+  const [original] = h.store.records('callLedger'), forkId = randomUUID();
+  const result = h.store.get('callResults', original.id);
+  h.store.put('calls', forkId, { ...h.store.get('calls', original.id), id: forkId });
+  h.store.put('callResults', forkId, { ...result, id: forkId, response: { ...result.response, body: result.response.body.replace('Saved synthetic answer', 'Different forked answer') } });
+  h.store.put('callLedger', forkId, { ...original, id: forkId });
+  assert.equal(h.ledger.listPending().length, 0);
+  await assert.rejects(h.generate(), { code: 'CALL_RECOVERY_REQUIRED' });
+  assert.equal(h.attempts, 1);
+  h.reopen();
+  await assert.rejects(h.generate(), { code: 'CALL_RECOVERY_REQUIRED' });
+  assert.equal(h.attempts, 1);
+});
+
+test('matching unfinished calls block replay while unrelated completed results remain available locally', async t => {
+  for (const phase of ['reserved', 'dispatch', 'received', 'unknown', 'resolved_unknown']) {
+    const h = harness(t);
+    await h.generate();
+    const [original] = h.store.records('callLedger'), conflictingId = randomUUID();
+    h.store.put('callLedger', conflictingId, { ...original, id: conflictingId, phase,
+      ...(phase === 'resolved_unknown' ? { confirmation: { cost: null, reason: '合成未知费用', at: original.createdAt } } : {}),
+    });
+    h.store.remove('callLedger', original.id);
+    h.store.put('callLedger', original.id, original);
+    assert.equal(h.store.records('callLedger')[0].phase, 'accounted', 'newest accounted row cannot hide an unfinished sibling');
+    assert.throws(() => h.ledger.replay(original.key), { code: 'CALL_RECOVERY_REQUIRED' }, phase);
+    assert.throws(() => h.ledger.replay('changed-key', { contextKey: original.contextKey, singleRequest: true }), { code: 'CALL_RECOVERY_REQUIRED' }, phase);
+    const unrelatedId = randomUUID();
+    h.store.put('callLedger', unrelatedId, { ...original, id: unrelatedId, key: 'unrelated-key', contextKey: 'unrelated-context' });
+    h.store.put('callResults', unrelatedId, { ...h.store.get('callResults', original.id), id: unrelatedId });
+    assert.equal(h.ledger.replay('unrelated-key').callId, unrelatedId, 'known unrelated local response requires no new external call');
+    await assert.rejects(h.ai.generate({ prompt: 'A new external request', privacy: 'cloud' }), { code: 'CALL_RECOVERY_REQUIRED' });
+    assert.equal(h.attempts, 1);
+  }
 });
 
 test('timeout and incomplete response are unknown and never automatically repeat search or embedding', async t => {

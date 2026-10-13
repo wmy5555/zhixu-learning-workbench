@@ -45,7 +45,7 @@ export function createCallLedger({ store, getStore = () => store, at = () => new
         const known = monthly.reduce((total, call) => total + call.cost, 0);
         if (known >= monthlyBudget || costValue(reservedCost) !== null && known + reservedCost > monthlyBudget) fail('BUDGET_EXCEEDED', '本月外部服务预算已用尽或剩余额度不足。');
       }
-      const row = { id: randomUUID(), phase: 'reserved', capability, model, sourceId, key, contextKey, jobId, turnId, reservedCost: costValue(reservedCost), createdAt: now, updatedAt: now };
+      const row = { id: randomUUID(), phase: 'reserved', capability, model, sourceId, key, contextKey, jobId, turnId, ...(singleRequest ? { singleRequest: true } : {}), reservedCost: costValue(reservedCost), createdAt: now, updatedAt: now };
       current.put('callLedger', row.id, row);
       current.put('calls', row.id, { id: row.id, capability, model, sourceId, createdAt: now, phase: 'reserved', ok: null, cost: costValue(reservedCost) });
       return row;
@@ -133,10 +133,12 @@ export function createCallLedger({ store, getStore = () => store, at = () => new
     // when a retry's prompt/provider fingerprint changed after receipt.
     const matches = getStore().records('callLedger').filter(item => item.phase !== 'cancelled' &&
       (singleRequest && contextKey ? item.contextKey === contextKey : item.key === key));
-    if (singleRequest && matches.length > 1) fail('CALL_RECOVERY_REQUIRED', '此轮操作有多个调用记录，请核对已有结果，不能再次发送。');
+    // A forked backup may contain a different attempt ID for the same operation.
+    // Neither insertion order nor an accounted sibling resolves local uncertainty.
+    if (matches.some(item => item.phase !== 'accounted')) fail('CALL_RECOVERY_REQUIRED', '该操作已有调用，需先恢复记账或核对未知结果；不会自动重发。');
+    if (matches.length > 1) fail('CALL_RECOVERY_REQUIRED', '此操作有多个调用记录，无法确认应采用哪个响应。请核对已有结果，不能自动选择或再次发送。');
     const row = matches[0];
     if (!row) return null;
-    if (row.phase !== 'accounted') fail('CALL_RECOVERY_REQUIRED', '该操作已有调用，需先恢复记账或核对未知结果；不会自动重发。');
     const result = getResult(row.id);
     if (!result) fail('CALL_RESULT_MISSING', '已有调用的响应缺失，不能重新发送。');
     return { ...result, callId: row.id };
