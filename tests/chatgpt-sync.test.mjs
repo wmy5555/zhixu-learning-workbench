@@ -7,9 +7,12 @@ import test from 'node:test';
 import { parseDocument } from 'yaml';
 import { createService } from '../src/service.mjs';
 import { createApp } from '../src/server.mjs';
+import { hash } from '../src/store.mjs';
 
 const tempRoot = path.resolve(import.meta.dirname, '../.tmp');
 fs.mkdirSync(tempRoot, { recursive: true });
+const newSourceNotice = '只保存本次实际收到的消息；知序本身未独立核对网页记录。手动传入的原文没有读取器核对证据；经本机历史读取器传输的原文仅由该读取器在发送前核对当前可见分支。两种方式均不保证覆盖完整历史、隐藏分支、附件或其他会话。';
+const legacySourceNotice = '只保存本次实际收到的消息；不保证覆盖完整历史、附件或其他会话。原文由 ChatGPT 传入，知序未独立核对网页记录。';
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(tempRoot, 'chatgpt-sync-'));
   const config = { dataDir: path.join(root, 'data'), vaultDir: path.join(root, 'vault') };
@@ -41,6 +44,49 @@ test('snapshot retries and new request ids deduplicate; delta appends/edits the 
   assert.ok(f.service.store.db.prepare('SELECT raw FROM versions WHERE noteId=?').all(note.id).some(v => v.raw.includes(messages[1].content)));
   assert.equal(f.service.store.records('calls').length, 0); assert.equal(f.service.store.records('jobs').length, 0);
   assert.equal(f.service.settings().mcp.chatgptAllowRead, false);
+});
+
+function downgradeSourceTemplate(f, saved) {
+  const store = f.service.store, note = store.read(saved.noteId);
+  assert.ok(note.body.includes(newSourceNotice));
+  const legacyBody = note.body.replace(newSourceNotice, legacySourceNotice);
+  const legacyNote = store.update(note.id, { expectedHash: note.hash, body: legacyBody });
+  const state = store.get('chatgptSyncSessions', note.meta.chatgptSync.sessionHash);
+  store.put('chatgptSyncSessions', state.key, { ...state, noteHash: legacyNote.hash });
+  return legacyNote;
+}
+
+test('upgrade accepts the exact previous source template and writes the current source warning', t => {
+  const f = fixture(t), firstValue = snapshot(), first = f.service.chatgpt.capture(firstValue);
+  const legacy = downgradeSourceTemplate(f, first);
+  assert.ok(legacy.body.includes(legacySourceNotice));
+  assert.equal(legacy.meta.chatgptSync.version, 1);
+  assert.equal(legacy.meta.chatgptSync.requestHash, f.service.store.records('chatgptSyncSessions')[0].requestHash);
+  assert.equal(legacy.meta.chatgptSync.payloadHash, f.service.store.records('chatgptSyncSessions')[0].payloadHash);
+  const next = snapshot({ summary: '升级后的整理摘要。', sync: { ...firstValue.sync, snapshotId: 'snapshot_after_upgrade', baseRevision: 1 } });
+  const updated = f.service.chatgpt.capture(next), note = f.service.store.read(updated.noteId);
+  assert.equal(updated.status, 'updated');
+  assert.ok(note.body.includes(newSourceNotice));
+  assert.ok(!note.body.includes(legacySourceNotice));
+});
+
+test('manual edits to a previous canonical source remain protected', t => {
+  const f = fixture(t), value = snapshot(), first = f.service.chatgpt.capture(value), store = f.service.store;
+  const legacy = downgradeSourceTemplate(f, first);
+  store.update(legacy.id, { expectedHash: legacy.hash, body: `${legacy.body}\n\nuser-added text` });
+  assert.throws(() => f.service.chatgpt.capture(snapshot({ summary: '更新摘要。', sync: { ...value.sync, baseRevision: 1 } })), { code: 'CHATGPT_SOURCE_EDITED' });
+  assert.ok(store.read(legacy.id).body.endsWith('user-added text'));
+});
+
+test('lost capture receipt recovers an exact previous-template note before the next update', t => {
+  const f = fixture(t), value = snapshot(), first = f.service.chatgpt.capture(value), store = f.service.store;
+  downgradeSourceTemplate(f, first);
+  store.db.exec("DELETE FROM records WHERE namespace='chatgptCaptures'");
+  const recovered = f.service.chatgpt.capture(value);
+  assert.equal(recovered.duplicate, true);
+  assert.equal(recovered.syncRevision, 1);
+  const update = snapshot({ summary: '恢复回执后的更新。', sync: { ...value.sync, snapshotId: 'snapshot_after_receipt_recovery', baseRevision: 1 } });
+  assert.equal(f.service.chatgpt.capture(update).status, 'updated');
 });
 
 test('stale revisions, reordered/removed messages and changed roles cannot replace the source; explicit branches coexist', t => {
@@ -121,13 +167,39 @@ test('structured items remain local unverified candidates, retain provenance/unc
   assert.equal(f.service.store.records('sessions').length, 0); assert.equal(f.service.store.records('jobs').length, jobsAfterUserEdit); assert.equal(f.service.store.records('calls').length, 0);
 });
 
+test('a v1 structured candidate remains bound to revision 1 through v2 receipt loss and restart', t => {
+  const f = fixture(t), v1 = snapshot({ structured: structure() });
+  const first = f.service.chatgpt.capture(v1), candidateId = first.importedNoteIds[0];
+  const originalCandidate = f.service.store.read(candidateId);
+  assert.equal(originalCandidate.meta.chatgptImport.sourceRevision, 1);
+  const v2 = snapshot({ summary: 'updated summary only', structured: structure(), sync: {
+    ...v1.sync, snapshotId: 'snapshot_two', baseRevision: 1,
+    readerEvidence: evidence(2),
+  } });
+  const updated = f.service.chatgpt.capture(v2);
+  const candidateAfterV2 = f.service.store.read(candidateId);
+  assert.equal(updated.syncRevision, 2);
+  assert.equal(candidateAfterV2.hash, originalCandidate.hash);
+  assert.equal(candidateAfterV2.meta.chatgptImport.sourceRevision, 1);
+  f.service.store.remove('chatgptCaptures', hash(v2.requestId));
+  f.restart();
+  const recovered = f.service.chatgpt.capture(v2);
+  assert.equal(recovered.duplicate, true);
+  const candidateAfterRetry = f.service.store.read(candidateId);
+  assert.equal(candidateAfterRetry.hash, originalCandidate.hash);
+  assert.equal(candidateAfterRetry.meta.chatgptImport.sourceRevision, 1);
+});
+
 test('interrupted structured imports resume exact requests without duplicate sources or items; other requests wait', t => {
-  const f = fixture(t), value = snapshot({ structured: structure() }), store = f.service.store, create = store.create.bind(store);
-  store.create = input => { if (input.kind === 'knowledge') throw new Error('synthetic interruption'); return create(input); };
+  const f = fixture(t), value = snapshot({ structured: structure() }), store = f.service.store, put = store.put.bind(store);
+  store.put = (namespace, key, record) => {
+    if (namespace === 'chatgptSyncSessions' && Object.values(record.candidateWrites || {}).some(entry => entry.phase === 'started')) throw new Error('synthetic interruption before candidate intent');
+    return put(namespace, key, record);
+  };
   assert.throws(() => f.service.chatgpt.capture(value), /synthetic interruption/);
   assert.equal(store.list().length, 1);
   assert.throws(() => f.service.chatgpt.capture(snapshot()), { code: 'CHATGPT_IMPORT_PENDING' });
-  store.create = create; f.restart();
+  store.put = put; f.restart();
   const completed = f.service.chatgpt.capture(value);
   assert.equal(completed.importedItems, 1); assert.equal(f.service.store.list().length, 2);
   assert.equal(f.service.chatgpt.capture(value).duplicate, true);
