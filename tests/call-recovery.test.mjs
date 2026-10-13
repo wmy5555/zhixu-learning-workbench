@@ -92,6 +92,50 @@ test('abort after dispatch retains unknown cost and blocks new calls even with b
   assert.equal(h.attempts, 2);
 });
 
+test('single grading operation recovers its received answer after prompt and provider changes without a new charge', async t => {
+  const h = harness(t), single = { ...context, singleRequest: true };
+  const generate = prompt => h.ai.withCallContext(single, () => h.ai.generate({ prompt, privacy: 'cloud' }));
+  const put = h.store.put.bind(h.store);
+  h.store.put = (namespace, key, data) => { if (namespace === 'calls' && data.phase === 'accounted') throw new Error('synthetic accounting failure'); return put(namespace, key, data); };
+  let callId;
+  await assert.rejects(generate('Original grade prompt'), error => { callId = error.callId; return error.code === 'CALL_ACCOUNTING_FAILED'; });
+  h.reopen();
+  h.settings.ai.model = 'changed-model'; h.settings.ai.baseUrl = 'https://1.1.1.1/v2'; h.settings.ai.inputPrice = 200;
+  await assert.rejects(generate('Changed grade prompt'), { code: 'CALL_RECOVERY_REQUIRED' });
+  h.ledger.recover(callId);
+  const result = await generate('Changed grade prompt');
+  assert.equal(result.text, 'Saved synthetic answer'); assert.equal(result.callId, callId); assert.equal(result.recovered, true);
+  assert.equal(result.usage.cost, .00014); assert.equal(h.attempts, 1); assert.equal(h.store.records('calls').length, 1);
+  await assert.rejects(h.ai.withCallContext(single, () => h.ai.generate({ prompt: 'Changed grade prompt', privacy: 'local' })), { code: 'PRIVACY_LOCAL' });
+  h.settings.ai.enabled = false;
+  await assert.rejects(generate('Changed grade prompt'), { code: 'CAPABILITY_DISABLED' });
+});
+
+test('single operation reserves once when different prompt fingerprints race', async t => {
+  let release, dispatched;
+  const gate = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { dispatched = resolve; });
+  const h = harness(t, async () => { dispatched(); await gate; return response(); });
+  const generate = prompt => h.ai.withCallContext({ ...context, singleRequest: true }, () => h.ai.generate({ prompt, privacy: 'cloud' }));
+  const outcomes = Promise.allSettled([generate('First prompt'), generate('Other prompt')]);
+  await started; release();
+  const results = await outcomes;
+  assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
+  assert.equal(results.find(result => result.status === 'rejected').reason.code, 'CALL_RECOVERY_REQUIRED');
+  assert.equal(h.attempts, 1); assert.equal(h.store.records('calls').length, 1);
+});
+
+test('multi-request contexts retain separate request identities and replay both results', async t => {
+  const h = harness(t, async (_url, options) => new Response(JSON.stringify({ choices: [{ message: { content: JSON.parse(options.body).messages[0].content } }], usage: { prompt_tokens: 1, completion_tokens: 1 } })));
+  const run = () => h.ai.withCallContext(context, async () => [await h.ai.generate({ prompt: 'First request', privacy: 'cloud' }), await h.ai.generate({ prompt: 'Second request', privacy: 'cloud' })]);
+  const first = await run();
+  assert.deepEqual(first.map(result => result.text), ['First request', 'Second request']);
+  h.reopen();
+  const replayed = await run();
+  assert.deepEqual(replayed.map(result => result.text), ['First request', 'Second request']);
+  assert.ok(replayed.every(result => result.recovered)); assert.equal(h.attempts, 2); assert.equal(h.store.records('calls').length, 2);
+});
+
 test('timeout and incomplete response are unknown and never automatically repeat search or embedding', async t => {
   const original = AbortSignal.timeout;
   t.mock.method(AbortSignal, 'timeout', () => original(30));

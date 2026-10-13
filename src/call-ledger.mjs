@@ -26,10 +26,11 @@ export function createCallLedger({ store, getStore = () => store, at = () => new
     return pending(getStore()).map(({ id, phase, capability, model, createdAt, updatedAt, jobId, turnId, error }) =>
       ({ id, phase, capability, model, createdAt, updatedAt, jobId, turnId, error, active: active.has(id), hasResult: phase === 'received' }));
   }
-  function reserve({ capability, model = null, sourceId, key, contextKey, jobId, turnId, reservedCost = null }, config) {
+  function reserve({ capability, model = null, sourceId, key, contextKey, singleRequest = false, jobId, turnId, reservedCost = null }, config) {
     const row = transaction(current => {
       if (pending(current).some(item => !active.has(item.id))) fail('CALL_RECOVERY_REQUIRED', '有结果未知或记账未完成的调用。请先在用量与费用中处理，系统不会自动重发。');
       if (contextKey && current.records('callLedger').some(item => item.contextKey === contextKey && item.phase === 'resolved_unknown')) fail('CALL_RECOVERY_REQUIRED', '原操作没有可恢复的响应。人工核对费用不会授权该操作重新发送。');
+      if (singleRequest && contextKey && current.records('callLedger').some(item => item.contextKey === contextKey && item.phase !== 'cancelled')) fail('CALL_RECOVERY_REQUIRED', '此轮操作已有调用，请恢复已有结果；修改输入或模型配置不会重新发送。');
       if (key && current.records('callLedger').some(item => item.key === key && item.phase !== 'cancelled')) fail('CALL_RECOVERY_REQUIRED', '同一操作已有调用记录，请恢复已有结果，不能重新发送。');
       const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: config.timezone || 'Asia/Singapore', year: 'numeric', month: '2-digit', day: '2-digit' });
       const dayOf = value => { const date = new Date(value); return Number.isFinite(date.getTime()) ? formatter.format(date) : null; };
@@ -127,8 +128,13 @@ export function createCallLedger({ store, getStore = () => store, at = () => new
     read(getStore(), id);
     return getStore().get('callResults', id);
   }
-  function replay(key) {
-    const row = getStore().records('callLedger').find(item => item.key === key && item.phase !== 'cancelled');
+  function replay(key, { contextKey, singleRequest = false } = {}) {
+    // A grading round has one external request. Its existing response wins even
+    // when a retry's prompt/provider fingerprint changed after receipt.
+    const matches = getStore().records('callLedger').filter(item => item.phase !== 'cancelled' &&
+      (singleRequest && contextKey ? item.contextKey === contextKey : item.key === key));
+    if (singleRequest && matches.length > 1) fail('CALL_RECOVERY_REQUIRED', '此轮操作有多个调用记录，请核对已有结果，不能再次发送。');
+    const row = matches[0];
     if (!row) return null;
     if (row.phase !== 'accounted') fail('CALL_RECOVERY_REQUIRED', '该操作已有调用，需先恢复记账或核对未知结果；不会自动重发。');
     const result = getResult(row.id);

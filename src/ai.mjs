@@ -455,8 +455,9 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
 
   function withCallContext(context, fn) {
     if (!context || typeof context.key !== 'string' || !context.key.trim() || context.key.length > 2000 || typeof fn !== 'function') throw fail('INVALID_INPUT', '调用上下文需要稳定 key 和任务函数。');
+    if (context.singleRequest !== undefined && typeof context.singleRequest !== 'boolean') throw fail('INVALID_INPUT', 'singleRequest 必须为开关值。');
     for (const field of ['jobId', 'turnId']) if (context[field] !== undefined && (typeof context[field] !== 'string' || context[field].length > 300)) throw fail('INVALID_INPUT', '调用上下文身份无效。');
-    return callContext.run({ key: context.key, jobId: context.jobId, turnId: context.turnId, occurrences: new Map() }, fn);
+    return callContext.run({ key: context.key, jobId: context.jobId, turnId: context.turnId, singleRequest: context.singleRequest === true, occurrences: new Map() }, fn);
   }
 
   async function withBudget({ limit, sourceId } = {}, fn) {
@@ -556,7 +557,8 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     const occurrence = context ? context.occurrences.get(fingerprint) ?? 0 : 0;
     if (context) context.occurrences.set(fingerprint, occurrence + 1);
     const key = context ? hashKey([context.key, context.jobId, context.turnId, fingerprint, occurrence]) : undefined;
-    const replay = key && callLedger?.replay(key);
+    const contextKey = context ? hashKey([context.key, context.jobId, context.turnId]) : undefined;
+    const replay = key && callLedger?.replay(key, { contextKey, singleRequest: context.singleRequest });
     if (replay) {
       if (replay.entry.ok === false) throw Object.assign(fail('PROVIDER_ERROR', replay.entry.error || '已有调用返回失败；没有重新发送。'), { callId: replay.callId });
       return { ...replay.response, body: Buffer.from(replay.response.body), headers: normalizeResponseHeaders(replay.response.headers), callId: replay.callId, accountingEntry: replay.entry, recovered: true };
@@ -572,7 +574,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     }
     if (combinedSignal.aborted) throw classifyAbort(combinedSignal.reason, signal, timeoutSignal);
     const sourceId = sourceBudget.getStore()?.sourceId;
-    const reservation = await reserveBudget(allSettings, { capability, model, sourceId, key, contextKey: context ? hashKey([context.key, context.jobId, context.turnId]) : undefined, jobId: context?.jobId, turnId: context?.turnId,
+    const reservation = await reserveBudget(allSettings, { capability, model, sourceId, key, contextKey, singleRequest: context?.singleRequest, jobId: context?.jobId, turnId: context?.turnId,
       reservedCost: capability === 'fetch' ? 0 : capability === 'search' ? safeNumber(allSettings.search?.requestPrice) : null });
     const callId = reservation.row?.id;
     let started = Date.now();
