@@ -4,6 +4,8 @@ import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { Store, now, hash, fail } from './store.mjs';
 import { createSecrets } from './secrets.mjs';
+import { validateSettings, credentialBinding } from './settings-validation.mjs';
+import { assertBackupSize } from './backup-contract.mjs';
 import { createAI } from './ai.mjs';
 import { createCallLedger } from './call-ledger.mjs';
 import { promptDefaults, renderPrompt, validatePromptOverrides, sourceExtractionStructure, sourceTitleContract, extractionResearchContract, effectivePromptTemplate } from './prompts.mjs';
@@ -52,7 +54,10 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   let store = new Store({ dataDir, vaultDir, backupPurpose: practice ? practicePurpose : undefined });
   let jobRevision = randomUUID();
   let jobSnapshot = 0;
-  const secret = practice ? { has: () => false, get: () => '' } : createSecrets(dataDir);
+  const secret = practice ? { has: () => false, get: () => '' } : createSecrets(dataDir, { db: store.db, getBinding: capability => {
+    const group = capability === 'model' ? 'ai' : capability;
+    return credentialBinding({ ...defaults[group], ...store.get('settings', 'main', {})[group] });
+  } });
   const settings = () => {
     const saved = store.get('settings', 'main', {});
     const value = { ...defaults, ...saved };
@@ -138,54 +143,37 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     return putJob({ id: randomUUID(), type, state: 'queued', payload, dedupKey, progress: 0, error: '', createdAt: now(), attempts: 0 });
   }
   function updateSettings(input) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) fail('设置须为键值对象。');
     if (practice && ['vaultDir','dataDir','ai','embedding','search','fetch','mcp','apiKey','clearKey'].some(key => Object.hasOwn(input, key))) fail('练习空间不能更改目录、连接凭据或外部能力；请返回正式设置配置。', 'PRACTICE_SETTINGS_LOCKED', 409);
     if (practice && input.prompts !== undefined && (processing || activeOperations)) fail('请等待练习任务结束后调整提示词。', 'BUSY', 409);
-    const old = settings(), allowed = ['dailyMinutes','timezone','scheduleTime','focusTopics','pausedIds','ai','embedding','search','fetch','mcp','discoveryDays','prompts'];
-    const next = Object.fromEntries(allowed.map(k => [k, old[k]]));
-    for (const key of allowed) if (input[key] !== undefined) next[key] = typeof defaults[key] === 'object' && !Array.isArray(defaults[key]) ? { ...old[key], ...input[key] } : input[key];
-    for (const key of ['enabled', 'allowProposals', 'chatgptEnabled', 'chatgptAllowRead']) if (typeof next.mcp[key] !== 'boolean') fail('MCP 接入与从属许可必须为开关值。');
-    if (!next.mcp.chatgptEnabled) next.mcp.chatgptAllowRead = false;
-    if (!next.mcp.enabled) next.mcp.allowProposals = false;
-    next.prompts=validatePromptOverrides(next.prompts);
-    if (!Number.isFinite(+next.dailyMinutes) || +next.dailyMinutes < 5 || +next.dailyMinutes > 240) fail('每日时间应为 5–240 分钟。'); next.dailyMinutes = +next.dailyMinutes;
-    try { localDay(new Date(), next.timezone); } catch { fail('时区无效，请用 Asia/Shanghai 等标准时区名称。'); }
-    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(next.scheduleTime)) fail('生成时间应为 HH:mm。');
-    for (const capability of ['ai','embedding','search']) {
-      const config = next[capability];
-      if (config.apiKey) secret.set(capability === 'ai' ? 'model' : capability, String(config.apiKey));
-      if (config.clearKey === true) secret.clear(capability === 'ai' ? 'model' : capability);
-      delete config.apiKey; delete config.clearKey; delete config.hasKey;
-      if (config.baseUrl) { let u; try { u = new URL(config.baseUrl); } catch { fail('服务地址无效。'); } if (u.protocol !== 'https:') fail('外部能力地址须使用 HTTPS。'); if (u.username || u.password) fail('服务地址不能包含凭据。'); }
-    }
-    for (const key of ['dailyCallLimit','monthlyBudget']) { if (!Number.isFinite(+next.ai[key]) || +next.ai[key] < 0) fail('调用预算必须为非负数。'); next.ai[key] = +next.ai[key]; }
-    next.ai.timeoutMs = Number(next.ai.timeoutMs);
-    if (!['number','string'].includes(typeof next.ai.sourceCallLimit) || String(next.ai.sourceCallLimit).trim() === '') fail('单任务请求上限须为 1–300 的整数。');
-    next.ai.sourceCallLimit = Number(next.ai.sourceCallLimit);
-    if (!Number.isInteger(next.ai.sourceCallLimit) || next.ai.sourceCallLimit < 1 || next.ai.sourceCallLimit > 300) fail('单份资料请求上限须为 1–300。');
-    if (!Number.isInteger(next.ai.timeoutMs) || next.ai.timeoutMs < 1000 || next.ai.timeoutMs > 600000) fail('模型等待时间须为 1–600 秒。');
-    for (const group of ['ai','embedding','search']) {
-      const config = next[group], keys = group === 'search' ? ['requestPrice'] : ['inputPrice','outputPrice','cachedInputPrice'];
-      const changed = config.baseUrl !== old[group].baseUrl || config.model !== old[group].model;
-      for (const key of keys) {
-        if (changed && !Object.hasOwn(input[group] || {}, key)) config[key] = null;
-        if (config[key] === '' || config[key] === undefined) config[key] = null;
-        if (config[key] !== null) {
-          if (!['number','string'].includes(typeof config[key]) || String(config[key]).trim() === '' || !Number.isFinite(+config[key]) || +config[key] < 0) fail('价格应为空（未知）或非负数字。');
-          config[key] = +config[key];
-        }
-      }
-    }
-    if (!Array.isArray(next.focusTopics) || !Array.isArray(next.pausedIds)) fail('关注主题和暂停项应为列表。');
-    if (input.vaultDir && path.resolve(input.vaultDir) !== store.vaultDir) {
-      if (processing) fail('请等待当前处理任务结束后更换 Vault。', 'BUSY', 409);
+    const old = settings(), { next, credentials } = validateSettings(input, old, defaults);
+    const newVault = input.vaultDir ? path.resolve(input.vaultDir) : store.vaultDir;
+    if (newVault !== store.vaultDir) {
+      if (processing || activeOperations || pausing) fail('请等待当前处理任务结束后更换 Vault。', 'BUSY', 409);
       if (store.list().some(n=>n.kind!=='report') || store.records('sessions').length) fail('当前库已有数据。为避免混淆学习记录，请先备份，使用独立数据目录启动另一个 Vault。', 'VAULT_NOT_EMPTY', 409);
-      const newVault = path.resolve(input.vaultDir);
       if (newVault === path.parse(newVault).root || newVault === store.dataDir) fail('请选择专用的 Vault 文件夹。');
-      store.close(); store = new Store({ dataDir, vaultDir: newVault }); jobRevision = randomUUID(); next.vaultDir = newVault;
-    } else next.vaultDir = store.vaultDir;
+      if (fs.existsSync(newVault) && (!fs.statSync(newVault).isDirectory() || fs.lstatSync(newVault).isSymbolicLink())) fail('Vault 须为专用文件夹且不能是链接。');
+    }
+    next.vaultDir = newVault;
     const researchChanged = practice && Object.keys(promptDefaults).filter(key => key.startsWith('research')).some(key => (old.prompts[key] ?? promptDefaults[key].template) !== (next.prompts[key] ?? promptDefaults[key].template));
-    store.put('settings', 'main', practice ? Object.fromEntries(practicePreferences.map(key => [key, next[key]])) : next);
-    if (researchChanged) store.db.prepare("DELETE FROM records WHERE namespace='research'").run();
+    const prepared = credentials.length ? secret.prepare(credentials) : [];
+    const oldVault = store.vaultDir, oldConflicts = store.conflicts;
+    store.db.exec('BEGIN IMMEDIATE');
+    try {
+      if (newVault !== oldVault) {
+        fs.mkdirSync(newVault, { recursive: true });
+        store.vaultDir = newVault; store.scan();
+        if (store.conflicts.length) fail('新 Vault 存在冲突，请先处理后再切换。', 'VAULT_CONFLICT', 409);
+      }
+      store.put('settings', 'main', practice ? Object.fromEntries(practicePreferences.map(key => [key, next[key]])) : next);
+      if (prepared.length) secret.apply(prepared);
+      if (researchChanged) store.db.prepare("DELETE FROM records WHERE namespace='research'").run();
+      store.db.exec('COMMIT');
+    } catch (error) {
+      store.db.exec('ROLLBACK'); store.vaultDir = oldVault; store.conflicts = oldConflicts;
+      throw error;
+    }
+    if (newVault !== oldVault) jobRevision = randomUUID();
     return settings();
   }
   const validExtraction = value => Array.isArray(value?.candidates) && value.candidates.length > 0 && value.candidates.length <= 8
@@ -924,22 +912,53 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     const pendingLinks=store.pendingManagedLinks().map(p=>({id:p.id,title:store.read(p.id).title,conflict:p.conflict,privacyChanged:p.privacyChanged}));
     return {usage:usage(),calls:store.records('calls').slice(0,100),index:{...chunks,pending,notes:notes.length,method:'中文关键词与可选语义检索；现有片段保留，缺失向量需手动更新，本地资料不外发'},mcp:{...settings().mcp,transport:'stdio',tools:['search_knowledge','read_note','read_source','related_knowledge','propose_change'],events:store.records('mcpCalls').slice(0,30)},storage:{vaultDir:store.vaultDir,dataDir:store.dataDir,conflicts:store.conflicts,pendingLinks,retention:'删除移除当前文件与检索缓存；历史版本和你此前导出的备份仍保留。JSON备份只包含Markdown与运行记录；附件和.obsidian请另行备份整个Vault。'},sessions:store.records('sessions').slice(0,20)};
   }
-  function backup(){const config=settings();return{...store.backup(),...(practice?{purpose:practicePurpose}:{}),preferences:practice?Object.fromEntries(practicePreferences.map(key=>[key,config[key]])):config};}
+  function backup(){const config=settings(), result={...store.backup(),...(practice?{purpose:practicePurpose}:{}),preferences:practice?Object.fromEntries(practicePreferences.map(key=>[key,config[key]])):config};assertBackupSize(result);return result;}
   function restore({backup:input,preview=true,token}) {
     if (practice !== (input?.purpose === practicePurpose)) fail(practice ? '练习空间只能恢复新手练习备份。' : '新手练习备份不能恢复到正式知识库。', 'BACKUP_PURPOSE_MISMATCH', 409);
     if (processing || activeOperations || pausing) fail('请等待或取消正在运行的任务后恢复。', 'BUSY', 409);
-    const info = store.validateBackup(input), digest = hash(JSON.stringify(input));
-    if (preview) { const token = randomUUID(); store.put('restore', token, { digest, at: now() }); return { ...info, token }; }
+    if (!input || typeof input !== 'object' || Array.isArray(input)) fail('备份须为键值对象。');
+    const digest = hash(assertBackupSize(input));
+    if (input.preferences !== undefined && (!input.preferences || typeof input.preferences !== 'object' || Array.isArray(input.preferences))) fail('备份偏好设置须为键值对象。');
+    const preferences = practice ? Object.fromEntries(practicePreferences.filter(key => Object.hasOwn(input.preferences || {}, key)).map(key => [key, input.preferences[key]])) : { ...input.preferences };
+    delete preferences.vaultDir; delete preferences.dataDir;
+    if (!practice) for (const group of ['ai','embedding','search']) {
+      if (preferences[group] && (Object.hasOwn(preferences[group], 'apiKey') || Object.hasOwn(preferences[group], 'clearKey'))) fail('备份不能包含密钥或更改本机凭据。');
+    }
+    // Validate the supplied switches before forcing safe defaults; invalid types are not hidden.
+    const currentConfig = settings(), { next } = validateSettings(preferences, currentConfig, defaults);
+    const safeEndpoint = value => { if (!value) return ''; try { const url = new URL(value); return `${url.origin}${url.pathname}`; } catch { return '无效地址'; } };
+    const mcpFlags = config => Object.fromEntries(Object.keys(defaults.mcp).map(key => [key, config[key]]));
+    const settingsPreview = practice ? { notice: '练习备份只恢复学习偏好；外部能力继续继承正式设置。' } : {
+      providers: ['ai','embedding','search'].map(group => ({ capability: group === 'ai' ? '模型' : group === 'embedding' ? '语义服务' : '搜索',
+        current: { baseUrl: safeEndpoint(currentConfig[group].baseUrl), model: currentConfig[group].model || '' },
+        backup: { baseUrl: safeEndpoint(next[group].baseUrl), model: next[group].model || '' } })),
+      permissions: ['ai','embedding','search','fetch','mcp'].map(group => ({ capability: group, current: currentConfig[group].enabled, backup: next[group].enabled, afterRestore: false })),
+      mcpPermissions: { current: mcpFlags(currentConfig.mcp), backup: mcpFlags(next.mcp), afterRestore: { ...defaults.mcp } },
+      allExternalCapabilitiesDisabled: true,
+      notice: '恢复后模型、语义、搜索、网页读取和 MCP 均保持关闭。本机凭据保留；变更地址或模型后须重新配置对应密钥。',
+    };
+    if (!practice) {
+      for (const group of externalCapabilities) next[group].enabled = false;
+      next.mcp = { ...defaults.mcp };
+    }
+    next.vaultDir = store.vaultDir;
+    const restoredSettings = practice ? Object.fromEntries(practicePreferences.map(key => [key, next[key]])) : next;
+    const info = store.validateBackup(input);
+    if (preview) {
+      const pendingTasksRequiringConfirmation = input.records.filter(record => record.namespace === 'jobs' && ['queued','running'].includes(JSON.parse(record.json)?.state)).length;
+      const token = randomUUID(); store.put('restore', token, { digest, at: now() });
+      return { ...info, settingsChanges: settingsPreview, pendingTasksRequiringConfirmation, taskNotice: '恢复的排队与运行任务等待确认，不会自动执行；请在任务页手动重试。', token };
+    }
     const saved = store.get('restore', token);
     if (!saved || saved.digest !== digest || Date.now() - Date.parse(saved.at) > 600000) fail('恢复预览已过期或内容改变，请重新预览。', 'CONFLICT', 409);
-    const result = store.restore(input);
+    const records = input.records.map(record => {
+      if (record.namespace !== 'jobs') return record;
+      const job = JSON.parse(record.json);
+      return ['queued','running'].includes(job?.state) ? { ...record, json: JSON.stringify({ ...job, state: 'waiting', code: 'RESTORE_CONFIRMATION_REQUIRED', error: '备份任务已恢复；为避免重复计费，请确认后手动重试。', updatedAt: now() }) } : record;
+    });
+    const result = store.restore({ ...input, records }, { settings: restoredSettings });
     jobRevision = randomUUID();
-    if (input.preferences) {
-      const preferences = practice ? Object.fromEntries(practicePreferences.filter(key => Object.hasOwn(input.preferences, key)).map(key => [key, input.preferences[key]])) : { ...input.preferences };
-      delete preferences.vaultDir; delete preferences.dataDir;
-      updateSettings(preferences);
-    }
-    recoverJobs(); return result;
+    return result;
   }
   function recoverJobs(){for(const j of store.records('jobs'))if(j.state==='running'||practice&&j.state==='queued')putJob({...j,state:'waiting',error:'服务曾停止或练习备份已恢复；为避免重复计费，请确认后手动重试。'});}
   recoverJobs();
