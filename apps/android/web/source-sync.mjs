@@ -3,6 +3,8 @@ export const syncLimits = Object.freeze({ events: 2000, sources: 100, replicas: 
 const FORMAT = 'zhixu-source-sync', UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const FIELDS = ['platform', 'author', 'url', 'date', 'locator', 'topic'];
 const encoder = new TextEncoder();
+// Match Android Character.isWhitespace || Character.isSpaceChar, not JS trim (BOM/NEL differ).
+const blankBody = /^[\u0009-\u000d\u001c-\u0020\u00a0\u1680\u2000-\u200a\u2028-\u2029\u202f\u205f\u3000]*$/u;
 function fail(message, code = 'SYNC_INVALID') { throw Object.assign(new Error(message), { code }); }
 function object(value, keys) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))
@@ -16,8 +18,11 @@ function text(value, max, singleLine = false) {
 }
 function source(value) {
   object(value, ['title', 'body', 'source']); object(value.source, FIELDS);
-  if (typeof value.title !== 'string' || !value.title || value.title.length > 200 || value.title !== value.title.trim()) fail('同步原文标题无效。');
-  const result = { title: text(value.title, 800, true), body: text(value.body, 128 * 1024), source: {} };
+  const title = text(value.title, 800, true), body = text(value.body, 128 * 1024);
+  // Preserve valid legacy titles read by Android; this does not relax its new-save/export limit.
+  if (!title || [...title].length > 200 || title !== title.trim()) fail('同步原文标题无效。');
+  if (body.includes('\u0000') || blankBody.test(body)) fail('同步原文正文不能为空白或包含 NUL。');
+  const result = { title, body, source: {} };
   for (const key of FIELDS) result.source[key] = text(value.source[key], 8192, true);
   // Source URLs are inert provenance here; the eventual store adapter must validate its own format.
   return result;

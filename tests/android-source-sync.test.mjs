@@ -93,7 +93,7 @@ test('library/context isolation and closed source schema exclude permissions, cr
 
 test('bounded increments count UTF-8 and JSON escaping and reject overflow without pruning', () => {
   let a = newState(A);
-  for (let i = 0; i < 70; i++) a = change(a, ('\u0000\\"中文').repeat(4000));
+  for (let i = 0; i < 70; i++) a = change(a, ('\u0001\\"中文').repeat(4000));
   const batch = createSyncBatch(a);
   assert.ok(batch.events.length > 0 && batch.events.length < a.events.length);
   assert.ok(Buffer.byteLength(JSON.stringify(batch)) <= syncLimits.batchBytes);
@@ -118,6 +118,45 @@ function memoryStorage(state) {
     get writes() { return writes; }, get durable() { return structuredClone(durable); },
   };
 }
+
+test('Android-invalid bodies reject whole remote batches and local changes without writes or ACK', async () => {
+  const whitespace = [9, 10, 11, 12, 13, 28, 29, 30, 31, 32, 0xa0, 0x1680,
+    ...Array.from({ length: 11 }, (_, i) => 0x2000 + i), 0x2028, 0x2029, 0x202f, 0x205f, 0x3000].map(point => String.fromCodePoint(point));
+  const invalid = ['', ...whitespace, whitespace.join(''), '\u0000', '合成\u0000正文'];
+  const remote = change(change(newState(A), '远端第一版'), '远端第二版'), packet = createSyncBatch(remote);
+  const original = change(newState(B), '当前本地头'), before = structuredClone(original);
+  for (const body of invalid) {
+    const broken = { ...packet, events: [packet.events[0], { ...packet.events[1], value: content(body) }] };
+    assert.throws(() => receiveSyncBatch(original, broken), { code: 'SYNC_INVALID' });
+    assert.deepEqual(original, before, 'even the preceding valid event must not advance the input batch');
+    assert.throws(() => change(original, body), { code: 'SYNC_INVALID' });
+    assert.deepEqual(original, before, 'invalid local edits must retain the current head');
+    const storage = memoryStorage(original), repository = createSourceSyncRepository(storage);
+    await assert.rejects(repository.receive(broken), { code: 'SYNC_INVALID' });
+    await assert.rejects(repository.change({ sourceId, expectedHeads: view(original).versions.map(v => v.id), operation: 'put', value: content(body) }), { code: 'SYNC_INVALID' });
+    assert.equal(storage.writes, 0, 'invalid data must never reach commit');
+    assert.deepEqual(storage.durable.state, before);
+    assert.deepEqual(syncVector(storage.durable.state), { [B]: 1 }, 'no receive cursor is acknowledged or persisted');
+  }
+  for (const body of ['\ufeff', '\u0085', '\u0001', `${whitespace.join('')}合成正文${whitespace.join('')}`]) {
+    const state = change(newState(A), body), target = receive(newState(B), state);
+    assert.equal(view(target).versions[0].value.body, body, 'valid body bytes are preserved without trimming');
+  }
+});
+
+test('legacy titles count Unicode code points and retain 101 to 200 emoji across peers', () => {
+  for (const title of ['😀'.repeat(101), '😀'.repeat(200), '中'.repeat(200)]) {
+    const a = recordSyncChange(newState(A), { sourceId, expectedHeads: [], operation: 'put', value: { ...content('合成正文'), title } });
+    assert.equal(view(a).versions[0].value.title, title);
+    assert.equal(view(receive(newState(B), a)).versions[0].value.title, title);
+  }
+  const original = change(newState(A), '原有合成正文'), before = structuredClone(original), packet = createSyncBatch(original);
+  for (const title of ['😀'.repeat(201), '中'.repeat(201), '\ud800', '\udc00', '标题\n换行']) {
+    assert.throws(() => recordSyncChange(original, { sourceId, expectedHeads: view(original).versions.map(v => v.id), operation: 'put', value: { ...content('合成正文'), title } }), { code: 'SYNC_INVALID' });
+    assert.throws(() => receiveSyncBatch(newState(B), { ...packet, events: [{ ...packet.events[0], value: { ...content('合成正文'), title } }] }), { code: 'SYNC_INVALID' });
+    assert.deepEqual(original, before);
+  }
+});
 
 test('interruption before/after atomic commit and ACK loss replay once after repository reopen', async () => {
   const a = change(change(newState(A), '合成历史'), null), batch = createSyncBatch(a), storage = memoryStorage(newState(B));
@@ -190,7 +229,7 @@ test('source, replica, event and journal caps retain input rather than pruning t
   const replicas = ids.slice(0, 33).map(id => ({ ...first, id: `${id}:1`, replicaId: id }));
   assert.throws(() => validateSyncState({ ...base, events: replicas }), { code: 'SYNC_LIMIT' });
   assert.throws(() => validateSyncState({ ...base, events: Array(2001).fill(first) }), { code: 'SYNC_LIMIT' });
-  const huge = Array.from({ length: 43 }, (_, i) => ({ ...first, id: `${A}:${i + 1}`, sequence: i + 1, parents: i ? [`${A}:${i}`] : [], value: content('\u0000'.repeat(128 * 1024)) }));
+  const huge = Array.from({ length: 43 }, (_, i) => ({ ...first, id: `${A}:${i + 1}`, sequence: i + 1, parents: i ? [`${A}:${i}`] : [], value: content('\u0001'.repeat(128 * 1024)) }));
   assert.throws(() => validateSyncState({ ...base, events: huge }), { code: 'SYNC_LIMIT' });
   assert.deepEqual(base.events, [first]);
 });
