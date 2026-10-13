@@ -18,6 +18,7 @@ class Element {
   set textContent(value) { this._text = String(value); this.children = []; }
   get textContent() { return this._text + this.children.map(child => child.textContent ?? String(child)).join(''); }
   append(...children) { this.children.push(...children.map(child => { if (child instanceof Element) return child; const text = new Element('text'); text.textContent = String(child); return text; })); }
+  prepend(...children) { this.children.unshift(...children); }
   replaceChildren(...children) { this._text = ''; this.children = []; this.append(...children); }
   addEventListener(name, handler) { this.events[name] = handler; }
   setAttribute(name, value) { this.attributes[name] = value; }
@@ -65,6 +66,35 @@ const settings = { ai: { model: 'alpha', baseUrl: 'https://example.org/v1', dail
 function report(options = {}) {
   return { ...buildUsageReport([{ createdAt: '2026-10-02T00:00:00Z', capability: 'model', model: '<script>bad()</script>', inputTokens: 100, outputTokens: 20, cost: null }], { at: new Date('2026-10-02T12:00:00Z') }), budget: { callsToday: 4, dailyCallLimit: 20, monthlyBudget: 5, costMonth: null, knownCostMonth: 1, unknownCostCalls: 1 }, ...options };
 }
+
+test('unknown calls require explicit acknowledgement and a reason without triggering a retry', async () => {
+  const app = browser(), calls = [];
+  const pending = [{ id: 'unknown-call', phase: 'unknown', capability: 'model', model: '<script>synthetic</script>', hasResult: false }];
+  const panel = await app.createUsagePanel({ load: async () => report(), settings, save: async () => {}, loadRecovery: async () => ({ pending }), recoverCall: async (...args) => calls.push(plain(args)) });
+  assert.equal(calls.length, 0);
+  assert.match(panel.textContent, /外部调用已暂停/);
+  assert.equal(descendants(panel).some(node => node.tagName === 'script'), false);
+  const submit = findButton(panel, '记录核对结果，不重发');
+  const form = descendants(panel).find(node => node.tagName === 'form' && node.children.includes(submit));
+  assert.equal(submit.disabled, true);
+  await form.events.submit({ preventDefault() {} });
+  assert.equal(calls.length, 0);
+  control(form, 'confirmationReason').value = '已核对，供应商暂未提供结算金额。';
+  const checkbox = control(form, 'checkedProvider'); checkbox.checked = true; checkbox.events.change();
+  await form.events.submit({ preventDefault() {} });
+  assert.deepEqual(calls, [['unknown-call', { action: 'confirm', cost: null, reason: '已核对，供应商暂未提供结算金额。' }]]);
+});
+
+test('received-result recovery is local, prevents double clicks, and practice cannot modify it', async () => {
+  const app = browser(); let finish, count = 0;
+  const options = { load: async () => report(), settings, save: async () => {}, loadRecovery: async () => ({ pending: [{ id: 'received-call', hasResult: true, phase: 'received' }] }), recoverCall: async (id, payload) => { assert.equal(id, 'received-call'); assert.equal(payload.action, 'recover'); count++; await new Promise(resolve => { finish = resolve; }); } };
+  const panel = await app.createUsagePanel(options);
+  const action = findButton(panel, '补记已收到的结果');
+  const work = click(action); assert.equal(action.disabled, true); assert.equal(count, 1); finish(); await work;
+  const practice = await app.createUsagePanel({ ...options, readOnly: true });
+  assert.equal(findButton(practice, '补记已收到的结果'), undefined);
+  assert.match(practice.textContent, /请返回正式库/);
+});
 
 test('dashboard labels incomplete costs, renders model names as text and saves only cost settings', async () => {
   const app = browser(), saves = [], requests = [];

@@ -221,8 +221,14 @@ export function createLearning(dependencies) {
     if (s.status === 'awaiting_feedback' || s.pendingJobId) fail('上一轮反馈仍在等待处理；你的上一份回答已保存。', 'BUSY', 409);
     const turn = { id: randomUUID(), requestId, question: s.question, answer, goal: s.goal || goals[s.depth || 'explain'].label, hintUsed: !!hintUsed || s.hintCount > 0, createdAt: now() };
     s.turns.push(turn); s.status = 'awaiting_feedback'; s.hintCount = 0;
-    const job = queue('grade', { sessionId: id, turnId: turn.id }, `grade:${id}:${turn.id}`); s.pendingJobId = job.id;
-    return store.put('sessions', id, s);
+    // Persist the answer and its queued work together; neither may outlive the other.
+    store.db.exec('BEGIN IMMEDIATE');
+    try {
+      const job = queue('grade', { sessionId: id, turnId: turn.id }, `grade:${id}:${turn.id}`); s.pendingJobId = job.id;
+      store.put('sessions', id, s);
+      store.db.exec('COMMIT');
+    } catch (error) { store.db.exec('ROLLBACK'); throw error; }
+    return s;
   }
   function hintStudy(id) {
     const store = storage(), s = session(id);
@@ -240,7 +246,7 @@ export function createLearning(dependencies) {
     const timestamp = now(), date = dayAt(new Date(timestamp), settings().timezone), note = getNote(s.noteId);
     if (note.hash !== s.sourceHash) fail('学习材料已有更新，请按当前材料重新开始。', 'SOURCE_CHANGED');
     const old = store.get('reviews', s.noteId, {}), depth = s.depth || depthOf(note);
-    const usedHints = s.turns.some(t => t.hintUsed), errors = s.turns.some(t => ['partial', 'incorrect'].includes(t.feedback.assessment));
+    const usedHints = s.hintCount > 0 || s.turns.some(t => t.hintUsed), errors = s.turns.some(t => ['partial', 'incorrect'].includes(t.feedback.assessment));
     const disputed = store.list().some(m => m.kind === 'mistake' && ['disputed', 'revoked'].includes(m.meta.correctionState) && (m.id === s.mistakeId || textList(m.meta.sessions).includes(s.id)));
     const ambiguous = disputed || s.turns.some(t => t.feedback.assessment === 'ambiguous' || t.feedback.disputedMisconception === true);
     const independent = !usedHints && !errors && !ambiguous && s.turns.every(t => t.feedback.assessment === 'correct');

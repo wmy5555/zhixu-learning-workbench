@@ -1877,6 +1877,7 @@ async function renderSystem() {
     wrapper.append(await createUsagePanel({
       load: filters => api.usage(filters), settings: await api.settings(), readOnly: Boolean(api.getContext?.().practiceId),
       save: payload => api.updateUsageSettings(payload),
+      loadRecovery: () => api.callRecovery(), recoverCall: (id, payload) => api.recoverCall(id, payload),
     }));
   }
   else if (state.systemTab === "jobs") wrapper.append(await jobsPanel());
@@ -2240,7 +2241,7 @@ async function importDemo() {
 }
 
 async function confirmRestore() {
-  const ok = await confirmAction({ title: "执行恢复？", message: "应用会先生成安全备份，再按预览结果恢复知识与运行记录。", confirmText: "确认恢复", danger: true });
+  const ok = await confirmAction({ title: "执行恢复？", message: "应用会先生成安全备份，再恢复资料与记录。恢复后的外部能力默认关闭，未完成任务等待你确认；本机未结清调用仍保留。", confirmText: "确认恢复", danger: true });
   if (!ok) return;
   try {
     await api.restore({ backup: state.restoreBackup, preview: false, token: state.restoreToken });

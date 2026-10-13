@@ -6,6 +6,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createService } from './service.mjs';
 import { atomicWrite, fail, now } from './store.mjs';
 import { createOnboarding } from './onboarding.mjs';
+import { BACKUP_REQUEST_MAX_BYTES } from './backup-contract.mjs';
 
 const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
 const safeEqual = (a, b) => typeof a === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
@@ -90,7 +91,8 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
       const cookie=(req.headers.cookie || '').split(';').map(x=>x.trim()).find(x=>x.startsWith('learning_session='))?.slice(17),session=sessions.get(cookie);
       if(!session||Date.now()-session.at>86400000)fail('会话已过期，请刷新页面。','SESSION_REQUIRED',401);
       if(!['GET','HEAD'].includes(method)&&!safeEqual(req.headers['x-csrf-token']||'',session.csrf))fail('请求缺少有效的操作凭据，请刷新页面。','CSRF_DENIED',403);
-      const body=['POST','PUT','DELETE'].includes(method)?await readJSON(req):{};
+      const restoring = parts[1] === 'restore' && parts.length === 2 || parts[1] === 'practice' && parts[3] === 'restore' && parts.length === 4;
+      const body=['POST','PUT','DELETE'].includes(method)?await readJSON(req, restoring ? BACKUP_REQUEST_MAX_BYTES : undefined):{};
       if (parts[1] === 'onboarding') {
         let result;
         if (parts[2] === 'state' && method === 'GET') result = onboarding.state();
@@ -169,6 +171,11 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
       else if(resource==='settings'&&id==='test'&&method==='POST')result=(await onboarding.test(body.capability)).testResult;
       else if(resource==='usage'&&!id&&method==='GET'){result=mainService.usageReport(query);result.sharedUsage=Boolean(practiceId);}
       else if(resource==='usage'&&id==='settings'&&method==='PUT')result=service.updateUsageSettings(body);
+      else if(resource==='call-recovery'&&!id&&method==='GET')result=mainService.callRecovery();
+      else if(resource==='call-recovery'&&id&&method==='POST'){
+        if(practiceId)fail('请返回正式库的用量与费用页面核对调用记录。','PRACTICE_SETTINGS_LOCKED',409);
+        result=mainService.recoverCall(id,body);
+      }
       else if(resource==='diagnostics'&&method==='GET'){result=service.diagnostics();if(practiceId){result.usage=mainService.usage();result.calls=mainService.store.records('calls').slice(0,100);result.sharedUsage=true;result.usageNotice='请求上限与日常使用共用。下方调用记录来自共用 AI 服务，包含正式与练习请求；仅在此查看，不写入练习备份。';}}
       else if(resource==='index'&&id==='rebuild'&&method==='POST')result=service.queue('index',{},'index:manual');
       else if(resource==='index'&&id==='update'&&method==='POST')result=service.queue('index',{incremental:true},'index:manual');

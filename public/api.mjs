@@ -189,6 +189,8 @@ export const api = {
   diagnostics: () => request("/api/diagnostics"),
   usage: (filters = {}) => request(`/api/usage?${new URLSearchParams(filters)}`),
   updateUsageSettings: (body) => request("/api/usage/settings", { method: "PUT", body }),
+  callRecovery: () => request("/api/call-recovery"),
+  recoverCall: (id, body) => request(`/api/call-recovery/${encodeURIComponent(id)}`, { method: "POST", body }),
   rebuildIndex: () => request("/api/index/rebuild", { method: "POST", body: {} }),
   updateIndex: () => request("/api/index/update", { method: "POST", body: {} }),
   backup: () => request("/api/backup", { blob: true }),
