@@ -45,9 +45,9 @@ public class LocalSourceSyncStoreTest extends AndroidTestCase {
             File unrelated = new File(root, "synthetic-unrelated"); assertTrue(unrelated.mkdir());
             File privateAlias = new File(privateBase, "practice"); Os.symlink(unrelated.getPath(), privateAlias.getPath());
             try { expect("STORE_ERROR", () -> new LocalSourceSyncStore(application, "practice")); }
-            finally { Os.unlink(privateAlias.getPath()); }
+            finally { assertTrue(privateAlias.delete()); }
             assertEquals(0, unrelated.list().length);
-        } finally { Os.unlink(alias.getPath()); }
+        } finally { assertTrue(alias.delete()); }
     }
     public void testWholeJournalCASAcrossInstancesAndNoop() throws Exception {
         JSONObject initial = store.load(), state = append(initial.getJSONObject("state"), "合成第一版", "合成标题");
