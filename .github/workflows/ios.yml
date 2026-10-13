@@ -1,0 +1,56 @@
+name: iOS development preview
+on:
+  pull_request:
+    paths: ['apps/ios/**', 'scripts/*ios*.mjs', 'package.json', 'pnpm-lock.yaml', '.github/workflows/ios.yml']
+  push:
+    branches: [main]
+    paths: ['apps/ios/**', 'scripts/*ios*.mjs', 'package.json', 'pnpm-lock.yaml', '.github/workflows/ios.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ios:
+    name: iOS unsigned build and native storage tests
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Select the installed supported Xcode
+        run: |
+          chosen=""
+          for app in /Applications/Xcode_26*.app; do
+            test -d "$app" || continue
+            case "$app" in *beta*|*Beta*|*RC*) continue ;; esac
+            chosen="$app"
+          done
+          test -n "$chosen"
+          sudo xcode-select -s "$chosen/Contents/Developer"
+          xcodebuild -version
+      - name: Native storage and interruption regressions
+        working-directory: apps/ios/native
+        run: swift test
+      - run: pnpm ios:sync
+      - name: Compile unsigned iOS Simulator app
+        run: xcodebuild -project apps/ios/ios/App/App.xcodeproj -scheme App -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath .tmp/ios-build CODE_SIGNING_ALLOWED=NO build
+      - name: Preserve source-bound build evidence
+        run: |
+          git rev-parse HEAD > .tmp/ios-build/source-sha.txt
+          cp dist/ios-web/ios-assets.json .tmp/ios-build/ios-assets.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ios-unsigned-simulator-preview
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            .tmp/ios-build/Build/Products/Debug-iphonesimulator/App.app
+            .tmp/ios-build/source-sha.txt
+            .tmp/ios-build/ios-assets.json

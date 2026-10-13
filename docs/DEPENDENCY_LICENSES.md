@@ -18,6 +18,10 @@
 
 ## 当前运行依赖（包含间接依赖）
 
+### iOS 原文候选（2026-10-13）
+
+仅新增官方 `@capacitor/ios@8.5.2`，与现有 core/android/cli 一致；锁文件由 pnpm 正常生成。实际安装包声明 MIT，来源为 [ionic-team/capacitor](https://github.com/ionic-team/capacitor/tree/8.5.2)，SPM 对应运行时也固定 8.5.2。CLI 自带 iOS SPM 模板（工程、启动资源和占位图标）同属该上游，随应用复制的 core 许可完整保留于 `apps/ios/THIRD_PARTY_LICENSES.txt`。既有 Web 教程原文及 SOURCE-LICENSES 随固定基线保留；未加入新字体、照片或他人私人资料，不改变知序自身许可证。生产依赖审计实际返回无已知漏洞；原生编译与二进制交付仍单独核验。
+
 ### 新手教程原文（2026-10-04）
 
 新增素材不是运行依赖。来源与完整附属许可见 [SOURCE-LICENSES](../public/tutorial-examples/SOURCE-LICENSES.txt)：维基教科书 CC BY-SA 4.0（仅相关摘录及其改编）、GitHub 与 EFF CC BY 4.0、Python PSF License 2 与示例代码 0BSD、鲁迅原作公有领域。摘录原文、作者、许可、编辑说明与固定修订位置随导入及下载保留；Python 完整附属许可也进入练习文件。不改变知序本身的许可证，未增加依赖或媒体资产。用户自行粘贴的正文是本地运行数据，不纳入公共素材。
