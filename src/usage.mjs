@@ -2,12 +2,14 @@ import { tokenCount } from './token-usage.mjs';
 
 const capabilities = new Set(['model', 'embedding', 'search', 'fetch']);
 const finiteCost = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
-const empty = () => ({ calls: 0, failedCalls: 0, tokenCalls: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, unknownTokenCalls: 0, unknownCacheCalls: 0, unknownReasoningCalls: 0, knownCost: 0, unknownCostCalls: 0 });
+const empty = () => ({ calls: 0, pendingCalls: 0, unknownResultCalls: 0, failedCalls: 0, tokenCalls: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, unknownTokenCalls: 0, unknownCacheCalls: 0, unknownReasoningCalls: 0, knownCost: 0, unknownCostCalls: 0 });
 const shiftDay = (day, offset) => new Date(Date.parse(`${day}T12:00:00Z`) + offset * 86400000).toISOString().slice(0, 10);
 const invalid = message => { throw Object.assign(new Error(message), { code: 'INVALID_USAGE_FILTER', status: 400 }); };
 
 function add(bucket, call) {
   bucket.calls++;
+  if (['reserved', 'dispatch', 'received', 'unknown'].includes(call.phase)) bucket.pendingCalls++;
+  if (['dispatch', 'unknown', 'resolved_unknown'].includes(call.phase)) bucket.unknownResultCalls++;
   if (call.ok === false) bucket.failedCalls++;
   const cost = finiteCost(call.cost);
   if (cost === null) bucket.unknownCostCalls++;
@@ -55,7 +57,7 @@ export function buildUsageReport(calls, { timezone = 'Asia/Shanghai', period = '
   }
   const recentCalls = selected.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))).slice(0, 100).map(call => ({
     // Only accounting metadata: no note IDs, prompts, errors, credentials or endpoint paths.
-    createdAt: call.createdAt, capability: call.capability, model: call.model || '', ok: typeof call.ok === 'boolean' ? call.ok : null,
+    createdAt: call.createdAt, capability: call.capability, model: call.model || '', phase: call.phase || 'legacy', ok: typeof call.ok === 'boolean' ? call.ok : null,
     inputTokens: tokenCount(call.inputTokens), outputTokens: tokenCount(call.outputTokens),
     cachedInputTokens: tokenCount(call.cachedInputTokens), cost: finiteCost(call.cost),
   }));
