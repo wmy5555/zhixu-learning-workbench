@@ -9,6 +9,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { createApp } from '../src/server.mjs';
 import { createChatgptClient } from '../src/mcp-chatgpt.mjs';
+import { renderLegacyConversation } from '../src/chatgpt.mjs';
+import { hash } from '../src/store.mjs';
 
 const projectDir = path.resolve(import.meta.dirname, '..');
 const tempRoot = path.join(projectDir, '.tmp');
@@ -105,6 +107,26 @@ test('capture preserves role text and summary in layer one without processing or
   assert.ok(!output.includes(payload.summary)); assert.ok(!output.includes(f.root)); assert.ok(!output.includes(f.token()));
   const audit = f.app.service.store.records('mcpCalls');
   assert.equal(audit[0].client, 'chatgpt'); assert.ok(!JSON.stringify(audit).includes(payload.messages[0].content));
+});
+
+test('lost non-sync receipt accepts the exact legacy renderer and still rejects edited or duplicated identities', async t => {
+  const f = await fixture(t); f.enable();
+  const payload = sample(), service = f.app.service, store = service.store;
+  const first = service.chatgpt.capture(payload), current = store.read(first.noteId);
+  const legacyBody = renderLegacyConversation(payload);
+  assert.notEqual(legacyBody, current.body);
+  const legacy = store.update(current.id, { expectedHash: current.hash, body: legacyBody });
+  store.remove('chatgptCaptures', hash(payload.requestId));
+  const recovered = service.chatgpt.capture(payload);
+  assert.equal(recovered.duplicate, true);
+  assert.equal(store.read(legacy.id).body, legacyBody, 'retry restores only the receipt and does not rewrite the legacy note');
+  assert.equal(store.get('chatgptCaptures', hash(payload.requestId)).noteId, first.noteId);
+
+  const afterRecovery = store.read(legacy.id);
+  store.update(afterRecovery.id, { expectedHash: afterRecovery.hash, body: legacyBody + '\n\nmanual edit' });
+  store.remove('chatgptCaptures', hash(payload.requestId));
+  assert.throws(() => service.chatgpt.capture(payload), { code: 'CHATGPT_CAPTURE_UNVERIFIABLE' });
+  assert.equal(store.read(legacy.id).body, legacyBody + '\n\nmanual edit');
 });
 
 test('Markdown headings and fences in supplied fields cannot impersonate structural or role sections', async t => {

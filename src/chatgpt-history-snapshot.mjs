@@ -1,4 +1,4 @@
-import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -17,50 +17,112 @@ export function snapshotPipePath(reference, { platform = process.platform, temp 
   return platform === 'win32' ? `\\\\.\\pipe\\zhixu-history-${match[1]}` : join(temp, `zhixu-history-${match[1]}`, 'handoff.sock');
 }
 
-export function authenticateHistoryEnvelope(envelope, reference, key) {
+export function authenticateHistoryEnvelope(envelope, reference, key, expectedClaim) {
   if (!envelope || typeof envelope !== 'object' || !envelope.payload || typeof envelope.payload !== 'object' ||
-    Array.isArray(envelope.payload) || typeof envelope.mac !== 'string' || !/^[a-f0-9]{64}$/.test(envelope.mac) ||
+    Array.isArray(envelope.payload) || !envelope.claim || typeof envelope.claim !== 'object' || typeof envelope.mac !== 'string' || !/^[a-f0-9]{64}$/.test(envelope.mac) ||
     !Buffer.isBuffer(key) || key.length !== 32) {
     fail('历史快照来源无法认证；不会保存。', 'CHATGPT_HISTORY_AUTH');
   }
-  const expected = createHmac('sha256', key).update(reference + '\n' + JSON.stringify(envelope.payload)).digest();
+  const claim = envelope.claim;
+  if (!expectedClaim || claim.requestId !== expectedClaim.requestId || claim.inputDigest !== expectedClaim.inputDigest ||
+    claim.nonce !== expectedClaim.nonce || claim.issuedAt !== expectedClaim.issuedAt) {
+    fail('历史读取响应与本次请求不匹配；不会保存。', 'CHATGPT_HISTORY_AUTH');
+  }
+  const expected = createHmac('sha256', key).update(reference + '\n' + JSON.stringify({ claim, payload: envelope.payload })).digest();
   if (!timingSafeEqual(expected, Buffer.from(envelope.mac, 'hex'))) {
     fail('历史快照来源无法认证；不会保存。', 'CHATGPT_HISTORY_AUTH');
   }
   return envelope.payload;
 }
 
-export async function receiveHistorySnapshot(reference, { timeout = 65000, maxBytes = 2 * 1024 * 1024, readAuthKey = readHistoryHandoffKey } = {}) {
+export async function receiveHistorySnapshot(reference, { timeout = 65000, maxBytes = 2 * 1024 * 1024, readAuthKey = readHistoryHandoffKey, requestId, inputDigest } = {}) {
   const path = snapshotPipePath(reference);
-  return new Promise((resolve, reject) => {
-    const socket = connect({ path });
-    const chunks = [];
-    let size = 0, settled = false, ended = false;
-    const finish = (error, value) => {
-      if (settled) return;
-      settled = true;
-      socket.destroy();
-      error ? reject(error) : resolve(value);
-    };
-    socket.setTimeout(timeout, () => finish(new Error('历史快照传输超时。')));
-    socket.on('error', () => finish(new Error('历史快照不可用或已过期；请重新读取。')));
-    socket.on('close', () => { if (!ended) finish(new Error('历史快照传输提前中断；请重新读取。')); });
-    socket.on('data', chunk => {
-      size += chunk.length;
-      if (size > maxBytes) return finish(new Error('历史快照超过本地导入上限。'));
-      chunks.push(chunk);
+  const deadline = Date.now() + timeout;
+  let key;
+  try {
+    // Authentication shares the IPC deadline. A late result is cleared and never used.
+    key = await new Promise((resolve, reject) => {
+      let settled = false;
+      const timer = setTimeout(() => { settled = true; reject(new Error('历史读取认证超时。')); }, Math.max(1, deadline - Date.now()));
+      Promise.resolve().then(() => readAuthKey()).then(value => {
+        if (settled) { if (Buffer.isBuffer(value)) value.fill(0); return; }
+        settled = true; clearTimeout(timer); resolve(value);
+      }, error => { if (!settled) { settled = true; clearTimeout(timer); reject(error); } });
     });
-    socket.on('end', async () => {
-      ended = true;
-      let key;
-      try {
-        const envelope = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-        key = await readAuthKey();
-        finish(null, authenticateHistoryEnvelope(envelope, reference, key));
-      } catch { finish(new Error('历史快照格式或来源认证无效；请重新读取。')); }
-      finally { key?.fill(0); }
+    if (!Buffer.isBuffer(key) || key.length !== 32 || typeof requestId !== 'string' ||
+      !/^[A-Za-z0-9_-]{8,128}$/.test(requestId) || !/^[a-f0-9]{64}$/.test(inputDigest || '')) {
+      throw new Error('invalid history handoff claim');
+    }
+    if (Date.now() >= deadline) throw new Error('历史读取认证超时。');
+    const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+    const receiveOnce = claim => new Promise((resolve, reject) => {
+      const socket = connect({ path });
+      const header = Buffer.alloc(4), chunks = [];
+      let headerBytes = 0, expectedSize = null, size = 0, settled = false, ended = false, parsed = null, ackSent = false;
+      const totalTimer = setTimeout(() => finish(new Error('历史快照传输超时。')), Math.max(1, deadline - Date.now()));
+      const finish = (error, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(totalTimer);
+        socket.destroy();
+        error ? reject(error) : resolve(value);
+      };
+      const completeIfDrained = () => { if (ended && parsed && ackSent) finish(null, parsed); };
+      const acknowledge = () => {
+        if (parsed || expectedSize === null || size !== expectedSize) return;
+        try {
+          const envelope = JSON.parse(Buffer.concat(chunks, size).toString('utf8'));
+          parsed = authenticateHistoryEnvelope(envelope, reference, key, claim);
+          ackSent = true;
+          socket.end(`ack:${claim.nonce}\n`, () => completeIfDrained());
+        } catch { finish(new Error('历史快照格式或来源认证无效；请重新读取。')); }
+      };
+      socket.on('error', error => {
+        if (error.code === 'EPIPE' && ackSent && parsed) return finish(null, parsed);
+        const failure = new Error('历史快照不可用或已过期；请重新读取。');
+        if (error.code === 'EPIPE' && headerBytes === 0) failure.code = 'HISTORY_PIPE_BUSY';
+        finish(failure);
+      });
+      socket.on('close', () => {
+        if (parsed && ackSent) finish(null, parsed);
+        else finish(new Error('历史快照传输提前中断；请重新读取。'));
+      });
+      socket.on('connect', () => socket.write(JSON.stringify(claim) + '\n'));
+      socket.on('data', chunk => {
+        let offset = 0;
+        if (expectedSize === null && headerBytes < header.length) {
+          const copied = Math.min(header.length - headerBytes, chunk.length);
+          chunk.copy(header, headerBytes, 0, copied); headerBytes += copied; offset += copied;
+          if (headerBytes === header.length) {
+            expectedSize = header.readUInt32LE(0);
+            if (expectedSize < 1 || expectedSize > maxBytes) return finish(new Error('历史快照超过本地导入上限。'));
+          }
+        }
+        if (expectedSize !== null && offset < chunk.length) {
+          const remaining = expectedSize - size, received = chunk.length - offset;
+          if (received > remaining) return finish(new Error('历史快照帧长度无效。'));
+          chunks.push(chunk.subarray(offset)); size += received; acknowledge();
+        }
+      });
+      socket.on('end', () => {
+        ended = true;
+        if (parsed && ackSent) completeIfDrained();
+        else if (!parsed) finish(new Error('历史快照传输提前结束；请重新读取。'));
+      });
     });
-  });
+    let busyRetries = 0;
+    while (true) {
+      const claim = { requestId, inputDigest, nonce: randomBytes(32).toString('hex'), issuedAt: Date.now() };
+      claim.mac = createHmac('sha256', key).update([reference, claim.requestId, claim.inputDigest, claim.nonce, claim.issuedAt].join('\n')).digest('hex');
+      try { return await receiveOnce(claim); }
+      catch (error) {
+        if (process.platform !== 'win32' || error.code !== 'HISTORY_PIPE_BUSY' || busyRetries >= 4 || Date.now() + 50 >= deadline) throw error;
+        await delay(50 * ++busyRetries);
+      }
+    }
+  } catch {
+    throw new Error('历史读取认证或传输不可用；请重新读取。');
+  } finally { key?.fill(0); }
 }
 
 export function verifiedHistoryCapture(snapshot, input) {
