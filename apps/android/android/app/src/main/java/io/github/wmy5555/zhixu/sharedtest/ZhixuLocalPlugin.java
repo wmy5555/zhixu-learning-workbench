@@ -129,6 +129,24 @@ public class ZhixuLocalPlugin extends Plugin {
         });
     }
 
+    @PluginMethod public void syncSourcePreview(PluginCall call) {
+        execute(call, () -> {
+            onlyFields(call, "context", "sourceId");
+            String context = string(call, "context");
+            if (!"formal".equals(context)) throw new LocalSourceStore.StoreException("SYNC_SCOPE", "练习同步不能写入正式原文。");
+            return JSObject.fromJSONObject(getSyncStore(context).sourcePreview(getStore(), string(call, "sourceId")));
+        });
+    }
+
+    @PluginMethod public void syncSourceApply(PluginCall call) {
+        execute(call, () -> {
+            onlyFields(call, "context", "token");
+            String context = string(call, "context");
+            if (!"formal".equals(context)) throw new LocalSourceStore.StoreException("SYNC_SCOPE", "练习同步不能写入正式原文。");
+            return JSObject.fromJSONObject(getSyncStore(context).sourceApply(getStore(), string(call, "token")));
+        });
+    }
+
     @PluginMethod public void learningLoad(PluginCall call) {
         execute(call, () -> {
             onlyFields(call, "context");

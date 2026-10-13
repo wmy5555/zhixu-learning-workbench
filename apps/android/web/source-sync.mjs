@@ -27,6 +27,7 @@ function source(value) {
   // Source URLs are inert provenance here; the eventual store adapter must validate its own format.
   return result;
 }
+export function validateSyncSource(value) { return source(value); }
 function event(value) {
   object(value, ['id', 'replicaId', 'sequence', 'sourceId', 'parents', 'operation', 'value']);
   const replicaId = uuid(value.replicaId), sequence = integer(value.sequence, 1), sourceId = uuid(value.sourceId);
@@ -74,11 +75,18 @@ export function validateSyncState(value) {
   size(result, syncLimits.stateBytes); return result;
 }
 export function syncVector(state) { return indexEvents(validateSyncState(state).events).vector; }
+function sourceView(byId, heads, sourceId) {
+  const versions = [...(heads.get(sourceId) || [])].sort().map(id => byId.get(id));
+  return { sourceId, status: !versions.length ? 'absent' : versions.length > 1 ? 'conflict' : versions[0].operation === 'delete' ? 'deleted' : 'present', versions };
+}
+export function listSyncSources(state) {
+  const { byId, heads } = indexEvents(validateSyncState(state).events);
+  return [...heads.keys()].sort().map(sourceId => sourceView(byId, heads, sourceId));
+}
 export function inspectSyncSource(state, sourceId) {
   uuid(sourceId); const { byId, heads } = indexEvents(validateSyncState(state).events);
-  const versions = [...(heads.get(sourceId) || [])].sort().map(id => byId.get(id));
   // Concurrent identical text still needs resolution: authorship/causality is not inferred from text.
-  return { sourceId, status: !versions.length ? 'absent' : versions.length > 1 ? 'conflict' : versions[0].operation === 'delete' ? 'deleted' : 'present', versions };
+  return sourceView(byId, heads, sourceId);
 }
 export function recordSyncChange(state, { sourceId, expectedHeads, operation, value }) {
   const next = validateSyncState(state), view = inspectSyncSource(next, sourceId);

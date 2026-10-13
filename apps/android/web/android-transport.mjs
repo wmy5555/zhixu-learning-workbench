@@ -1,4 +1,5 @@
 import { createAndroidLearning, validateLearningState } from './android-learning.mjs';
+import { createAndroidSourceSyncWorkspace } from './android-source-sync-workspace.mjs';
 
 const UUID = '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}';
 const noteRoute = new RegExp(`^/api/notes/(${UUID})(?:/(extract|promote|confirm|evidence))?$`);
@@ -51,6 +52,7 @@ function guideSummary(service) {
 // Native revisions also reject stale writes from another WebView.
 export function createAndroidTransport(plugin, { clock } = {}) {
   let tail = Promise.resolve();
+  let sourceSync;
   async function dispatch(path, options) {
     if (typeof path !== 'string' || !path.startsWith('/api/') || /[\u0000-\u0020\\#]/.test(path)) return unavailable();
     const url = new URL(path, 'https://localhost');
@@ -63,6 +65,18 @@ export function createAndroidTransport(plugin, { clock } = {}) {
       const scoped = route.match(/^\/api\/practice\/android-local(\/.*)$/);
       if (!scoped) return unavailable();
       route = `/api${scoped[1]}`; context = 'practice';
+    }
+    if (route === '/api/android/sync' || route.startsWith('/api/android/sync/')) {
+      if (context !== 'formal' || url.search) return unavailable();
+      const actions = { '/api/android/sync': ['GET', 'summary', []], '/api/android/sync/preview': ['POST', 'preview', ['sourceId']],
+        '/api/android/sync/stage': ['POST', 'stage', ['sourceId', 'expectedHash', 'expectedHeads']],
+        '/api/android/sync/resolve': ['POST', 'resolve', ['sourceId', 'eventId', 'expectedHeads']],
+        '/api/android/sync/apply': ['POST', 'apply', ['token']] };
+      const action = actions[route];
+      if (!action || method !== action[0]) return unavailable();
+      fields(payload, action[2]);
+      sourceSync ||= createAndroidSourceSyncWorkspace(plugin);
+      return sourceSync[action[1]](payload);
     }
     if (Object.hasOwn(nativeActions, route)) {
       if (method !== 'POST' || url.search || context === 'practice' && route !== '/api/android/source-file') return unavailable();

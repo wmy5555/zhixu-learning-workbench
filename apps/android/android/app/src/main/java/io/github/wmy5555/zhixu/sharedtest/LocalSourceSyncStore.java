@@ -1,6 +1,7 @@
 package io.github.wmy5555.zhixu.sharedtest;
 
 import android.content.Context;
+import android.os.SystemClock;
 import android.system.ErrnoException;
 import android.system.Os;
 import android.system.OsConstants;
@@ -24,11 +25,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.TreeMap;
+import java.util.function.LongSupplier;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-/** Private append-only reconciliation journal. No transport, note mapping, backup or history pruning. */
+/** Private append-only journal with reviewed single-source puts. No transport, backup or history pruning. */
 public final class LocalSourceSyncStore {
     static final int MAX_STATE_BYTES = 32 * 1024 * 1024;
     private static final int MAX_FILE_BYTES = MAX_STATE_BYTES + 1024;
@@ -39,6 +42,17 @@ public final class LocalSourceSyncStore {
     private final File root;
     private final File file;
     private FailurePoint failurePoint;
+    private final Map<String, SourcePreview> sourcePreviews = new HashMap<>();
+    private LongSupplier previewClock = SystemClock::elapsedRealtime;
+    private static final long PREVIEW_TTL_MS = 5 * 60 * 1000;
+    private static final class SourcePreview {
+        final String sourceId, revision, eventId, originalHash;
+        final long issued;
+        SourcePreview(String sourceId, String revision, String eventId, String originalHash, long issued) {
+            this.sourceId = sourceId; this.revision = revision; this.eventId = eventId; this.originalHash = originalHash; this.issued = issued;
+        }
+    }
+    void setPreviewClockForTests(LongSupplier clock) { synchronized (LOCK) { previewClock = clock; } }
     interface FailurePoint { void at(String stage) throws IOException; }
     void setFailurePoint(FailurePoint point) { synchronized (LOCK) { failurePoint = point; } }
     private void inject(String stage) throws IOException { if (failurePoint != null) failurePoint.at(stage); }
@@ -97,6 +111,87 @@ public final class LocalSourceSyncStore {
                 return read(); // Success is based only on the installed main file, never .new.
             } catch (IOException | JSONException exception) { throw storageError(exception); }
         }
+    }
+    public JSONObject sourcePreview(LocalSourceStore sources, String sourceId) throws LocalSourceStore.StoreException {
+        synchronized (LOCK) {
+            requireFormal(); uuid(sourceId);
+            try {
+                JSONObject journal = read(); JSONArray versions = sourceHeads(journal.getJSONObject("state"), sourceId);
+                JSONArray heads = new JSONArray(); for (int i = 0; i < versions.length(); i++) heads.put(versions.getJSONObject(i).getString("id"));
+                JSONObject original = original(sources, sourceId);
+                JSONObject result = new JSONObject().put("context", context).put("sourceId", sourceId).put("revision", journal.getString("revision"))
+                    .put("heads", heads).put("versions", versions).put("original", original == null ? JSONObject.NULL : original)
+                    .put("canApply", false).put("identical", false).put("token", JSONObject.NULL);
+                if (versions.length() != 1) return result.put("reason", versions.length() == 0 ? "同步日记没有这份原文。" : "仍有冲突分支，请先核对并保留明确版本。");
+                JSONObject event = versions.getJSONObject(0);
+                if (!"put".equals(event.getString("operation"))) return result.put("reason", "这是删除记录；手机不会通过同步删除原文。");
+                JSONObject value = event.getJSONObject("value");
+                if (identical(original, value)) return result.put("identical", true).put("reason", "原文已经相同，无需重复保存。");
+                try { sources.previewSynced(sourceId, value); }
+                catch (LocalSourceStore.StoreException exception) {
+                    if (!Arrays.asList("VALIDATION", "LIMIT_REACHED", "CONFLICT").contains(exception.code)) throw exception;
+                    return result.put("reason", exception.getMessage());
+                }
+                long now = previewClock.getAsLong();
+                sourcePreviews.entrySet().removeIf(entry -> expired(entry.getValue(), now));
+                if (sourcePreviews.size() >= 100) return result.put("reason", "预览过多，请完成已有预览或稍后重试。");
+                String token = UUID.randomUUID().toString();
+                sourcePreviews.put(token, new SourcePreview(sourceId, journal.getString("revision"), event.getString("id"), original == null ? null : original.getString("hash"), now));
+                return result.put("canApply", true).put("token", token);
+            } catch (IOException | JSONException exception) { throw storageError(exception); }
+        }
+    }
+    public JSONObject sourceApply(LocalSourceStore sources, String token) throws LocalSourceStore.StoreException {
+        synchronized (LOCK) {
+            requireFormal();
+            if (token == null || !token.matches(UUID_PATTERN)) throw stalePreview();
+            SourcePreview preview = sourcePreviews.remove(token); // Single use, including a stale or failed attempt.
+            if (preview == null || expired(preview, previewClock.getAsLong())) throw stalePreview();
+            try {
+                JSONObject journal = read(); JSONArray heads = sourceHeads(journal.getJSONObject("state"), preview.sourceId);
+                if (!preview.revision.equals(journal.getString("revision")) || heads.length() != 1
+                    || !preview.eventId.equals(heads.getJSONObject(0).getString("id"))) throw stalePreview();
+                JSONObject original = original(sources, preview.sourceId);
+                String hash = original == null ? null : original.getString("hash");
+                if (!java.util.Objects.equals(preview.originalHash, hash)) throw stalePreview();
+                JSONObject event = heads.getJSONObject(0); if (!"put".equals(event.getString("operation"))) throw stalePreview();
+                JSONObject value = event.getJSONObject("value"); boolean unchanged = identical(original, value);
+                JSONObject note = unchanged ? original : sources.saveSynced(preview.sourceId, value, hash);
+                JSONObject saved = sources.read(preview.sourceId);
+                if (!saved.getString("hash").equals(note.getString("hash"))) throw stalePreview();
+                return new JSONObject().put("sourceId", preview.sourceId).put("eventId", preview.eventId).put("note", saved).put("unchanged", unchanged);
+            } catch (IOException | JSONException exception) { throw storageError(exception); }
+        }
+    }
+    private void requireFormal() throws LocalSourceStore.StoreException {
+        if (!"formal".equals(context)) throw error("SYNC_SCOPE", "练习同步日记不能写入正式原文。");
+    }
+    private static boolean expired(SourcePreview preview, long now) { return now < preview.issued || now - preview.issued >= PREVIEW_TTL_MS; }
+    private static LocalSourceStore.StoreException stalePreview() { return error("SYNC_STALE", "同步预览已失效，请重新核对；原文不会被覆盖。"); }
+    private static JSONObject original(LocalSourceStore sources, String id) throws LocalSourceStore.StoreException {
+        try { return sources.read(id); }
+        catch (LocalSourceStore.StoreException exception) { if ("NOT_FOUND".equals(exception.code)) return null; throw exception; }
+    }
+    private static boolean identical(JSONObject original, JSONObject value) throws JSONException {
+        if (original == null || !original.getString("title").equals(value.getString("title")) || !original.getString("body").equals(value.getString("body"))) return false;
+        JSONObject meta = original.getJSONObject("meta"), source = value.getJSONObject("source");
+        for (String key : SOURCE_FIELDS) if (!meta.optString(key, "").equals(source.getString(key))) return false;
+        return true;
+    }
+    private static JSONArray sourceHeads(JSONObject state, String sourceId) throws JSONException {
+        Map<String, JSONObject> known = new HashMap<>(), heads = new TreeMap<>(); JSONArray events = state.getJSONArray("events");
+        for (int i = 0; i < events.length(); i++) {
+            JSONObject event = events.getJSONObject(i); String id = event.getString("id"); known.put(id, event);
+            if (!sourceId.equals(event.getString("sourceId"))) continue;
+            Set<String> ancestors = new HashSet<>(); List<String> visit = new ArrayList<>(); JSONArray parents = event.getJSONArray("parents");
+            for (int j = 0; j < parents.length(); j++) visit.add(parents.getString(j));
+            while (!visit.isEmpty()) {
+                String parent = visit.remove(visit.size() - 1); if (!ancestors.add(parent)) continue; heads.remove(parent);
+                JSONArray older = known.get(parent).getJSONArray("parents"); for (int j = 0; j < older.length(); j++) visit.add(older.getString(j));
+            }
+            heads.put(id, event);
+        }
+        JSONArray result = new JSONArray(); for (JSONObject event : heads.values()) result.put(event); return result;
     }
     private JSONObject read() throws IOException, JSONException, LocalSourceStore.StoreException {
         atomicPaths();

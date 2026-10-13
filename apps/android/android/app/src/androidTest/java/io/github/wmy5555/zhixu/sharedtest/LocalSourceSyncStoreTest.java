@@ -187,6 +187,106 @@ public class LocalSourceSyncStoreTest extends AndroidTestCase {
         JSONObject journalOverflow = copy(state).put("events", huge); expect("SYNC_LIMIT", () -> store.commit("0", journalOverflow));
         assertEquals(initial.toString(), store.load().toString());
     }
+    public void testSourcePreviewCreatesSameUuidAndRepeatedPreviewDoesNotAddHistory() throws Exception {
+        try (LocalSourceStore sources = syntheticSources()) {
+            JSONObject snapshot = putJournal(store, "已核对的合成原文", "合成标题");
+            JSONObject value = snapshot.getJSONObject("state").getJSONArray("events").getJSONObject(0).getJSONObject("value");
+            expect("NOT_FOUND", () -> sources.save(new JSONObject().put("id", SOURCE).put("title", "标题").put("body", "正文")));
+            JSONObject preview = store.sourcePreview(sources, SOURCE); assertTrue(preview.getBoolean("canApply")); assertTrue(preview.isNull("original"));
+            JSONObject applied = store.sourceApply(sources, preview.getString("token"));
+            assertEquals(SOURCE, applied.getJSONObject("note").getString("id")); assertFalse(applied.getBoolean("unchanged"));
+            assertEquals(value.getString("body"), sources.read(SOURCE).getString("body"));
+            expect("SYNC_STALE", () -> store.sourceApply(sources, preview.getString("token")));
+            JSONObject repeated = store.sourcePreview(sources, SOURCE); assertTrue(repeated.getBoolean("identical"));
+            assertFalse(repeated.getBoolean("canApply")); assertTrue(repeated.isNull("token")); assertEquals(1, sources.history(SOURCE).length());
+            assertEquals(snapshot.toString(), store.load().toString()); // Apply neither commits the journal nor ACKs a cursor.
+        }
+    }
+    public void testSourceApplyArchivesExistingBodyAndPreservesLocalPrivacyMeta() throws Exception {
+        try (LocalSourceStore sources = syntheticSources()) {
+            JSONObject current = store.load(), state = append(current.getJSONObject("state"), "同步新版合成正文", "同步新版标题");
+            JSONObject incoming = state.getJSONArray("events").getJSONObject(0).getJSONObject("value").getJSONObject("source");
+            for (String key : new String[] { "platform", "author", "url", "date", "locator", "topic" }) incoming.put(key, "合成-" + key);
+            incoming.put("url", "https://example.org/synthetic-sync-source");
+            JSONObject snapshot = store.commit(current.getString("revision"), state);
+            JSONObject oldValue = sourceValue("原本的合成正文", "旧标题"); oldValue.getJSONObject("source").put("author", "原作者");
+            JSONObject old = sources.saveSynced(SOURCE, oldValue, null);
+            assertEquals("local", old.getJSONObject("meta").getString("privacy"));
+            JSONObject preview = store.sourcePreview(sources, SOURCE); assertEquals(old.getString("hash"), preview.getJSONObject("original").getString("hash"));
+            JSONObject result = store.sourceApply(sources, preview.getString("token")), note = result.getJSONObject("note");
+            assertEquals("同步新版合成正文", note.getString("body")); assertEquals("local", note.getJSONObject("meta").getString("privacy"));
+            assertEquals("reference", note.getJSONObject("meta").getString("stage"));
+            for (String key : new String[] { "platform", "author", "url", "date", "locator", "topic" }) assertEquals(incoming.getString(key), note.getJSONObject("meta").getString(key));
+            JSONArray history = sources.history(SOURCE); assertEquals(2, history.length());
+            assertEquals("原本的合成正文", history.getJSONObject(0).getString("body"));
+            assertEquals(snapshot.toString(), store.load().toString());
+        }
+    }
+    public void testSourceOrJournalChangesInvalidateApplyWithoutOverwritingUserEdit() throws Exception {
+        try (LocalSourceStore sources = syntheticSources()) {
+            putJournal(store, "同步候选合成正文", "标题");
+            JSONObject old = sources.saveSynced(SOURCE, sourceValue("原文旧正文", "标题"), null);
+            JSONObject preview = store.sourcePreview(sources, SOURCE);
+            JSONObject edited = sources.save(new JSONObject().put("id", SOURCE).put("expectedHash", old.getString("hash")).put("title", "用户改的标题").put("body", "用户保留的正文"));
+            expect("SYNC_STALE", () -> store.sourceApply(sources, preview.getString("token")));
+            assertEquals(edited.getString("hash"), sources.read(SOURCE).getString("hash"));
+            JSONObject another = store.sourcePreview(sources, SOURCE), current = store.load();
+            store.commit(current.getString("revision"), append(current.getJSONObject("state"), "日记新候选", "标题"));
+            expect("SYNC_STALE", () -> store.sourceApply(sources, another.getString("token")));
+            assertEquals(edited.getString("hash"), sources.read(SOURCE).getString("hash"));
+        }
+    }
+    public void testConflictDeleteAndLegacyLongTitleHaveNoApplyToken() throws Exception {
+        try (LocalSourceStore sources = syntheticSources()) {
+            JSONObject snapshot = putJournal(store, "合成一端正文", "标题"), state = copy(snapshot.getJSONObject("state"));
+            String peer = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+            JSONObject branch = copy(state.getJSONArray("events").getJSONObject(0)).put("id", peer + ":1").put("replicaId", peer).put("sequence", 1);
+            branch.getJSONObject("value").put("body", "另一端合成分支"); state.getJSONArray("events").put(branch);
+            store.commit(snapshot.getString("revision"), state);
+            JSONObject conflict = store.sourcePreview(sources, SOURCE); assertEquals(2, conflict.getJSONArray("heads").length());
+            assertFalse(conflict.getBoolean("canApply")); assertTrue(conflict.isNull("token"));
+            LocalSourceSyncStore deleted = new LocalSourceSyncStore(new File(root, "delete-journal"), "formal");
+            JSONObject deletion = putJournal(deleted, null, "unused"), deletionPreview = deleted.sourcePreview(sources, SOURCE);
+            assertFalse(deletionPreview.getBoolean("canApply")); assertTrue(deletionPreview.isNull("token")); assertTrue(deletionPreview.getString("reason").contains("删除"));
+            LocalSourceSyncStore legacy = new LocalSourceSyncStore(new File(root, "legacy-journal"), "formal");
+            putJournal(legacy, "合成旧正文", repeat("😀", 200)); JSONObject longTitle = legacy.sourcePreview(sources, SOURCE);
+            assertFalse(longTitle.getBoolean("canApply")); assertTrue(longTitle.isNull("token")); assertTrue(longTitle.getString("reason").contains("不会裁剪"));
+            assertEquals(0, sources.list("").length()); assertEquals(deletion.toString(), deleted.load().toString());
+        }
+    }
+    public void testPreviewExpiryReopenAndPracticeScopeNeverReuseToken() throws Exception {
+        try (LocalSourceStore sources = syntheticSources()) {
+            putJournal(store, "合成候选", "标题"); long[] now = { 1000 }; store.setPreviewClockForTests(() -> now[0]);
+            JSONObject preview = store.sourcePreview(sources, SOURCE); now[0] += 5 * 60 * 1000;
+            expect("SYNC_STALE", () -> store.sourceApply(sources, preview.getString("token")));
+            JSONObject fresh = store.sourcePreview(sources, SOURCE);
+            LocalSourceSyncStore reopened = new LocalSourceSyncStore(root, "formal");
+            expect("SYNC_STALE", () -> reopened.sourceApply(sources, fresh.getString("token")));
+            LocalSourceSyncStore practice = new LocalSourceSyncStore(root, "practice");
+            expect("SYNC_SCOPE", () -> practice.sourcePreview(sources, SOURCE));
+            expect("SYNC_SCOPE", () -> practice.sourceApply(sources, fresh.getString("token")));
+            assertEquals(0, sources.list("").length());
+        }
+    }
+    public void testPreviewTokenCapAndExistingPathEvidenceProtectAbsentSource() throws Exception {
+        try (LocalSourceStore sources = syntheticSources()) {
+            putJournal(store, "合成候选", "标题");
+            File staging = new File(root, "synthetic-sources/notes/" + SOURCE + ".md.new"); write(staging, "不明合成暂存");
+            JSONObject blocked = store.sourcePreview(sources, SOURCE); assertFalse(blocked.getBoolean("canApply")); assertTrue(blocked.isNull("token"));
+            assertTrue(staging.delete()); long[] now = { 100 }; store.setPreviewClockForTests(() -> now[0]);
+            for (int i = 0; i < 100; i++) assertTrue(store.sourcePreview(sources, SOURCE).getBoolean("canApply"));
+            JSONObject full = store.sourcePreview(sources, SOURCE); assertFalse(full.getBoolean("canApply")); assertTrue(full.isNull("token"));
+            now[0] += 5 * 60 * 1000; assertTrue(store.sourcePreview(sources, SOURCE).getBoolean("canApply")); assertEquals(0, sources.list("").length());
+        }
+    }
+    private LocalSourceStore syntheticSources() throws Exception { return new LocalSourceStore(new File(root, "synthetic-sources")); }
+    private static JSONObject putJournal(LocalSourceSyncStore journal, String body, String title) throws Exception {
+        JSONObject current = journal.load(); return journal.commit(current.getString("revision"), append(current.getJSONObject("state"), body, title));
+    }
+    private static JSONObject sourceValue(String body, String title) throws Exception {
+        JSONObject provenance = new JSONObject(); for (String key : new String[] { "platform", "author", "url", "date", "locator", "topic" }) provenance.put(key, "");
+        return new JSONObject().put("title", title).put("body", body).put("source", provenance);
+    }
     private static JSONObject append(JSONObject original, String body, String title) throws Exception {
         JSONObject state = copy(original); JSONArray events = state.getJSONArray("events"); String replica = state.getString("replicaId");
         int sequence = events.length() + 1; JSONArray parents = new JSONArray(); if (sequence > 1) parents.put(replica + ":" + (sequence - 1));

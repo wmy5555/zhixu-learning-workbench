@@ -68,8 +68,8 @@ function stripImports(source) {
 }
 
 export async function createAndroidBrowser({ api = {}, confirmations = [] } = {}) {
-  const [ui, app, sourceExchange, androidData] = await Promise.all([
-    read("ui.mjs"), read("app.mjs"), read("source-exchange.mjs"), read("android-data.mjs"),
+  const [ui, app, sourceExchange, androidData, androidSync] = await Promise.all([
+    read("ui.mjs"), read("app.mjs"), read("source-exchange.mjs"), read("android-data.mjs"), read("android-sync.mjs"),
   ]);
   const roots = new Map();
   const document = {
@@ -84,7 +84,8 @@ export async function createAndroidBrowser({ api = {}, confirmations = [] } = {}
     history: { replaceState() {} }, location: { hash: "" }, setTimeout() {}, addEventListener() {},
   };
   const context = vm.createContext({
-    api: { runtime: { kind: "android-prototype" }, getContext: () => ({ practiceId: "", version: 0 }), ...api },
+    api: { runtime: { kind: "android-prototype" }, getContext: () => ({ practiceId: "", version: 0 }),
+      androidSync: async () => ({ context: 'formal', connected: false, sources: [], events: 0 }), ...api },
     document, window, localStorage: { getItem: key => local.get(key) || null, setItem: (key, value) => local.set(key, value) },
     Node: Element, ApiError: class extends Error {}, URL, Intl, Date, Map, Set, Promise, JSON, RegExp, TextEncoder, TextDecoder, queueMicrotask,
     crypto: { randomUUID: () => "synthetic-request-id" },
@@ -100,7 +101,7 @@ export async function createAndroidBrowser({ api = {}, confirmations = [] } = {}
   });
   context.toasts = [];
   context.confirmAction = async () => confirmations.length ? confirmations.shift() : true;
-  vm.runInContext(stripImports(ui) + "\n" + stripImports(sourceExchange) + "\n" + stripImports(androidData), context);
+  vm.runInContext(stripImports(ui) + "\n" + stripImports(sourceExchange) + "\n" + stripImports(androidData) + "\n" + stripImports(androidSync), context);
   context.confirmAction = async options => {
     context.confirmPrompts.push(options);
     return confirmations.length ? confirmations.shift() : true;
