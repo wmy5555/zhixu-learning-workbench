@@ -43,6 +43,18 @@ Vault 中保存 source（原始资料）、knowledge（结构化/个人知识）
 
 服务只绑定 127.0.0.1，限制 Host、Origin，API 使用同源 HttpOnly 会话及写入 CSRF 标记。没有公网部署入口。密钥使用 Windows DPAPI，其他平台需环境密钥或明确配置主密钥。
 
+## 设置、备份与调用的恢复边界
+
+`src/settings-validation.mjs` 在任何持久写入前完整校验候选设置；`src/secrets.mjs` 把加密凭据保存在 SQLite 的独立 `encrypted_credentials` 表，与设置同事务提交。凭据绑定服务地址和模型，读取及外发时均核对；变更配置后须重新配置对应密钥。旧加密文件保留，一次性迁移标记阻止已清除密钥重新导入。该表不进入 JSON 备份或运行记录，恢复也不修改本机凭据。
+
+`src/backup-contract.mjs` 统一导入和导出的容量与结构约定：最终 JSON（含转义、历史、记录与偏好）最多 100,000,000 UTF-8 字节，恢复 HTTP 包裹请求最多 100,065,536 字节；普通请求维持原限制。存储预校验只读当前 Vault，并在独立内存数据库重建候选镜像；完整设置校验也在恢复预览前完成。`Store.restore(backup,{settings})` 将资料、历史、运行记录和已验证设置一起提交。正式库恢复关闭外部能力及全部 MCP 权限，导入的 queued/running 任务转为 waiting；练习恢复仅处理隔离偏好。
+
+文件与 SQLite 无法使用一个共同事务，因此 `src/store.mjs` 将恢复计划和原件持久暂存，并在 `restore_transactions` 表中先保存计划摘要，最后在数据事务中写入提交标记。启动在正常扫描前核对计划、数据库与全组文件哈希：未提交且原件完整则回滚，已提交且新态完整则清理；回滚完成前保留原件，允许再次中断后继续。未知文件、外部修改、计划不一致或证据缺失保留现场并阻塞，失败回滚也须核对预期哈希。进程强杀检查覆盖完整前态或后态，不代表全部断电情形已验收。
+
+`src/call-ledger.mjs` 持久化 `callLedger`、`callResults` 与 `calls`。调用先预留、再发送、保存受限响应、最后记账；结果未知或记账失败暂停新请求，独立于月预算是否为 0。已有完整响应先补记账，再由原任务复用；批改的 `singleRequest` 按原轮次识别，即使模型或提示词改变也不重发。人工费用确认不补造响应，未知费用继续阻塞，已知费用只解除符合其他条件的新操作限制。恢复备份按整个调用身份保留本机原有证据，导入账本必须满足响应及费用记录的关联约束。
+
+本次已完成调用恢复 15 项、备份恢复 17 项及设置相关 67 项定向测试；最终综合验证、浏览器界面和真实供应商验收仍待完成。没有新增依赖或第三方资产，Android 未同步本次网页改动。
+
 ## 模块与协作边界
 
 - `src/store.mjs` 负责文件与 SQLite，`src/service.mjs` 编排知识业务，`src/server.mjs` 提供 HTTP 与调度；接口、数据边界和最终验收需在任务负责人处统一核对。
@@ -73,6 +85,7 @@ JSON 请求/响应；正常状态 200/201；错误 `{error,code}`。GET /api/boo
 - GET /api/jobs → `{jobs}`；POST /api/jobs/:id/action `{action:'retry'|'cancel'}`。
 - GET /api/settings → sanitized settings；PUT /api/settings 更新非空字段，apiKey 仅写入且不返回，空值保持旧密钥；POST /api/settings/test `{capability:'model'|'embedding'|'search'|'fetch'}`。
 - GET /api/usage → `{totals,daily,models,recentCalls,budget}`；按正式库时区汇总完整调用记录。PUT /api/usage/settings → 只更新预算与单价，验证当前模型标识；练习只读共用统计。详见 [用量说明](USAGE.md)。
+- GET /api/call-recovery → `{pending}`；POST /api/call-recovery/:id `{action:'recover'}` 补记已有响应或取消未发预留，`{action:'confirm',cost:number|null,reason}` 核对无响应调用费用；不重新发送请求，练习只读。
 - GET /api/diagnostics → `{usage,calls,index,mcp,storage}`；POST /api/index/rebuild → 状态。
 - GET /api/backup → 下载开放 JSON（知识+运行状态，无密钥）；POST /api/restore `{backup,preview:true}` → 预览和 token；POST 同地址 `{backup,preview:false,token}` → 恢复。
 - GET /api/history/:id → `{versions}`；POST /api/history/:id/restore `{versionId,expectedHash}`。
@@ -100,8 +113,8 @@ settings `{dailyMinutes:25,timezone:'Asia/Singapore',scheduleTime:'08:00',focusT
 
 ### AI 模块 contract
 
-导出 `createAI({getSettings,getSecret,recordCall,getUsage,fetchImpl?})` → `{generate({system,prompt,privacy,signal,json?}),embed({texts,privacy,signal}),search({query,privacy,signal}),readPage({url,privacy,signal}),research({claim,privacy,signal}),test(capability)}`。
-getSecret(capability) 返回实际密钥；getUsage() → `{callsToday,costMonth}`；recordCall({capability,model,inputTokens,outputTokens,cost,durationMs,ok,error?})。
+导出 `createAI({getSettings,getSecret,recordCall,getUsage,fetchImpl?,callLedger?})` → `{generate({system,prompt,privacy,signal,json?}),embed({texts,privacy,signal}),search({query,privacy,signal}),readPage({url,privacy,signal}),research({claim,privacy,signal}),test(capability),withCallContext(context,fn)}`。
+getSecret(capability,config) 核对配置绑定后返回实际密钥；getUsage() → `{callsToday,costMonth}`；recordCall({capability,model,inputTokens,outputTokens,cost,durationMs,ok,error?})。正式服务注入持久 callLedger；withCallContext 绑定原任务与批改轮次，用于保存响应的安全复用。
 generate 返回 `{text,usage}`；embed → `{vectors}`；search → `{results:[{title,url,snippet}]}`；readPage → `{url,title,text,fetchedAt}`；research → `{claim,evidence:[{url,title,excerpt,locator,fetchedAt,role}],limitations:[]}`。research 必须真实搜索、读取支持与反对方向，不可把 search snippet 当已读正文。错误抛 Error 带 code；默认不外发 local 数据。禁止服务返回/日志记录密钥，记录供应商错误需截断清洗。
 
 ## 2026-09-29 对齐接口
