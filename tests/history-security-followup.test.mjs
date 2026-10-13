@@ -36,6 +36,37 @@ test('security: alternate request ID for identical history input retries after p
   await assert.rejects(f.service.chatgpt.captureHistorySnapshot({...b,summary:'不同摘要。'}),{code:'CHATGPT_REQUEST_CONFLICT'});
 });
 
+test('security: completed revision one receipt remains valid after revision two without rewriting edited or current source',async t=>{
+  const f=fixture(t),a=request(),first=await f.service.chatgpt.captureHistorySnapshot(a);
+  const second=await f.service.chatgpt.captureHistorySnapshot({...a,requestId:randomUUID(),summary:'第二版合成摘要。',baseRevision:1});
+  assert.equal(second.syncRevision,2);f.expire();f.restart();
+  const store=f.service.store,before=store.read(first.noteId),beforeReceipts=store.records('chatgptCaptures'),beforeSessions=store.records('chatgptSyncSessions');
+  store.create=()=>{throw new Error('completed retry must not create notes');};store.update=()=>{throw new Error('completed retry must not update notes');};
+  const retry=await f.service.chatgpt.captureHistorySnapshot(a);
+  assert.equal(retry.duplicate,true);assert.equal(retry.syncRevision,1);assert.equal(retry.noteId,first.noteId);
+  assert.deepEqual(retry.importedNoteIds,first.importedNoteIds);assert.equal(store.read(first.noteId).hash,before.hash);
+  assert.deepEqual(store.records('chatgptCaptures'),beforeReceipts);assert.deepEqual(store.records('chatgptSyncSessions'),beforeSessions);assert.equal(f.calls,2);
+  await assert.rejects(f.service.chatgpt.captureHistorySnapshot({...a,summary:'变更旧请求内容。'}),{code:'CHATGPT_REQUEST_CONFLICT'});
+  const file=path.join(f.config.vaultDir,before.path);fs.appendFileSync(file,'\n外部编辑，必须保留。');const edited=fs.readFileSync(file,'utf8');
+  await assert.rejects(f.service.chatgpt.captureHistorySnapshot(a),{code:'CHATGPT_SOURCE_EDITED'});assert.equal(fs.readFileSync(file,'utf8'),edited);
+});
+
+for(const point of ['before-source-write','before-new-receipt'])test(`security: completed receipt retry leaves a newer pending request intact (${point})`,async t=>{
+  const f=fixture(t),a=request(),first=await f.service.chatgpt.captureHistorySnapshot(a);
+  const b={...a,requestId:randomUUID(),summary:'待完成的第二版合成摘要。',baseRevision:1},store=f.service.store,put=store.put.bind(store);
+  store.put=(namespace,key,record)=>{
+    if(point==='before-source-write'&&namespace==='chatgptSyncSessions'&&record.revision===2&&record.sourceWritePhase==='started')throw new Error('synthetic newer pending interruption');
+    if(point==='before-new-receipt'&&namespace==='chatgptCaptures'&&record.receipt?.syncRevision===2)throw new Error('synthetic newer pending interruption');
+    return put(namespace,key,record);
+  };
+  await assert.rejects(f.service.chatgpt.captureHistorySnapshot(b),/newer pending interruption/);store.put=put;f.expire();f.restart();
+  const pending=f.service.store.records('chatgptSyncSessions')[0],before=f.service.store.read(first.noteId);assert.equal(pending.pending,true);
+  const retry=await f.service.chatgpt.captureHistorySnapshot(a);assert.equal(retry.syncRevision,1);assert.equal(retry.duplicate,true);
+  assert.deepEqual(f.service.store.records('chatgptSyncSessions')[0],pending);assert.equal(f.service.store.read(first.noteId).hash,before.hash);
+  const file=path.join(f.config.vaultDir,before.path);fs.appendFileSync(file,'\n人工修改。');const edited=fs.readFileSync(file,'utf8');
+  await assert.rejects(f.service.chatgpt.captureHistorySnapshot(a),{code:'CHATGPT_SOURCE_EDITED'});assert.equal(fs.readFileSync(file,'utf8'),edited);
+});
+
 for(const [key,value] of [['author','人工作者'],['platform','人工来源'],['origins',[{author:'人工来源'}]]])test(`security: interrupted source hash checkpoint rejects external ${key} edits`,async t=>{
   const f=fixture(t),a=request(),store=f.service.store,put=store.put.bind(store);
   store.put=(namespace,key,record)=>{if(namespace==='chatgptSyncSessions'&&record.noteHash)throw new Error('synthetic source hash checkpoint failure');return put(namespace,key,record);};

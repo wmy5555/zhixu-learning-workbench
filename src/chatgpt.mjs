@@ -71,21 +71,35 @@ function findCompletedHistoryRetry(store, input) {
   const prior = store.get('chatgptCaptures', requestHash);
   if (!prior) return null;
   if (!sameHistoryBinding(prior.historyHandoff, binding)) fail('同一历史导入请求编号已绑定到其他读取引用或整理内容。', 'CHATGPT_REQUEST_CONFLICT', 409);
+  const receipt = prior.receipt;
+  if (!/^[a-f0-9]{64}$/.test(prior.payloadHash || '') || !receipt || receipt.noteId !== prior.noteId ||
+    receipt.kind !== 'source' || receipt.layer !== 1 || !Number.isSafeInteger(receipt.syncRevision) || receipt.syncRevision < 1 ||
+    !Array.isArray(receipt.importedNoteIds) || receipt.importedItems !== receipt.importedNoteIds.length) {
+    fail('历史导入的持久回执无法核对；须在知序检查。', 'CHATGPT_CAPTURE_UNVERIFIABLE', 409);
+  }
   if (!store.row(prior.noteId)) fail('已保存原资料已删除或存在冲突，不会自动重建。', 'CHATGPT_CAPTURE_UNAVAILABLE', 409);
   const sessions = store.records('chatgptSyncSessions').filter(row => prior.sessionKey ? row.key === prior.sessionKey : row.requestHash === requestHash);
   if (sessions.length !== 1) fail('历史导入回执无法唯一核对；须在知序检查。', 'CHATGPT_CAPTURE_UNVERIFIABLE', 409);
   const session = sessions[0];
-  if (session.payloadHash !== prior.payloadHash || !session.pending && (!session.receipt || session.receipt.noteId !== prior.noteId)) {
-    fail('历史导入回执与本地会话状态不一致；须在知序检查。', 'CHATGPT_CAPTURE_UNVERIFIABLE', 409);
-  }
   const note = store.read(prior.noteId);
-  checkSource(note, session, renderConversation, acceptedSourceRenderers);
-  checkStructuredCandidates(store, session);
-  if (session.pending) {
-    if (session.requestHash !== requestHash) fail('历史导入尚未完成；须使用原请求重试。', 'CHATGPT_IMPORT_PENDING', 409);
-    store.put('chatgptSyncSessions', session.key, { ...session, pending: false, noteHash: note.hash, receipt: prior.receipt });
+  if (receipt.syncRevision > session.revision) fail('历史导入回执版本无法核对；须在知序检查。', 'CHATGPT_CAPTURE_UNVERIFIABLE', 409);
+  const finalizingCurrentRequest = session.pending && session.requestHash === requestHash;
+  if (finalizingCurrentRequest && (session.payloadHash !== prior.payloadHash || session.revision !== receipt.syncRevision ||
+    !sameHistoryBinding(session.historyHandoff, binding))) {
+    fail('历史导入回执与待恢复会话状态不一致；须在知序检查。', 'CHATGPT_CAPTURE_UNVERIFIABLE', 409);
   }
-  return { ...prior.receipt, status: 'already_saved', duplicate: true };
+  // A durable completed receipt describes its own revision, not the latest payload.
+  // Still protect the current source; a different pending request is never finalized here.
+  if (session.pending && !finalizingCurrentRequest && note.hash === session.previousHash) {
+    if (receipt.syncRevision >= session.revision) fail('历史导入回执与待恢复版本冲突。', 'CHATGPT_CAPTURE_UNVERIFIABLE', 409);
+  } else {
+    checkSource(note, session, renderConversation, acceptedSourceRenderers);
+    if (!session.pending || finalizingCurrentRequest) checkStructuredCandidates(store, session);
+  }
+  if (finalizingCurrentRequest) {
+    store.put('chatgptSyncSessions', session.key, { ...session, pending: false, noteHash: note.hash, receipt });
+  }
+  return { ...receipt, status: 'already_saved', duplicate: true };
 }
 
 function findPendingHistoryRetry(store, input) {
