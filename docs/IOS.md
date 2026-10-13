@@ -14,9 +14,9 @@ Android 的 `apps/android/web` 与既定基线不改变，已有 Android 安装�
 
 | 原阶段 | iOS 当前目标 | 可复用与平台差异 | 完成条件与当前边界 |
 |---|---|---|---|
-| 1．共用界面与原文本地样机 | 原文收集、查看、文字搜索、编辑和本机存储 | Web 视觉与通用控件；Swift 私有文件与版本，替代 Node/Java 文件接口 | 断网保存、重开、冲突拒绝和工程编译；目前有源码与 Windows 预览，iOS 编译/设备仍待验 |
-| 2．数据可迁移与恢复 | txt/md 草稿、来源六字段、历史、单条交换与原文备份 | 复用 source-exchange 解析器和恢复原则；UIDocumentPicker 取代 SAF | 源码已接入；XCTest 覆盖恢复/中断/幂等，执行证据仍待 macOS；真实文件提供方待验 |
-| 3．手机本地学习闭环 | 今日、原答、错题、主题、独立练习与完整新手流程 | 按现有纯 JS 规则与已修复反馈迁移；独立持久运行记录 | 待接入；不以四步指南代替 Web 完整实操，不伪造离线分数或掌握度 |
+| 1．共用界面与原文本地样机 | 原文收集、查看、文字搜索、编辑和本机存储 | Web 视觉与通用控件；Swift 私有文件与版本，替代 Node/Java 文件接口 | `c80b694` 原生 XCTest 与未签名 Simulator 编译通过；设备重开/真实操作待验 |
+| 2．数据可迁移与恢复 | txt/md 草稿、来源六字段、历史、单条交换与原文备份 | 复用 source-exchange 解析器和恢复原则；UIDocumentPicker 取代 SAF | `c80b694` XCTest 覆盖恢复/中断/幂等并通过；真实文件提供方待验 |
+| 3．手机本地学习闭环 | 今日、原答、错题、主题、独立练习与完整新手流程 | 按现有纯 JS 规则与已修复反馈迁移；独立持久运行记录 | 数据层候选已接入，页面仍在开发；不以四步指南代替 Web 完整实操，不伪造离线分数或掌握度 |
 | 4．AI、研究与输出 | 逐次授权、预算、任务恢复、结构、引用输出 | Android #55 仅作为有明确未验收项的候选参考；iOS 需 Keychain 与原生网络授权 | 待接入；本阶段无凭据存储、供应商请求或费用记录，不调用付费 AI 验收 |
 | 5．双端同步与手机系统能力 | 明确文件交换边界，另行设计同步/通知/后台 | iOS 生命周期与后台限制不同；Web 也没有现成自动同步 | 待设计/授权相关步骤；不把文件交换称作自动同步，不同步运行中的 SQLite |
 | 6．发布打磨 | 编译、Simulator、iPhone/iPad、签名与覆盖升级 | 受支持 macOS/Xcode 和 Apple 签名流程 | 未签名、未真机、未发布；不创建新长期密钥或自动选许可证 |
@@ -89,3 +89,10 @@ Android 的 `apps/android/web` 与既定基线不改变，已有 Android 安装�
 来源：2026-10-13 实读 [Capacitor iOS](https://capacitorjs.com/docs/ios)、[环境/SPM 要求](https://capacitorjs.com/docs/getting-started/environment-setup)、[Xcode 系统要求](https://developer.apple.com/xcode/system-requirements)、[Apple Personal Team](https://developer.apple.com/help/account/basics/about-your-developer-account)。
 
 实际结果与版本更新在 [测试结果](TEST_RESULTS.md) 和本任务 PR 跟进中；没有执行的检查保留未运行。
+## 第 3 阶段数据层候选（界面仍在接入）
+
+独立 `LearningStore` 把知识、错题、主题的不可变 Markdown 引用、历史、会话和设置用一个原生清单提交。正式与练习目录分开；正式原文仍由 `SourceStore` 管理。提交先校验学习库 revision 和原文版本清单，Markdown 与记录一起发布，提交回执支持同一请求精确重试。离线回答保持未评估，不结算复习间隔、不生成自动掌握证据；用户追加章节和退休状态保留。
+
+此候选复用已冻结的 Android 本地学习算法，并补入 Web 基线的开始学习请求去重。`ios-learning-transport.mjs` 尚未作为页面入口启用，不能据此声称手机学习界面已完成。数据层的 macOS XCTest 与 iOS 编译须以当前提交的 CI 实际结果为准；上面首轮构建证明只覆盖 `c80b694`。
+
+学习库容量：200 个当前条目，当前与历史引用合计 1000 份，最多 2000 个提交回执，记录 8 MiB、当前状态 16 MiB、完整备份 32 MiB；中断留下的未引用文件也计入文件上限，不自动删除。原文备份与学习备份分别导出。学习恢复先预览，仅允许空库或完全相同内容，遇到已有不同记录不能覆盖。练习重置提交空练习状态并保留旧条目历史，正式库不能调用练习重置。

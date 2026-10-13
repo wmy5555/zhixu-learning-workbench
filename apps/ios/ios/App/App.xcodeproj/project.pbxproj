@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A10000000000000000000007 /* LearningStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000017; };
+		A10000000000000000000008 /* LearningSchema.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000018; };
 		A10000000000000000000006 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000016; };
 		A10000000000000000000005 /* SourceIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000015; };
 		A10000000000000000000001 /* ZhixuLocalPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000011; };
@@ -25,6 +27,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		A10000000000000000000017 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "../../../native/Sources/ZhixuStorage/LearningStore.swift"; sourceTree = "<group>"; };
+		A10000000000000000000018 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "../../../native/Sources/ZhixuStorage/LearningSchema.swift"; sourceTree = "<group>"; };
 		A10000000000000000000016 = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		A10000000000000000000015 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "../../../native/Sources/ZhixuStorage/SourceIndex.swift"; sourceTree = "<group>"; };
 		A10000000000000000000011 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZhixuLocalPlugin.swift; sourceTree = "<group>"; };
@@ -76,6 +80,8 @@
 		504EC3061FED79650016851F /* App */ = {
 			isa = PBXGroup;
 			children = (
+				A10000000000000000000017,
+				A10000000000000000000018,
 				A10000000000000000000016,
 				A10000000000000000000015,
 				A10000000000000000000011,
@@ -177,6 +183,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A10000000000000000000007,
+				A10000000000000000000008,
 				A10000000000000000000005,
 				A10000000000000000000001,
 				A10000000000000000000002,

@@ -8,16 +8,46 @@ import Capacitor
 public final class ZhixuLocalPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPickerDelegate {
     public let identifier = "ZhixuLocalPlugin"
     public let jsName = "ZhixuIOSLocal"
-    public let pluginMethods: [CAPPluginMethod] = ["list", "read", "save", "history", "restoreVersion", "pickSource", "exportSource", "exportBackup", "previewBackup", "restoreBackup", "rebuildIndex"].map {
+    public let pluginMethods: [CAPPluginMethod] = ["list", "read", "save", "history", "restoreVersion", "pickSource", "exportSource", "exportBackup", "previewBackup", "restoreBackup", "rebuildIndex", "learningLoad", "learningCommit", "learningReset", "exportLearningBackup", "previewLearningBackup", "restoreLearningBackup"].map {
         CAPPluginMethod(name: $0, returnType: CAPPluginReturnPromise)
     }
     private let queue = DispatchQueue(label: "zhixu.ios.local-store")
     private var storage: SourceStore?
+    private var learningStores: [String: LearningStore] = [:]
     private struct Pending {
         let call: CAPPluginCall, kind: String
         let temporary: URL?
+        let context: String?
     }
     private var pending: Pending?
+    private func learning(_ context: String) throws -> LearningStore {
+        guard ["formal", "practice"].contains(context) else { throw SourceError("INVALID", "学习库范围无效。") }
+        if let saved = learningStores[context] { return saved }
+        let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        let folder = support.appendingPathComponent("zhixu-ios-learning-v1", isDirectory: true).appendingPathComponent(context, isDirectory: true)
+        let created = try LearningStore(root: folder, context: context); learningStores[context] = created; return created
+    }
+    private func performLearning(_ call: CAPPluginCall, allowed: Set<String>, _ operation: @escaping (LearningStore) throws -> [String: Any]) {
+        queue.async {
+            do { try self.keys(call, allowed); call.resolve(try operation(self.learning(self.string(call, "context")))) }
+            catch { self.reject(call, error) }
+        }
+    }
+    @objc func learningLoad(_ call: CAPPluginCall) { performLearning(call, allowed: ["context"]) { try $0.load() } }
+    @objc func learningCommit(_ call: CAPPluginCall) {
+        performLearning(call, allowed: ["context", "expectedRevision", "state", "sourceVersions", "requestId"]) { learning in
+            guard let state = call.getObject("state"), let versions = call.getObject("sourceVersions") as? [String: String], versions.count <= 100,
+                  versions.allSatisfy({ SourceStore.validID($0.key) && SourceStore.validID($0.value) }) else { throw SourceError("INVALID", "学习草稿或原文版本清单无效。") }
+            let current = learning.context == "formal" ? Dictionary(uniqueKeysWithValues: try self.store().list().map { ($0.id, $0.hash) }) : [:]
+            return try learning.commit(expectedRevision: self.string(call, "expectedRevision"), state: state, requestID: self.string(call, "requestId"), sourceVersions: versions, currentSourceVersions: current)
+        }
+    }
+    @objc func learningReset(_ call: CAPPluginCall) { performLearning(call, allowed: ["context", "expectedRevision", "requestId"]) { try $0.reset(expectedRevision: self.string(call, "expectedRevision"), requestID: self.string(call, "requestId")) } }
+    @objc func restoreLearningBackup(_ call: CAPPluginCall) { performLearning(call, allowed: ["context", "token", "requestId"]) { try $0.restoreBackup(token: self.string(call, "token"), requestID: self.string(call, "requestId")) } }
+    @objc func previewLearningBackup(_ call: CAPPluginCall) { select(call, kind: "learning") }
+    @objc func exportLearningBackup(_ call: CAPPluginCall) {
+        export(call, allowed: ["context"], filename: "zhixu-ios-learning-backup.json") { try self.learning(self.string(call, "context")).exportBackup() }
+    }
     private func store() throws -> SourceStore {
         if let storage = storage { return storage }
         let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
@@ -68,12 +98,17 @@ public final class ZhixuLocalPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
     @objc func previewBackup(_ call: CAPPluginCall) { select(call, kind: "backup") }
     private func select(_ call: CAPPluginCall, kind: String) {
         DispatchQueue.main.async {
-            do { try self.keys(call, []); try self.ensureDialogAvailable() }
+            var context: String?
+            do {
+                try self.keys(call, kind == "learning" ? ["context"] : [])
+                if kind == "learning" { context = try self.string(call, "context"); guard ["formal", "practice"].contains(context!) else { throw SourceError("INVALID", "学习库范围无效。") } }
+                try self.ensureDialogAvailable()
+            }
             catch { self.reject(call, error); return }
-            let types: [UTType] = kind == "backup" ? [.json] : [.plainText, UTType(filenameExtension: "md") ?? .text]
+            let types: [UTType] = kind == "backup" || kind == "learning" ? [.json] : [.plainText, UTType(filenameExtension: "md") ?? .text]
             let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
             picker.allowsMultipleSelection = false; picker.delegate = self
-            self.pending = Pending(call: call, kind: kind, temporary: nil)
+            self.pending = Pending(call: call, kind: kind, temporary: nil, context: context)
             self.bridge?.viewController?.present(picker, animated: true)
         }
     }
@@ -83,8 +118,8 @@ public final class ZhixuLocalPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
         }
     }
     @objc func exportSource(_ call: CAPPluginCall) {
-        export(call, allowed: ["id", "expectedHash"], filename: "zhixu-source.md") { store in
-            let note = try store.read(id: self.string(call, "id"))
+        export(call, allowed: ["id", "expectedHash"], filename: "zhixu-source.md") {
+            let note = try self.store().read(id: self.string(call, "id"))
             guard note.hash == (try self.string(call, "expectedHash")) else { throw SourceError("CONFLICT", "原文已修改，请重新打开后导出。") }
             let metadata: [String: Any] = ["format": "zhixu-source-exchange", "version": 1, "title": note.title, "source": note.source.dictionary]
             let json = try JSONSerialization.data(withJSONObject: metadata, options: [.sortedKeys, .withoutEscapingSlashes])
@@ -92,12 +127,12 @@ public final class ZhixuLocalPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
             return Data(("---\n" + text + "\n---\n" + note.body).utf8)
         }
     }
-    @objc func exportBackup(_ call: CAPPluginCall) { export(call, allowed: [], filename: "zhixu-ios-source-backup.json") { try $0.exportBackup() } }
-    private func export(_ call: CAPPluginCall, allowed: Set<String>, filename: String, bytes: @escaping (SourceStore) throws -> Data) {
+    @objc func exportBackup(_ call: CAPPluginCall) { export(call, allowed: [], filename: "zhixu-ios-source-backup.json") { try self.store().exportBackup() } }
+    private func export(_ call: CAPPluginCall, allowed: Set<String>, filename: String, bytes: @escaping () throws -> Data) {
         queue.async {
             do {
                 try self.keys(call, allowed)
-                let data = try bytes(self.store())
+                let data = try bytes()
                 let folder = FileManager.default.temporaryDirectory.appendingPathComponent("zhixu-ios-export-" + UUID().uuidString, isDirectory: true)
                 try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false, attributes: [.protectionKey: FileProtectionType.complete])
                 let url = folder.appendingPathComponent(filename)
@@ -107,7 +142,7 @@ public final class ZhixuLocalPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
                     catch { self.removeExport(url); self.reject(call, error); return }
                     let picker = UIDocumentPickerViewController(forExporting: [url], asCopy: true)
                     picker.delegate = self
-                    self.pending = Pending(call: call, kind: "export", temporary: url)
+                    self.pending = Pending(call: call, kind: "export", temporary: url, context: nil)
                     self.bridge?.viewController?.present(picker, animated: true)
                 }
             } catch { self.reject(call, error) }
@@ -133,7 +168,7 @@ public final class ZhixuLocalPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             do {
-                let limit = operation.kind == "backup" ? SourceStore.backupLimit : 160 * 1024
+                let limit = operation.kind == "backup" ? SourceStore.backupLimit : operation.kind == "learning" ? LearningStore.backupLimit : 160 * 1024
                 let handle = try FileHandle(forReadingFrom: url)
                 defer { try? handle.close() }
                 var bytes = Data()
@@ -142,6 +177,7 @@ public final class ZhixuLocalPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
                     guard bytes.count <= limit else { throw SourceError("LIMIT_REACHED", "文件超过允许上限。") }
                 }
                 if operation.kind == "backup" { operation.call.resolve(try self.store().previewBackup(bytes).dictionary) }
+                else if operation.kind == "learning" { operation.call.resolve(try self.learning(operation.context!).previewBackup(bytes)) }
                 else {
                     guard ["txt", "md"].contains(url.pathExtension.lowercased()), let text = String(data: bytes, encoding: .utf8) else { throw SourceError("INVALID", "请选择 UTF-8 txt 或 md 文件。") }
                     operation.call.resolve(["name": url.lastPathComponent, "text": text])

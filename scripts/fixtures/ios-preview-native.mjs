@@ -13,7 +13,25 @@ export function createPreviewPlugin() {
   const second = note('22222222-2222-4222-8222-222222222222', '合成原文：离线与恢复边界', '浏览器预览仅用内存模拟原生接口。\n\n文件选择、后台恢复、真实键盘和 Keychain 仍需 iOS 环境验收。', { ...fields, date: '', topic: '平台限制' });
   current.set(second.id, second); history.set(second.id, []);
   let revision = 0;
-  const controls = { failNextSave: false, dropNextSaveResponse: false, calls: [] };
+  const controls = { failNextSave: false, dropNextSaveResponse: false, dropNextLearningResponse: false, changeSourceBeforeLearningCommit: false, calls: [] };
+  const emptyLearning = () => ({ notes: [], records: {}, settings: {}, guide: {} });
+  const learning = new Map(['formal', 'practice'].map(context => [context, { revision: 'empty', state: emptyLearning(), receipts: new Map() }]));
+  function learningContext(context) { if (!learning.has(context)) fail('INVALID', '合成学习范围无效。'); return learning.get(context); }
+  function learningMutation(method, input, state) {
+    const currentLearning = learningContext(input.context), intent = JSON.stringify([method, { ...input, requestId: undefined }]);
+    const prior = currentLearning.receipts.get(input.requestId);
+    if (prior) { if (prior.intent !== intent) fail('REQUEST_CONFLICT', '合成学习回执不一致。'); return copy(prior.result); }
+    if (currentLearning.revision !== input.expectedRevision) fail('CONFLICT', '合成学习库版本已改变。');
+    if (controls.changeSourceBeforeLearningCommit) { controls.changeSourceBeforeLearningCommit = false; current.get(firstID).hash = crypto.randomUUID(); }
+    if (input.context === 'formal' && method === 'learningCommit') {
+      const versions = Object.fromEntries([...current.values()].map(note => [note.id, note.hash]));
+      if (Object.keys(versions).length !== Object.keys(input.sourceVersions).length || Object.entries(versions).some(([id, hash]) => input.sourceVersions[id] !== hash)) fail('SOURCE_CHANGED', '合成原文在提交前发生变化。');
+    }
+    currentLearning.state = copy(state); currentLearning.revision = crypto.randomUUID();
+    const result = { committed: true, revision: currentLearning.revision }; currentLearning.receipts.set(input.requestId, { intent, result });
+    if (controls.dropNextLearningResponse) { controls.dropNextLearningResponse = false; fail('COMMIT_UNKNOWN', '合成学习已提交但响应丢失。'); }
+    return copy(result);
+  }
   function mutation(action, input, operation) {
     const intent = JSON.stringify([action, { ...input, requestId: undefined }]);
     if (receipts.has(input.requestId)) {
@@ -25,6 +43,21 @@ export function createPreviewPlugin() {
     return result;
   }
   const plugin = {
+    async learningLoad({ context }) { const selected = learningContext(context); return { context, revision: selected.revision, state: copy(selected.state) }; },
+    async learningCommit(input) { controls.calls.push(['learningCommit', copy(input)]); return learningMutation('learningCommit', input, input.state); },
+    async learningReset(input) { if (input.context !== 'practice') fail('INVALID', '不能模拟清空正式库。'); return learningMutation('learningReset', input, emptyLearning()); },
+    async exportLearningBackup({ context }) { learningContext(context); return { saved: true, simulated: true }; },
+    async previewLearningBackup({ context }) {
+      const selected = learningContext(context), token = crypto.randomUUID();
+      previews.set(token, { learning: true, context, revision: selected.revision, deadline: Date.now() + 300000 });
+      return { token, context, notes: 0, history: 0, canRestore: selected.state.notes.length === 0, identical: false, candidateState: emptyLearning(), simulated: true };
+    },
+    async restoreLearningBackup(input) {
+      const selected = learningContext(input.context), previous = previews.get(input.token);
+      if (!previous || !previous.learning || previous.context !== input.context || previous.revision !== selected.revision || previous.deadline <= Date.now()) fail('PREVIEW_EXPIRED', '合成学习备份预览已失效。');
+      if (selected.state.notes.length) fail('CONFLICT', '合成学习库已有不同内容。');
+      return { restored: true, simulated: true };
+    },
     async list() { controls.calls.push('list'); return { notes: copy([...current.values()]) }; },
     async read({ id }) { controls.calls.push('read'); if (!current.has(id)) fail('NOT_FOUND', '合成原文不存在。'); return { note: copy(current.get(id)) }; },
     async save(input) {
