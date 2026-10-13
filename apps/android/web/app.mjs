@@ -4,6 +4,7 @@ import { createSourceMap } from "./source-map.mjs";
 import { initSidebar } from "./sidebar.mjs";
 import { parseSourceFile } from "./source-exchange.mjs";
 import { createAndroidDataPanel } from "./android-data.mjs";
+import { createAndroidSyncPanel } from "./android-sync.mjs";
 import {
   el, clear, button, badge, emptyState, formatDate, truncate, safeExternalUrl,
   labels, stateTone, field, toast, confirmAction, promptAction, serializeForm, describeJobError,
@@ -1958,10 +1959,21 @@ function systemTabButton(value, label) {
   return el("button", { class: `tab${state.systemTab === value ? " is-active" : ""}`, text: label, on: { click: () => { state.systemTab = value; setPage("system"); renderSystem().catch(handleError); } } });
 }
 
+let androidSystemRender = 0;
 async function renderSystem() {
   const wrapper = el("div", { class: "page-stack" });
   if (isMobilePrototype()) {
-    wrapper.append(await androidLocalGuidePanel(), await androidLearningSettingsPanel(), androidLearningBackupPanel());
+    const generation = ++androidSystemRender, context = api.getContext(), view = state.view;
+    const current = () => generation === androidSystemRender && state.view === view
+      && api.getContext().version === context.version && api.getContext().practiceId === context.practiceId;
+    const guide = await androidLocalGuidePanel(); if (!current()) return; wrapper.append(guide);
+    if (!androidPracticeActive()) {
+      const syncPanel = await createAndroidSyncPanel({ api, isCurrent: current,
+        onChanged: async () => { if (current()) await refreshBootstrap(); }, onError: handleError });
+      if (!current()) return; wrapper.append(syncPanel);
+    }
+    const settings = await androidLearningSettingsPanel(); if (!current()) return;
+    wrapper.append(settings, androidLearningBackupPanel());
     if (!androidPracticeActive()) wrapper.append(createAndroidDataPanel({ api, onRestored: refreshBootstrap, onError: handleError }));
     clear(refs.main).append(wrapper);
     return;
