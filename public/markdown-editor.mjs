@@ -140,6 +140,15 @@ export function createMarkdownEditor(textarea, { value = textarea.value, loadEdi
               markdown: { sanitize: true, codeBlockPreview: false, mathBlockPreview: false, autoSpace: false, fixTermTypo: false } },
             // Always intercept file paste/drop below; never use Vditor's data-URL fallback.
             upload: { handler: () => '请使用本地附件入口。', linkToImgUrl: '' },
+            // Upstream's image popover assigns src directly, outside Lute. Replace
+            // it before users can reach those handlers; URLs remain source edits.
+            customWysiwygToolbar: (type, popover) => {
+              if (type !== 'image') return;
+              popover.replaceChildren(
+                el('p', { class: 'field-hint', text: '图片以本地占位或已绑定附件显示。请在 Markdown 源码中修改图片说明或引用；这里不会直接访问图片地址。' }),
+                button('切换源码编辑图片引用', { onClick: async () => { await switchMode('source'); textarea.focus(); } }),
+              );
+            },
             input: () => { if (!initializing && mode === 'rich') changed(); },
             after: () => { clearTimeout(timer); queueMicrotask(resolve); },
           });

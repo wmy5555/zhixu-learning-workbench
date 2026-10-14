@@ -22,6 +22,7 @@ class Element {
   set value(value) { this._value = String(value).replace(/\r\n?/g, '\n'); }
   get value() { return this._value || ''; }
   append(...nodes) { for (const node of nodes) { node.parentNode = this; this.children.push(node); } }
+  replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
   addEventListener(name, handler) { this.events[name] = handler; }
   setAttribute(name, value) { this.attributes[name] = value; }
   getAttribute(name) { return this.attributes[name]; }
@@ -150,6 +151,25 @@ test('injected image uploads accept only a stable attachment identity and cannot
   pasteFile(late); await late.root.switchMode('source'); resolve(asset); await new Promise(setImmediate);
   assert.equal(late.root.getValue(), '保留');
   valid.root.destroy(); invalid.root.destroy(); late.root.destroy();
+});
+
+test('image property hook removes direct URL mutation controls and returns the exact current draft to source', async () => {
+  const original = '![原图片](https://example.invalid/original.png)\r\n\r\n原文';
+  const f = fixture(original); await f.root.switchMode('rich');
+  const popover = new Element('div'), directUrl = new Element('input'); popover.append(directUrl);
+  f.editor.config.customWysiwygToolbar('table', popover);
+  assert.equal(popover.children[0], directUrl, 'other property tools remain unchanged');
+  f.editor.config.customWysiwygToolbar('image', popover);
+  assert.equal(popover.children.includes(directUrl), false);
+  assert.equal(popover.children.some(item => item.tagName === 'input'), false);
+  assert.equal(f.root.getValue(), original);
+  f.editor.insertValue('\n\n**保留富文本草稿**');
+  const before = f.root.getValue();
+  await popover.children.find(item => item.tagName === 'button').events.click();
+  assert.equal(f.root.getMode(), 'source'); assert.equal(f.root.getValue(), before);
+  assert.ok(f.root.getValue().includes('https://example.invalid/original.png'));
+  assert.doesNotMatch(f.root.getValue(), /blob:|data:image|file:/);
+  f.root.destroy();
 });
 
 test('attachment display URLs must stay on a controlled same-origin note attachment endpoint', () => {
