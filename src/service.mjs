@@ -353,7 +353,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
       children.forEach(n => grouped.add(n.id)); grouped.add(source.id);
       return { source, children, jobs: store.records('jobs').filter(j => j.type === 'process' && j.payload.noteId === source.id).map(j => ({id:j.id,state:j.state,progress:j.progress})) };
     }).filter(g => matching.has(g.source.id) || g.children.some(n => matching.has(n.id)));
-    return { groups, standalone: all.filter(n => !grouped.has(n.id) && matching.has(n.id)) };
+    return { groups, standalone: all.filter(n => !grouped.has(n.id) && matching.has(n.id)), matchingIds: [...matching] };
   }
   function readPublicNote(id) {
     const note = getNote(id);
