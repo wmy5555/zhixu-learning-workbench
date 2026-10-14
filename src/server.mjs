@@ -61,6 +61,10 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
           service.chatgpt.status();
           if (url.pathname === '/api/chatgpt/status' && method === 'GET') result = service.chatgpt.status();
           else if (url.pathname === '/api/chatgpt/conversations' && method === 'POST') result = service.chatgpt.capture(await readJSON(req, 2 * 1024 * 1024));
+          else if (url.pathname === '/api/chatgpt/history-snapshots' && method === 'POST') result = await service.chatgpt.captureHistorySnapshot(await readJSON(req, 2 * 1024 * 1024));
+          else if (url.pathname === '/api/chatgpt/history-batches' && method === 'POST') result = await service.chatgpt.captureHistoryBatch(await readJSON(req, 2 * 1024 * 1024));
+          else if (url.pathname === '/api/chatgpt/undo-previews' && method === 'POST') result = service.chatgpt.previewUndo(await readJSON(req, 16384));
+          else if (url.pathname === '/api/chatgpt/restore-previews' && method === 'POST') result = service.chatgpt.previewRestore(await readJSON(req, 16384));
           else if (url.pathname === '/api/chatgpt/search' && method === 'GET') result = await service.chatgpt.search(query.q);
           else if (parts.length === 4 && ['notes', 'sources'].includes(parts[2]) && method === 'GET') result = service.chatgpt.read(parts[3], { sourceOnly: parts[2] === 'sources', offset: query.offset === undefined ? 0 : Number(query.offset), limit: query.limit === undefined ? 12000 : Number(query.limit) });
           else if (parts.length === 4 && parts[2] === 'related' && method === 'GET') result = service.chatgpt.related(parts[3]);
@@ -91,6 +95,15 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
       if(!session||Date.now()-session.at>86400000)fail('会话已过期，请刷新页面。','SESSION_REQUIRED',401);
       if(!['GET','HEAD'].includes(method)&&!safeEqual(req.headers['x-csrf-token']||'',session.csrf))fail('请求缺少有效的操作凭据，请刷新页面。','CSRF_DENIED',403);
       const body=['POST','PUT','DELETE'].includes(method)?await readJSON(req):{};
+      if (parts[1] === 'capture-undo') {
+        let result;
+        if (parts.length === 2 && method === 'GET') result = mainService.chatgptUndo.list();
+        else if (parts.length === 3 && method === 'POST' && parts[2] === 'confirm') result = mainService.chatgptUndo.confirmUndo(body);
+        else if (parts.length === 3 && method === 'POST' && parts[2] === 'restore-preview') result = mainService.chatgptUndo.previewRestore(body);
+        else if (parts.length === 3 && method === 'POST' && parts[2] === 'restore-confirm') result = mainService.chatgptUndo.confirmRestore(body);
+        else fail('本机撤销接口不存在。', 'NOT_FOUND', 404);
+        return json(res, 200, result);
+      }
       if (parts[1] === 'onboarding') {
         let result;
         if (parts[2] === 'state' && method === 'GET') result = onboarding.state();
