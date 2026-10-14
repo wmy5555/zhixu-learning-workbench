@@ -167,3 +167,5 @@ Capacitor 生成的默认图标和启动图属于模板资源，其许可范围�
 新增 npm `vditor@4.0.0`（MIT）和传递依赖 `diff-match-patch@1.0.5`（Apache-2.0）。已核对官方 npm 元数据、实际包版本、锁文件 dist.integrity，复制的核心 JS/CSS、Lute、中文界面、图标及主题 CSS 用 [manifest.json](../public/vendor/vditor/manifest.json) 记录 SHA-256，测试逐字比对已安装包。Vditor 固定完整性为 `sha512-JUeSmmNNxXaq4j29F6OZ/vLgyM/Wt/SpSK4o/gyrc02uTsS+iTeC0ofajxbW29WSJ4LFMec4nrywVul51PrLvg==`。
 
 内嵌 Lute 实际报告 1.7.6，其固定 tag LICENSE 为 MulanPSL-2.0；Go/GopherJS 使用 BSD 许可，其他声明组件的许可也单独保留。详细固定来源、各许可全文和不可重建完整编译 SBOM 的限制见 [NOTICE](../public/vendor/vditor/NOTICE.txt)。未分发可选 KaTeX、图表、PlantUML、字体或 emoji 图片集合；未更改项目自身许可证。旧 93 包历史清单不代表当前锁文件的完整最新依赖树。
+
+编辑器vendor目录通过 `.gitattributes` 的 `-text` 保持上游原字节，避免Windows Git自动换行破坏已登记SHA-256；测试还用 `core.autocrlf=true` 的真实Git导出核对，不对哈希进行换行归一化或忽略差异。

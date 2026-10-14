@@ -2,6 +2,8 @@
 
 ## 原始资料 Markdown 双模式编辑（2026-10-15）
 
+首个PR CI候选 `80f80b7`：Linux Quality通过（747项中743通过、4项Windows专属启动测试按平台跳过）；Windows Quality为746通过、1失败，具体是本轮vendor严格哈希断言，不能与本地atomic-write失败混为一谈。已确认 `dist/index.css` 的原始LF SHA-256为 `2a3d87ec37964ef04a47269bc6cb34f5bf16bda83d02d60b059cf8c6c94562d0`，仅转CRLF就精确得到CI实际 `ff55b05c23d356a9df518323a2df165ccdbde56c7d7376048795d4344a497208`。新增仅限 `public/vendor/vditor/** -text` 的Git属性，保持上游字节；不改资源、manifest、哈希断言或全局Git配置。现有vendor测试补充真实 `core.autocrlf=true checkout-index` 导出到随机临时目录并逐字核对，修复后定向11/11通过，日志 `.tmp/editor-windows-checkout-fix.log`；产品代码与浏览器输入未改变，不重复无关验收。等待修复提交的新CI确认。
+
 从 main `164ee4f` 创建独立 `fix/source-markdown-editor` 工作树。Node 24.21.0、固定 pnpm 11.19.0。实际执行 `pnpm verify`：仓库检查274个跟踪文件通过，746项测试中745通过、1失败、0跳过/取消；唯一失败是未修改的 `atomic-write.test.mjs` 在控制锁重试后的真实 rename 返回 Windows EPERM。没有修改存储或放宽断言，仅定向重跑该文件：3/3通过。由于 verify 的串联在此停止，再单独实际运行 `pnpm quality`，20条合成检索检查通过。不能把首次 verify 记为完整成功；完整干净环境结果仍由本 PR 四项 CI确认。
 
 首次新增10项编辑器回归：真实Lute1.7.6引擎往返、CRLF/末尾空行保真、两模式编辑、延迟回调前即时读取、扩展语法/行内公式回退、Markdown编辑与预览XSS、HTML粘贴清理/回退、二进制粘贴不嵌入临时地址、异步加载/取消、同源附件URL、DOM插入前远图占位和仅图片目标反解、固定包/资源哈希比对。另1项表单集成回归确保未保存检测与expectedHash保存读取适配器当前正文；全部在上述746项中执行通过。此后补充1项图片上传注入契约回归（仅测试稳定引用、拒绝blob地址与切换模式后迟到回执；不增加真实上传管道），主题/图片预览与销毁回调小调整后定向11/11通过，最终候选测试总数为747项。先前203项UI运行有原始日志，不据此代替最终新增集成回归。生产依赖审计98项，所有级别0漏洞。

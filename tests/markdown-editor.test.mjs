@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createMarkdownEditor, richFallbackReason, controlledAssetUrl, guardEditorImages } from '../public/markdown-editor.mjs';
 
@@ -172,13 +174,18 @@ test('image rendering never places remote URLs in a live src and round-trips onl
   assert.doesNotMatch(preview(lute.Md2HTML(source)), /src="https:\/\/example.invalid/);
 });
 
-test('vendored runtime matches pinned installed package and recorded hashes; no optional renderer is shipped', () => {
+test('vendored runtime matches pinned package and hashes even with Windows checkout conversion', t => {
   const manifest = JSON.parse(fs.readFileSync(new URL('../public/vendor/vditor/manifest.json', import.meta.url)));
   assert.equal(manifest.version, '4.0.0'); assert.equal(context.Lute.Version, '1.7.6');
+  const tempRoot = path.resolve('.tmp'); fs.mkdirSync(tempRoot, { recursive: true });
+  const checkout = fs.mkdtempSync(path.join(tempRoot, 'editor-checkout-'));
+  t.after(() => { assert.ok(checkout.startsWith(tempRoot + path.sep)); fs.rmSync(checkout, { recursive: true, force: true }); });
+  execFileSync('git', ['-c', 'core.autocrlf=true', 'checkout-index', '--prefix=' + checkout.replaceAll('\\', '/') + '/', '--', ...manifest.files.map(file => 'public/vendor/vditor/' + file.path)], { stdio: 'pipe' });
   for (const file of manifest.files) {
     const bytes = fs.readFileSync(new URL('../public/vendor/vditor/' + file.path, import.meta.url));
     assert.equal(createHash('sha256').update(bytes).digest('hex'), file.sha256);
     assert.deepEqual(bytes, fs.readFileSync(new URL('../node_modules/vditor/' + file.path, import.meta.url)));
+    assert.deepEqual(bytes, fs.readFileSync(path.join(checkout, 'public/vendor/vditor', file.path)), file.path + ' must retain upstream bytes during Windows checkout');
   }
   assert.equal(fs.existsSync(new URL('../public/vendor/vditor/dist/js/katex', import.meta.url)), false);
 });
