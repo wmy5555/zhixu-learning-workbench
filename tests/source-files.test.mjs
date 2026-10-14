@@ -4,9 +4,10 @@ import path from 'node:path';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
+import YAML from 'yaml';
 import { createService } from '../src/service.mjs';
 import { createApp } from '../src/server.mjs';
-import { decodeFile, extractWord, MAX_FILE_BYTES } from '../src/attachments.mjs';
+import { decodeFile, extractWord, MAX_FILE_BYTES, processingText } from '../src/attachments.mjs';
 import { tinyPng, tinyPdf, legacyDoc, docx } from './fixtures/source-files.mjs';
 
 fs.mkdirSync(new URL('../.tmp/', import.meta.url), { recursive: true });
@@ -67,6 +68,30 @@ test('DOCX text retains immutable original relation and explicit partial coverag
   assert.equal(h.service.processNote(note.id).type, 'process');
   await h.reopen();
   assert.equal(h.service.getNote(note.id).meta.textExtraction.text, note.meta.textExtraction.text);
+});
+
+test('externally changed DOCX extraction is blocked before processing and preserved for recovery', async t => {
+  const h = await harness(t), bytes = await docx('首次提取正文'), file = upload(h.service, '校验.docx', bytes);
+  const { note } = await h.service.commitFile({ uploadId: file.id, privacy: 'cloud' });
+  const target = path.join(h.options.vaultDir, note.path), original = fs.readFileSync(target, 'utf8');
+  assert.equal(processingText(note), note.meta.textExtraction.text);
+  for (const change of [extraction => { extraction.text = '外部改写文字'; }, extraction => { delete extraction.textSha256; }]) {
+    const frontmatter = original.match(/^---\n([\s\S]*?)\n---\n/), meta = YAML.parse(frontmatter[1]);
+    change(meta.textExtraction);
+    const modified = '---\n' + YAML.stringify(meta) + '---\n' + original.slice(frontmatter[0].length);
+    fs.writeFileSync(target, modified);
+    await h.reopen();
+    assert.throws(() => h.service.processNote(note.id), { code: 'EXTRACTION_CHANGED' });
+    assert.throws(() => h.service.requestSourceStructure(note.id), { code: 'EXTRACTION_CHANGED' });
+    assert.throws(() => h.service.extractNote(note.id, { title: '标题', body: '正文' }), { code: 'EXTRACTION_CHANGED' });
+    assert.throws(() => processingText(h.service.getNote(note.id)), { code: 'EXTRACTION_CHANGED' });
+    assert.equal(h.service.store.records('jobs').length, 0);
+    assert.equal(fs.readFileSync(target, 'utf8'), modified);
+    assert.deepEqual(h.service.readFile(note.id, file.attachment.id).bytes, bytes);
+  }
+  fs.writeFileSync(target, original);
+  assert.equal(processingText(h.service.getNote(note.id)), note.meta.textExtraction.text);
+  assert.equal(h.service.processNote(note.id).type, 'process');
 });
 
 test('empty, corrupt, macro, encrypted and zipbomb DOCX retain files with AI blocked', async t => {

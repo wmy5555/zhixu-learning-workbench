@@ -96,6 +96,9 @@ export function extractWord(file, { timeoutMs = 10000 } = {}) {
   });
 }
 export function assertTextSource(note) {
-  if (note.meta?.sourceFile && !(note.meta.sourceFile.format === 'docx' && note.meta.textExtraction?.text?.trim() && note.meta.textExtraction.sourceSha256 === note.meta.sourceFile.sha256)) reject('图片、PDF及未提取到文字的Word仅保存在第一层，不能拆解或整理为知识。', 'SOURCE_FILE_ONLY', 409);
+  if (!note.meta?.sourceFile) return;
+  const extraction = note.meta.textExtraction;
+  if (!(note.meta.sourceFile.format === 'docx' && typeof extraction?.text === 'string' && extraction.text.trim() && extraction.sourceSha256 === note.meta.sourceFile.sha256)) reject('图片、PDF及未提取到文字的Word仅保存在第一层，不能拆解或整理为知识。', 'SOURCE_FILE_ONLY', 409);
+  if (digest(extraction.text) !== extraction.textSha256) reject('Word 提取文字与保存的校验值不一致，已停止加工。请核对外部编辑并从可信版本恢复提取记录；原件和当前文字均保留。', 'EXTRACTION_CHANGED', 409);
 }
 export const processingText = note => { assertTextSource(note); return note.meta.sourceFile ? note.meta.textExtraction.text : note.body; };
