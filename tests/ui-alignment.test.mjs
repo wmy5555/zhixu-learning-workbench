@@ -18,6 +18,7 @@ const onboardingCss = await readFile(new URL('../public/onboarding.css', import.
 const uiSource = await readFile(new URL('../public/ui.mjs', import.meta.url), 'utf8');
 const markdownSource = await readFile(new URL('../public/markdown-reader.mjs', import.meta.url), 'utf8');
 const appSource = await readFile(new URL('../public/app.mjs', import.meta.url), 'utf8');
+const fileUiSource = await readFile(new URL('../public/source-files.mjs', import.meta.url), 'utf8');
 const onboardingSource = await readFile(new URL('../public/onboarding.mjs', import.meta.url), 'utf8');
 const sourceMapSource = (await readFile(new URL('../public/source-map.mjs', import.meta.url), 'utf8')).replace(/^import.*;$/m, '').replaceAll('export ', '');
 
@@ -280,7 +281,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
   };
   document.createTextNode = value => { const node = new Element('text'); node.textContent = value; return node; };
   const context = vm.createContext({
-    api, document, initSidebar, createProcessFeedback, parseSourceFile, TextDecoder, Node: Element, URL, Intl: Object.assign(Object.create(Intl), { DateTimeFormat: dateTimeFormat }), Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => `request-ui-${++requestSequence}` },
+    api, document, request: async () => ({ uploads: [] }), initSidebar, createProcessFeedback, parseSourceFile, TextDecoder, Node: Element, URL, Intl: Object.assign(Object.create(Intl), { DateTimeFormat: dateTimeFormat }), Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => `request-ui-${++requestSequence}` },
     FormData: class {
       constructor(form) { this.form = form; }
       entries() { return descendants(this.form).filter(node => node.name && !node.disabled && ['input', 'textarea', 'select'].includes(node.tagName)).map(node => [node.name, String(node.tagName === 'select' ? node.children.find(option => option.selected)?.value || '' : node.value)]); }
@@ -289,6 +290,10 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
     window: { zhixuAppearance: { getAccent: () => null, getTheme: () => 'light', resolvedTheme: () => 'light', previewAccent: () => ({}), getMode: () => 'light', palette: () => ({}) }, matchMedia: () => ({ matches: false, addEventListener() {} }), history: { replaceState() {} }, location: { hash: '' }, setTimeout() {}, events: {}, addEventListener(name, handler) { this.events[name] = handler; } },
   });
   const stripped = appSource.replace(/import[\s\S]*?from "\.\/api\.mjs";\s*/, '').replace(/import[\s\S]*?from "\.\/ui\.mjs";\s*/, '').replace(/^init\(\);\s*$/m, '').replace('const { createUsagePanel } = await import("./usage.mjs");', '');
+  // Exercise our actual attachment UI functions; FilePond's browser-only lifecycle
+  // is covered by the separate browser flow, not the minimal DOM fixture.
+  vm.runInContext(fileUiSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') +
+    '\ncreateFilePicker = async () => ({ getFiles: () => [] });\nthis.attachmentUrl = (id, asset) => "/api/notes/" + id + "/attachments?asset=" + asset;', context);
   vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + ('const renderMarkdown = (() => {\n' + markdownSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn renderMarkdown;\n})();') + '\n' + sourceMapSource + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { renderSourceGroupDrawer, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
   context.app.beginStudy = vm.runInContext('beginStudy', context);
   context.app.manualExtract = vm.runInContext('manualExtract', context);
@@ -1930,4 +1935,23 @@ test('successful start of another intent retires uncertain keys before returning
   assert.notEqual(requests[2].requestId, requests[0].requestId, 'moving on successfully retires old uncertain intent');
   assert.notEqual(app.state.currentStudy.id, firstSession.id, 'deliberate return starts a new session');
   assert.equal(backend.service.store.records('sessions').length, 3);
+});
+
+
+test('binary first-layer controls disable AI/research until DOCX has extracted text', () => {
+  const app = browser();
+  for (const format of ['png','pdf','doc','docx']) {
+    const note = {id: 'synthetic-' + format, kind: 'source', meta: {sourceFile: {format}, textExtraction: {text: ''}}};
+    const controls = app.processControls(note);
+    assert.equal(findButton(controls, '提交 AI 拆解').disabled, true);
+    assert.equal(findButton(controls, '联网核验事实与适用条件').disabled, true);
+    assert.equal(controls.querySelector('input').disabled, true);
+    assert.equal(Boolean(controls.querySelector('input').checked), false);
+  }
+  const word = app.processControls({id:'word', kind:'source', meta:{sourceFile:{format:'docx'}, textExtraction:{text:'已提取文字'}}});
+  assert.equal(findButton(word, '提交 AI 拆解').disabled, false);
+  assert.equal(word.querySelector('input').disabled, false);
+  assert.equal(Boolean(word.querySelector('input').checked), false);
+  const plain = app.processControls({id:'text',kind:'source',meta:{}});
+  assert.equal(findButton(plain, '提交 AI 拆解').disabled, false);
 });

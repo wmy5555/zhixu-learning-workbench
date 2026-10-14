@@ -75,7 +75,7 @@ function linkToken(text, start, budget) {
   if (!match) return null;
   const value = unescapeMarkdown(match[1] ?? match[2]);
   const url = /[\u0000-\u0020\u007f]/.test(value) ? '' : safeExternalUrl(value);
-  return { end: end + 1, label: text.slice(start + 1, labelEnd), url, title: match[3] ? unescapeMarkdown(match[3]) : '' };
+  return { end: end + 1, label: text.slice(start + 1, labelEnd), url, value, title: match[3] ? unescapeMarkdown(match[3]) : '' };
 }
 
 function inline(text, depth = 0, allowLinks = true, budget = { remaining: text.length * 4 + INLINE_SCAN_LIMIT }) {
@@ -96,7 +96,13 @@ function inline(text, depth = 0, allowLinks = true, budget = { remaining: text.l
     }
     if (text[i] === '!' && text[i + 1] === '[') {
       const token = linkToken(text, i + 1, budget);
-      if (token) { plain += text.slice(i, token.end); i = token.end; continue; }
+      if (token) {
+        const imageUrl = budget.imageResolver?.(token.value);
+        if (imageUrl && /^\/api\/(?:practice\/[^/]+\/)?notes\/[^/]+\/attachments\?asset=/.test(imageUrl)) {
+          flush(); children.push(el('img', { src: imageUrl, alt: unescapeMarkdown(token.label), loading: 'lazy', class: 'source-image' }));
+        } else plain += text.slice(i, token.end);
+        i = token.end; continue;
+      }
     }
     if (allowLinks && text[i] === '[') {
       const token = linkToken(text, i, budget);
@@ -174,7 +180,8 @@ function blockStart(lines, index) {
   return Boolean(!line.trim() || fence(line) || heading(line) || listMarker(line) || /^ {0,3}>/.test(line) || tableAt(lines, index));
 }
 
-function blocks(lines, depth = 0) {
+function blocks(lines, depth = 0, imageResolver) {
+  const textInline = text => inline(text, 0, true, { remaining: text.length * 4 + INLINE_SCAN_LIMIT, imageResolver });
   if (depth >= MAX_DEPTH) return [el('p', { class: 'markdown-fallback' }, inline(lines.join('\n'), MAX_DEPTH))];
   const children = [];
   for (let i = 0; i < lines.length;) {
@@ -193,11 +200,11 @@ function blocks(lines, depth = 0) {
       continue;
     }
     const title = heading(line);
-    if (title) { children.push(el(`h${title.level}`, {}, inline(title.text))); i++; continue; }
+    if (title) { children.push(el(`h${title.level}`, {}, textInline(title.text))); i++; continue; }
     if (/^ {0,3}>/.test(line)) {
       const quote = [];
       while (i < lines.length && /^ {0,3}>/.test(lines[i])) quote.push(lines[i++].replace(/^ {0,3}> ?/, ''));
-      children.push(el('blockquote', {}, blocks(quote, depth + 1)));
+      children.push(el('blockquote', {}, blocks(quote, depth + 1, imageResolver)));
       continue;
     }
     const marker = listMarker(line);
@@ -215,14 +222,14 @@ function blocks(lines, depth = 0) {
           itemLines.push(lines[i].slice(Math.min(indentation, item.width)));
           i++;
         }
-        list.append(el('li', {}, blocks(itemLines, depth + 1)));
+        list.append(el('li', {}, blocks(itemLines, depth + 1, imageResolver)));
       }
       children.push(list);
       continue;
     }
     const table = tableAt(lines, i);
     if (table) {
-      const cell = (tag, value, index) => el(tag, { ...(tag === 'th' ? { scope: 'col' } : {}), class: table.alignment[index] ? `markdown-align-${table.alignment[index]}` : null }, inline(value));
+      const cell = (tag, value, index) => el(tag, { ...(tag === 'th' ? { scope: 'col' } : {}), class: table.alignment[index] ? `markdown-align-${table.alignment[index]}` : null }, textInline(value));
       const body = el('tbody');
       i += 2;
       while (i < lines.length && lines[i].trim()) {
@@ -238,22 +245,22 @@ function blocks(lines, depth = 0) {
     }
     // Setext headings are recognized only for a single preceding text line.
     if (/^ {0,3}(?:={3,}|-{3,})[ \t]*$/.test(lines[i + 1] || '')) {
-      children.push(el(/^ *=/.test(lines[i + 1]) ? 'h1' : 'h2', {}, inline(line)));
+      children.push(el(/^ *=/.test(lines[i + 1]) ? 'h1' : 'h2', {}, textInline(line)));
       i += 2; continue;
     }
     const paragraph = [line];
     i++;
     while (i < lines.length && !blockStart(lines, i)) paragraph.push(lines[i++]);
-    children.push(el('p', {}, inline(paragraph.join('\n'))));
+    children.push(el('p', {}, textInline(paragraph.join('\n'))));
   }
   return children;
 }
 
 /** Render body text only. Keep titles/metadata and editing/storage as plain text. */
-export function renderMarkdown(value, { className = '', emptyText = '暂无正文' } = {}) {
+export function renderMarkdown(value, { className = '', emptyText = '暂无正文', imageResolver } = {}) {
   const source = String(value ?? '');
   const root = el('div', { class: ['markdown-reader', className].filter(Boolean).join(' ') });
   if (!source.trim()) root.append(el('p', { class: 'markdown-empty', text: emptyText }));
-  else for (const block of blocks(source.replace(/\r\n?/g, '\n').split('\n'))) root.append(block);
+  else for (const block of blocks(source.replace(/\r\n?/g, '\n').split('\n'), 0, imageResolver)) root.append(block);
   return root;
 }

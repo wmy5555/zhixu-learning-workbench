@@ -3,6 +3,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID, createHash } from 'node:crypto';
 import YAML from 'yaml';
+import { includeAttachments, validateAttachments, installAttachments } from './attachment-backup.mjs';
 
 export const now = () => new Date().toISOString();
 export const hash = value => createHash('sha256').update(value).digest('hex');
@@ -303,13 +304,20 @@ export class Store {
     if (!preview.changed) return this.read(id);
     return this.update(id, { expectedHash, body: preview.body, meta: preview.meta });
   }
-  create({ id = randomUUID(), kind = 'knowledge', title, body, meta = {} }) {
+  create({ id = randomUUID(), kind = 'knowledge', title, body, meta = {}, exclusive = false }) {
     if (!folders[kind]) fail('不支持的知识文件类型。');
     if (!String(title || '').trim() || !String(body || '').trim()) fail('标题和正文不能为空。');
     if (this.row(id)) fail('内容 id 已存在。', 'CONFLICT', 409);
     const file = assertTree(path.join(this.vaultDir, folders[kind], `${id}.md`), this.vaultDir);
     const fields = { ...meta, id, kind, title: String(title).slice(0, 200), createdAt: now(), updatedAt: now() };
-    const raw = serialize('', fields, String(body)); atomicWrite(file, raw);
+    const raw = serialize('', fields, String(body));
+    if (exclusive) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const temporary = file + '.' + randomUUID() + '.tmp';
+      try { fs.writeFileSync(temporary, raw, { flag: 'wx', mode: 0o600 }); fs.linkSync(temporary, file); }
+      catch (error) { if (error.code === 'EEXIST') fail('资料目标已有文件，未覆盖。', 'CONFLICT', 409); throw error; }
+      finally { if (fs.existsSync(temporary)) fs.unlinkSync(temporary); }
+    } else atomicWrite(file, raw);
     const result = this.upsert(file, raw, id); this.version(this.row(id), kind === 'source' ? '原始输入快照' : '首次创建'); this.syncMirrors(); return result;
   }
   update(id, { body, title, meta = {}, expectedHash }) {
@@ -342,10 +350,10 @@ export class Store {
   backup() {
     this.scan();
     if (this.conflicts.length) fail('Vault 中仍有冲突或无法解析的 Markdown；为避免静默遗漏，修复后再备份。', 'BACKUP_CONFLICT', 409);
-    return { format: 'learning-workbench-backup', version: 1, ...(this.backupPurpose ? { purpose: this.backupPurpose } : {}), createdAt: now(), scope: { managedMarkdown: true, runtimeRecords: true, attachments: false, obsidianConfig: false }, notes: this.db.prepare('SELECT id,path,raw FROM notes').all(), records: this.db.prepare("SELECT * FROM records WHERE namespace NOT IN ('settings','changed','restore')").all(), versions: this.db.prepare('SELECT * FROM versions').all() };
+    return includeAttachments(this.vaultDir, { format: 'learning-workbench-backup', version: 1, ...(this.backupPurpose ? { purpose: this.backupPurpose } : {}), createdAt: now(), scope: { managedMarkdown: true, runtimeRecords: true, attachments: false, obsidianConfig: false }, notes: this.db.prepare('SELECT id,path,raw FROM notes').all(), records: this.db.prepare("SELECT * FROM records WHERE namespace NOT IN ('settings','changed','restore','attachmentUploads')").all(), versions: this.db.prepare('SELECT * FROM versions').all() });
   }
   validateBackup(backup) {
-    if (backup?.format !== 'learning-workbench-backup' || backup.version !== 1 || !Array.isArray(backup.notes) || !Array.isArray(backup.records) || !Array.isArray(backup.versions)) fail('备份格式不正确。');
+    if (backup?.format !== 'learning-workbench-backup' || ![1,2].includes(backup.version) || !Array.isArray(backup.notes) || !Array.isArray(backup.records) || !Array.isArray(backup.versions)) fail('备份格式不正确。');
     const validId = value => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,100}$/.test(value);
     const validatePath = value => {
       if (typeof value !== 'string' || !value || value.length > 1_000 || value.includes('\\') || value.includes('\0') || path.isAbsolute(value)) fail('备份包含非法 Markdown 路径。');
@@ -370,7 +378,7 @@ export class Store {
     }
     const recordKeys = new Set();
     for (const r of backup.records) {
-      if (!r || typeof r !== 'object' || typeof r.namespace !== 'string' || !/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(r.namespace) || ['settings','changed','restore'].includes(r.namespace) || typeof r.key !== 'string' || !r.key || r.key.length > 500 || typeof r.json !== 'string' || Buffer.byteLength(r.json) > 5_000_000) fail('备份运行记录不正确。');
+      if (!r || typeof r !== 'object' || typeof r.namespace !== 'string' || !/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(r.namespace) || ['settings','changed','restore','attachmentUploads'].includes(r.namespace) || typeof r.key !== 'string' || !r.key || r.key.length > 500 || typeof r.json !== 'string' || Buffer.byteLength(r.json) > 5_000_000) fail('备份运行记录不正确。');
       const recordKey = `${r.namespace}\0${r.key}`;
       if (recordKeys.has(recordKey)) fail('备份包含重复运行记录。');
       try { JSON.parse(r.json); } catch { fail('备份运行记录不是有效 JSON。'); }
@@ -387,14 +395,16 @@ export class Store {
       totalBytes += Buffer.byteLength(version.raw); versionIds.add(version.id);
     }
     if (totalBytes > 100_000_000) fail('备份展开后超过 100 MB 限制。', 'TOO_LARGE', 413);
+    validateAttachments(this.vaultDir, backup);
     this.scan();
     if (this.conflicts.length) fail('当前 Vault 有冲突或无法解析的 Markdown；恢复前必须先处理，避免遗漏或覆盖。', 'RESTORE_CONFLICT', 409);
-    return { notes: backup.notes.length, records: backup.records.length, versions: backup.versions.length, replaces: this.list().length, retention: '恢复前自动备份；JSON 只覆盖本应用索引的 Markdown、运行记录和历史版本。附件、.obsidian 与其他未索引文件不会写入或删除，需另行复制整个 Vault 保存。' };
+    return { notes: backup.notes.length, records: backup.records.length, versions: backup.versions.length, attachments: backup.attachments?.length || 0, replaces: this.list().length, retention: '恢复前自动备份；版本2包含受管理附件，按哈希只新增不覆盖。外部附件、.obsidian 与其他未索引文件不会写入或删除，需另行复制整个 Vault 保存。' };
   }
   restore(backup) {
     this.validateBackup(backup);
     const safetyFile = path.join(this.dataDir, 'backups', `before-restore-${Date.now()}.json`);
     atomicWrite(safetyFile, JSON.stringify(this.backup()));
+    installAttachments(this.vaultDir, validateAttachments(this.vaultDir, backup));
     const currentRows = this.db.prepare('SELECT * FROM notes').all();
     const currentPaths = new Set(currentRows.map(row => row.path.toLowerCase()));
     const stageRoot = assertTree(path.join(this.vaultDir, `.learning-restore-${randomUUID()}`), this.vaultDir);

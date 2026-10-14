@@ -10,6 +10,7 @@
 - `.data/secrets.enc.json`：Windows 当前账号 DPAPI 密文；不放在 Vault 或备份里。其他系统需环境变量 `LEARNING_MASTER_KEY`。
 - `.data/mcp-token`：仅本地 MCP 访问令牌。不要分享，备份不导出。
 - `.data/chatgpt-mcp-token`：ChatGPT 专用桥接凭据，与上面的令牌隔离，不进入备份或回执。
+- `vault/.zhixu-attachments`：通过附件接口保存的原始字节，以 SHA-256 与规范扩展名寻址。第一层 Markdown 的 `sourceFile` / `attachments` 记录原文件名和关系；`textExtraction` 记录 DOCX 的提取文字、源哈希与覆盖限制。二进制文件不进入第二层，详见 [SOURCE_FILES](SOURCE_FILES.md)。
 
 ChatGPT 会话作为第一层原始资料保存，正文分开标注模型整理摘要、角色原文和实际收到的范围。设置中的 ChatGPT 读取许可属于独立的接收方授权：开启后可读取“仅本地”资料，内容会进入 ChatGPT 上下文；每份资料的隐私字段仍继续限制其他模型/搜索/向量服务。关闭该许可立即停止后续读取，不会收回此前已经发送到 ChatGPT 的内容。
 
@@ -21,7 +22,7 @@ Vault 文件是知识内容权威。Web 修改前检查最新文件哈希；外�
 
 系统页可下载开放 JSON，包含知识文件、运行与学习记录、历史和非敏感偏好；密钥和 MCP 令牌不导出。恢复先预览数量，再用绑定内容的短期确认凭据执行；恢复前自动生成 `.data/backups/before-restore-*.json`。详见恢复测试记录。
 
-**附件与 Obsidian 配置**：当前文本版备份针对受管理的 Markdown 与应用记录。外部放入 Vault 的图片、PDF、音频及 `.obsidian` 配置请随整个 Vault 另行复制；JSON 恢复不覆盖这些文件。完整机器迁移建议在停止服务后复制 Vault 和 `.data`，并重新配置 API 密钥（DPAPI 密文与 Windows 账号绑定）。
+**附件与 Obsidian 配置**：无受管理附件时继续导出 v1；笔记或历史引用了受管理附件时导出 v2，包含校验后的原始字节，恢复前校验完整性并只增补缺失附件。附件 JSON 上限 49 MiB，超限明确拒绝导出，不产生缺件备份。外部放入 Vault 的图片、PDF、音频及 `.obsidian` 配置仍需随整个 Vault 另行复制。暂存上传回执不进入 JSON。删除笔记或撤销上传不物理清除附件，避免破坏其他引用和历史；未引用文件暂不自动回收。完整机器迁移建议在停止服务后复制 Vault 和 `.data`，并重新配置 API 密钥（DPAPI 密文与 Windows 账号绑定）。
 
 删除只移除当前知识文件、检索片段和研究缓存；历史版本与以前下载的备份仍可能有副本。历史恢复是明确操作，重建索引不会自动恢复删除内容。恢复或合并可能影响多个笔记，请检查预览。清除历史和备份文件是单独的人工维护步骤。
 

@@ -161,3 +161,12 @@
 Capacitor 生成的默认图标和启动图属于模板资源，其许可范围随上述 Capacitor MIT 许可说明；本次未重绘、替换或另行引入媒体。2026-10-07 已在 b129246 构建的实际 APK ZIP 条目中确认 [android-third-party-notices.txt](../public/android-third-party-notices.txt) 随包收录；这不扩展上文注明的传递依赖审计范围。
 
 2026-10-07 依赖安全修复：MCP SDK 从 1.30.0 升至 1.31.0（MIT，许可文件保持存在），修复 GHSA-6qxp-vccf-f47h。旧清单版本不代表当前锁文件。
+
+
+## 第一层附件新增依赖（2026-10-14）
+
+相对 `164ee4f` 增加26个锁定包；版本、锁文件integrity、npm官方元数据一致性及随包许可证文件SHA-256见 [增量清单](attachment-dependencies.json)。本次逐项核对26个版本的官方dist.integrity，均与锁文件一致；不是重新审计历史全部依赖。
+
+直接依赖：FilePond 4.32.12、file-validate-type 1.2.9、file-validate-size 2.2.8、image-preview 4.6.12 均MIT；Mammoth 1.13.0为BSD-2-Clause；yauzl 3.4.0为MIT。JSZip采用其MIT选项，pako保留MIT与Zlib附属条件，duck的BSD声明已按随包正文核为BSD-2-Clause，isarray的MIT正文位于README。其余传递依赖见机器清单。代码从已安装包的固定dist路径提供，不复制删改其版权头，不打包node_modules；安装物保留随包许可。未选择或更改本项目许可证。
+
+高危生产审计通过但仍有1项moderate：Mammoth CLI的argparse引入sprintf-js 1.0.3，详见 [附件已知边界](SOURCE_FILES.md#验证与已知边界)。只调用worker内rawText API，未引入CLI执行；不以审计退出码0声称无漏洞。

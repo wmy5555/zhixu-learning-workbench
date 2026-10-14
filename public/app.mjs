@@ -1,6 +1,8 @@
 import { api, ApiError, startSession } from "./api.mjs";
 import { parseSourceFile } from "./source-exchange.mjs";
 import { renderMarkdown } from "./markdown-reader.mjs";
+import { createFileImportPanel, attachmentPanel, canProcessFile, sourceFileNotice, imageInsertControls } from "./source-files.mjs";
+import { attachmentUrl } from "./api.mjs";
 import { createProcessFeedback } from "./process-feedback.mjs";
 import { createSourceMap } from "./source-map.mjs";
 import { initSidebar } from "./sidebar.mjs";
@@ -103,8 +105,12 @@ function sourceBodyPreview(value, length = 420) {
   return text.length > length ? `${text.slice(0, length)}\n…` : text;
 }
 
-function sourceReadingBody(value, className = '', emptyText = '暂无原文') {
-  return renderMarkdown(value, { className: `prose ${className}`.trim(), emptyText });
+function sourceReadingBody(value, className = '', emptyText = '暂无原文', note = null) {
+  const images = [note?.meta?.sourceFile, ...(note?.meta?.attachments || [])].filter(file => file?.kind === 'image');
+  return renderMarkdown(value, { className: `prose ${className}`.trim(), emptyText, imageResolver: target => {
+    const file = images.find(item => target === '../.zhixu-attachments/' + item.id);
+    return file ? attachmentUrl(note.id, file.id) : '';
+  } });
 }
 
 function historyReadingBody(note, version) {
@@ -508,7 +514,8 @@ async function renderCapture() {
       step("4. 个人理解", "只有你的确认，才能形成正式的个人知识。", false),
     ]),
   ]);
-  clear(refs.main).append(el("div", { class: "page-stack" }, [capabilityNotice(), el("div", { class: "split-layout capture-layout" }, [sourceForm, el("div", { class: "page-stack" }, [batchPanel, flowPanel])])]));
+  const filesPanel = !isMobilePrototype() ? createFileImportPanel({ onSaved: () => refreshBootstrap(), onError: handleError }) : null;
+  clear(refs.main).append(el("div", { class: "page-stack" }, [capabilityNotice(), el("div", { class: "split-layout capture-layout" }, [sourceForm, el("div", { class: "page-stack" }, [batchPanel, filesPanel, flowPanel])])]));
 }
 
 function step(title, copy, done) {
@@ -784,10 +791,11 @@ function renderSourceGroupDrawer(source) {
 
   const original = el("details", { class: "original-material", dataset: { tour: "note-original" } }, [
     el("summary", {}, [el("span", { text: "查看原始资料全文" }), el("small", { text: `${String(source.body || "").length} 字` })]),
-    sourceReadingBody(source.body, 'original-body'),
+    sourceReadingBody(source.body, 'original-body', '暂无原文', source),
   ]);
   if (isMobilePrototype()) original.open = true;
   content.append(original);
+  if (attachmentPanel(source)) content.append(attachmentPanel(source));
 
   const currentUrl = safeExternalUrl(meta.url);
   if (meta.platform || meta.author || meta.date || meta.locator || currentUrl) content.append(el("details", { class: "source-metadata" }, [
@@ -810,7 +818,7 @@ function renderSourceGroupDrawer(source) {
     sectionHeading("继续整理", "生成的拆解会继续归入这个窗口。"),
     el("div", { class: "form-actions" }, [
       processControls(source, source.id),
-      button("手动整理为待选学", { onClick: () => manualExtract(source, source.id) }),
+      button("手动整理为待选学", { disabled: !canProcessFile(source), onClick: () => manualExtract(source, source.id) }),
     ]),
     jobs.length ? el("div", { class: "group-job-list" }, jobs.slice(0, 3).map((job) => el("div", { class: "group-job" }, [
       badge(labels.state(job.state), stateTone(job.state)),
@@ -818,7 +826,7 @@ function renderSourceGroupDrawer(source) {
     ]))) : null,
   ]));
 
-  if (!children.length) content.append(emptyState("尚未形成拆解", "可以提交 AI 拆解，按需勾选联网核验，或手动整理一条待选学知识。"));
+  if (!children.length) content.append(emptyState("尚未形成拆解", canProcessFile(source) ? "可以提交 AI 拆解，按需勾选联网核验，或手动整理一条待选学知识。" : sourceFileNotice(source)));
   clear(refs.drawerBody).append(content);
   refs.drawerBody.querySelectorAll('[data-structure-submit]').forEach(updateStructureButton);
   refs.drawerBody.querySelectorAll('.structure-job-status').forEach(updateStructureStatus);
@@ -978,7 +986,7 @@ function renderNoteDrawer(note) {
   const nextActions = el("div", { class: "form-actions", dataset: { tour: "note-lifecycle" } });
   if (note.kind === "source") nextActions.append(
     processControls(note),
-    button("手动整理为待选学", { onClick: () => manualExtract(note) }),
+    button("手动整理为待选学", { disabled: !canProcessFile(note), onClick: () => manualExtract(note) }),
   );
   if (note.kind === "knowledge") nextActions.append(
     button("开始学习", { kind: "primary", onClick: event => beginStudy(note.id, undefined, {}, event.currentTarget || event.target) }),
@@ -1006,6 +1014,7 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
   const form = el("form", { class: "page-stack" });
   const title = el("input", { name: "title", value: note.title || "", required: true });
   const body = el("textarea", { name: "body", textContent: note.body || "", rows: 18, required: true });
+  const imageUploads = [];
   const sourceFields = note.kind === "source" ? el("section", { class: "panel soft" }, [
     sectionHeading("来源信息", "补充或修正当前来源，不会改写最初收集快照"),
     el("div", { class: "form-grid" }, [
@@ -1020,6 +1029,7 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
   form.append(
     el("div", { class: "notice", text: "保存时会核对内容哈希；若文件已被 Obsidian 或其他窗口修改，本次保存会停下并显示冲突。" }),
     field("标题", title), field("正文", tour(body, "note-body")),
+    ...(note.kind === 'source' && !isMobilePrototype() ? [imageInsertControls(body, imageUploads)] : []),
     ...(sourceFields ? [sourceFields] : []),
     el("div", { class: "form-grid" }, [
       el("div", { class: "field" }, [
@@ -1071,7 +1081,7 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
       const sourceMeta = note.kind === "source" ? { platform: data.platform || "", author: data.author || "", url: data.url || "", date: data.date || "", locator: data.locator || "", researchIntervalDays: Number(data.researchIntervalDays) } : {};
       const changedMeta = Object.fromEntries(Object.entries({ privacy: data.privacy, topic: data.topic, depth: data.depth, ...sourceMeta }).filter(([key]) => data[key] !== initialFields[key]));
       if (isMobilePrototype()) for (const key of ["privacy", "depth", "researchIntervalDays"]) delete changedMeta[key];
-      const updated = await api.updateNote(note.id, { body: data.body, title: data.title, expectedHash: note.hash, meta: changedMeta });
+      const updated = await api.updateNote(note.id, { body: data.body, title: data.title, expectedHash: note.hash, meta: changedMeta, ...(imageUploads.length ? { attachmentUploadIds: imageUploads } : {}) });
       toast(updated.hash === note.hash ? "内容未改变，已确认当前设置" : "已保存，并保留版本记录", "success");
       await refreshBootstrap();
       if (returnToSourceId) await refreshSourceGroup(returnToSourceId);
@@ -1110,6 +1120,8 @@ function processControls(note, returnToSourceId = "") {
     el("div", { class: "process-status", role: "status", ariaLive: "polite", hidden: true }),
     el("p", { class: "muted", text: "默认只拆解。生成后可手动联网核验整份资料；已有拆解会复用，人工编辑内容将生成修订建议。" }),
   ]);
+  controls.dataset.fileBlocked = canProcessFile(note) ? '' : 'true';
+  if (sourceFileNotice(note)) controls.append(el('p', { class: 'notice', text: sourceFileNotice(note) }));
   updateProcessControls(controls);
   return controls;
 }
@@ -1117,10 +1129,12 @@ function processControls(note, returnToSourceId = "") {
 function updateProcessControls(controls) {
   const status = processFeedback.status(controls.dataset.processNoteId);
   const pending = Boolean(status?.active);
-  controls.querySelector(".process-submit").disabled = pending;
+  const disabled = pending || controls.dataset.fileBlocked === 'true';
+  controls.querySelector(".process-submit").disabled = disabled;
   controls.querySelector(".process-submit").textContent = pending ? (status.type === 'structure' ? '逻辑关系分析中…' : "AI 拆解处理中…") : "提交 AI 拆解";
-  controls.querySelector(".process-research").disabled = pending;
-  controls.querySelector("input").disabled = pending;
+  controls.querySelector(".process-research").disabled = disabled;
+  controls.querySelector("input").disabled = disabled;
+  if (disabled) controls.querySelector("input").checked = false;
   const indicator = controls.querySelector(".process-status");
   indicator.hidden = !status;
   clear(indicator).append(...[pending ? el("span", { class: "spinner process-spinner", ariaHidden: "true" }) : null,
