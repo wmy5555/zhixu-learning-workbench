@@ -1,4 +1,5 @@
 import { api } from "./api.mjs";
+import { renderMarkdown } from "./markdown-reader.mjs";
 import { el, button, badge, clear, toast, confirmAction, containDialogKeyboard } from "./ui.mjs";
 import { chapters, getCurriculum } from "./onboarding-curriculum.mjs";
 import { materials, customMaterial, customSample, getMaterial, materialSample } from "./onboarding-materials.mjs";
@@ -40,7 +41,7 @@ export function chooseMaterial(initialId = "course") {
         el("p", { class: "fine-print", text: `作者：${item.source.author} · ${item.body.length} 字选段` }),
         el("a", { href: item.source.url, target: "_blank", rel: "noopener noreferrer", text: "查看原文" }),
         el("details", {}, [el("summary", { text: "心得示例" }), el("p", { text: item.note })]),
-        el("details", {}, [el("summary", { text: "原文摘录" }), el("pre", { text: item.body })]),
+        el("details", {}, [el("summary", { text: "原文摘录" }), renderMarkdown(item.body, { className: "prose onboarding-material-body" })]),
         el("p", { class: "fine-print", text: item.source.license }), el("a", { href: "/tutorial-examples/SOURCE-LICENSES.txt", target: "_blank", rel: "noopener noreferrer", text: "来源与许可说明" }));
     }
     [...materials, customMaterial].forEach(item => options.append(el("label", { class: "onboarding-material-option" }, [

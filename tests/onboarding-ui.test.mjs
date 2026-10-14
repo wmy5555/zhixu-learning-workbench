@@ -7,6 +7,7 @@ import { materials, customMaterial, customSample, getMaterial, materialSample } 
 
 const apiSource = await readFile(new URL('../public/api.mjs', import.meta.url), 'utf8');
 const uiSource = await readFile(new URL('../public/ui.mjs', import.meta.url), 'utf8');
+const markdownSource = await readFile(new URL('../public/markdown-reader.mjs', import.meta.url), 'utf8');
 const onboardingSource = await readFile(new URL('../public/onboarding.mjs', import.meta.url), 'utf8');
 const store = initial => {
   const values = new Map(Object.entries(initial || {}));
@@ -177,7 +178,7 @@ async function tutorialBrowser({ modelReady = true, exists = true, narrow = fals
     window: { location: { search: query }, matchMedia: query => ({ matches: query.includes('prefers-reduced-motion') ? reducedMotion : narrow }), addEventListener(type, handler) { windowEvents[type] = handler; }, setTimeout() {}, clearTimeout() {}, setInterval(handler) { intervals.push(handler); }, clearInterval() {} },
   });
   const stripped = onboardingSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '');
-  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + stripped + '\nthis.make = createOnboarding; this.progress = getStepProgress;', context);
+  vm.runInContext(uiSource.replaceAll('export ', '') + '\nconst renderMarkdown = (() => {\n' + markdownSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn renderMarkdown;\n})();\n' + stripped + '\nthis.make = createOnboarding; this.progress = getStepProgress;', context);
   const adapter = { navigate: async step => { navigations.push(step.id || step.view); }, contextChanged: async () => {}, refresh: async () => {}, fillSample: async () => {}, processStatus: () => null };
   const tutorial = context.make(adapter); await tutorial.init();
   return { tutorial, adapter, api, body, workspace, main, drawer, drawerBody, toasts, requests, navigations, contexts, intervals, document, setNarrow(value) { narrow = value; windowEvents.resize?.(); }, progress: context.progress, get state() { return state; }, setState: value => { state = { ...state, ...value }; } };
@@ -493,6 +494,24 @@ test('AI gate prevents chapter two navigation and check cannot manufacture compl
   assert.match(ui.body.textContent, /尚未找到这一步的完成记录/);
   assert.equal(ui.requests.at(-1).data.mode, 'check');
   assert.ok(!('done' in ui.requests.at(-1).data));
+  ui.tutorial.dispose();
+});
+
+test('material choice reads Markdown headings and literal code without changing the selected source', async () => {
+  const ui = await tutorialBrowser({ exists: false });
+  const original = getMaterial('course').body;
+  const expectedCode = original.match(/^```[^\n]*\n([\s\S]*?\n)```/m)?.[1];
+  const pending = click(findButton(ui.tutorial.entryCard(), '开始新手引导'));
+  const reader = descend(ui.body).find(node => node.classList.contains('onboarding-material-body'));
+  assert.ok(reader, 'source excerpt has a reading view');
+  assert.ok(descend(reader).some(node => node.tagName === 'H2'));
+  assert.ok(expectedCode, 'selected material contains a fenced code sample');
+  const codeNodes = descend(reader).filter(node => node.tagName === 'CODE');
+  assert.ok(codeNodes.length);
+  assert.equal(codeNodes[0].textContent, expectedCode);
+  assert.equal(getMaterial('course').body, original);
+  await click(findButton(ui.body, '取消')); await pending;
+  assert.ok(!ui.requests.some(call => call.action === 'start'));
   ui.tutorial.dispose();
 });
 
