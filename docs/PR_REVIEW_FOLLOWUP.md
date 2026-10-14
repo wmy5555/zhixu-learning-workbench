@@ -8,6 +8,8 @@
 
 整合组合实际执行声明版本 pnpm 11.19.0 的 `pnpm verify`：269 个跟踪文件检查、858/858 测试及 20 条合成检索检查通过，0 失败/跳过/取消。保留沙箱 DPAPI 中止与包管理器对齐过程的日志，不把中断运行标作通过。正文和服务没有手工解决产品冲突，#70 组件、样式及对应回归文件与 main 原样一致；当前提交四项 CI 与新增功能审查须另行核对。
 
+[PR #71](https://github.com/wmy5555/zhixu-learning-workbench/pull/71) 的候选 `403454b4a11e12ca650ef5c73c5b6b4eb2b77f6b` 已通过 [CI 38595547821](https://github.com/wmy5555/zhixu-learning-workbench/actions/runs/38595547821) 的 Windows/Linux Quality、Secrets、Dependencies 四项检查。主执行会话对其后的新增实质功能各发一次初审：[代码请求](https://github.com/wmy5555/zhixu-learning-workbench/pull/71#issuecomment-6172770464)覆盖读回、分批恢复、候选来源、撤销恢复及 #70 兼容；[安全请求](https://github.com/wmy5555/zhixu-learning-workbench/pull/71#issuecomment-6172772362)覆盖不可信分批输入、路径与覆盖保护、回执版本、本机会话/CSRF 确认、人工编辑与依赖冲突。两者均明确不是重找 #66 旧报告或重置其次数；截至本条登记，公开摘要仍在运行，尚无可读的新增审阅意见或独立安全结论。此后仅补这条记录，代码输入保持不变，复用上述 858 项实际结果；新提交 CI 和审阅最终结果由主会话继续核对。
+
 ## 2026-10-14 网页原文阅读、折叠与搜索建议
 
 修改前增量读取相关PR #40、#56、#61、#62的普通评论、行内反馈与总结。关闭抽屉后重复Esc、切库前确认、刷新等待期冻结与迟到面板更新等已采纳修复在main保留；本轮只调整资料阅读、现有栏折叠、精确建议关联及当前请求/上下文挂载保护。未重启旧审查或扩大为独立reviewer。
