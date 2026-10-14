@@ -1,0 +1,184 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
+import { createHash } from 'node:crypto';
+import { createMarkdownEditor, richFallbackReason, controlledAssetUrl, guardEditorImages } from '../public/markdown-editor.mjs';
+
+const context = { console, setTimeout, clearTimeout, TextEncoder, TextDecoder };
+context.global = context; context.globalThis = context; context.window = context;
+vm.createContext(context);
+vm.runInContext(fs.readFileSync(new URL('../public/vendor/vditor/dist/js/lute/lute.min.js', import.meta.url), 'utf8'), context);
+function engine() {
+  const lute = context.Lute.New();
+  lute.SetSanitize(true); lute.SetEmoji(false); lute.SetInlineMath(false);
+  lute.SetVditorCodeBlockPreview(false); lute.SetVditorMathBlockPreview(false);
+  return lute;
+}
+class Element {
+  constructor(tag) { this.tagName = tag; this.children = []; this.events = {}; this.attributes = {}; this.hidden = false; this.disabled = false; this.dataset = {}; }
+  set value(value) { this._value = String(value).replace(/\r\n?/g, '\n'); }
+  get value() { return this._value || ''; }
+  append(...nodes) { for (const node of nodes) { node.parentNode = this; this.children.push(node); } }
+  addEventListener(name, handler) { this.events[name] = handler; }
+  setAttribute(name, value) { this.attributes[name] = value; }
+  getAttribute(name) { return this.attributes[name]; }
+  focus() {}
+}
+function fixture(value, options = {}) {
+  globalThis.Node = Element;
+  globalThis.document = { createElement: tag => new Element(tag), createTextNode: text => Object.assign(new Element('text'), { textContent: text }) };
+  globalThis.window = { Lute: context.Lute };
+  const textarea = new Element('textarea'); textarea.value = value;
+  let editor;
+  class Vditor {
+    constructor(host, config) {
+      this.vditor = { lute: engine() }; this.config = config; editor = this;
+      this.setValue(''); queueMicrotask(config.after);
+    }
+    getValue() { return this.markdown; }
+    setValue(value) { this.markdown = this.vditor.lute.VditorDOM2Md(this.vditor.lute.Md2VditorDOM(value)); }
+    insertValue(value) { this.setValue(this.markdown + value); }
+    focus() {}
+    destroy() { this.destroyed = true; }
+  }
+  const root = createMarkdownEditor(textarea, { value, loadEditor: async () => Vditor, ...options });
+  return { root, textarea, get editor() { return editor; }, host: root.children[2], status: root.children[3] };
+}
+
+test('real parser normalization cannot rewrite untouched Markdown across repeated mode switches', async () => {
+  for (const source of ['# 标题\r\n\r\n- 一\r\n- 二  \r\n', '无末尾换行', '\n\n**粗体**\n\n\n', ':doge: 与 :smile:']) {
+    const f = fixture(source);
+    assert.equal(f.root.getValue(), source);
+    for (let i = 0; i < 3; i++) {
+      await f.root.switchMode('rich'); assert.equal(f.root.getMode(), 'rich');
+      assert.equal(f.root.getValue(), source);
+      await f.root.switchMode('source'); assert.equal(f.root.getValue(), source);
+    }
+    f.root.destroy();
+  }
+});
+
+test('both modes edit the same draft and immediate read sees rich edits without waiting for debounce', async () => {
+  const f = fixture('# 原标题\r\n\r\n原文');
+  f.textarea.value += '\n\n源码增加';
+  await f.root.switchMode('rich');
+  assert.ok(f.editor.getValue().includes('源码增加'));
+  f.editor.insertValue('\n\n**可视化增加**');
+  assert.ok(f.root.getValue().includes('**可视化增加**'));
+  await f.root.switchMode('source');
+  assert.ok(f.textarea.value.includes('源码增加'));
+  assert.ok(f.textarea.value.includes('**可视化增加**'));
+  f.textarea.value += '\n再次编辑';
+  await f.root.switchMode('rich');
+  assert.ok(f.root.getValue().endsWith('再次编辑'));
+  f.root.destroy();
+});
+
+test('unsupported extensions and inline formulas explicitly stay in source with exact bytes', async () => {
+  for (const source of ['[[知识双链]]\r\n', '![[image.png]]', '<details><summary>正文</summary>保留</details>', '<!-- 原文标记 -->\n正文', '$x^2$\n', '---\ntitle: 元数据\n---\n正文', ':::custom\n保留\n:::']) {
+    const f = fixture(source); await f.root.switchMode('rich');
+    assert.equal(f.root.getMode(), 'source'); assert.equal(f.root.getValue(), source);
+    assert.match(f.status.textContent, /保留源码/);
+    f.root.destroy();
+  }
+  const lute = engine();
+  for (const source of ['```html\n<img onerror=alert(1)>\n```', '~~~plantuml\nAlice -> Bob\n~~~', '$$\nx^2\n$$', '| a | b |\n|---|---|\n|1|2|']) assert.equal(richFallbackReason(source, lute), '');
+});
+
+test('Markdown editing and preview conversion sanitize executable payloads while code stays literal', () => {
+  const lute = engine();
+  for (const source of ['[危险](javascript:alert(1))', '[危险](JaVaScRiPt:alert(1))', '<img src="x" onerror="alert(1)">', '<svg onload="alert(1)"></svg>', '<script>alert(1)</script>']) {
+    const editing = lute.Md2VditorDOM(source);
+    const preview = lute.Md2HTML(source);
+    for (const html of [editing, preview]) {
+      assert.doesNotMatch(html, /<(?:script|iframe)\b/i);
+      assert.doesNotMatch(html, /<[^>]+\son\w+\s*=/i);
+      assert.doesNotMatch(html, /(?:href|src)="\s*javascript:/i);
+    }
+  }
+  const code = lute.Md2VditorDOM('```html\n<img src=x onerror=alert(1)>\n```');
+  assert.ok(code.includes('&lt;img')); assert.doesNotMatch(code, /<img\b/);
+  // Upstream permits iframes in its sanitizer; the adapter refuses raw HTML.
+  assert.match(richFallbackReason('<iframe src="https://example.invalid"></iframe>', lute), /保留源码/);
+});
+
+test('HTML clipboard embeds switch to literal source instead of entering the rich DOM', async () => {
+  const f = fixture('正文'); await f.root.switchMode('rich');
+  f.host.events.paste({ preventDefault() {}, stopImmediatePropagation() {}, clipboardData: { files: [], getData: type => type === 'text/html' ? '<iframe src="https://example.invalid"></iframe>' : '' } });
+  assert.equal(f.root.getMode(), 'source'); assert.ok(f.root.getValue().includes('<iframe'));
+  assert.equal(f.editor.getValue().includes('<iframe'), false);
+  assert.match(f.status.textContent, /追加到源码末尾/);
+  f.root.destroy();
+});
+
+test('HTML clipboard is sanitized before Markdown insertion, and unsupported binary paste is not embedded', async () => {
+  const f = fixture('正文'); await f.root.switchMode('rich');
+  let stopped = 0;
+  f.host.events.paste({ preventDefault() {}, stopImmediatePropagation() { stopped++; }, clipboardData: { files: [], getData: type => type === 'text/html' ? '<p><strong>粘贴粗体</strong><img src=x onerror=alert(1)><a href="javascript:alert(2)">危险</a><script>alert(3)</script></p>' : '粘贴文字' } });
+  assert.equal(stopped, 1); assert.ok(f.root.getValue().includes('**粘贴粗体**'));
+  assert.doesNotMatch(f.editor.vditor.lute.Md2VditorDOM(f.root.getValue()), /<[^>]+\son\w+\s*=|javascript:|<script/i);
+  const before = f.root.getValue();
+  f.host.events.paste({ preventDefault() {}, stopImmediatePropagation() {}, clipboardData: { files: [{ type: 'image/png', name: 'local.png' }] } });
+  assert.equal(f.root.getValue(), before); assert.match(f.status.textContent, /尚未接入/);
+  assert.equal(f.editor.config.cache.enable, false); assert.equal(f.editor.config.preview.markdown.sanitize, true);
+  f.root.destroy();
+});
+
+test('late load/cancel and loading failures preserve the current draft', async () => {
+  let resolve;
+  const f = fixture('原文\r\n', { loadEditor: () => new Promise(done => { resolve = done; }) });
+  const pending = f.root.switchMode('rich'); await f.root.switchMode('source'); resolve(class {}); await pending;
+  assert.equal(f.root.getMode(), 'source'); assert.equal(f.root.getValue(), '原文\r\n');
+  const failed = fixture('保留', { loadEditor: async () => { throw new Error('断网'); } });
+  await failed.root.switchMode('rich'); assert.equal(failed.root.getValue(), '保留'); assert.match(failed.status.textContent, /断网/);
+});
+
+test('injected image uploads accept only a stable attachment identity and cannot insert after changing modes', async () => {
+  const assetId = 'b'.repeat(64) + '.png', asset = { attachmentId: assetId, markdownUrl: '../.zhixu-attachments/' + assetId };
+  const pasteFile = f => f.host.events.paste({ preventDefault() {}, stopImmediatePropagation() {}, clipboardData: { files: [{ name: '本地图片.png', type: 'image/png' }] } });
+  const valid = fixture('正文', { uploadImage: async () => asset }); await valid.root.switchMode('rich');
+  pasteFile(valid); await new Promise(setImmediate);
+  assert.ok(valid.root.getValue().includes(asset.markdownUrl)); assert.doesNotMatch(valid.root.getValue(), /blob:|data:image/);
+  const invalid = fixture('正文', { uploadImage: async () => ({ attachmentId: assetId, markdownUrl: 'blob:temporary' }) }); await invalid.root.switchMode('rich');
+  pasteFile(invalid); await new Promise(setImmediate);
+  assert.equal(invalid.root.getValue(), '正文'); assert.match(invalid.status.textContent, /未返回稳定/);
+  let resolve;
+  const late = fixture('保留', { uploadImage: () => new Promise(done => { resolve = done; }) }); await late.root.switchMode('rich');
+  pasteFile(late); await late.root.switchMode('source'); resolve(asset); await new Promise(setImmediate);
+  assert.equal(late.root.getValue(), '保留');
+  valid.root.destroy(); invalid.root.destroy(); late.root.destroy();
+});
+
+test('attachment display URLs must stay on a controlled same-origin note attachment endpoint', () => {
+  const origin = 'http://127.0.0.1:4329';
+  assert.equal(controlledAssetUrl('/api/notes/source/attachments?asset=abc.png', origin), `${origin}/api/notes/source/attachments?asset=abc.png`);
+  for (const value of ['https://remote.invalid/a.png', 'blob:abc', 'file:///C:/secret', 'data:image/svg+xml,a', '/api/settings?asset=a', '/api/notes/x/attachments', '//remote.invalid/api/notes/a/attachments?asset=x']) assert.equal(controlledAssetUrl(value, origin), '');
+});
+
+test('image rendering never places remote URLs in a live src and round-trips only image destinations', () => {
+  const lute = engine(), assetId = 'a'.repeat(64) + '.png', reference = '../.zhixu-attachments/' + assetId;
+  const displayUrl = 'http://127.0.0.1:4329/api/notes/source/attachments?asset=' + assetId;
+  const preview = guardEditorImages(lute, { origin: 'http://127.0.0.1:4329', assetResolver: value => value === reference ? displayUrl : null });
+  const source = `![远图](https://example.invalid/a.png?a=1&b=2)\n\n![附件](${reference})\n\n普通文字 ${displayUrl}\n`;
+  const dom = lute.Md2VditorDOM(source);
+  assert.doesNotMatch(dom, /src="https:\/\/example.invalid/);
+  assert.match(dom, /src="data:image\/gif/); assert.ok(dom.includes(displayUrl));
+  const plainEngine = engine();
+  assert.equal(lute.VditorDOM2Md(dom), plainEngine.VditorDOM2Md(plainEngine.Md2VditorDOM(source)));
+  const edited = lute.SpinVditorDOM(dom);
+  assert.doesNotMatch(edited, /src="https:\/\/example.invalid/);
+  assert.ok(lute.VditorDOM2Md(edited).includes('https://example.invalid/a.png?a=1&b=2'));
+  assert.doesNotMatch(preview(lute.Md2HTML(source)), /src="https:\/\/example.invalid/);
+});
+
+test('vendored runtime matches pinned installed package and recorded hashes; no optional renderer is shipped', () => {
+  const manifest = JSON.parse(fs.readFileSync(new URL('../public/vendor/vditor/manifest.json', import.meta.url)));
+  assert.equal(manifest.version, '4.0.0'); assert.equal(context.Lute.Version, '1.7.6');
+  for (const file of manifest.files) {
+    const bytes = fs.readFileSync(new URL('../public/vendor/vditor/' + file.path, import.meta.url));
+    assert.equal(createHash('sha256').update(bytes).digest('hex'), file.sha256);
+    assert.deepEqual(bytes, fs.readFileSync(new URL('../node_modules/vditor/' + file.path, import.meta.url)));
+  }
+  assert.equal(fs.existsSync(new URL('../public/vendor/vditor/dist/js/katex', import.meta.url)), false);
+});

@@ -18,6 +18,7 @@ const onboardingCss = await readFile(new URL('../public/onboarding.css', import.
 const uiSource = await readFile(new URL('../public/ui.mjs', import.meta.url), 'utf8');
 const markdownSource = await readFile(new URL('../public/markdown-reader.mjs', import.meta.url), 'utf8');
 const appSource = await readFile(new URL('../public/app.mjs', import.meta.url), 'utf8');
+const editorSource = await readFile(new URL('../public/markdown-editor.mjs', import.meta.url), 'utf8');
 const onboardingSource = await readFile(new URL('../public/onboarding.mjs', import.meta.url), 'utf8');
 const sourceMapSource = (await readFile(new URL('../public/source-map.mjs', import.meta.url), 'utf8')).replace(/^import.*;$/m, '').replaceAll('export ', '');
 
@@ -289,7 +290,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
     window: { zhixuAppearance: { getAccent: () => null, getTheme: () => 'light', resolvedTheme: () => 'light', previewAccent: () => ({}), getMode: () => 'light', palette: () => ({}) }, matchMedia: () => ({ matches: false, addEventListener() {} }), history: { replaceState() {} }, location: { hash: '' }, setTimeout() {}, events: {}, addEventListener(name, handler) { this.events[name] = handler; } },
   });
   const stripped = appSource.replace(/import[\s\S]*?from "\.\/api\.mjs";\s*/, '').replace(/import[\s\S]*?from "\.\/ui\.mjs";\s*/, '').replace(/^init\(\);\s*$/m, '').replace('const { createUsagePanel } = await import("./usage.mjs");', '');
-  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + ('const renderMarkdown = (() => {\n' + markdownSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn renderMarkdown;\n})();') + '\n' + sourceMapSource + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { renderSourceGroupDrawer, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
+  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + ('const renderMarkdown = (() => {\n' + markdownSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn renderMarkdown;\n})();') + '\nconst createMarkdownEditor = (() => {\n' + editorSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn createMarkdownEditor;\n})();\n' + sourceMapSource + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { renderSourceGroupDrawer, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
   context.app.beginStudy = vm.runInContext('beginStudy', context);
   context.app.manualExtract = vm.runInContext('manualExtract', context);
   context.app.serializeForm = vm.runInContext('serializeForm', context);
@@ -1427,6 +1428,24 @@ test('saving an untouched source editor submits no display defaults; actual chan
   control(localForm, 'privacy').children.forEach(option => { option.selected = option.value === 'cloud'; });
   await localForm.events.submit({ preventDefault() {} });
   assert.deepEqual(writes[3].meta, { privacy: 'cloud' }, 'an actual privacy change remains explicit');
+});
+
+test('source form reads the current editor draft for dirty checks and hash-protected save, rather than a stale textarea', async () => {
+  const source = { id: 'editor-source', kind: 'source', title: '合成原文', body: '# 原文\r\n\r\n保留', hash: 'original-hash', meta: {} };
+  const writes = [];
+  const app = browser({ updateNote: async (id, body) => { writes.push(plain(body)); throw new Error('合成冲突'); } });
+  app.renderNoteEditor(source);
+  const form = app.refs.drawerBody.children[0], editor = form.querySelector('.markdown-editor');
+  assert.equal(form.hasUnsavedChanges(), false);
+  assert.equal(editor.getValue(), source.body);
+  const richDraft = '# 原文\n\n**可视化编辑尚未同步 textarea**\n';
+  editor.getValue = () => richDraft;
+  assert.equal(form.hasUnsavedChanges(), true);
+  await form.events.submit({ preventDefault() {} });
+  assert.equal(writes[0].body, richDraft);
+  assert.equal(writes[0].expectedHash, source.hash);
+  assert.equal(app.refs.drawerBody.children[0], form);
+  assert.equal(editor.getValue(), richDraft);
 });
 
 test('empty daily plans show the actual reasons with working knowledge and budget entry points', async () => {

@@ -1,6 +1,7 @@
 import { api, ApiError, startSession } from "./api.mjs";
 import { parseSourceFile } from "./source-exchange.mjs";
 import { renderMarkdown } from "./markdown-reader.mjs";
+import { createMarkdownEditor } from "./markdown-editor.mjs";
 import { createProcessFeedback } from "./process-feedback.mjs";
 import { createSourceMap } from "./source-map.mjs";
 import { initSidebar } from "./sidebar.mjs";
@@ -1006,6 +1007,8 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
   const form = el("form", { class: "page-stack" });
   const title = el("input", { name: "title", value: note.title || "", required: true });
   const body = el("textarea", { name: "body", textContent: note.body || "", rows: 18, required: true });
+  const bodyEditor = note.kind === "source" && !isMobilePrototype() ? createMarkdownEditor(body, { value: note.body || "" }) : null;
+  const editorValues = () => { const values = serializeForm(form); if (bodyEditor) values.body = bodyEditor.getValue(); return values; };
   const sourceFields = note.kind === "source" ? el("section", { class: "panel soft" }, [
     sectionHeading("来源信息", "补充或修正当前来源，不会改写最初收集快照"),
     el("div", { class: "form-grid" }, [
@@ -1019,14 +1022,14 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
   ]) : null;
   form.append(
     el("div", { class: "notice", text: "保存时会核对内容哈希；若文件已被 Obsidian 或其他窗口修改，本次保存会停下并显示冲突。" }),
-    field("标题", title), field("正文", tour(body, "note-body")),
+    field("标题", title), bodyEditor ? el("div", { class: "field" }, [el("span", { class: "field-label", text: "正文" }), tour(bodyEditor, "note-body")]) : field("正文", tour(body, "note-body")),
     ...(sourceFields ? [sourceFields] : []),
     el("div", { class: "form-grid" }, [
       el("div", { class: "field" }, [
         field("学习状态", el("input", { value: labels.stage(meta.stage), disabled: true }), "学习状态请通过相应操作调整，以便保留理由。"),
         note.kind === "knowledge" ? button("前往状态操作", { kind: "text compact", onClick: async () => {
           const context = api.getContext();
-          if (JSON.stringify(serializeForm(form)) !== originalValues && !await confirmAction({ title: "前往状态操作？", message: "当前修改尚未保存。请取消并先保存；也可以放弃这些修改，返回这条知识的详情进行状态操作。", confirmText: "放弃修改并前往" })) return;
+          if (JSON.stringify(editorValues()) !== originalValues && !await confirmAction({ title: "前往状态操作？", message: "当前修改尚未保存。请取消并先保存；也可以放弃这些修改，返回这条知识的详情进行状态操作。", confirmText: "放弃修改并前往" })) return;
           const latest = api.getContext();
           if (latest.practiceId !== context.practiceId || latest.version !== context.version || refs.drawerBody.querySelector("form") !== form) return;
           renderNoteDrawer(note);
@@ -1044,17 +1047,17 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
     ]),
     el("div", { class: "form-actions" }, [button("保存修改", { kind: "primary", type: "submit" }), button("取消", { onClick: () => returnToSourceId ? refreshSourceGroup(returnToSourceId).catch(handleError) : renderNoteDrawer(note) })]),
   );
-  const initialFields = serializeForm(form);
+  const initialFields = editorValues();
   if (isMobilePrototype()) {
     for (const name of ["privacy", "depth", "researchIntervalDays"]) form.querySelector(`[name="${name}"]`).disabled = true;
   }
-  const originalValues = JSON.stringify(serializeForm(form));
-  form.hasUnsavedChanges = () => JSON.stringify(serializeForm(form)) !== originalValues;
+  const originalValues = JSON.stringify(editorValues());
+  form.hasUnsavedChanges = () => JSON.stringify(editorValues()) !== originalValues;
   let confirmingDiscard = false;
   form.confirmDiscardChanges = async () => {
     if (confirmingDiscard) return false;
     const context = api.getContext();
-    if (JSON.stringify(serializeForm(form)) !== originalValues) {
+    if (JSON.stringify(editorValues()) !== originalValues) {
       confirmingDiscard = true;
       try {
         if (!await confirmAction({ title: "放弃未保存的修改？", message: "当前修改尚未保存。取消可继续编辑；确认放弃后，本次输入不会保存。", confirmText: "放弃修改", danger: true })) return false;
@@ -1065,8 +1068,9 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
   };
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const data = serializeForm(form);
+    const data = editorValues();
     try {
+      if (bodyEditor && !data.body.trim()) throw new Error("正文不能为空。");
       if (!isMobilePrototype() && note.kind === "source" && (!Number.isInteger(Number(data.researchIntervalDays)) || Number(data.researchIntervalDays) < 1 || Number(data.researchIntervalDays) > 365)) throw new Error("核验有效天数应为 1–365 的整数。");
       const sourceMeta = note.kind === "source" ? { platform: data.platform || "", author: data.author || "", url: data.url || "", date: data.date || "", locator: data.locator || "", researchIntervalDays: Number(data.researchIntervalDays) } : {};
       const changedMeta = Object.fromEntries(Object.entries({ privacy: data.privacy, topic: data.topic, depth: data.depth, ...sourceMeta }).filter(([key]) => data[key] !== initialFields[key]));
@@ -1082,6 +1086,7 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
     } catch (error) { handleError(error); }
   });
   clear(refs.drawerBody).append(form);
+  bodyEditor?.mount(refs.drawerBody);
 }
 
 async function deleteNote(note, returnToSourceId = "") {

@@ -1,0 +1,30 @@
+# 原始资料 Markdown 编辑
+
+网页版在「知识库 → 查看整组 → 编辑原始资料」提供「Markdown 源码」和「可视化编辑」。两者编辑同一份正文，保存时仍核对原内容哈希；其他窗口或外部编辑器先修改后，本页会保留草稿并显示冲突，不覆盖新版本。关闭、切换资料和刷新继续沿用未保存保护。
+
+源码模式使用普通文本框，没有语法高亮。可视化模式采用固定 Vditor 4.0.0，提供标题、粗体、斜体、删除线、列表、引用、链接、表格、代码和撤销/重做。只打开、切换模式或直接保存时保留原 Markdown，包括 CRLF、末尾换行和空行；真正编辑可视化内容后，正文采用编辑器的规范 Markdown 格式。
+
+| 内容 | 当前行为 |
+|---|---|
+| 标题、段落、列表、表格、链接 | 可双向编辑；切换不自动保存 |
+| 围栏代码、块公式 | 保留为可编辑源码，不执行代码或加载公式/图表渲染器 |
+| 远程图片、未绑定的本地图片引用 | 显示本地占位，保留原引用，不请求远图 |
+| 已绑定附件 | 调用方注入解析器后可显示同源受控图片；当前独立编辑器分支尚未接入附件分支 |
+| 行内公式、HTML、Obsidian 双链、frontmatter、扩展指令、无法完整往返的 Markdown | 明确保留源码编辑，不丢弃内容；可视化按钮说明原因 |
+| 粘贴格式化 HTML | 先清理危险内容，再转为 Markdown；残留 HTML 或不支持的扩展内容追加到源码末尾并说明 |
+
+编辑器的脚本、样式、Lute、中文界面和图标均在 `public/vendor/vditor/` 自托管。关闭本地草稿缓存，不把资料写进 localStorage。Vditor 的 `preview.markdown.sanitize` 明确开启；HTML 默认保留源码，粘贴不直接插入剪贴板 HTML。图片在进入页面 DOM 前转换为本地占位或受控附件地址，读取 Markdown 时只恢复图片目标，普通文本中的 URL 不被替换。页面原有 CSP、CSRF、会话和外发限制保持有效。
+
+本轮不加载 Vditor 包内可选 KaTeX、图表或 PlantUML 渲染器；这些资源不随网页发布。已有只读 Markdown 入口仍使用原来的安全 DOM 阅读器，不能把它的旧验证代替新编辑器安全验证。没有新增 AI 调用、提示词或外发授权。
+
+## 附件注入契约
+
+`public/markdown-editor.mjs` 的 `createMarkdownEditor(textarea, options)` 接受以下可选回调：
+
+- `assetResolver(markdownUrl)` 返回已绑定附件的同源受控展示 URL，或返回空值。只接受 `/api/notes/<noteId>/attachments?asset=<id>` 地址。
+- `uploadImage(file)` 由附件组件暂存图片并返回 `{ attachmentId, markdownUrl }`；`markdownUrl` 必须为 `../.zhixu-attachments/<sha256.ext>`。不接受 blob、file、临时路径或远程上传地址作为新图片引用。
+- 上传、撤销、恢复、`attachmentUploadIds` 和保存绑定归调用方负责。新上传未保存时没有受控 `displayUrl`，不能用预分配 noteId 伪造预览 URL；保存成功绑定后，才使用真实 noteId 的附件入口。FilePond 自身的临时预览不进入正文。
+
+适配器默认不连接上传接口。没有注入回调时，粘贴/拖入图片会说明使用附件入口，不会嵌入 data URL。`getValue()` 同步读取当前草稿，供保存与未保存检查使用；不能只读取隐藏文本框，因为可视化输入可能仍在等待编辑器的延迟回调。
+
+依赖来源、完整性、各组件许可见 [第三方依赖说明](DEPENDENCY_LICENSES.md) 与随资源保留的 `NOTICE.txt`、许可全文和 `manifest.json`。本项目自身许可证状态不因使用这些组件改变。
