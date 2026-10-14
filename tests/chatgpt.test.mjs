@@ -232,7 +232,9 @@ test('official SDK discovers the ChatGPT tools and stores a real temporary Markd
   const client = new Client({ name: 'zhixu-chatgpt-test', version: '0.1.0' });
   await client.connect(transport); t.after(() => client.close());
   const tools = (await client.listTools()).tools;
-  assert.deepEqual(tools.map(tool => tool.name).sort(), ['get_zhixu_status', 'save_chatgpt_conversation', 'import_chatgpt_history_snapshot', 'search_knowledge', 'read_note', 'read_source', 'related_knowledge'].sort());
+  assert.deepEqual(tools.map(tool => tool.name).sort(), ['get_zhixu_status', 'save_chatgpt_conversation', 'import_chatgpt_history_snapshot', 'import_chatgpt_history_batch', 'preview_chatgpt_capture_undo', 'preview_chatgpt_capture_restore', 'search_knowledge', 'read_note', 'read_source', 'related_knowledge'].sort());
+  assert.ok(!tools.some(tool => /confirm/.test(tool.name)));
+  assert.equal(tools.find(tool => tool.name === 'import_chatgpt_history_batch').inputSchema.properties.baseRevision, undefined);
   assert.equal(tools.find(tool => tool.name === 'save_chatgpt_conversation').annotations.readOnlyHint, false);
   assert.equal(tools.find(tool => tool.name === 'save_chatgpt_conversation').annotations.idempotentHint, true);
   assert.ok(tools.find(tool => tool.name === 'save_chatgpt_conversation').inputSchema.properties.sync);

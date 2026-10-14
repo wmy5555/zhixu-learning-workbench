@@ -196,6 +196,10 @@ export const api = {
   history: (id) => request(`/api/history/${encodeURIComponent(id)}`),
   restoreVersion: (id, body) => request(`/api/history/${encodeURIComponent(id)}/restore`, { method: "POST", body }),
   proposals: () => request("/api/proposals"),
+  captureUndoRequests: () => request("/api/capture-undo", { scope: "main" }),
+  captureUndoConfirm: (body) => request("/api/capture-undo/confirm", { method: "POST", body, scope: "main" }),
+  captureRestorePreview: (body) => request("/api/capture-undo/restore-preview", { method: "POST", body, scope: "main" }),
+  captureRestoreConfirm: (body) => request("/api/capture-undo/restore-confirm", { method: "POST", body, scope: "main" }),
   proposalAction: (id, body) => request(`/api/proposals/${encodeURIComponent(id)}/action`, { method: "POST", body }),
   demo: () => request("/api/demo", { method: "POST", body: {} }),
 };

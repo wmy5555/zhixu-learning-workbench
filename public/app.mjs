@@ -2326,8 +2326,10 @@ function keyValueObject(object) {
 
 async function proposalsPanel() {
   const data = await api.proposals();
+  const undo = api.getContext().practiceId ? { requests: [] } : await api.captureUndoRequests();
   const proposals = asArray(data.proposals);
   return el("section", { dataset: { tour: "system-proposals" } }, [
+    captureUndoPanel(asArray(undo.requests)),
     sectionHeading("MCP 写入提案", "外部客户端只能提交草稿；接受时仍会核对原内容哈希"),
     proposals.length ? el("div", { class: "list" }, proposals.map((proposal) => el("article", { class: "list-item" }, [
       el("div", { class: "item-symbol", text: "提" }),
@@ -2335,6 +2337,40 @@ async function proposalsPanel() {
       (proposal.state || "pending") === "pending" ? el("div", { class: "item-actions" }, [button("审阅差异", { kind: "primary compact", onClick: () => openProposal(proposal) }), button("拒绝", { kind: "text compact", onClick: () => actProposal(proposal.id, "reject") })]) : null,
     ]))) : emptyState("没有待确认提案", "默认只读 MCP 不会产生提案；启用写入提案后，外部修改仍需在此确认。"),
   ]);
+}
+
+function captureUndoPanel(requests) {
+  if (!requests.length) return null;
+  const names = { preview: "等待本机确认", pending: "待继续", partial: "部分完成", undone: "已撤销，可恢复", restored: "已恢复" };
+  return el("section", { class: "panel soft" }, [
+    sectionHeading("会话保存撤销", "仅处理你指定的保存回执；原文可恢复，后续编辑或依赖变化会阻止操作。"),
+    ...requests.map(item => {
+      const restore = item.kind === "restore", actionable = ["preview", "pending", "partial"].includes(item.state);
+      const expired = item.state === "preview" && item.expiresAt <= Date.now();
+      return el("article", { class: "list-item no-icon" }, [
+        el("div", { class: "item-copy" }, [
+          el("h3", { text: `${restore ? "恢复" : "撤销"} · ${names[item.state] || "需核对"}` }),
+          el("p", { text: item.restoreToRevision ? `更新回退到第 ${item.restoreToRevision} 版，旧资料继续保留。` : "初次保存的原资料和本次新建候选进入可恢复记录。" }),
+          el("ul", {}, asArray(item.items).map(entry => el("li", { text: `${entry.title} · ${entry.action === "recycle" ? "移入可恢复记录" : entry.action === "restore_from_undo" ? "恢复撤销前内容" : "回退版本"}` }))),
+          el("p", { class: "fine-print", text: expired ? "预览已过期，请在聊天中重新预览。" : `预览编号：${item.previewId}` }),
+        ]),
+        actionable ? button(restore ? "确认恢复" : "确认撤销", { kind: "danger compact", disabled: expired, onClick: () => confirmCaptureUndo(item) }) :
+          item.kind === "undo" && item.state === "undone" ? button("预览恢复", { onClick: async () => { try { await api.captureRestorePreview({ undoId: item.undoId }); await renderSystem(); } catch (error) { handleError(error); } } }) : null,
+      ]);
+    }),
+  ]);
+}
+
+async function confirmCaptureUndo(item) {
+  const restore = item.kind === "restore";
+  const ok = await confirmAction({ title: restore ? "恢复这次撤销？" : "撤销这次保存？", message: `只处理上方列出的 ${asArray(item.items).length} 项资料。执行前会重新核对内容和依赖，发生冲突时停止；不会永久删除原文。`, confirmText: restore ? "确认恢复" : "确认撤销", danger: true });
+  if (!ok) return;
+  try {
+    const result = await (restore ? api.captureRestoreConfirm({ previewId: item.previewId }) : api.captureUndoConfirm({ previewId: item.previewId }));
+    const complete = ["undone", "already_undone", "restored", "already_restored"].includes(result.status);
+    toast(complete ? "操作已完成，原文和审计记录已保留。" : "尚未全部完成，请核对冲突后继续。", complete ? "success" : "error");
+    await refreshBootstrap(); await renderSystem();
+  } catch (error) { handleError(error); }
 }
 
 function openProposal(proposal) {

@@ -157,6 +157,9 @@ export function createKnowledgeClient({
     },
     captureConversation(input) { return request(`${apiPrefix}/conversations`, { method: "POST", body: input }); },
     captureHistorySnapshot(input) { return request(`${apiPrefix}/history-snapshots`, { method: "POST", body: input, requestTimeoutMs: 75000 }); },
+    captureHistoryBatch(input) { return request(`${apiPrefix}/history-batches`, { method: "POST", body: input, requestTimeoutMs: 75000 }); },
+    previewCaptureUndo(input) { return request(`${apiPrefix}/undo-previews`, { method: "POST", body: input }); },
+    previewCaptureRestore(input) { return request(`${apiPrefix}/restore-previews`, { method: "POST", body: input }); },
     status() { return request(`${apiPrefix}/status`); },
   };
 }

@@ -27,6 +27,16 @@ export function atomicWrite(file, content) {
   }
   finally { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); }
 }
+function atomicWriteExclusive(file, content) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(tmp, content, { mode: 0o600, flag: 'wx' });
+    // Linking a complete same-directory file is atomic and cannot replace an occupant.
+    // Unsupported filesystems fail closed; never fall back to an overwriting rename.
+    fs.linkSync(tmp, file);
+  } finally { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); }
+}
 const folders = { source: '01 原始资料', knowledge: '02 知识', mistake: '03 错题修正', topic: '04 主题', report: '05 发现' };
 const reserved = new Set(['id', 'kind', 'title', 'createdAt', 'updatedAt']);
 const linkStart = '<!-- zhixu-managed-links:start -->';
@@ -82,6 +92,27 @@ export class Store {
   remove(namespace, key) { this.db.prepare('DELETE FROM records WHERE namespace=? AND key=?').run(namespace, key); }
   row(id) { return this.db.prepare('SELECT * FROM notes WHERE id=?').get(id); }
   read(id) { const row = this.row(id); if (!row) fail('内容不存在，可能已经删除或存在文件冲突。', 'NOT_FOUND', 404); return JSON.parse(row.json); }
+  readPersisted(id, { includeRaw = false } = {}) {
+    const row = this.row(id);
+    if (!row) fail('已保存内容缺失，无法完成磁盘核验。', 'PERSISTED_UNAVAILABLE', 409);
+    try {
+      if (fs.lstatSync(this.vaultDir).isSymbolicLink()) throw new Error('unsafe root');
+      const file = assertTree(path.resolve(this.vaultDir, row.path), this.vaultDir);
+      const stat = fs.statSync(file);
+      if (!stat.isFile() || stat.size > 5_000_000) throw new Error('invalid persisted file');
+      const bytes = fs.readFileSync(file), raw = bytes.toString('utf8'), digest = hash(bytes), { meta, body } = parse(raw);
+      const fresh = { id, kind: folders[meta.kind || 'knowledge'] ? (meta.kind || 'knowledge') : 'knowledge',
+        title: String(meta.title || path.basename(file, '.md')), body,
+        meta: Object.fromEntries(Object.entries(meta).filter(([key]) => !reserved.has(key))),
+        hash: digest, path: path.relative(this.vaultDir, file).replaceAll('\\', '/'),
+        updatedAt: meta.updatedAt || stat.mtime.toISOString() };
+      if ((meta.id !== undefined && meta.id !== id) || row.hash !== digest || row.raw !== raw ||
+        stableJSON(JSON.parse(row.json)) !== stableJSON(fresh)) throw new Error('disk/index mismatch');
+      return includeRaw === true ? { ...fresh, raw } : fresh;
+    } catch {
+      fail('磁盘内容与保存索引不一致，尚未通过完整性核验；已保留现有文件。', 'PERSISTED_MISMATCH', 409);
+    }
+  }
   list() { return this.db.prepare('SELECT json FROM notes ORDER BY rowid DESC').all().map(r => JSON.parse(r.json)); }
   version(row, reason) {
     if (!row) return;
@@ -303,13 +334,15 @@ export class Store {
     if (!preview.changed) return this.read(id);
     return this.update(id, { expectedHash, body: preview.body, meta: preview.meta });
   }
-  create({ id = randomUUID(), kind = 'knowledge', title, body, meta = {} }) {
+  create({ id = randomUUID(), kind = 'knowledge', title, body, meta = {}, exclusive = false }) {
     if (!folders[kind]) fail('不支持的知识文件类型。');
     if (!String(title || '').trim() || !String(body || '').trim()) fail('标题和正文不能为空。');
     if (this.row(id)) fail('内容 id 已存在。', 'CONFLICT', 409);
     const file = assertTree(path.join(this.vaultDir, folders[kind], `${id}.md`), this.vaultDir);
     const fields = { ...meta, id, kind, title: String(title).slice(0, 200), createdAt: now(), updatedAt: now() };
-    const raw = serialize('', fields, String(body)); atomicWrite(file, raw);
+    const raw = serialize('', fields, String(body));
+    try { if (exclusive === true) atomicWriteExclusive(file, raw); else atomicWrite(file, raw); }
+    catch (error) { if (exclusive === true && error.code === 'EEXIST') fail('目标文件已被占用，未覆盖已有内容。', 'CONFLICT', 409); throw error; }
     const result = this.upsert(file, raw, id); this.version(this.row(id), kind === 'source' ? '原始输入快照' : '首次创建'); this.syncMirrors(); return result;
   }
   update(id, { body, title, meta = {}, expectedHash }) {
@@ -325,7 +358,9 @@ export class Store {
     this.scan(); const row = this.row(id); this.read(id);
     if (!expectedHash || expectedHash !== row.hash) fail('删除前检测到版本变化。', 'CONFLICT', 409);
     this.version(row, '用户删除');
-    fs.unlinkSync(assertTree(path.join(this.vaultDir, row.path), this.vaultDir));
+    const file = assertTree(path.join(this.vaultDir, row.path), this.vaultDir);
+    if (hash(fs.readFileSync(file)) !== expectedHash) fail('版本审计期间文件发生变化，未删除新内容。', 'CONFLICT', 409);
+    fs.unlinkSync(file);
     this.db.prepare('DELETE FROM notes WHERE id=?').run(id); this.db.prepare('DELETE FROM index_chunks WHERE noteId=?').run(id);
     this.remove('changed', id); this.put('deleted', id, { id, deletedAt: now() }); this.syncMirrors(); return { deleted: true };
   }
@@ -338,6 +373,40 @@ export class Store {
     if (expectedHash) fail('已删除文件恢复不应携带现行哈希。', 'CONFLICT', 409);
     this.remove('deleted', id);
     return this.create({ id, kind: parsed.meta.kind, title: parsed.meta.title, body: parsed.body, meta: parsed.meta });
+  }
+  restoreVersionExact(id, versionId, { expectedHash, expectMissing = false } = {}) {
+    if (!/^[A-Za-z0-9_-]{1,100}$/.test(id || '') || typeof versionId !== 'string' ||
+      (expectMissing ? expectedHash !== undefined : !/^[a-f0-9]{64}$/.test(expectedHash || ''))) {
+      fail('精确恢复必须指定已有版本和当前文件版本，或明确要求文件缺失。', 'EXACT_RESTORE_INVALID', 409);
+    }
+    const version = this.db.prepare('SELECT * FROM versions WHERE id=? AND noteId=?').get(versionId, id);
+    if (!version || hash(version.raw) !== version.hash) fail('恢复所需的原始版本缺失或无法核对。', 'EXACT_RESTORE_UNAVAILABLE', 409);
+    const parsed = parse(version.raw);
+    if (parsed.meta.id !== id || !folders[parsed.meta.kind]) fail('原始版本的身份无法核对。', 'EXACT_RESTORE_INVALID', 409);
+    this.scan();
+    const row = this.row(id);
+    if (this.conflicts.some(conflict => conflict.id === id || conflict.path === version.path)) fail('恢复目标存在文件冲突。', 'EXACT_RESTORE_CONFLICT', 409);
+    const file = assertTree(path.resolve(this.vaultDir, version.path), this.vaultDir);
+    if (expectMissing) {
+      if (row || fs.existsSync(file)) fail('原位置已被使用，未覆盖新内容。', 'EXACT_RESTORE_CONFLICT', 409);
+    } else {
+      if (!row || row.path !== version.path || row.hash !== expectedHash || this.readPersisted(id).hash !== expectedHash) {
+        fail('恢复前当前文件或路径发生变化，未覆盖。', 'EXACT_RESTORE_CONFLICT', 409);
+      }
+      this.version(row, '受限撤销或恢复前原始版本');
+    }
+    // Recheck after the audit write; an external save during it must be retained.
+    if (expectMissing ? this.row(id) || fs.existsSync(file) : this.readPersisted(id).hash !== expectedHash) {
+      fail('版本审计期间文件发生变化，未覆盖。', 'EXACT_RESTORE_CONFLICT', 409);
+    }
+    try { if (expectMissing) atomicWriteExclusive(file, version.raw); else atomicWrite(file, version.raw); }
+    catch (error) { if (expectMissing && error.code === 'EEXIST') fail('恢复位置已被占用，未覆盖已有内容。', 'EXACT_RESTORE_CONFLICT', 409); throw error; }
+    const result = this.upsert(file, version.raw, id, parsed);
+    this.version(this.row(id), '受限精确恢复后的原始版本');
+    this.remove('deleted', id);
+    this.syncMirrors();
+    if (this.readPersisted(id).hash !== version.hash) fail('精确恢复后的磁盘核验未完成。', 'EXACT_RESTORE_VERIFY_FAILED', 409);
+    return result;
   }
   backup() {
     this.scan();
