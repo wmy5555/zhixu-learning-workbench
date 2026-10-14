@@ -10,6 +10,10 @@
 
 [PR #71](https://github.com/wmy5555/zhixu-learning-workbench/pull/71) 的候选 `403454b4a11e12ca650ef5c73c5b6b4eb2b77f6b` 已通过 [CI 38595547821](https://github.com/wmy5555/zhixu-learning-workbench/actions/runs/38595547821) 的 Windows/Linux Quality、Secrets、Dependencies 四项检查。主执行会话对其后的新增实质功能各发一次初审：[代码请求](https://github.com/wmy5555/zhixu-learning-workbench/pull/71#issuecomment-6172770464)覆盖读回、分批恢复、候选来源、撤销恢复及 #70 兼容；[安全请求](https://github.com/wmy5555/zhixu-learning-workbench/pull/71#issuecomment-6172772362)覆盖不可信分批输入、路径与覆盖保护、回执版本、本机会话/CSRF 确认、人工编辑与依赖冲突。两者均明确不是重找 #66 旧报告或重置其次数；截至本条登记，公开摘要仍在运行，尚无可读的新增审阅意见或独立安全结论。此后仅补这条记录，代码输入保持不变，复用上述 858 项实际结果；新提交 CI 和审阅最终结果由主会话继续核对。
 
+初审随后返回四条具体意见，均核实采纳：[恢复替换竞争](https://github.com/wmy5555/zhixu-learning-workbench/pull/71#discussion_r4273338423)、[回收删除竞争](https://github.com/wmy5555/zhixu-learning-workbench/pull/71#discussion_r4273338432)、[started 步骤续跑](https://github.com/wmy5555/zhixu-learning-workbench/pull/71#discussion_r4273338443)、[连续撤销前驱版本](https://github.com/wmy5555/zhixu-learning-workbench/pull/71#discussion_r4273338453)。新增五项回归先实际复现五项失败，修复采用原子移走/核对与独占写入，保留恢复副本和操作审计；重试只协调同一操作的完整持久证据及准确前后版本，不重复删除或替换；前驱哈希随成功回执保留，旧记录仅在唯一前驱证据时重建。补充新占位和重试后人工修改的拒绝回归后，撤销、接入控制、增量三个文件共 61/61 实际通过。858 项是修复前证据，新修改须另跑综合验证；修复后的代码复审只由主执行会话按定向范围决定，不追加初审或重复安全请求。
+
+上述修复的综合验证已实际通过：269 个跟踪文件检查、866/866 测试、20 条合成检索，0 失败/跳过/取消；后续只补这份证据，235 个非 Markdown 跟踪输入摘要保持相同。修复提交的四项 CI、线程处理与唯一一次针对修复的代码复审由主会话继续核对，不依据初审“已完成”推断新修复或安全通过。
+
 ## 2026-10-14 网页原文阅读、折叠与搜索建议
 
 修改前增量读取相关PR #40、#56、#61、#62的普通评论、行内反馈与总结。关闭抽屉后重复Esc、切库前确认、刷新等待期冻结与迟到面板更新等已采纳修复在main保留；本轮只调整资料阅读、现有栏折叠、精确建议关联及当前请求/上下文挂载保护。未重启旧审查或扩大为独立reviewer。

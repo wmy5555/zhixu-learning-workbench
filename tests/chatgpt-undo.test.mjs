@@ -18,11 +18,13 @@ const input = () => ({ requestId: randomUUID(), title: '合成撤销会话', sum
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(tempRoot, 'chatgpt-undo-'));
   const config = { dataDir: path.join(root, 'data'), vaultDir: path.join(root, 'vault'), scheduler: false };
-  const service = createService(config); service.updateSettings({ mcp: { chatgptEnabled: true } });
+  let service = createService(config); service.updateSettings({ mcp: { chatgptEnabled: true } });
   const authority = Symbol('synthetic local user confirmation'); let clock = Date.now();
-  const undo = createChatgptUndo({ getStore: () => service.store, localAuthority: authority, clock: () => clock, ttl: 60000 });
+  const makeUndo = () => createChatgptUndo({ getStore: () => service.store, localAuthority: authority, clock: () => clock, ttl: 60000 });
+  let undo = makeUndo();
   t.after(() => { service.store.db.close(); assert.ok(root.startsWith(tempRoot + path.sep)); fs.rmSync(root, { recursive: true, force: true }); });
-  return { service, store: service.store, config, undo, authority, expire() { clock += 60001; },
+  return { get service() { return service; }, get store() { return service.store; }, get undo() { return undo; }, config, authority, expire() { clock += 60001; },
+    restart() { service.store.db.close(); service = createService(config); undo = makeUndo(); },
     file(noteId) { return path.join(config.vaultDir, service.store.read(noteId).path); } };
 }
 const selector = (value, receipt) => ({ requestId: value.requestId, noteId: receipt.noteId, syncRevision: receipt.syncRevision ?? null });
@@ -187,6 +189,8 @@ test('an audit persistence failure after a file operation is explicitly partial 
   assert.equal(result.completedItems, 1); assert.equal(f.store.list().length, 2);
   assert.ok(f.store.history(saved.importedNoteIds[0]).length > 0);
   assert.notEqual(f.store.get('chatgptUndo', preview.previewId).state, 'undone');
+  f.store.put = put; f.restart();
+  assert.equal(f.undo.confirmUndo({ previewId: preview.previewId }, f.authority).status, 'undone');
 });
 
 test('restore refuses reused identities before writes', t => {
@@ -307,4 +311,95 @@ test('restoration of a missing source also uses an atomic claim and preserves a 
   } finally { fs.linkSync = link; }
   assert.equal(fs.readFileSync(claimedFile, 'utf8'), '恢复期间出现的新文件，不能覆盖。');
   assert.equal(f.store.row(saved.noteId), undefined);
+});
+
+test('an external save at the final restore filesystem operation is preserved', t => {
+  const f = fixture(t), note = f.store.create({ kind: 'source', title: '合成最终恢复竞争', body: '最早内容。' });
+  const version = f.store.history(note.id)[0], current = f.store.update(note.id, { expectedHash: note.hash, body: '新版本。' });
+  const file = f.file(note.id), rename = fs.renameSync; let injected = false;
+  fs.renameSync = (from, to) => {
+    if (!injected && (from === file || to === file)) { injected = true; fs.appendFileSync(file, '\n最后一步的外部编辑。'); }
+    return rename(from, to);
+  };
+  try { assert.throws(() => f.store.restoreVersionExact(note.id, version.versionId, { expectedHash: current.hash })); }
+  finally { fs.renameSync = rename; }
+  assert.equal(injected, true); assert.ok(fs.readFileSync(file, 'utf8').endsWith('最后一步的外部编辑。'));
+});
+
+test('an external save at the final recycle filesystem operation is preserved', t => {
+  const f = fixture(t), value = input(), saved = f.service.chatgpt.capture(value), preview = f.undo.preview(selector(value, saved));
+  const file = f.file(saved.importedNoteIds[0]), unlink = fs.unlinkSync, rename = fs.renameSync; let injected = false;
+  const inject = target => { if (!injected && target === file) { injected = true; fs.appendFileSync(file, '\n最后一步的外部编辑。'); } };
+  fs.unlinkSync = target => { inject(target); return unlink(target); };
+  fs.renameSync = (from, to) => { inject(from); return rename(from, to); };
+  let result;
+  try { result = f.undo.confirmUndo({ previewId: preview.previewId }, f.authority); }
+  finally { fs.unlinkSync = unlink; fs.renameSync = rename; }
+  assert.equal(injected, true); assert.equal(result.status, 'pending');
+  assert.ok(fs.readFileSync(file, 'utf8').endsWith('最后一步的外部编辑。'));
+});
+
+for (const action of ['recycle', 'restore_previous_revision']) test(`a started ${action} completed before journal persistence resumes after restart`, t => {
+  const f = fixture(t), value = { ...input(), structured: undefined }, first = f.service.chatgpt.capture(value);
+  const currentInput = action === 'recycle' ? value : { ...value, requestId: randomUUID(), summary: '第二版本。', sync: { ...value.sync, baseRevision: 1 } };
+  const current = action === 'recycle' ? first : f.service.chatgpt.capture(currentInput);
+  const preview = f.undo.preview(selector(currentInput, current)), method = action === 'recycle' ? 'delete' : 'restoreVersionExact';
+  const operation = f.store[method].bind(f.store);
+  f.store[method] = (...args) => { operation(...args); throw new Error('synthetic stop after completed file operation'); };
+  assert.equal(f.undo.confirmUndo({ previewId: preview.previewId }, f.authority).status, 'pending');
+  assert.equal(f.store.get('chatgptUndo', preview.previewId).steps[0].state, 'started');
+  f.restart();
+  assert.equal(f.undo.confirmUndo({ previewId: preview.previewId }, f.authority).status, 'undone');
+  const restore = f.undo.previewRestore({ undoId: preview.undoId });
+  const recover = f.store.restoreVersionExact.bind(f.store);
+  f.store.restoreVersionExact = (...args) => { recover(...args); throw new Error('synthetic stop after completed restore'); };
+  assert.equal(f.undo.confirmRestore({ previewId: restore.previewId }, f.authority).status, 'pending');
+  f.restart();
+  assert.equal(f.undo.confirmRestore({ previewId: restore.previewId }, f.authority).status, 'restored');
+  assert.equal(f.store.readPersisted(current.noteId).hash, current.verification.source.rawSha256);
+});
+
+test('three explicitly selected revisions can be undone successively without losing predecessor identity', t => {
+  const f = fixture(t), original = { ...input(), structured: undefined }, inputs = [], receipts = [];
+  for (let revision = 1; revision <= 3; revision++) {
+    const value = { ...original, requestId: randomUUID(), summary: `合成第${revision}版。`, sync: { ...original.sync, ...(revision > 1 ? { baseRevision: revision - 1 } : {}) } };
+    inputs.push(value); receipts.push(f.service.chatgpt.capture(value));
+  }
+  for (let index = 2; index >= 0; index--) {
+    const preview = f.undo.preview(selector(inputs[index], receipts[index]));
+    assert.equal(f.undo.confirmUndo({ previewId: preview.previewId }, f.authority).status, 'undone');
+    if (index > 0) assert.equal(f.store.readPersisted(receipts[index].noteId).hash, receipts[index - 1].verification.source.rawSha256);
+  }
+  assert.equal(f.store.list().length, 0);
+});
+
+test('a new occupant after the original is claimed is retained with the original recovery copy', t => {
+  const f = fixture(t), note = f.store.create({ kind: 'source', title: '合成占位恢复', body: '原始内容。' });
+  const version = f.store.history(note.id)[0], current = f.store.update(note.id, { expectedHash: note.hash, body: '待回退内容。' });
+  const file = f.file(note.id), original = fs.readFileSync(file), link = fs.linkSync; let injected = false;
+  fs.linkSync = (from, target) => {
+    if (!injected && target === file) { injected = true; fs.writeFileSync(file, '竞争写入的新文件，不能覆盖。'); }
+    return link(from, target);
+  };
+  try { assert.throws(() => f.store.restoreVersionExact(note.id, version.versionId, { expectedHash: current.hash }), { code: 'EXACT_RESTORE_CONFLICT' }); }
+  finally { fs.linkSync = link; }
+  assert.equal(injected, true); assert.equal(fs.readFileSync(file, 'utf8'), '竞争写入的新文件，不能覆盖。');
+  const record = f.store.records('fileRecovery')[0];
+  assert.equal(record.state, 'preserved');
+  assert.deepEqual(fs.readFileSync(path.join(f.config.vaultDir, record.holdingPath)), original);
+});
+
+for (const action of ['recycle', 'restore_previous_revision']) test(`a completed started ${action} cannot bypass a later external change on retry`, t => {
+  const f = fixture(t), firstInput = { ...input(), structured: undefined }, first = f.service.chatgpt.capture(firstInput);
+  const value = action === 'recycle' ? firstInput : { ...firstInput, requestId: randomUUID(), summary: '新版本。', sync: { ...firstInput.sync, baseRevision: 1 } };
+  const saved = action === 'recycle' ? first : f.service.chatgpt.capture(value), preview = f.undo.preview(selector(value, saved));
+  const method = action === 'recycle' ? 'delete' : 'restoreVersionExact', operation = f.store[method].bind(f.store);
+  const file = f.file(saved.noteId);
+  f.store[method] = (...args) => { operation(...args); throw new Error('synthetic stop after operation'); };
+  assert.equal(f.undo.confirmUndo({ previewId: preview.previewId }, f.authority).status, 'pending');
+  if (action === 'recycle') fs.writeFileSync(file, '外部重新创建的文件，不能删。');
+  else fs.appendFileSync(file, '\n外部刚保存的内容。');
+  const changed = fs.readFileSync(file); f.restart();
+  assert.throws(() => f.undo.confirmUndo({ previewId: preview.previewId }, f.authority), { code: 'CHATGPT_UNDO_CONFLICT' });
+  assert.deepEqual(fs.readFileSync(file), changed);
 });

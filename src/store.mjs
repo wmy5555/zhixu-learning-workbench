@@ -354,15 +354,52 @@ export class Store {
     const raw = serialize(old.raw, { ...safeMeta, id, kind: note.kind, title: title ?? note.title, updatedAt: now() }, body ?? note.body);
     this.version(old, 'Web 修改前'); atomicWrite(file, raw); const result = this.upsert(file, raw, id); this.syncMirrors(); return result;
   }
-  delete(id, expectedHash) {
+  beginFileOperation(id, relative, { operationId = randomUUID(), kind, beforeHash = null, afterHash = null, undoId = null } = {}) {
+    if (this.get('fileRecovery', operationId)) fail('文件操作已有恢复记录，须核对后继续。', 'FILE_OPERATION_PENDING', 409);
+    const holdingPath = path.join(path.dirname(relative), `.zhixu-recovery-${randomUUID()}.raw`).replaceAll('\\', '/');
+    const operation = { id: operationId, noteId: id, path: relative, holdingPath, kind, beforeHash, afterHash, undoId, state: 'prepared', createdAt: now() };
+    this.put('fileRecovery', operation.id, operation);
+    return operation;
+  }
+  claimFile(operation, code) {
+    const file = assertTree(path.resolve(this.vaultDir, operation.path), this.vaultDir);
+    const holding = assertTree(path.resolve(this.vaultDir, operation.holdingPath), this.vaultDir);
+    // Move the actual occupant first, then inspect those claimed bytes. Never unlink
+    // or replace a file merely because an earlier read matched. Retain the claim
+    // even after success: an editor holding the old inode may still save to it.
+    fs.renameSync(file, holding);
+    const stat = fs.lstatSync(holding);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || hash(fs.readFileSync(holding)) !== operation.beforeHash) {
+      this.preserveFileClaim(operation);
+      fail('原子接管时发现外部修改，原文件或恢复副本已保留，未覆盖或删除新内容。', code, 409);
+    }
+    this.put('fileRecovery', operation.id, { ...operation, state: 'claimed' });
+  }
+  preserveFileClaim(operation) {
+    const file = assertTree(path.resolve(this.vaultDir, operation.path), this.vaultDir);
+    const holding = assertTree(path.resolve(this.vaultDir, operation.holdingPath), this.vaultDir);
+    if (fs.existsSync(holding)) {
+      try { fs.linkSync(holding, file); } catch (error) { if (error.code !== 'EEXIST') throw error; }
+    }
+    this.put('fileRecovery', operation.id, { ...operation, state: 'preserved' });
+  }
+  completeFileOperation(operation) {
+    const versions = this.history(operation.noteId).map(version =>
+      [version.versionId, version.path, version.hash, version.reason, version.createdAt]).toSorted((a, b) => a[0].localeCompare(b[0]));
+    this.put('fileRecovery', operation.id, { ...operation, state: 'complete', versions, completedAt: now() });
+  }
+  delete(id, expectedHash, { operationId, undoId = null } = {}) {
     this.scan(); const row = this.row(id); this.read(id);
     if (!expectedHash || expectedHash !== row.hash) fail('删除前检测到版本变化。', 'CONFLICT', 409);
     this.version(row, '用户删除');
     const file = assertTree(path.join(this.vaultDir, row.path), this.vaultDir);
     if (hash(fs.readFileSync(file)) !== expectedHash) fail('版本审计期间文件发生变化，未删除新内容。', 'CONFLICT', 409);
-    fs.unlinkSync(file);
+    const operation = this.beginFileOperation(id, row.path, { operationId, kind: 'recycle', beforeHash: expectedHash, undoId });
+    this.claimFile(operation, 'CONFLICT');
     this.db.prepare('DELETE FROM notes WHERE id=?').run(id); this.db.prepare('DELETE FROM index_chunks WHERE noteId=?').run(id);
-    this.remove('changed', id); this.put('deleted', id, { id, deletedAt: now() }); this.syncMirrors(); return { deleted: true };
+    this.remove('changed', id); this.put('deleted', id, { id, deletedAt: now(), operationId: operation.id,
+      ...(undoId ? { chatgptUndoId: undoId, rawSha256: expectedHash } : {}) });
+    this.syncMirrors(); this.completeFileOperation(operation); return { deleted: true };
   }
   history(id) { return this.db.prepare('SELECT id as versionId,noteId,path,hash,raw,reason,createdAt FROM versions WHERE noteId=? ORDER BY createdAt DESC').all(id); }
   restoreVersion(id, versionId, expectedHash) {
@@ -374,7 +411,7 @@ export class Store {
     this.remove('deleted', id);
     return this.create({ id, kind: parsed.meta.kind, title: parsed.meta.title, body: parsed.body, meta: parsed.meta });
   }
-  restoreVersionExact(id, versionId, { expectedHash, expectMissing = false } = {}) {
+  restoreVersionExact(id, versionId, { expectedHash, expectMissing = false, operationId } = {}) {
     if (!/^[A-Za-z0-9_-]{1,100}$/.test(id || '') || typeof versionId !== 'string' ||
       (expectMissing ? expectedHash !== undefined : !/^[a-f0-9]{64}$/.test(expectedHash || ''))) {
       fail('精确恢复必须指定已有版本和当前文件版本，或明确要求文件缺失。', 'EXACT_RESTORE_INVALID', 409);
@@ -399,13 +436,20 @@ export class Store {
     if (expectMissing ? this.row(id) || fs.existsSync(file) : this.readPersisted(id).hash !== expectedHash) {
       fail('版本审计期间文件发生变化，未覆盖。', 'EXACT_RESTORE_CONFLICT', 409);
     }
-    try { if (expectMissing) atomicWriteExclusive(file, version.raw); else atomicWrite(file, version.raw); }
-    catch (error) { if (expectMissing && error.code === 'EEXIST') fail('恢复位置已被占用，未覆盖已有内容。', 'EXACT_RESTORE_CONFLICT', 409); throw error; }
+    const operation = this.beginFileOperation(id, version.path, { operationId, kind: 'restore', beforeHash: expectedHash ?? null, afterHash: version.hash });
+    if (!expectMissing) this.claimFile(operation, 'EXACT_RESTORE_CONFLICT');
+    try { atomicWriteExclusive(file, version.raw); }
+    catch (error) {
+      if (!expectMissing) this.preserveFileClaim(operation);
+      if (error.code === 'EEXIST') fail('恢复位置已被占用，未覆盖已有内容；原件仍在恢复记录中。', 'EXACT_RESTORE_CONFLICT', 409);
+      throw error;
+    }
     const result = this.upsert(file, version.raw, id, parsed);
     this.version(this.row(id), '受限精确恢复后的原始版本');
     this.remove('deleted', id);
     this.syncMirrors();
     if (this.readPersisted(id).hash !== version.hash) fail('精确恢复后的磁盘核验未完成。', 'EXACT_RESTORE_VERIFY_FAILED', 409);
+    this.completeFileOperation(operation);
     return result;
   }
   backup() {

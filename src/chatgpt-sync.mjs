@@ -337,7 +337,7 @@ export function captureIncremental(store, value, render, { acceptedRenderers = [
     syncRevision: state.revision, addedMessages: state.added, modifiedMessages: state.modified,
     complete: state.snapshot.sync.complete, importedNoteIds, importedItems: importedNoteIds.length,
     notice: '完整性仅指调用方声明的当前可见分支；未独立核对网页、隐藏分支或附件。结构化条目未经核验，未加入学习。', location: '知序 → 知识库 → 原始资料' };
-  const captureRecord = { noteId, payloadHash, receipt, sessionKey: key, ...(historyHandoff ? { historyHandoff } : {}) };
+  const captureRecord = { noteId, payloadHash, receipt, sessionKey: key, previousHash: state.previousHash ?? null, ...(historyHandoff ? { historyHandoff } : {}) };
   store.put('chatgptCaptures', requestHash, captureRecord);
   assertCaptureRecord(store, 'chatgptCaptures', requestHash, captureRecord);
   const completed = { ...state, pending: false, noteHash: note.hash, receipt };

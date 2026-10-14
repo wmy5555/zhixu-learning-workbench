@@ -52,7 +52,7 @@ function dependencyDigest(store, plan) {
     if (!allowed.has(version.noteId) || !Number.isSafeInteger(marker?.sourceRevision) || marker.sourceRevision >= plan.revision) conflict();
     outside.push(['version', version.id, version.hash]);
   }
-  for (const row of store.db.prepare("SELECT namespace,key,json FROM records WHERE namespace NOT IN ('settings','changed','deleted','mcpCalls','chatgptCaptureRate','chatgptUndo') ORDER BY namespace,key").all()) {
+  for (const row of store.db.prepare("SELECT namespace,key,json FROM records WHERE namespace NOT IN ('settings','changed','deleted','mcpCalls','chatgptCaptureRate','chatgptUndo','fileRecovery') ORDER BY namespace,key").all()) {
     const value = JSON.parse(row.json);
     if (row.namespace === 'chatgptCaptures' && value.noteId === plan.sourceId) continue;
     if (row.namespace === 'chatgptSyncSessions' && value.key === plan.sessionKey) continue;
@@ -60,10 +60,11 @@ function dependencyDigest(store, plan) {
   }
   return digest(outside);
 }
-function versionsDigest(store, plan) {
-  return digest(plan.guards.map(guard => [guard.noteId, store.history(guard.noteId).map(version =>
-    [version.versionId, version.path, version.hash, version.reason, version.createdAt]).toSorted((a, b) => a[0].localeCompare(b[0]))]));
+function versionsSnapshot(store, plan) {
+  return plan.guards.map(guard => [guard.noteId, store.history(guard.noteId).map(version =>
+    [version.versionId, version.path, version.hash, version.reason, version.createdAt]).toSorted((a, b) => a[0].localeCompare(b[0]))]);
 }
+function versionsDigest(store, plan) { return digest(versionsSnapshot(store, plan)); }
 function runtimeDigest(store, plan) {
   return digest({ captures: family(store, plan.sourceId), session: plan.sessionKey ? store.get('chatgptSyncSessions', plan.sessionKey) : null });
 }
@@ -84,9 +85,21 @@ function previousSession(store, current, version) {
     candidateSourceRevisions[noteId] = { itemHash: imported.itemHash, sourceMessageIds: imported.sourceMessageIds, sourceRevision: imported.sourceRevision };
     candidateWrites[noteId] = { phase: 'written', itemHash: imported.itemHash, existing: imported.sourceRevision < marker.revision };
   }
+  let previousHash = prior.previousHash ?? null;
+  if (marker.revision > 1 && !previousHash) {
+    const predecessors = store.history(version.noteId).filter(item => {
+      const previous = metadata(item.raw)?.chatgptSync;
+      const receipt = previous && store.get('chatgptCaptures', previous.requestHash)?.receipt;
+      return item.path === version.path && previous?.sessionHash === current.key && previous.revision === marker.revision - 1 &&
+        receipt?.verification?.source?.rawSha256 === item.hash && hash(item.raw) === item.hash;
+    });
+    const hashes = [...new Set(predecessors.map(item => item.hash))];
+    if (hashes.length !== 1) conflict();
+    previousHash = hashes[0];
+  }
   return { key: current.key, requestHash: marker.requestHash, payloadHash: marker.payloadHash, pending: false,
     revision: marker.revision, snapshot: marker.snapshot, candidateSourceRevisions, candidateWrites,
-    previousHash: null, sourceWritePhase: 'restored', added: prior.receipt.addedMessages, modified: prior.receipt.modifiedMessages,
+    previousHash, sourceWritePhase: 'restored', added: prior.receipt.addedMessages, modified: prior.receipt.modifiedMessages,
     savedAt: prior.receipt.savedAt, noteHash: version.hash, receipt: prior.receipt,
     ...(prior.historyHandoff ? { historyHandoff: prior.historyHandoff } : {}) };
 }
@@ -157,6 +170,43 @@ export function createChatgptUndo({ getStore, localAuthority = Symbol('private l
   const authorized = authority => { if (authority !== localAuthority) fail('撤销或恢复只能在本机预览后由用户确认；模型参数不能授权。', 'CHATGPT_UNDO_LOCAL_CONFIRMATION', 403); };
   const save = (store, record) => { store.put(namespace, record.id, record); if (digest(store.get(namespace, record.id)) !== digest(record)) fail('撤销审计尚未完成保存。', 'CHATGPT_UNDO_AUDIT_FAILED', 409); return record; };
   const load = (store, previewId, kind) => { const record = store.get(namespace, previewId); if (!record || record.kind !== kind) fail('撤销预览不存在。', 'CHATGPT_UNDO_NOT_FOUND', 404); return record; };
+  function reconcileStarted(store, record, restoring = false) {
+    if (!record.steps.some(step => step.state === 'started') && !record.steps.every(step => step.state === 'done')) return record;
+    store.scan();
+    let changed = false;
+    for (const step of record.steps) {
+      if (step.state !== 'started') continue;
+      const operation = step.operationId && store.get('fileRecovery', step.operationId);
+      if (!operation || operation.state !== 'complete') continue;
+      const targetHash = restoring ? step.beforeHash : step.action === 'recycle' ? null : step.afterHash;
+      const originHash = restoring ? step.action === 'recycle' ? null : step.afterHash : step.beforeHash;
+      if (operation.noteId !== step.noteId || operation.path !== step.path || operation.afterHash !== targetHash ||
+        operation.beforeHash !== originHash || !Array.isArray(operation.versions) ||
+        operation.kind !== (!restoring && step.action === 'recycle' ? 'recycle' : 'restore') || !Array.isArray(step.beforeVersions)) conflict();
+      const before = step.beforeVersions.find(([noteId]) => noteId === step.noteId)?.[1];
+      if (!before || before.some(entry => !operation.versions.some(item => digest(item) === digest(entry)))) conflict();
+      const expectedVersions = step.beforeVersions.map(([noteId, entries]) => [noteId, noteId === step.noteId ? operation.versions : entries]);
+      if (digest(versionsSnapshot(store, record.plan)) !== digest(expectedVersions)) conflict();
+      if (targetHash === null) {
+        const deleted = store.get('deleted', step.noteId);
+        if (store.row(step.noteId) || existsSync(path.resolve(store.vaultDir, step.path)) || deleted?.operationId !== operation.id ||
+          deleted?.chatgptUndoId !== record.undoId || deleted?.rawSha256 !== step.beforeHash) conflict();
+      } else {
+        const note = store.readPersisted(step.noteId);
+        if (note.hash !== targetHash || note.path !== step.path) conflict();
+      }
+      if (!restoring && step.action !== 'recycle') step.recoveryVersionId = versionFor(store, step.noteId, step.beforeHash, step.path).versionId;
+      step.state = 'done'; record.expected.versions = versionsDigest(store, record.plan); changed = true;
+    }
+    if (record.plan.sessionKey && record.steps.every(step => step.state === 'done') && runtimeDigest(store, record.plan) !== record.expected.runtime) {
+      const target = restoring ? record.plan.currentState : record.plan.priorState;
+      const baseline = restoring ? record.plan.priorState ?? record.plan.currentState : record.plan.currentState;
+      if (!target || digest(store.get('chatgptSyncSessions', record.plan.sessionKey)) !== digest(target) ||
+        digest({ captures: family(store, record.plan.sourceId), session: baseline }) !== record.expected.runtime) conflict();
+      record.expected.runtime = runtimeDigest(store, record.plan); changed = true;
+    }
+    return changed ? save(store, record) : record;
+  }
   function check(store, record, restoring = false) {
     store.scan();
     if (dependencyDigest(store, record.plan) !== record.expected.dependencies || runtimeDigest(store, record.plan) !== record.expected.runtime ||
@@ -188,13 +238,11 @@ export function createChatgptUndo({ getStore, localAuthority = Symbol('private l
         const step = working.steps[index];
         if (step.state === 'done') continue;
         check(store, working);
-        working.steps[index] = { ...step, state: 'started' }; save(store, working);
+        working.steps[index] = { ...step, state: 'started', operationId: randomUUID(), beforeVersions: versionsSnapshot(store, working.plan) }; save(store, working);
         if (step.action === 'recycle') {
-          store.delete(step.noteId, step.beforeHash);
-          const deleted = store.get('deleted', step.noteId);
-          store.put('deleted', step.noteId, { ...deleted, chatgptUndoId: working.id, rawSha256: step.beforeHash });
+          store.delete(step.noteId, step.beforeHash, { operationId: working.steps[index].operationId, undoId: working.id });
         } else {
-          store.restoreVersionExact(step.noteId, step.restoreVersionId, { expectedHash: step.beforeHash });
+          store.restoreVersionExact(step.noteId, step.restoreVersionId, { expectedHash: step.beforeHash, operationId: working.steps[index].operationId });
           working.steps[index].recoveryVersionId = versionFor(store, step.noteId, step.beforeHash, step.path).versionId;
         }
         working.steps[index].state = 'done';
@@ -232,11 +280,12 @@ export function createChatgptUndo({ getStore, localAuthority = Symbol('private l
       save(store, record); return publicPreview(record);
     },
     confirmUndo(input, authority) {
-      authorized(authority); const { previewId } = parsed(previewSchema, input), store = getStore(), record = load(store, previewId, 'undo');
+      authorized(authority); const { previewId } = parsed(previewSchema, input), store = getStore(); let record = load(store, previewId, 'undo');
       if (record.state === 'undone') return { ...record.receipt, status: 'already_undone' };
       if (record.state === 'restored') return { ...record.restoreReceipt, status: 'already_restored' };
       if (record.state === 'preview' && record.expiresAt <= clock()) fail('撤销预览已到期，请重新预览。', 'CHATGPT_UNDO_EXPIRED', 409);
       if (record.planDigest !== digest(record.plan)) conflict();
+      record = reconcileStarted(store, record);
       check(store, record);
       return executeUndo(store, record);
     },
@@ -249,12 +298,13 @@ export function createChatgptUndo({ getStore, localAuthority = Symbol('private l
       save(store, record); return publicPreview(record);
     },
     confirmRestore(input, authority) {
-      authorized(authority); const { previewId } = parsed(previewSchema, input), store = getStore(), record = load(store, previewId, 'restore');
+      authorized(authority); const { previewId } = parsed(previewSchema, input), store = getStore(); let record = load(store, previewId, 'restore');
       const undo = load(store, record.undoId, 'undo');
       if (record.state === 'restored') return { ...record.receipt, status: 'already_restored' };
       if (undo.state !== 'undone') conflict();
       if (record.state === 'preview' && record.expiresAt <= clock()) fail('恢复预览已到期，请重新预览。', 'CHATGPT_UNDO_EXPIRED', 409);
       if (record.planDigest !== digest(record.plan)) conflict();
+      record = reconcileStarted(store, record, true);
       // Every still-recycled or already-restored file is checked before the next write.
       check(store, record, true);
       let working = save(store, { ...record, state: 'pending', confirmedAt: record.confirmedAt || now() });
@@ -266,11 +316,12 @@ export function createChatgptUndo({ getStore, localAuthority = Symbol('private l
           check(store, working, true);
           const version = validateVersion(store, step, step.recoveryVersionId);
           if (version.hash !== step.beforeHash) conflict();
+          working.steps[index] = { ...step, state: 'started', operationId: randomUUID(), beforeVersions: versionsSnapshot(store, working.plan) }; save(store, working);
           if (step.action === 'recycle') {
             const deleted = store.get('deleted', step.noteId);
             if (deleted?.chatgptUndoId !== working.undoId || deleted?.rawSha256 !== step.beforeHash) conflict();
-            store.restoreVersionExact(step.noteId, step.recoveryVersionId, { expectMissing: true });
-          } else store.restoreVersionExact(step.noteId, step.recoveryVersionId, { expectedHash: step.afterHash });
+            store.restoreVersionExact(step.noteId, step.recoveryVersionId, { expectMissing: true, operationId: working.steps[index].operationId });
+          } else store.restoreVersionExact(step.noteId, step.recoveryVersionId, { expectedHash: step.afterHash, operationId: working.steps[index].operationId });
           working.steps[index].state = 'done'; working.expected.versions = versionsDigest(store, working.plan); save(store, working);
         }
         if (working.plan.sessionKey) store.put('chatgptSyncSessions', working.plan.sessionKey, working.plan.currentState);
