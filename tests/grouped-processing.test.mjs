@@ -182,7 +182,9 @@ test('library groups children, applies filters, hides internal evidence, and doe
   const originalCount = service.store.list().length;
 
   const library = service.library();
-  assert.deepEqual(Object.keys(library).sort(), ['groups', 'standalone']);
+  assert.deepEqual(Object.keys(library).sort(), ['groups', 'matchingIds', 'standalone']);
+  assert.deepEqual(new Set(library.matchingIds), new Set([source.id, bySourceRole.id, byProcessKey.id, standalone.id]));
+  assert.equal(library.matchingIds.includes(evidenceSource.id), false);
   assert.equal(library.groups.length, 1);
   assert.equal(library.groups[0].source.id, source.id);
   assert.deepEqual(

@@ -16,6 +16,7 @@ const usageSource = await readFile(new URL('../public/usage.mjs', import.meta.ur
 const onboardingCss = await readFile(new URL('../public/onboarding.css', import.meta.url), 'utf8');
 
 const uiSource = await readFile(new URL('../public/ui.mjs', import.meta.url), 'utf8');
+const markdownSource = await readFile(new URL('../public/markdown-reader.mjs', import.meta.url), 'utf8');
 const appSource = await readFile(new URL('../public/app.mjs', import.meta.url), 'utf8');
 const onboardingSource = await readFile(new URL('../public/onboarding.mjs', import.meta.url), 'utf8');
 const sourceMapSource = (await readFile(new URL('../public/source-map.mjs', import.meta.url), 'utf8')).replace(/^import.*;$/m, '').replaceAll('export ', '');
@@ -55,6 +56,8 @@ class Element {
 }
 function descendants(node) { return [node, ...node.children.flatMap(child => child instanceof Element ? descendants(child) : [])]; }
 function matches(node, selector) {
+  const dataValue = selector.match(/^\[data-([\w-]+)=["']([^"']+)["']\]$/);
+  if (dataValue) return node.dataset[dataValue[1].replace(/-([a-z])/g, (_, c) => c.toUpperCase())] === dataValue[2];
   const named = selector.match(/^\[name=["']([^"']+)["']\]$/);
   if (named) return node.name === named[1];
   const dataPresent = selector.match(/^\[data-([\w-]+)\]$/);
@@ -286,7 +289,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
     window: { zhixuAppearance: { getAccent: () => null, getTheme: () => 'light', resolvedTheme: () => 'light', previewAccent: () => ({}), getMode: () => 'light', palette: () => ({}) }, matchMedia: () => ({ matches: false, addEventListener() {} }), history: { replaceState() {} }, location: { hash: '' }, setTimeout() {}, events: {}, addEventListener(name, handler) { this.events[name] = handler; } },
   });
   const stripped = appSource.replace(/import[\s\S]*?from "\.\/api\.mjs";\s*/, '').replace(/import[\s\S]*?from "\.\/ui\.mjs";\s*/, '').replace(/^init\(\);\s*$/m, '').replace('const { createUsagePanel } = await import("./usage.mjs");', '');
-  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + sourceMapSource + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { renderSourceGroupDrawer, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
+  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + ('const renderMarkdown = (() => {\n' + markdownSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn renderMarkdown;\n})();') + '\n' + sourceMapSource + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { renderSourceGroupDrawer, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
   context.app.beginStudy = vm.runInContext('beginStudy', context);
   context.app.manualExtract = vm.runInContext('manualExtract', context);
   context.app.serializeForm = vm.runInContext('serializeForm', context);
@@ -301,6 +304,9 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
   context.app.jobsPanel = vm.runInContext('jobsPanel', context);
   context.app.generateToday = vm.runInContext('generateToday', context);
   context.app.renderToday = vm.runInContext('renderToday', context);
+  context.app.renderLibrary = vm.runInContext('renderLibrary', context);
+  context.app.historyReadingBody = vm.runInContext('historyReadingBody', context);
+  context.app.searchResultRow = vm.runInContext('searchResultRow', context);
   context.app.prepareContextChange = vm.runInContext('prepareContextChange', context);
   Object.assign(context, { chapters, getCurriculum, materials, customMaterial, customSample, getMaterial, materialSample, URLSearchParams,
     localStorage: { getItem() { return null; }, setItem() {} }, sessionStorage: { getItem() { return null; }, setItem() {} },
@@ -310,6 +316,151 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
   context.app.createOnboarding = vm.runInContext('(function () {\n' + onboardingSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn createOnboarding;\n})()', context);
   return context.app;
 }
+
+function libraryFixture(matchingIds = ['source', 'alpha', 'beta', 'standalone']) {
+  return {
+    matchingIds,
+    groups: [{ source: { id: 'source', kind: 'source', title: '原始资料', body: '## 阅读标题\n\n**原文**', meta: {} }, children: [
+      { id: 'alpha', kind: 'knowledge', title: '甲', body: '甲正文', meta: {} },
+      { id: 'beta', kind: 'knowledge', title: '乙', body: '乙正文', meta: {} },
+    ] }],
+    standalone: [{ id: 'standalone', kind: 'knowledge', title: '独立知识', body: '正文', meta: {} }],
+  };
+}
+const libraryAdvice = { suggestions: [
+  { id: 'advice-alpha', noteId: 'alpha', type: 'reference', title: '建议甲', reason: '甲理由' },
+  { id: 'advice-beta', noteId: 'beta', type: 'merge', relatedId: 'other', title: '建议乙', reason: '乙理由' },
+] };
+const suggestionTitles = app => descendants(app.refs.main).filter(node => node.tagName === 'h3' && node.textContent.startsWith('建议')).map(node => node.textContent);
+
+test('library advice uses exact matches and expands children only for a matching original source', async () => {
+  let data = libraryFixture(['alpha']);
+  const app = browser({ library: async () => data, recommendations: async () => libraryAdvice });
+  app.state.view = 'library'; app.state.libraryFilters.q = '甲';
+  await app.renderLibrary();
+  assert.deepEqual(suggestionTitles(app), ['建议甲']);
+  data = libraryFixture(['source']); await app.renderLibrary();
+  assert.deepEqual(suggestionTitles(app), ['建议甲', '建议乙']);
+  data = libraryFixture(['other']); await app.renderLibrary();
+  assert.deepEqual(suggestionTitles(app), ['建议乙']);
+});
+
+test('library hides unrelated, missing-association and empty-result advice and restores it on clearing', async () => {
+  let data = libraryFixture(['standalone']);
+  const app = browser({ library: async () => data, recommendations: async () => libraryAdvice });
+  app.state.view = 'library'; app.state.libraryFilters.q = '独立';
+  await app.renderLibrary(); assert.equal(app.refs.main.querySelector('[data-tour="library-recommendations"]'), null);
+  data = { ...libraryFixture(), matchingIds: undefined }; await app.renderLibrary();
+  assert.equal(app.refs.main.querySelector('[data-tour="library-recommendations"]'), null);
+  data = { groups: [], standalone: [], matchingIds: [] }; await app.renderLibrary();
+  assert.equal(app.refs.main.querySelector('[data-tour="library-recommendations"]'), null);
+  assert.ok(app.refs.main.textContent.includes('没有匹配的内容'));
+  app.state.libraryFilters.q = ''; data = libraryFixture(); await app.renderLibrary();
+  assert.deepEqual(suggestionTitles(app), ['建议甲', '建议乙']);
+});
+
+test('library ignores out-of-order content and advice responses without mounting an old second page', async () => {
+  for (const delayed of ['library', 'advice']) {
+    const waits = [];
+    const app = browser({
+      library: delayed === 'library' ? filters => new Promise(resolve => waits.push({ q: filters.q, resolve })) : async filters => libraryFixture([filters.q === '甲' ? 'alpha' : 'beta']),
+      recommendations: delayed === 'advice' ? () => new Promise(resolve => waits.push({ resolve })) : async () => libraryAdvice,
+    });
+    app.state.view = 'library'; app.state.libraryFilters.q = '甲';
+    const first = app.renderLibrary(); await new Promise(resolve => setImmediate(resolve));
+    app.state.libraryFilters.q = '乙'; const second = app.renderLibrary(); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(waits.length, 2);
+    waits[1].resolve(delayed === 'library' ? libraryFixture(['beta']) : libraryAdvice); await second;
+    waits[0].resolve(delayed === 'library' ? libraryFixture(['alpha']) : libraryAdvice); await first;
+    assert.equal(app.refs.main.children.length, 1);
+    assert.equal(control(app.refs.main, 'q').value, '乙');
+    assert.deepEqual(suggestionTitles(app), ['建议乙']);
+  }
+});
+
+test('library discards delayed responses after a library-context or page change', async () => {
+  for (const transition of ['context', 'page']) {
+    let context = { practiceId: '', version: 0 }, resolve;
+    const app = browser({ getContext: () => context, library: () => new Promise(done => { resolve = done; }), recommendations: async () => libraryAdvice });
+    app.state.view = 'library'; app.refs.main.append(new Element('sentinel'));
+    const request = app.renderLibrary();
+    if (transition === 'context') context = { practiceId: 'synthetic-practice', version: 1 };
+    else app.state.view = 'today';
+    resolve(libraryFixture()); await request;
+    assert.equal(app.refs.main.children[0].tagName, 'sentinel');
+    assert.equal(app.refs.main.children.length, 1);
+  }
+});
+
+test('a pending library response cannot erase a newly typed query before its next submit', async () => {
+  let resolve, delayed = false;
+  const app = browser({ library: filters => delayed ? new Promise(done => { resolve = done; }) : Promise.resolve(libraryFixture()), recommendations: async () => libraryAdvice });
+  app.state.view = 'library'; await app.renderLibrary();
+  const form = app.refs.main.querySelector('[data-tour="library-filter"]');
+  control(form, 'q').value = '甲'; app.state.libraryFilters.q = '甲';
+  delayed = true; const first = app.renderLibrary();
+  control(form, 'q').value = '乙'; form.events.input();
+  resolve(libraryFixture(['alpha'])); await first;
+  assert.equal(app.refs.main.querySelector('[data-tour="library-filter"]'), form);
+  assert.equal(control(form, 'q').value, '乙');
+  assert.equal(app.state.libraryFilters.q, '乙');
+  assert.equal(app.refs.main.querySelector('[data-tour="library-recommendations"]').hidden, true);
+});
+
+test('existing library sections fold independently with counts and aria state, scoped to the library', async () => {
+  let context = { practiceId: '', version: 0 };
+  const app = browser({ getContext: () => context, library: async () => libraryFixture(), recommendations: async () => libraryAdvice });
+  app.state.view = 'library'; await app.renderLibrary();
+  const sourcePanel = app.refs.main.querySelector('[data-library-section="sources"]');
+  const standalonePanel = app.refs.main.querySelector('[data-library-section="standalone"]');
+  const body = sourcePanel.querySelector('.library-section-body'), toggle = findButton(sourcePanel, '折叠原始资料');
+  assert.equal(toggle.attributes['aria-expanded'], 'true');
+  assert.equal(toggle.attributes['aria-controls'], body.id);
+  await click(toggle); assert.equal(body.hidden, true); assert.equal(toggle.attributes['aria-expanded'], 'false');
+  assert.equal(standalonePanel.querySelector('.library-section-body').hidden, false);
+  assert.ok(sourcePanel.textContent.includes('1 份资料'));
+  await click(findButton(app.refs.main, '折叠知识使用建议'));
+  assert.equal(app.refs.main.querySelector('[data-tour="library-recommendations"]').querySelector('.library-section-body').hidden, true);
+  context = { practiceId: 'synthetic-practice', version: 1 }; await app.renderLibrary();
+  assert.equal(app.refs.main.querySelector('[data-library-section="sources"]').querySelector('.library-section-body').hidden, false);
+  context = { practiceId: '', version: 2 }; await app.renderLibrary();
+  assert.equal(app.refs.main.querySelector('[data-library-section="sources"]').querySelector('.library-section-body').hidden, true);
+});
+
+test('library folding cannot hide content during an unsaved source edit and retains the exact textarea value', async () => {
+  const body = '## 原文\n\n**粗体**\n\n```text\n## 围栏内保持原样\n```';
+  const app = browser({ library: async () => libraryFixture(), recommendations: async () => libraryAdvice });
+  app.state.view = 'library'; await app.renderLibrary();
+  app.renderNoteEditor({ id: 'source', kind: 'source', title: '合成原文', body, hash: 'synthetic-hash', meta: {} });
+  app.refs.drawer.classList.add('is-open');
+  const editor = app.refs.drawerBody.querySelector('form'), textarea = control(editor, 'body');
+  assert.equal(textarea.value, body);
+  textarea.value += '\n尚未保存';
+  const section = app.refs.main.querySelector('[data-library-section="sources"]');
+  await click(findButton(section, '折叠原始资料'));
+  assert.equal(section.querySelector('.library-section-body').hidden, false);
+  assert.equal(textarea.value, body + '\n尚未保存');
+  textarea.value = body; await click(findButton(section, '折叠原始资料'));
+  assert.equal(section.querySelector('.library-section-body').hidden, true);
+});
+
+test('source reading, search excerpts and historical body use Markdown while metadata and fenced code stay literal', () => {
+  const body = '## 阅读标题\n\n**粗体**\n\n```text\n## 围栏内标题\n[危险](javascript:alert(1))\n```';
+  const app = browser();
+  app.renderSourceGroupDrawer({ id: 'synthetic-source', kind: 'source', title: '## 标题不解析', body, meta: {}, children: [], jobs: [] });
+  assert.equal(app.refs.drawerTitle.textContent, '## 标题不解析');
+  const reading = app.refs.drawerBody.querySelector('[data-tour="note-original"]');
+  assert.ok(descendants(reading).some(node => node.tagName === 'h2' && node.textContent === '阅读标题'));
+  assert.ok(descendants(reading).some(node => node.tagName === 'strong' && node.textContent === '粗体'));
+  assert.ok(descendants(reading).some(node => node.tagName === 'code' && node.textContent.includes('## 围栏内标题')));
+  assert.equal(descendants(reading).filter(node => node.tagName === 'a').length, 0);
+  const historical = app.historyReadingBody({ kind: 'source' }, { raw: '---\ntitle: "## 元数据"\n---\n' + body });
+  assert.ok(historical.querySelector('.history-metadata').textContent.includes('title: "## 元数据"'));
+  assert.ok(descendants(historical).some(node => node.tagName === 'h2' && node.textContent === '阅读标题'));
+  const search = app.searchResultRow({ note: { kind: 'source', id: 'source', title: '**纯文本标题**', body } });
+  assert.ok(descendants(search).some(node => node.tagName === 'h3' && node.textContent === '**纯文本标题**'));
+  assert.ok(descendants(search).some(node => node.tagName === 'h2' && node.textContent === '阅读标题'));
+});
 
 test('today card preserves the scheduler calendar day in a browser west of UTC', async () => {
   const app = browser({}, function (locale, options) {
