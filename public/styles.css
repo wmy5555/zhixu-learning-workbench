@@ -551,8 +551,9 @@ input[type="color"] { height: 44px; padding: 5px 8px; cursor: pointer; }
 .markdown-editor [hidden] { display: none !important; }
 .markdown-mode-switch { gap: 8px; margin-bottom: 10px; }
 .markdown-mode-switch [aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
-.source-rich-editor.vditor { border-color: var(--line); border-radius: 10px; overflow: hidden; }
-.source-rich-editor .vditor-toolbar { padding: 8px; flex-wrap: wrap; }
+/* Toolbar tooltips extend above the editor; keep them outside its rounded frame. */
+.source-rich-editor.vditor { border-color: var(--line); border-radius: 10px; overflow: visible; }
+.source-rich-editor .vditor-toolbar { padding: 8px; flex-wrap: wrap; border-radius: 10px 10px 0 0; }
 .source-rich-editor .vditor-wysiwyg { min-height: 360px; }
 .source-rich-editor .vditor-reset { padding: 18px !important; font-size: 16px; color: var(--ink); }
 .source-rich-editor .vditor-reset img { max-width: 100%; }
