@@ -512,6 +512,17 @@ for (const action of ['update', 'rebuild']) test(`HTTP index ${action} captures 
   assert.deepEqual(result.body.payload.snapshots, [{ noteId: source.id, hash: source.hash }]);
 });
 
+for (const type of ['relate', 'discover', 'topics']) test(`HTTP ${type} AI enqueue captures server-side knowledge versions`, async t => {
+  const app = await startApp(t), session = await webSession(app);
+  app.service.store.create({ kind: 'source', title: '合成第一层资料', body: '不作为知识比较材料发送。' });
+  const note = app.service.store.create({ kind: 'knowledge', title: '合成点击时知识', body: '合成知识原文。', meta: { stage: 'learning' } });
+  const endpoint = type === 'relate' ? `/api/notes/${note.id}/relate` : type === 'topics' ? '/api/topics/suggest' : '/api/discover';
+  const result = await request(app.baseUrl, endpoint, { method: 'POST', headers: session.headers, body: { useAI: true, snapshots: [{ noteId: 'forged', hash: 'forged' }] } });
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.body.payload.snapshots, [{ noteId: note.id, hash: note.hash }]);
+  assert.equal(app.service.store.records('calls').length, 0, 'the POST only queues the explicit operation');
+});
+
 test('concurrent start POSTs with one intent return one persisted session and a new intent starts again', async t => {
   const app = await startApp(t), session = await webSession(app);
   const note = app.service.store.create({ kind: 'knowledge', title: '合成个人观点', body: '合成测试正文', meta: { stage: 'learning', privacy: 'local' } });
