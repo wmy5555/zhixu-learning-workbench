@@ -40,6 +40,54 @@ function descendants(node) { return [node, ...node.children.flatMap(descendants)
 function tags(node, tag) { return descendants(node).filter(item => item.tagName === tag); }
 function attribute(node, name) { return node.attributes[name] ?? node[name]; }
 
+test('captured messages unwrap once for reading without changing original text or nested code', () => {
+  const { render } = browser();
+  const body = '## 会话原文（按收到的顺序保留）\r\n\r\n### 1. 用户\r\n\r\n```text\r\n[$app](app://plugin_example) 请解释\r\n```\r\n\r\n### 2. ChatGPT\r\n\r\n消息编号：```text\r\nm_2\r\n```\r\n\r\n````text\r\n## 合成标题\r\n\r\n**解释**\r\n\r\n- 条目\r\n\r\n```js\r\nconst x = "**字面量**";\r\n```\r\n````';
+  const root = render(body, { conversation: true });
+  assert.equal(tags(root, 'section').length, 2);
+  assert.equal(tags(root, 'strong')[0].textContent, '解释');
+  assert.equal(tags(root, 'li')[0].textContent, '条目');
+  assert.equal(tags(root, 'pre').length, 1);
+  assert.equal(tags(root, 'pre')[0].textContent, 'const x = "**字面量**";\n');
+  assert.ok(root.textContent.includes('应用 请解释'));
+  assert.ok(root.textContent.includes('消息编号：m_2'));
+  assert.equal(root.textContent.includes('app://'), false);
+  assert.ok(body.includes('````text\r\n## 合成标题'));
+  assert.equal(tags(render(body), 'section').length, 0);
+});
+
+test('conversation rendering keeps malformed envelopes literal and untrusted content inert', () => {
+  const { render } = browser();
+  const prefix = '## 会话原文（按收到的顺序保留）\n\n### 1. ChatGPT\n\n';
+  const content = '# 内容\n\n<script>boom</script>\n\n![图片](https://example.com/x) [危险](javascript:boom)';
+  const rendered = render(prefix + '```text\n' + content + '\n```', { conversation: true });
+  for (const tag of ['script', 'img', 'iframe', 'a']) assert.equal(tags(rendered, tag).length, 0, tag);
+  assert.equal(tags(rendered, 'h1')[0].textContent, '内容');
+  const unclosed = render(prefix + '```text\n' + content, { conversation: true });
+  assert.equal(tags(unclosed, 'section').length, 0);
+  assert.equal(tags(unclosed, 'pre')[0].textContent, content);
+  const unrelated = render('### 1. ChatGPT\n\n```text\n# 字面\n```', { conversation: true });
+  assert.equal(tags(unrelated, 'section').length, 0);
+});
+
+test('exported conversation layout becomes inert readable text while code samples stay literal', () => {
+  const { render, created } = browser();
+  const layout = '<box background="https://example.com/x" onclick="boom"><text>**步骤**</text><icon name="arrow-down"/><row><badge>资料</badge></row></box>';
+  const body = '## 会话原文（按收到的顺序保留）\n\n### 1. ChatGPT\n\n````text\n' + layout + '\n\n`<box>`\n\n<text-other>未知标记</text-other>\n\n```html\n' + layout + '\n```\n````';
+  const root = render(body, { conversation: true });
+  assert.equal(tags(root, 'strong')[0].textContent, '步骤');
+  assert.ok(root.textContent.includes(' ↓ '));
+  assert.ok(root.textContent.includes('<box>'));
+  assert.ok(root.textContent.includes('<text-other>未知标记</text-other>'));
+  assert.equal(tags(root, 'pre')[0].textContent, layout + '\n');
+  for (const tag of ['box', 'text', 'icon', 'badge', 'row', 'script', 'img']) {
+    if (tag !== 'text') assert.equal(created.some(node => node.tagName === tag), false, tag);
+  }
+  const mention = render('[$app](app://asdk_app_example)');
+  assert.equal(mention.textContent, '应用');
+  assert.equal(tags(mention, 'a').length, 0);
+});
+
 test('inline images render only an explicitly resolved bound same-origin attachment', () => {
   const { render } = browser(), id = 'a'.repeat(64) + '.png';
   const markdown = `![合成](../.zhixu-attachments/${id}) ![remote](https://example.com/a.png) ![active](data:image/svg+xml;base64,AAAA)`;

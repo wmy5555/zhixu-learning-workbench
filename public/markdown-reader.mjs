@@ -94,6 +94,17 @@ function inline(text, depth = 0, allowLinks = true, budget = { remaining: text.l
       do { plain += text[i++]; } while (text[i] === '`');
       continue;
     }
+    if (budget.presentation && text[i] === '<') {
+      const decoration = text.slice(i, i + 2050).match(/^<\/?(box|row|text|badge|icon|divider)(?=[\s/>])[^<>]{0,2000}>/);
+      if (decoration) {
+        // Flatten known exported layout markers into text, never HTML or app components.
+        flush();
+        if (decoration[1] === 'icon' && /\bname=["']arrow-down["']/.test(decoration[0])) children.push(' ↓ ');
+        else if (decoration[1] !== 'icon') children.push(el('br'));
+        i += decoration[0].length;
+        continue;
+      }
+    }
     if (text[i] === '!' && text[i + 1] === '[') {
       const token = linkToken(text, i + 1, budget);
       if (token) {
@@ -109,6 +120,9 @@ function inline(text, depth = 0, allowLinks = true, budget = { remaining: text.l
       if (token) {
         if (token.url) {
           flush(); children.push(el('a', { href: token.url, target: '_blank', rel: 'noopener noreferrer', title: token.title || null }, inline(token.label, depth + 1, false, budget)));
+        } else if (/^app:\/\/(?:plugin_|asdk_app_)[A-Za-z0-9_-]+$/.test(token.value)) {
+          // A captured app mention is a label, never an executable app link.
+          plain += token.label === '$app' ? '应用' : unescapeMarkdown(token.label);
         } else plain += text.slice(i, token.end);
         i = token.end; continue;
       }
@@ -180,13 +194,25 @@ function blockStart(lines, index) {
   return Boolean(!line.trim() || fence(line) || heading(line) || listMarker(line) || /^ {0,3}>/.test(line) || tableAt(lines, index));
 }
 
-function blocks(lines, depth = 0, imageResolver) {
-  const textInline = text => inline(text, 0, true, { remaining: text.length * 4 + INLINE_SCAN_LIMIT, imageResolver });
+function blocks(lines, depth = 0, imageResolver, conversation = false, presentation = false) {
+  const textInline = text => inline(text, 0, true, { remaining: text.length * 4 + INLINE_SCAN_LIMIT, imageResolver, presentation });
   if (depth >= MAX_DEPTH) return [el('p', { class: 'markdown-fallback' }, inline(lines.join('\n'), MAX_DEPTH))];
   const children = [];
+  let transcript = false, message = false;
   for (let i = 0; i < lines.length;) {
     const line = lines[i];
     if (!line.trim()) { i++; continue; }
+    // The capture format stores IDs in an inline-prefixed literal block.
+    // Keep that metadata literal rather than mistaking its closing fence for an opener.
+    const messageId = conversation && transcript && message && line.match(/^消息编号：(`{3,})text$/);
+    if (messageId) {
+      const end = lines.findIndex((value, index) => index > i && value === messageId[1]);
+      if (end > i) {
+        children.push(el('p', {}, ['消息编号：', el('code', { text: lines.slice(i + 1, end).join('\n') })]));
+        i = end + 1;
+        continue;
+      }
+    }
     const opening = fence(line);
     if (opening) {
       const code = [];
@@ -194,17 +220,30 @@ function blocks(lines, depth = 0, imageResolver) {
       while (i < lines.length && !closesFence(lines[i], opening)) code.push(lines[i++]);
       const closed = i < lines.length;
       if (closed) i++;
-      children.push(el('pre', { class: 'markdown-code', tabIndex: 0, ariaLabel: '代码，可横向滚动' }, el('code', {
+      if (conversation && transcript && message && closed && opening.language === 'text') {
+        // Only unwrap the generated message envelope, once. Inner code stays code.
+        children.push(el('section', { class: 'conversation-message' }, blocks(code, depth + 1, imageResolver, false, true)));
+        message = false;
+        continue;
+      }
+      message = false;
+      children.push(el('pre', { class: 'markdown-code', tabIndex: 0, ariaLabel: '代码，长行自动换行' }, el('code', {
         text: code.join('\n') + (closed && code.length ? '\n' : ''), dataset: opening.language ? { language: opening.language } : {},
       })));
       continue;
     }
     const title = heading(line);
-    if (title) { children.push(el(`h${title.level}`, {}, textInline(title.text))); i++; continue; }
+    if (title) {
+      if (conversation) {
+        if (title.level <= 2) transcript = title.level === 2 && title.text === '会话原文（按收到的顺序保留）';
+        message = transcript && title.level === 3 && /^\d+\. (?:用户|ChatGPT)$/.test(title.text);
+      }
+      children.push(el(`h${title.level}`, {}, textInline(title.text))); i++; continue;
+    }
     if (/^ {0,3}>/.test(line)) {
       const quote = [];
       while (i < lines.length && /^ {0,3}>/.test(lines[i])) quote.push(lines[i++].replace(/^ {0,3}> ?/, ''));
-      children.push(el('blockquote', {}, blocks(quote, depth + 1, imageResolver)));
+      children.push(el('blockquote', {}, blocks(quote, depth + 1, imageResolver, false, presentation)));
       continue;
     }
     const marker = listMarker(line);
@@ -222,7 +261,7 @@ function blocks(lines, depth = 0, imageResolver) {
           itemLines.push(lines[i].slice(Math.min(indentation, item.width)));
           i++;
         }
-        list.append(el('li', {}, blocks(itemLines, depth + 1, imageResolver)));
+        list.append(el('li', {}, blocks(itemLines, depth + 1, imageResolver, false, presentation)));
       }
       children.push(list);
       continue;
@@ -257,10 +296,10 @@ function blocks(lines, depth = 0, imageResolver) {
 }
 
 /** Render body text only. Keep titles/metadata and editing/storage as plain text. */
-export function renderMarkdown(value, { className = '', emptyText = '暂无正文', imageResolver } = {}) {
+export function renderMarkdown(value, { className = '', emptyText = '暂无正文', imageResolver, conversation = false } = {}) {
   const source = String(value ?? '');
   const root = el('div', { class: ['markdown-reader', className].filter(Boolean).join(' ') });
   if (!source.trim()) root.append(el('p', { class: 'markdown-empty', text: emptyText }));
-  else for (const block of blocks(source.replace(/\r\n?/g, '\n').split('\n'), 0, imageResolver)) root.append(block);
+  else for (const block of blocks(source.replace(/\r\n?/g, '\n').split('\n'), 0, imageResolver, conversation)) root.append(block);
   return root;
 }
