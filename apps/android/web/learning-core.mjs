@@ -195,8 +195,19 @@ export function createLearning(dependencies) {
     const prefix = `## ${heading}\n`, text = note.body.slice(note.body.lastIndexOf(prefix) + prefix.length);
     return note.body.includes(prefix) ? text.split(/\n## |\n### |\n---/)[0].trim() : '';
   }
-  function startStudy({ noteId, planId, topicId, mistakeId } = {}) {
+  function startStudy({ noteId, planId, topicId, mistakeId, requestId } = {}) {
     const store = storage();
+    // Optional for older clients; retries of one explicit start reuse its saved session.
+    const startIntent = { noteId: noteId || null, planId: planId || null, topicId: topicId || null, mistakeId: mistakeId || null };
+    if (requestId !== undefined) {
+      if (typeof requestId !== 'string' || !requestId.trim() || requestId.length > 128) fail('开始学习的防重标识无效。');
+      const existing = store.records('sessions').find(s => s.startRequestId === requestId);
+      if (existing) {
+        // Native persistence orders object keys canonically, so compare parameter values.
+        if (Object.keys(startIntent).some(key => existing.startIntent?.[key] !== startIntent[key])) fail('这次开始请求已用于其他学习内容。', 'START_REQUEST_CONFLICT', 409);
+        return session(existing.id);
+      }
+    }
     const plan = planId ? store.get('plans', planId) : null;
     mistakeId ||= plan?.mistakeId; topicId ||= plan?.topicId;
     let mistake;
@@ -226,7 +237,7 @@ export function createLearning(dependencies) {
     const question = mistake ? mistakeContext.nextQuestion || `请针对上次的误解「${mistakeContext.omission || mistake.title}」重新解释，并说明修正依据和适用边界。` : dependencies.getPracticeQuestion?.(note) || goals[depth].question(note.title);
     const id = randomUUID();
     const privacy = privacyFor(note) === 'cloud' && (!mistake || privacyFor(mistake) === 'cloud') ? 'cloud' : 'local';
-    store.put('sessions', id, { id, noteId, planId, status: 'reading', question, material: note.body, sourceHash: note.hash, depth, goal, privacy, turns: [], createdAt: now(), hintCount: 0, ...practiceTags(mistake, note), ...(topic ? { topicId, topicIndex: textList(topic.meta.noteIds).indexOf(noteId) } : {}), ...(mistake ? { mistakeId, mistakeContext } : {}) });
+    store.put('sessions', id, { id, noteId, planId, ...(requestId ? { startRequestId: requestId, startIntent } : {}), status: 'reading', question, material: note.body, sourceHash: note.hash, depth, goal, privacy, turns: [], createdAt: now(), hintCount: 0, ...practiceTags(mistake, note), ...(topic ? { topicId, topicIndex: textList(topic.meta.noteIds).indexOf(noteId) } : {}), ...(mistake ? { mistakeId, mistakeContext } : {}) });
     return session(id);
   }
   function answerStudy(id, { answer, hintUsed = false, requestId }) {
@@ -297,7 +308,7 @@ export function createLearning(dependencies) {
     const evidence = {
       sessionId: s.id, noteId: s.noteId, day: date, completedAt: timestamp, depth, independent, usedHints, errorObserved: errors, ambiguous,
       explanationPractice: independent && ['explain', 'apply'].includes(depth), applicationPractice: independent && depth === 'apply', spacedRecall: spaced,
-      assessment, turnIds: s.turns.map(t => t.id), reviewSettled, ...practiceTags(s, note),
+      assessment, ...(s.assessmentMode === 'online' ? { assessmentMode: 'online' } : {}), turnIds: s.turns.map(t => t.id), reviewSettled, ...practiceTags(s, note),
     };
     s.status = 'completed'; s.completedAt = timestamp;
     s.completion = { reviewSettled, interval: reviewSettled ? interval : null, sameDayPractice: sameDay, evidence, ...practiceTags(s, note), reason: ambiguous ? '本次存在争议，已保留练习记录，未更新复习间隔。' : usedHints || errors ? '本次使用提示或出现错误，安排近期再练。' : spaced ? '到期后在另一天独立作答，增加复习间隔。' : sameDay ? '同日追加练习不叠加复习间隔。' : '首次独立练习先安排近期复习，之后依据跨日表现调整。' };
@@ -318,7 +329,7 @@ export function createLearning(dependencies) {
     const store = storage(), s = session(id);
     if (!s.turns.length) fail('请先留下至少一次自己的解释。');
     const n = getNote(s.noteId), wasCurrent = n.hash === s.sourceHash;
-    if (dependencies.assessmentMode === 'offline' && !wasCurrent) fail('学习材料已有更新，请按当前材料重新开始；本次回答与当前知识均已保留。', 'SOURCE_CHANGED', 409);
+    if (['offline','online'].includes(dependencies.assessmentMode) && !wasCurrent) fail('学习材料已有更新，请按当前材料重新开始；本次回答与当前知识均已保留。', 'SOURCE_CHANGED', 409);
     const result = confirmNote(n.id, { body, expectedHash: n.hash });
     s.confirmedNoteId = result.id;
     // The explicit confirmation appends the user's own note; the original teaching snapshot stays separate.

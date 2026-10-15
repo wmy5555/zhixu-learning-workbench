@@ -41,6 +41,8 @@ public class ZhixuLocalPlugin extends Plugin {
     private LocalSourceStore store;
     private LocalLearningStore formalLearning;
     private LocalLearningStore practiceLearning;
+    private LocalSourceSyncStore formalSync;
+    private LocalSourceSyncStore practiceSync;
     private PendingDocument pending;
     private boolean destroyed;
     private String abandonedCreateCallId;
@@ -109,6 +111,41 @@ public class ZhixuLocalPlugin extends Plugin {
     @PluginMethod public void previewBackup(PluginCall call) { beginDocument(call, "previewBackup"); }
     @PluginMethod public void exportBackup(PluginCall call) { beginDocument(call, "exportBackup"); }
     @PluginMethod public void exportSource(PluginCall call) { beginDocument(call, "exportSource"); }
+
+    @PluginMethod public void syncLoad(PluginCall call) {
+        execute(call, () -> {
+            onlyFields(call, "context");
+            return JSObject.fromJSONObject(getSyncStore(string(call, "context")).load());
+        });
+    }
+
+    @PluginMethod public void syncCommit(PluginCall call) {
+        execute(call, () -> {
+            onlyFields(call, "context", "expectedRevision", "state");
+            Object state = call.getData().opt("state");
+            if (!(state instanceof JSONObject)) throw invalid();
+            return JSObject.fromJSONObject(getSyncStore(string(call, "context"))
+                .commit(string(call, "expectedRevision"), (JSONObject) state));
+        });
+    }
+
+    @PluginMethod public void syncSourcePreview(PluginCall call) {
+        execute(call, () -> {
+            onlyFields(call, "context", "sourceId");
+            String context = string(call, "context");
+            if (!"formal".equals(context)) throw new LocalSourceStore.StoreException("SYNC_SCOPE", "练习同步不能写入正式原文。");
+            return JSObject.fromJSONObject(getSyncStore(context).sourcePreview(getStore(), string(call, "sourceId")));
+        });
+    }
+
+    @PluginMethod public void syncSourceApply(PluginCall call) {
+        execute(call, () -> {
+            onlyFields(call, "context", "token");
+            String context = string(call, "context");
+            if (!"formal".equals(context)) throw new LocalSourceStore.StoreException("SYNC_SCOPE", "练习同步不能写入正式原文。");
+            return JSObject.fromJSONObject(getSyncStore(context).sourceApply(getStore(), string(call, "token")));
+        });
+    }
 
     @PluginMethod public void learningLoad(PluginCall call) {
         execute(call, () -> {
@@ -389,6 +426,16 @@ public class ZhixuLocalPlugin extends Plugin {
         }
         if (practiceLearning == null) practiceLearning = new LocalLearningStore(getContext().getApplicationContext(), context);
         return practiceLearning;
+    }
+
+    private LocalSourceSyncStore getSyncStore(String context) throws LocalSourceStore.StoreException {
+        LocalLearningStore.validateContext(context);
+        if ("formal".equals(context)) {
+            if (formalSync == null) formalSync = new LocalSourceSyncStore(getContext().getApplicationContext(), context);
+            return formalSync;
+        }
+        if (practiceSync == null) practiceSync = new LocalSourceSyncStore(getContext().getApplicationContext(), context);
+        return practiceSync;
     }
 
     private interface Operation { JSObject run() throws Exception; }

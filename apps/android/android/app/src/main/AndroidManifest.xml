@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <application
         android:allowBackup="false"
@@ -31,5 +32,5 @@
         <uses-library android:name="android.test.runner" android:required="false" />
     </application>
 
-    <!-- The local prototype deliberately has no network or storage permissions. -->
+    <!-- Online requests require explicit native one-shot consent. Storage uses app-private files and SAF. -->
 </manifest>

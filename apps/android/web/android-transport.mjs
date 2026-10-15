@@ -1,4 +1,6 @@
 import { createAndroidLearning, validateLearningState } from './android-learning.mjs';
+import { createAndroidSourceSyncWorkspace } from './android-source-sync-workspace.mjs';
+import { createAndroidOnline } from './android-online.mjs';
 
 const UUID = '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}';
 const noteRoute = new RegExp(`^/api/notes/(${UUID})(?:/(extract|promote|confirm|evidence))?$`);
@@ -49,8 +51,10 @@ function guideSummary(service) {
 
 // Serialize reads and writes; return success only after a native atomic commit.
 // Native revisions also reject stale writes from another WebView.
-export function createAndroidTransport(plugin, { clock } = {}) {
+export function createAndroidTransport(plugin, { clock, online } = {}) {
   let tail = Promise.resolve();
+  let sourceSync;
+  const workflow = online ? createAndroidOnline(plugin, online, { clock }) : null;
   async function dispatch(path, options) {
     if (typeof path !== 'string' || !path.startsWith('/api/') || /[\u0000-\u0020\\#]/.test(path)) return unavailable();
     const url = new URL(path, 'https://localhost');
@@ -63,6 +67,55 @@ export function createAndroidTransport(plugin, { clock } = {}) {
       const scoped = route.match(/^\/api\/practice\/android-local(\/.*)$/);
       if (!scoped) return unavailable();
       route = `/api${scoped[1]}`; context = 'practice';
+    }
+    if (route === '/api/android/sync' || route.startsWith('/api/android/sync/')) {
+      if (context !== 'formal' || url.search) return unavailable();
+      const actions = { '/api/android/sync': ['GET', 'summary', []], '/api/android/sync/preview': ['POST', 'preview', ['sourceId']],
+        '/api/android/sync/stage': ['POST', 'stage', ['sourceId', 'expectedHash', 'expectedHeads']],
+        '/api/android/sync/resolve': ['POST', 'resolve', ['sourceId', 'eventId', 'expectedHeads']],
+        '/api/android/sync/apply': ['POST', 'apply', ['token']] };
+      const action = actions[route];
+      if (!action || method !== action[0]) return unavailable();
+      fields(payload, action[2]);
+      sourceSync ||= createAndroidSourceSyncWorkspace(plugin);
+      return sourceSync[action[1]](payload);
+    }
+    if (workflow) {
+      const process = route.match(new RegExp(`^/api/notes/(${UUID})/process$`));
+      const structure = route.match(new RegExp(`^/api/notes/(${UUID})/structure$`));
+      const evaluate = route.match(new RegExp(`^/api/study/(${UUID})/evaluate$`));
+      const answer = route.match(new RegExp(`^/api/study/(${UUID})/answer$`));
+      const job = route.match(new RegExp(`^/api/jobs/(${UUID})/action$`));
+      const draft = route.match(new RegExp(`^/api/drafts/(${UUID})$`));
+      const captureDraft = route.match(new RegExp(`^/api/drafts/(${UUID})/capture$`));
+      const proposal = route.match(new RegExp(`^/api/proposals/(${UUID})/action$`));
+      if (method === 'POST' && !url.search) {
+        if (process) return workflow.process(context, process[1], payload);
+        if (structure) return workflow.structure(context,structure[1],payload);
+        if (evaluate) return workflow.evaluate(context, evaluate[1], payload);
+        if (answer) return workflow.answer(context, answer[1], payload);
+        if (job) return workflow.action(context, job[1], payload);
+        if (proposal) return workflow.proposalAction(context, proposal[1], payload);
+        if (captureDraft) return workflow.captureDraft(context, captureDraft[1], payload);
+        if (route === '/api/ask') { const result = await workflow.ask(context,payload); return { ...result, queued: true, jobId: result.id }; }
+        if (route === '/api/android/online-run') { fields(payload,['jobId']); return workflow.run(context,payload.jobId); }
+      }
+      if (method === 'PUT' && !url.search && draft) return workflow.updateDraft(context,draft[1],payload);
+      if (method === 'GET' && route === '/api/jobs' && (!url.search || url.search === '?view=status')) return workflow.snapshot(context);
+      if (method === 'GET' && !url.search && ['/api/proposals','/api/drafts'].includes(route)) { const result=await workflow.snapshot(context); return route === '/api/proposals' ? {proposals:result.proposals} : {drafts:result.drafts}; }
+      if (method === 'GET' && route === '/api/usage') return workflow.usage({ ...Object.fromEntries(url.searchParams), context });
+      if (method === 'PUT' && !url.search && ['/api/settings','/api/usage/settings'].includes(route)) {
+        const keys=['ai','search','fetch','credentials','clearCredentials','expectedRevision'];
+        const nativeFields=Object.fromEntries(Object.entries(payload).filter(([key])=>keys.includes(key)));
+        const localFields=Object.fromEntries(Object.entries(payload).filter(([key])=>!keys.includes(key)));
+        let saved = await workflow.settings();
+        if (Object.keys(nativeFields).length) {
+          if(context!=='formal') throw Object.assign(new Error('请在正式知识库设置供应商与凭据。'),{code:'PRACTICE_ISOLATION'});
+          saved=await workflow.updateSettings(nativeFields);
+        }
+        if(Object.keys(localFields).length) { const loaded=await plugin.learningLoad({context}),service=createAndroidLearning({state:loaded.state,practice:context==='practice',clock});service.updateSettings(localFields);await plugin.learningCommit({context,expectedRevision:loaded.revision,state:service.state}); }
+        const loaded=await plugin.learningLoad({context}),service=createAndroidLearning({state:loaded.state,practice:context==='practice',clock});return {...service.settings(),...saved};
+      }
     }
     if (Object.hasOwn(nativeActions, route)) {
       if (method !== 'POST' || url.search || context === 'practice' && route !== '/api/android/source-file') return unavailable();
@@ -123,7 +176,8 @@ export function createAndroidTransport(plugin, { clock } = {}) {
       if (index < 0) sources.push(full); else sources[index] = full;
     }
     const before = JSON.stringify(loaded.state);
-    const service = createAndroidLearning({ state: structuredClone(loaded.state), sources, practice: context === 'practice', clock });
+    const onlineSettings=workflow ? await workflow.settings() : null;
+    const service = createAndroidLearning({ state: structuredClone(loaded.state), sources, practice: context === 'practice', clock, ...(onlineSettings ? { online: { settings: onlineSettings } } : {}) });
     let result;
     if (route === '/api/bootstrap') {
       result = service.bootstrap();
@@ -131,6 +185,13 @@ export function createAndroidTransport(plugin, { clock } = {}) {
       result.jobs = []; result.conflicts = [];
       result.stats = { ...result.stats, notes: result.notes.length, pending: 0 };
       result.practice = context === 'practice' ? { id: 'android-local', local: true } : null;
+      if (workflow) {
+        const snapshot=await workflow.snapshot(context),ready=onlineSettings.capabilities || {};
+        Object.assign(result,snapshot);
+        const ai=ready.ai ?? (onlineSettings.ai?.enabled===true&&onlineSettings.ai?.hasKey===true),search=ready.search ?? (onlineSettings.search?.enabled===true&&onlineSettings.search?.hasKey===true),fetch=ready.fetch ?? onlineSettings.fetch?.enabled===true;
+        result.capabilities={...result.capabilities,ai,model:ai,search,fetch,onlineResearch:ai&&search&&fetch,assessment:ai?'available':'unavailable'};
+        result.stats.pending=result.jobs.filter(j=>['queued','running','waiting'].includes(j.state)).length;
+      }
     } else if (route === '/api/notes' || route === '/api/library') {
       const filters = Object.fromEntries(['q', 'kind', 'stage'].map(key => [key, url.searchParams.get(key) || '']));
       result = route === '/api/notes' ? { notes: service.list(filters) } : service.library(filters);

@@ -9,7 +9,8 @@ const source = path.join(root, 'apps/android/web');
 const baseline = JSON.parse(await readFile(path.join(root, 'apps/android/web-baseline.json'), 'utf8'));
 if (baseline.schemaVersion !== 1 || baseline.sourceDirectory !== 'apps/android/web'
   || baseline.updatePolicy !== 'manual-major-release-opt-in'
-  || !/^[a-f0-9]{40}$/.test(baseline.webBaselineCommit)) throw new Error('Invalid Android web baseline');
+  || !/^[a-f0-9]{40}$/.test(baseline.webBaselineCommit)
+  || baseline.webAlignmentCommit !== undefined && !/^[a-f0-9]{40}$/.test(baseline.webAlignmentCommit)) throw new Error('Invalid Android web baseline');
 const target = path.join(root, 'dist/android-web');
 for (const directory of [path.join(root, 'dist'), target]) {
   const info = await lstat(directory).catch(error => { if (error.code !== 'ENOENT') throw error; return null; });
@@ -41,7 +42,7 @@ await writeFile(path.join(target, 'android-entry.mjs'), `import { registerPlugin
 import { configureLocalTransport } from './api.mjs';
 import { createAndroidTransport } from './android-transport.mjs';
 if (Capacitor.getPlatform() !== 'android') throw new Error('Android native runtime is required');
-configureLocalTransport(createAndroidTransport(registerPlugin('ZhixuLocal')));
+configureLocalTransport(createAndroidTransport(registerPlugin('ZhixuLocal'), { online: registerPlugin('ZhixuOnline') }));
 await import('./app.mjs');
 `);
-console.log(`Prepared Android assets from the frozen web baseline ${baseline.webBaselineCommit.slice(0, 7)}; no current public/ or user data included.`);
+console.log(`Prepared Android assets from original baseline ${baseline.webBaselineCommit.slice(0, 7)}${baseline.webAlignmentCommit ? `; selected fixes from ${baseline.webAlignmentCommit.slice(0, 7)}` : ""}; no current public/ or user data included.`);

@@ -512,3 +512,42 @@ body, .sidebar, .panel, .card, .topbar, .drawer, .drawer-header, input, textarea
 .accent-swatch { display: inline-block; width: 15px; height: 15px; flex-shrink: 0; border: 1px solid #8886; border-radius: 50%; }
 .appearance-presets { flex-wrap: wrap; }
 input[type="color"] { height: 44px; padding: 5px 8px; cursor: pointer; }
+
+/* Shared reading view: stored Markdown and textarea values stay untouched. */
+.source-group-drawer { grid-template-columns: minmax(0, 1fr); }
+.source-group-drawer > .original-material { min-width: 0; max-width: 100%; }
+.markdown-reader { min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; line-height: 1.75; }
+.markdown-reader > :first-child { margin-top: 0; }
+.markdown-reader > :last-child { margin-bottom: 0; }
+.markdown-reader h1, .markdown-reader h2, .markdown-reader h3, .markdown-reader h4 { line-height: 1.45; margin: 1.1em 0 .45em; }
+.markdown-reader h1 { font-size: 1.65em; }
+.markdown-reader h2 { font-size: 1.4em; }
+.markdown-reader h3 { font-size: 1.2em; }
+.markdown-reader p { white-space: pre-wrap; margin: .65em 0; }
+.markdown-reader ul, .markdown-reader ol { padding-inline-start: 1.6em; }
+.markdown-reader blockquote { margin: .8em 0; padding: .2em 1em; border-inline-start: 3px solid var(--accent); background: var(--accent-soft); }
+.markdown-reader a { text-decoration: underline; text-underline-offset: 3px; }
+.markdown-reader code { font-family: Consolas, monospace; font-size: .92em; }
+.markdown-code { min-width: 0; max-width: 100%; margin: .8em 0; padding: 14px; overflow: auto; white-space: pre; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); }
+.markdown-code code { white-space: pre; overflow-wrap: normal; }
+.markdown-table-scroll { min-width: 0; max-width: 100%; overflow: auto; margin: .8em 0; }
+.markdown-table-scroll table { width: max-content; min-width: 100%; border-collapse: collapse; }
+.markdown-table-scroll th, .markdown-table-scroll td { border: 1px solid var(--line); padding: 7px 10px; max-width: 36rem; }
+.markdown-table-scroll th { background: var(--panel); }
+.markdown-align-left { text-align: left; }
+.markdown-align-center { text-align: center; }
+.markdown-align-right { text-align: right; }
+.markdown-fallback { white-space: pre-wrap; }
+.markdown-empty { color: var(--muted); }
+.markdown-preview { max-height: 8em; overflow: hidden; font-size: 13px; }
+.markdown-preview h1, .markdown-preview h2, .markdown-preview h3 { font-size: 1.05em; margin: .4em 0; }
+.library-content-section, .library-section-body, .library-sections { min-width: 0; }
+.library-section-body[hidden] { display: none; }
+.library-fold-toggle { white-space: normal; }
+.library-content-section .section-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.history-metadata { max-width: 100%; overflow: auto; }
+@media (max-width: 600px) {
+  .library-content-section > .section-heading { flex-wrap: wrap; }
+  .markdown-code { padding: 10px; }
+  .markdown-table-scroll th, .markdown-table-scroll td { padding: 6px 8px; }
+}

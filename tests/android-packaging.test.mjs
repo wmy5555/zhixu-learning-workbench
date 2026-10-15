@@ -22,6 +22,7 @@ test('Android packaging stays on its tracked frozen snapshot when public changes
     await writeFile(path.join(root, 'node_modules/@capacitor/core/dist/index.js'), '// synthetic build fixture');
     const git = (...args) => execFileSync('git', ['-c', `safe.directory=${root.replaceAll('\\', '/')}`, ...args], { cwd: root, stdio: 'pipe' });
     git('init', '-q');
+    await writeFile(path.join(root, 'apps/android/web/markdown-reader.mjs'), '// selected tracked reading fix');
     git('add', 'apps/android/web');
     // Untracked material must never be included even if it is inside the snapshot directory.
     await writeFile(path.join(root, 'apps/android/web/untracked.txt'), 'synthetic untracked material');
@@ -30,6 +31,7 @@ test('Android packaging stays on its tracked frozen snapshot when public changes
     assert.equal(await readFile(path.join(root, 'dist/android-web/app.mjs'), 'utf8'), '// frozen Android source');
     await assert.rejects(readFile(path.join(root, 'dist/android-web/untracked.txt')), { code: 'ENOENT' });
     assert.match(await readFile(path.join(root, 'dist/android-web/index.html'), 'utf8'), /android-entry\.mjs/);
+    assert.equal(await readFile(path.join(root, 'dist/android-web/markdown-reader.mjs'), 'utf8'), '// selected tracked reading fix');
     await writeFile(path.join(root, 'public/app.mjs'), '// another main change');
     await writeFile(path.join(root, 'dist/android-web/stale.txt'), 'obsolete output');
     build();

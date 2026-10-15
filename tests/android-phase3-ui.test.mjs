@@ -3,6 +3,7 @@ import test from "node:test";
 import { click, control, createAndroidBrowser, descendants, findButton } from "./fixtures/android-browser.mjs";
 
 const source = { id: "reflection", kind: "source", title: "合成反思", body: "我希望先回忆，再查材料。", hash: "synthetic-source-hash", meta: {}, children: [] };
+function startIntent(body) { const { requestId, ...intent } = body; assert.match(requestId, /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i); return intent; }
 const bootstrap = async () => ({ notes: [], today: { items: [] }, stats: {} });
 const guide = async () => ({ steps: [{ id: "sources", label: "保存原文", completed: true }, { id: "answer", label: "保存回答", completed: false }] });
 
@@ -96,7 +97,7 @@ test("Android topic member starts only the current next step and disabled starts
   ]) {
     const calls = [], topic = { id: "topic", title: "有前置顺序的主题", body: "先A再B", ...scenario };
     const session = { id: "session", noteId: scenario.enabled, status: "reading", turns: [], material: "本地材料" };
-    const fixture = await createAndroidBrowser({ api: { topics: async () => ({ topics: [topic] }), startStudy: async body => { calls.push({ ...body }); return session; }, study: async () => session } });
+    const fixture = await createAndroidBrowser({ api: { topics: async () => ({ topics: [topic] }), startStudy: async body => { calls.push(startIntent(body)); return session; }, study: async () => session } });
     await fixture.app.navigate("topics");
     await click(findButton(fixture.app.refs.main, "查看"));
     const starts = descendants(fixture.app.refs.drawerBody).filter(node => node.tagName === "button" && node.textContent === "开始");
@@ -118,7 +119,7 @@ test("Android topic member starts only the current next step and disabled starts
 
 test("Android ordinary single knowledge remains startable without topic context", async () => {
   const calls = [], session = { id: "session", noteId: "b", status: "reading", turns: [], material: "个人反思" };
-  const fixture = await createAndroidBrowser({ api: { startStudy: async body => { calls.push({ ...body }); return session; }, study: async () => session } });
+  const fixture = await createAndroidBrowser({ api: { startStudy: async body => { calls.push(startIntent(body)); return session; }, study: async () => session } });
   fixture.app.renderNoteDrawer({ id: "b", kind: "knowledge", title: "B的独立学习", body: "个人反思", meta: { claimType: "opinion", stage: "learning" } });
   const start = findButton(fixture.app.refs.drawerBody, "开始学习");
   assert.equal(start.disabled, false);
@@ -134,7 +135,7 @@ test("Android today and queue topic plans disable later steps while unbound sing
     const fixture = await createAndroidBrowser({ api: {
       bootstrap: async () => ({ topics: [topic], today: { items, budget: 25 }, stats: {} }),
       today: async () => ({ items }), topics: async () => ({ topics: [topic] }), notes: async () => ({ notes: [] }), studySessions: async () => ({ sessions: [] }),
-      startStudy: async body => { calls.push({ ...body }); return session; }, study: async () => session,
+      startStudy: async body => { calls.push(startIntent(body)); return session; }, study: async () => session,
     } });
     await fixture.app.navigate(view);
     const starts = descendants(fixture.app.refs.main).filter(node => node.tagName === "button" && node.textContent === (view === "today" ? "开始" : "开始学习"));
@@ -154,7 +155,7 @@ test("Android queue follows fixed plan state transitions while pending plans and
   const fixture = await createAndroidBrowser({ api: {
     bootstrap: async () => ({ today: { items: [item] }, stats: {} }),
     today: async () => ({ items: [item] }), notes: async () => ({ notes: [{ id: item.noteId, title: item.title }, { id: "pool-note", title: "独立学习池" }] }),
-    studySessions: async () => ({ sessions: [] }), startStudy: async body => { calls.push({ ...body }); return session; }, study: async () => session,
+    studySessions: async () => ({ sessions: [] }), startStudy: async body => { calls.push(startIntent(body)); return session; }, study: async () => session,
   } });
   for (const [state, label] of [["pending", "开始学习"], ["done", "已完成"], ["skipped", "已跳过"], ["deferred", "已延期"], ["paused", "已暂停"], ["pending", "开始学习"]]) {
     item.state = state;
@@ -423,12 +424,12 @@ test("Android local settings save only learning preferences and paused content c
   assert.equal(findButton(fixture.app.refs.main, "恢复安排"), undefined);
 });
 
-test("Android topic page offers manual creation without AI and unsupported output stays blocked", async () => {
-  const fixture = await createAndroidBrowser({ api: { topics: async () => ({ topics: [] }) } });
+test("Android topic page keeps manual creation and output defaults to local use", async () => {
+  const fixture = await createAndroidBrowser({ api: { drafts: async () => ({ drafts: [] }), topics: async () => ({ topics: [] }) } });
   await fixture.app.navigate("topics");
   assert.ok(findButton(fixture.app.refs.main, "新建主题学习包"));
   assert.equal(findButton(fixture.app.refs.main, "AI 建议学习包"), undefined);
   await fixture.app.navigate("output");
-  assert.match(fixture.app.refs.main.textContent, /尚未迁移到手机/);
-  assert.equal(descendants(fixture.app.refs.main).some(node => node.name === "question"), false);
+  assert.match(fixture.app.refs.main.textContent, /有依据的问答与输出/);
+  assert.equal(descendants(fixture.app.refs.main).some(node => node.name === "question"), true);
 });

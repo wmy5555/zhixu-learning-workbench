@@ -162,6 +162,56 @@ public class LocalSourceStore implements AutoCloseable {
     }
 
     public JSONObject save(JSONObject input) throws StoreException {
+        return save(input, false);
+    }
+
+    // Native-only reviewed put. Null expectedHash means create this exact UUID iff still absent.
+    JSONObject saveSynced(String id, JSONObject value, String expectedHash) throws StoreException {
+        try {
+            validateSyncValue(value);
+            JSONObject input = new JSONObject().put("id", id).put("title", value.getString("title"))
+                .put("body", value.getString("body")).put("meta", value.getJSONObject("source"));
+            if (expectedHash != null) input.put("expectedHash", expectedHash);
+            return save(input, expectedHash == null);
+        } catch (JSONException exception) { throw validation("同步原文格式不正确。"); }
+    }
+
+    JSONObject previewSynced(String id, JSONObject value) throws StoreException {
+        synchronized (LOCK) {
+            validateId(id); validateSyncValue(value);
+            try {
+                Map<String, JSONObject> documents = readAll(); JSONObject previous = documents.get(id);
+                if (previous == null) {
+                    if (documents.size() >= MAX_NOTES) throw new StoreException("LIMIT_REACHED", "最多保存 100 份本地资料。");
+                    requireSyncCreateAbsent(id);
+                }
+                return previous;
+            } catch (IOException | JSONException exception) { throw new StoreException("STORE_ERROR", "同步目标存在不明路径或暂不可读，请保留资料。"); }
+        }
+    }
+
+    private static void validateSyncValue(JSONObject value) throws StoreException {
+        rejectUnknown(value, new HashSet<>(Arrays.asList("title", "body", "source")));
+        String title = requireString(value, "title"); validateWriteBoundary(title);
+        validateContent(title, requireString(value, "body"));
+        if (title.length() > 200) throw validation("旧标题可保留在同步日记，但当前原文写入最多 200 个 UTF-16 字符；不会裁剪。");
+        Object source = value.opt("source"); if (!(source instanceof JSONObject)) throw validation("同步来源格式不正确。");
+        JSONObject meta = (JSONObject) source;
+        rejectUnknown(meta, new HashSet<>(Arrays.asList(SOURCE_FIELDS)));
+        for (String field : SOURCE_FIELDS) requireString(meta, field);
+        validateWriteMeta(meta); sanitizeMeta(meta);
+    }
+
+    private void requireSyncCreateAbsent(String id) throws IOException, StoreException {
+        for (File target : Arrays.asList(child(notesDirectory, id + ".md"), child(originalsDirectory, id + ".md"),
+            child(historyDirectory, id), child(saveTransactionsDirectory, id + ".json"))) {
+            requireAtomicPrivate(target);
+            if (atomicExists(target) || child(target.getParentFile(), target.getName() + ".new").exists())
+                throw new StoreException("CONFLICT", "同步新建的 UUID 已有资料或路径证据，不能覆盖。");
+        }
+    }
+
+    private JSONObject save(JSONObject input, boolean syncCreate) throws StoreException {
         synchronized (LOCK) {
             rejectUnknown(input, SAVE_FIELDS);
             String title = requireString(input, "title");
@@ -186,7 +236,8 @@ public class LocalSourceStore implements AutoCloseable {
             try {
                 Map<String, JSONObject> documents = readAll();
                 JSONObject previous = id == null ? null : documents.get(id);
-                if (id != null && previous == null) throw new StoreException("NOT_FOUND", "这份资料不存在。");
+                if (id != null && previous == null && !syncCreate) throw new StoreException("NOT_FOUND", "这份资料不存在。");
+                if (syncCreate && previous != null) throw new StoreException("CONFLICT", "这份同步原文已存在，请重新预览。");
                 if (previous != null) {
                     String expectedHash = requireString(input, "expectedHash");
                     if (!expectedHash.equals(previous.getString("hash"))) {
@@ -195,7 +246,8 @@ public class LocalSourceStore implements AutoCloseable {
                 } else {
                     if (input.has("expectedHash")) throw validation("新资料不能带有旧版本标识。");
                     if (documents.size() >= MAX_NOTES) throw new StoreException("LIMIT_REACHED", "样机最多保存 100 份本地资料。");
-                    id = UUID.randomUUID().toString();
+                    if (syncCreate) requireSyncCreateAbsent(id);
+                    else id = UUID.randomUUID().toString();
                 }
                 JSONObject mergedMeta = previous == null ? new JSONObject()
                     : new JSONObject(previous.getJSONObject("meta").toString());
