@@ -219,9 +219,17 @@ function closeDrawer() {
 
 async function requestCloseDrawer() {
   if (!refs.drawer.classList.contains("is-open")) return;
-  const form = refs.drawerBody.querySelector("form");
-  if (form?.confirmDiscardChanges && !await form.confirmDiscardChanges()) return;
+  if (!await confirmDrawerDiscard()) return;
   closeDrawer();
+}
+
+function drawerInputForm() {
+  return refs.drawer.classList.contains("is-open") ? refs.drawerBody.querySelector("form") : null;
+}
+
+async function confirmDrawerDiscard() {
+  const form = drawerInputForm();
+  return !form?.confirmDiscardChanges || await form.confirmDiscardChanges();
 }
 
 async function refreshBootstrap() {
@@ -242,13 +250,19 @@ async function refreshCompletedSource(sourceId) {
 }
 
 async function navigate(view, options = {}) {
-  if (!await confirmUnsavedInputDiscard()) return;
+  const context = api.getContext(), mainForm = unsavedInputForm(), drawerForm = drawerInputForm();
+  if (!await confirmUnsavedInputDiscard()) return false;
+  if (!options.keepDrawer && !await confirmDrawerDiscard()) return false;
+  const latest = api.getContext();
+  if (latest.version !== context.version || latest.practiceId !== context.practiceId
+    || unsavedInputForm() !== mainForm || drawerInputForm() !== drawerForm) return false;
   setPage(view);
   if (!options.keepDrawer) closeDrawer();
   showLoading();
   try {
     await renderCurrent();
     refs.main.focus({ preventScroll: true });
+    return true;
   } catch (error) {
     renderFailure(error, () => navigate(view));
   }
@@ -1084,13 +1098,16 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
       field("知识主题", el("input", { name: "topic", value: meta.topic || "", placeholder: "可留空" })),
       learningGoalField(meta.depth),
     ]),
-    el("div", { class: "form-actions" }, [button("保存修改", { kind: "primary", type: "submit" }), button("取消", { onClick: () => returnToSourceId ? refreshSourceGroup(returnToSourceId).catch(handleError) : renderNoteDrawer(note) })]),
+    el("div", { class: "form-actions" }, [button("保存修改", { kind: "primary", type: "submit" }), button("取消", { onClick: async () => {
+      if (!await form.confirmDiscardChanges()) return;
+      await leaveEditor(JSON.stringify(editorValues())).catch(handleError);
+    } })]),
   );
-  const initialFields = editorValues();
+  let initialFields = editorValues();
   if (isMobilePrototype()) {
     for (const name of ["privacy", "depth", "researchIntervalDays"]) form.querySelector(`[name="${name}"]`).disabled = true;
   }
-  const originalValues = JSON.stringify(editorValues());
+  let originalValues = JSON.stringify(editorValues()), saving = false;
   form.hasUnsavedChanges = () => JSON.stringify(editorValues()) !== originalValues;
   let confirmingDiscard = false;
   form.confirmDiscardChanges = async () => {
@@ -1105,24 +1122,50 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
     const latest = api.getContext();
     return latest.practiceId === context.practiceId && latest.version === context.version && refs.drawerBody.querySelector("form") === form;
   };
+  const currentEditor = (context, open) => {
+    const latest = api.getContext();
+    return latest.practiceId === context.practiceId && latest.version === context.version
+      && refs.drawerBody.querySelector("form") === form && refs.drawer.classList.contains("is-open") === open;
+  };
+  async function leaveEditor(snapshot, context = api.getContext(), open = refs.drawer.classList.contains("is-open")) {
+    const canLeave = () => currentEditor(context, open) && JSON.stringify(editorValues()) === snapshot;
+    if (!canLeave()) return;
+    const source = returnToSourceId ? await api.note(returnToSourceId) : null;
+    if (!canLeave()) return;
+    if (source) { if (!isExcerptOnly(source)) renderSourceGroupDrawer(source); }
+    else renderNoteDrawer(note);
+    if (state.view === "library") await renderLibrary();
+  }
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const data = editorValues();
+    if (saving) return;
+    const data = editorValues(), submitted = JSON.stringify(data), context = api.getContext();
+    const open = refs.drawer.classList.contains("is-open"), previousHash = note.hash;
+    const submit = form.querySelector("button[type='submit']");
+    saving = true; submit.disabled = true;
     try {
       if (bodyEditor && !data.body.trim()) throw new Error("正文不能为空。");
       if (!isMobilePrototype() && note.kind === "source" && (!Number.isInteger(Number(data.researchIntervalDays)) || Number(data.researchIntervalDays) < 1 || Number(data.researchIntervalDays) > 365)) throw new Error("核验有效天数应为 1–365 的整数。");
       const sourceMeta = note.kind === "source" ? { platform: data.platform || "", author: data.author || "", url: data.url || "", date: data.date || "", locator: data.locator || "", researchIntervalDays: Number(data.researchIntervalDays) } : {};
       const changedMeta = Object.fromEntries(Object.entries({ privacy: data.privacy, topic: data.topic, depth: data.depth, ...sourceMeta }).filter(([key]) => data[key] !== initialFields[key]));
       if (isMobilePrototype()) for (const key of ["privacy", "depth", "researchIntervalDays"]) delete changedMeta[key];
-      const updated = await api.updateNote(note.id, { body: data.body, title: data.title, expectedHash: note.hash, meta: changedMeta });
-      toast(updated.hash === note.hash ? "内容未改变，已确认当前设置" : "已保存，并保留版本记录", "success");
+      const updated = await api.updateNote(note.id, { body: data.body, title: data.title, expectedHash: previousHash, meta: changedMeta });
+      if (!currentEditor(context, open)) return;
+      note = { ...note, ...updated };
+      initialFields = data; originalValues = submitted;
+      toast(updated.hash === previousHash ? "内容未改变，已确认当前设置" : "已保存，并保留版本记录", "success");
       await refreshBootstrap();
-      if (returnToSourceId) await refreshSourceGroup(returnToSourceId);
-      else {
-        renderNoteDrawer(updated);
-        if (state.view === "library") await renderLibrary();
+      if (!currentEditor(context, open)) return;
+      if (JSON.stringify(editorValues()) !== submitted) {
+        toast("提交时的版本已保存；后续输入仍在当前草稿，请再次保存。", "info");
+        return;
       }
-    } catch (error) { handleError(error); }
+      await leaveEditor(submitted, context, open);
+      if (currentEditor(context, open) && JSON.stringify(editorValues()) !== submitted) {
+        toast("提交时的版本已保存；后续输入仍在当前草稿，请再次保存。", "info");
+      }
+    } catch (error) { if (currentEditor(context, open)) handleError(error); }
+    finally { saving = false; submit.disabled = false; }
   });
   clear(refs.drawerBody).append(form);
   bodyEditor?.mount(refs.drawerBody);
@@ -2566,8 +2609,9 @@ async function navigateTutorial(step, tutorial) {
   }
   if (step.tab && step.view === "system") state.systemTab = step.tab;
   if (step.view === "study") state.studyTab = requestedTab;
-  if (!sameView) await navigate(step.view || "today");
+  if (!sameView) { if (await navigate(step.view || "today") === false) return; }
   else if (!openStudyConfirmation && !step.target?.startsWith("note-") && !["topic-editor", "topic-detail", "draft-editor"].includes(step.target) && refs.drawer.classList.contains("is-open")) {
+    if (!await confirmDrawerDiscard()) return;
     closeDrawer();
     if (["library", "topics"].includes(step.view)) await renderCurrent();
   }
@@ -2665,7 +2709,7 @@ refs.refresh.addEventListener("click", async () => {
 });
 refs.drawerClose.addEventListener("click", requestCloseDrawer);
 refs.drawerBackdrop.addEventListener("click", requestCloseDrawer);
-document.addEventListener("keydown", (event) => { if (event.key === "Escape") requestCloseDrawer(); });
+document.addEventListener("keydown", (event) => { if (event.key === "Escape") return requestCloseDrawer(); });
 
 function unsavedInputForm() {
   return refs.main.querySelector('[data-tour="capture-form"]') || refs.main.querySelector('[data-tour="study-session"]');
@@ -2698,13 +2742,14 @@ async function confirmUnsavedInputDiscard() {
 
 async function prepareContextChange() {
   if (!await confirmUnsavedInputDiscard()) return false;
+  if (!await confirmDrawerDiscard()) return false;
   showLoading();
   return true;
 }
 
 // Only inspect the live form; sensitive draft text never enters browser storage.
 window.addEventListener("beforeunload", (event) => {
-  if (!unsavedInputForm()?.hasUnsavedChanges()) return;
+  if (!unsavedInputForm()?.hasUnsavedChanges() && !drawerInputForm()?.hasUnsavedChanges?.()) return;
   event.preventDefault();
   // Legacy Chrome/Edge also require a nonempty returnValue to request the prompt.
   event.returnValue = "unsaved";
