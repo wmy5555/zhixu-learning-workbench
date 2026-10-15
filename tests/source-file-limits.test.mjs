@@ -54,6 +54,11 @@ test('50 MB boundary survives HTTP upload, original preview and large-base64 bac
   assert.match(preview.headers.get('content-disposition'), /^inline;/);
   assert.match(preview.headers.get('content-security-policy'), /sandbox/);
   assert.equal(sha(Buffer.from(await preview.arrayBuffer())), expectedHash);
+  const download = await fetch(originalRoute + '&download=1', { headers: h.headers });
+  assert.equal(download.status, 200);
+  assert.equal(download.headers.get('content-length'), String(MAX_FILE_BYTES));
+  assert.match(download.headers.get('content-disposition'), /^attachment;/);
+  assert.equal(sha(Buffer.from(await download.arrayBuffer())), expectedHash);
 
   const directory = path.join(h.options.vaultDir, '.zhixu-attachments');
   const before = fs.readdirSync(directory);

@@ -293,12 +293,13 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
   // Exercise our actual attachment UI functions; FilePond's browser-only lifecycle
   // is covered by the separate browser flow, not the minimal DOM fixture.
   vm.runInContext(fileUiSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') +
-    '\ncreateFilePicker = async () => ({ getFiles: () => [] });\nthis.attachmentUrl = (id, asset) => "/api/notes/" + id + "/attachments?asset=" + asset;', context);
+    '\ncreateFilePicker = async () => ({ getFiles: () => [] });\nthis.attachmentUrl = (id, asset, download = false) => "/api/notes/" + id + "/attachments?asset=" + asset + (download ? "&download=1" : "");', context);
   vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + ('const renderMarkdown = (() => {\n' + markdownSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn renderMarkdown;\n})();') + '\n' + sourceMapSource + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { renderSourceGroupDrawer, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
   context.app.beginStudy = vm.runInContext('beginStudy', context);
   context.app.manualExtract = vm.runInContext('manualExtract', context);
   context.app.serializeForm = vm.runInContext('serializeForm', context);
   context.app.processControls = vm.runInContext('processControls', context);
+  context.app.attachmentPanel = vm.runInContext('attachmentPanel', context);
   context.app.refreshBootstrap = vm.runInContext('refreshBootstrap', context);
   context.app.processFeedback = vm.runInContext('processFeedback', context);
   context.app.renderSourceGroupDrawer = vm.runInContext('renderSourceGroupDrawer', context);
@@ -1954,4 +1955,22 @@ test('binary first-layer controls disable AI/research until DOCX has extracted t
   assert.equal(Boolean(word.querySelector('input').checked), false);
   const plain = app.processControls({id:'text',kind:'source',meta:{}});
   assert.equal(findButton(plain, '提交 AI 拆解').disabled, false);
+});
+
+test('PDF attachment explains viewer failure and keeps the same protected original download', () => {
+  const app = browser();
+  const file = { id: 'public-file.pdf', name: '公开50 MB.pdf', kind: 'pdf', format: 'pdf', size: 50_000_000 };
+  const panel = app.attachmentPanel({ id: 'source-pdf', meta: { sourceFile: file } });
+  assert.match(panel.textContent, /空白、灰屏或加载失败/);
+  assert.match(panel.textContent, /本机 PDF 阅读器/);
+  const links = descendants(panel).filter(node => node.tagName === 'a');
+  const preview = links.find(node => node.textContent === '在浏览器中查看 PDF');
+  const download = links.find(node => node.textContent === '下载原件');
+  assert.equal(preview.attributes.href, '/api/notes/source-pdf/attachments?asset=public-file.pdf');
+  assert.equal(preview.attributes.target, '_blank');
+  assert.equal(preview.attributes.rel, 'noopener noreferrer');
+  assert.equal(download.attributes.href, preview.attributes.href + '&download=1');
+  assert.equal(download.attributes.download, file.name);
+  const image = app.attachmentPanel({ id: 'image', meta: { sourceFile: { ...file, kind: 'image', format: 'png' } } });
+  assert.doesNotMatch(image.textContent, /灰屏/);
 });

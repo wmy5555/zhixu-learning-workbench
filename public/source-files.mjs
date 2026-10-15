@@ -34,6 +34,7 @@ export function attachmentPanel(note) {
       el('p', { text: file.name + ' · ' + Math.ceil(file.size / 1024) + ' KB' }),
       file.kind === 'image' ? el('img', { src: attachmentUrl(note.id, file.id), alt: file.name, loading: 'lazy', class: 'source-image' }) : null,
       file.kind === 'pdf' ? el('a', { href: attachmentUrl(note.id, file.id), target: '_blank', rel: 'noopener noreferrer', text: '在浏览器中查看 PDF' }) : null,
+      file.kind === 'pdf' ? el('p', { class: 'notice', text: 'PDF 由浏览器查看器显示，大文件加载可能需要更久。若出现空白、灰屏或加载失败，请点击“下载原件”，再用本机 PDF 阅读器打开；原件仍保留在资料库中。' }) : null,
       el('a', { href: attachmentUrl(note.id, file.id, true), download: file.name, text: '下载原件' }),
     ])),
   ]);
