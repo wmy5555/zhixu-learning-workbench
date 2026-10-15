@@ -572,13 +572,16 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   const askBasis = (input, prepared) => hash(JSON.stringify([input, prepared.references]));
   const askContext = (id, step, input, operation, basisHash) => ai.withCallContext
     ? ai.withCallContext({ key: `ask:${id}:${step}`, jobId: `ask:${id}`, turnId: `${hash(JSON.stringify(input))}${basisHash ? `:${basisHash}` : ''}`, singleRequest: true }, operation) : operation();
-  function askResult(request, { fresh = false } = {}) {
+  function checkAskCalls(request, { fresh = false } = {}) {
     const calls = store.records('callLedger').filter(call => call.jobId === `ask:${request.id}` && call.phase !== 'cancelled');
     if (calls.some(call => call.phase !== 'accounted')) fail('原请求仍有未决调用，请先完成本地记账或核对；备份中的完成状态不会替代本机证据。', 'CALL_RECOVERY_REQUIRED', 409);
     const modelCalls = calls.filter(call => call.capability === 'model');
     // A freshly returned test override may have no transport ledger. A restored
     // completed record never inherits that trust from missing evidence.
-    if (request.generated && (!fresh || modelCalls.length || request.callId) && (modelCalls.length !== 1 || modelCalls[0].id !== request.callId || store.get('callResults', request.callId)?.entry?.ok !== true)) fail('此完成记录与本机调用证据不一致。请核对恢复前安全备份和输出草稿；不会将其他调用的草稿当作原请求结果，也不会重新发送。', 'CALL_RECOVERY_REQUIRED', 409);
+    if ((modelCalls.length || request.callId || request.generated && !fresh) && (modelCalls.length !== 1 || modelCalls[0].id !== request.callId || store.get('callResults', request.callId)?.entry?.ok !== true)) fail('此完成记录与本机调用证据不一致。请核对恢复前安全备份和输出草稿；不会将其他调用的草稿当作原请求结果，也不会重新发送。', 'CALL_RECOVERY_REQUIRED', 409);
+  }
+  function askResult(request, options) {
+    checkAskCalls(request, options);
     const draft = store.get('drafts', request.draftId);
     if (!draft) fail('原请求的草稿已不存在；不会重新调用模型。', 'ASK_RESULT_MISSING', 409);
     return { requestId: request.id, answer: draft.body, citations: draft.citations, limitations: draft.limitations, draftId: draft.id, generated: request.generated };
@@ -632,6 +635,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
         citations.splice(0, citations.length, ...citations.filter(c => result.citationIds.includes(c.id)));
       }
       checkAskMaterials(request.prepared);
+      checkAskCalls({ id: request.id, generated, callId }, { fresh: true });
       store.db.exec('BEGIN IMMEDIATE');
       try {
         store.put('drafts', request.draftId, { id: request.draftId, mode, question, body: answer, citations, limitations, usedIds: [], createdAt: now() });

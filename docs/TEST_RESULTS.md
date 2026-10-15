@@ -11,12 +11,13 @@
 | 接口对应操作 | 预期 | 实际证据 |
 | --- | --- | --- |
 | 问答与输出：恢复异机 completed 后继续同 ID | 完成标记不能绕过本机 received；补记后仍须匹配调用 | 真实服务恢复/重开回归在补记前后均返回 CALL_RECOVERY_REQUIRED；异机草稿保留作手动检查，传输仍 1 次 |
+| 问答：备份将 completed 或 prepared 的生成标记改为本地 | 标记不能关闭本机调用核对；拒绝前不能覆盖正文 | 两种状态均返回 CALL_RECOVERY_REQUIRED，导入草稿正文不变，未将 prepared 中的替代回答写入 |
 | 问答：恢复旧的待处理备份，再开启合成模型并继续 | 本机已记账响应保留，不能重复计费 | 复用原调用和 draftId，只有 1 次传输、1 份草稿；恢复后能力关闭时先拒绝执行 |
 | 输出工作区：恢复自身完成备份 | 保留人工草稿编辑，读回无需外发 | 模型关闭时仍读回人工编辑正文，原调用身份相同，传输不增加 |
 | 问答：嵌入响应记账失败后备份/恢复/补记，再继续生成 | 嵌入与模型各一次，不重复嵌入 | 2 次受控传输分别为 embedding/model，1 份草稿，同 ID 再读不增加调用 |
-| 备份恢复：完成记录绑定其他调用，或历史缺少 callId | 问答接口拒绝推断来源，草稿仍可读取 | 实际 HTTP 两例均为 POST /api/ask 409/CALL_RECOVERY_REQUIRED、GET /api/drafts 200/1 份原稿，能力关闭，累计 1 次受控传输 |
+| 备份恢复：绑定其他调用、历史缺 callId、伪装本地标记 | 问答接口拒绝推断来源，草稿仍可读取 | 实际 HTTP 三例均为 POST /api/ask 409/CALL_RECOVERY_REQUIRED、GET /api/drafts 200/1 份原稿，能力关闭，累计 1 次受控传输 |
 
-最终完整日志 `.tmp/verify-recovery-resume-bound-final-20261015.log`，最终定向日志 `.tmp/verify-recovery-resume-targeted-final-20261015.log`，HTTP 证据 `.tmp/evidence/recovery-http-resume.json`；全部在本任务忽略目录，测试只使用随机合成库与假凭据，真实供应商调用 0 次。新提交 CI 在最终交付时核对。未变的设置/文件断电恢复/下载/UI 证据按原记录复用，不称为本轮重跑。独立安全完整报告、真实供应商/生产凭据与用户最终确认仍未完成，未合并或部署，不接管其他 PR。
+最终完整日志 `.tmp/verify-recovery-final-20261015.log`，最终定向日志 `.tmp/verify-recovery-flags-targeted-20261015.log`，HTTP 证据 `.tmp/evidence/recovery-http-resume.json`；全部在本任务忽略目录，测试只使用随机合成库与假凭据，真实供应商调用 0 次。新提交 CI 在最终交付时核对。未变的设置/文件断电恢复/下载/UI 证据按原记录复用，不称为本轮重跑。独立安全完整报告、真实供应商/生产凭据与用户最终确认仍未完成，未合并或部署，不接管其他 PR。
 
 ## PR #69 交互问答补记后重试（2026-10-15）
 

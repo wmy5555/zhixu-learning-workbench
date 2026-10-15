@@ -122,6 +122,17 @@ test('restored completed ask cannot bypass a local unfinished call or substitute
   await assert.rejects(h.service.ask(input), { code: 'CALL_RECOVERY_REQUIRED' });
   assert.equal(h.attempts, 1);
   assert.equal(h.service.store.records('drafts').length, 1, 'explicitly restored data remains available for manual inspection');
+  for (const state of ['completed-local', 'prepared-local']) {
+    const disguised = structuredClone(backup), row = disguised.records.find(row => row.namespace === 'askRequests');
+    row.json = JSON.stringify(state === 'completed-local'
+      ? { ...completed, completed: true, generated: false }
+      : { ...operation, prepared: { ...prepared, generated: false, answer: '不能覆盖导入草稿的合成伪装结果。' } });
+    restoreBackup(h.service, disguised);
+    await h.reopen();
+    await assert.rejects(h.service.ask(input), { code: 'CALL_RECOVERY_REQUIRED' });
+    assert.equal(h.service.store.get('drafts', operation.draftId).body, body, 'a changed generation flag cannot apply another result before rejecting');
+    assert.equal(h.attempts, 1);
+  }
 });
 
 test('older pending ask backup resumes from local accounted response and completed backup preserves manual draft edits', async t => {
