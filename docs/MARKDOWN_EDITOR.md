@@ -37,6 +37,50 @@
 
 附件控件组合时也需先用 `getValue()` 读取当前草稿，再用 `setValue()` 替换；直接对隐藏的 textarea 调用 `setRangeText` 或 `.value` 会遗漏可视化输入。`attachmentUploadIds` 仍由附件调用方独立维护，正文替换不能清空或伪造这些绑定记录。本分支只记录接点，不修改 PR #73 的文件。
 
+### PR #73 组合接点
+
+以下约定根据附件分支当前 `source-files.mjs` 的回执形状核对，供统筹串行整合；它不是已经联调通过的附件功能。
+
+| 值 | 含义与用途 |
+|---|---|
+| `receipt.id` | 暂存上传编号，加入 `attachmentUploadIds`，用于本次保存绑定及上传撤销 |
+| `receipt.attachment.id` | 稳定附件编号，组成 `../.zhixu-attachments/<id>`；不能当作上传编号提交 |
+| `editor.getValue()` | 同步取得当前源码或可视化正文；提交、未保存检查和程序插入都读取它 |
+| `editor.setValue(markdown)` | 精确替换草稿、回到源码、使旧加载失效；不会管理或清除上传编号 |
+
+附件分支的 `imageInsertControls(body, uploadIds)` 当前对 textarea 使用 `setRangeText`、`.value` 和 `input` 事件。组合时保留其 FilePond 上传与撤销流程，只把正文读写接到适配器。例如，明确追加图片的操作使用：
+
+```js
+const editor = body.markdownEditor;
+if (imageUploads.includes(receipt.id)) return;
+const markdown = editor.getValue();
+editor.setValue(`${markdown}\n${imageReference(receipt.attachment)}\n`);
+imageUploads.push(receipt.id);
+```
+
+这段示例是追加到末尾，并会回到源码。只有源码模式才能沿用 textarea 的选区插入；不能把隐藏 textarea 的旧选区当作可视化光标。重置、填例和导入提取结果也走 `setValue()`，上传列表另行按实际撤销结果处理。
+
+保存时正文与上传编号必须在同一次点击中取快照，不把可变数组直接交给异步保存：
+
+```js
+const submitted = {
+  ...serializeForm(form),
+  body: editor.getValue(),
+  expectedHash: currentHash,
+  attachmentUploadIds: [...imageUploads],
+};
+const updated = await api.updateNote(note.id, submitted);
+currentHash = updated.hash;
+const bound = new Set(submitted.attachmentUploadIds);
+for (let i = imageUploads.length - 1; i >= 0; i -= 1) {
+  if (bound.has(imageUploads[i])) imageUploads.splice(i, 1);
+}
+```
+
+上述片段只展示两个状态的组合，不替代本页已有的保存锁、当前编辑器/资料库核对及字段比较。失败时保留正文和全部暂存编号；成功时只移除本次已绑定编号。慢保存期间新增正文或上传仍留在当前草稿，新哈希用于下一次保存，不能无条件重绘或清空整个上传数组。撤销暂存上传时，只有能证明仍是该次插入且未被用户修改的片段才可删正文；否则保留引用并提示处理，不能用全局字符串替换误删原文。
+
+若后续采用编辑器 `uploadImage(file)` 回调，附件侧负责把现有异步回执桥接成 `{ attachmentId: receipt.attachment.id, markdownUrl }`，其中 `markdownUrl` 为 `../.zhixu-attachments/` 加稳定附件编号，同时独立记录 `receipt.id`。多格式提取仅把已提取正文传入 `setValue()`，提交重新取 `getValue()`，保留提取来源、警告和附件绑定记录。整合后仍须实际验收：可视化输入后插图/撤销、失败重试、保存中新上传、重新打开后的绑定图片和引用；本 PR 不把这些列为已通过。
+
 适配器默认不连接上传接口。没有注入回调时，粘贴/拖入图片会说明使用附件入口，不会嵌入 data URL。`getValue()` 同步读取当前草稿，供保存与未保存检查使用；不能只读取隐藏文本框，因为可视化输入可能仍在等待编辑器的延迟回调。
 
 依赖来源、完整性、各组件许可见 [第三方依赖说明](DEPENDENCY_LICENSES.md) 与随资源保留的 `NOTICE.txt`、许可全文和 `manifest.json`。本项目自身许可证状态不因使用这些组件改变。
