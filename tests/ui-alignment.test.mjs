@@ -245,7 +245,7 @@ test('dirty capture through real onboarding resume cancels in the original libra
       return tutorialState;
     },
   });
-  const tutorial = app.createOnboarding({ beforeContextChange: app.prepareContextChange, contextChanged: async () => app.renderCapture(), navigate: async target => navigations.push(target.id || target.view) });
+  const tutorial = app.createOnboarding({ beforeContextChange: app.prepareContextChange, contextChangeFinished: app.finishContextChange, contextChanged: async () => app.renderCapture(), navigate: async target => navigations.push(target.id || target.view) });
   await tutorial.init();
   app.state.view = 'capture'; await app.renderCapture();
   const form = app.refs.main.querySelector('[data-tour="capture-form"]');
@@ -265,6 +265,48 @@ test('dirty capture through real onboarding resume cancels in the original libra
   assert.notEqual(targetForm, form); assert.equal(targetForm.draftPracticeId, 'synthetic-practice');
   assert.equal(control(targetForm, 'body').value, '');
   tutorial.dispose();
+});
+
+test('onboarding restores the current capture page when prerequisites or a failed switch prevent navigation', async () => {
+  for (const failure of ['prerequisite', 'resume-error', 'context-busy']) {
+    const tutorialState = { practiceId: 'synthetic-practice', status: 'paused', modelReady: failure !== 'prerequisite', currentStepId: 'study-answer', progress: {}, clock: {} };
+    const app = browser({
+      setContext: () => { throw new Error('合成请求仍在进行'); },
+      onboarding: async action => {
+        if (failure === 'resume-error' && action === 'resume') throw new Error('合成恢复失败');
+        return tutorialState;
+      },
+    });
+    const tutorial = app.createOnboarding({ beforeContextChange: app.prepareContextChange, contextChangeFinished: app.finishContextChange, navigate: async () => assert.fail('must not navigate') });
+    await tutorial.init();
+    app.state.view = 'capture'; await app.renderCapture();
+    const form = app.refs.main.querySelector('[data-tour="capture-form"]');
+    control(form, 'body').value = '合成未保存原文';
+    const pending = tutorial.open();
+    await click(findButton(app.dialogs, '放弃输入'));
+    await pending;
+    assert.equal(app.refs.main.querySelector('.loading-panel'), null, failure);
+    assert.equal(app.refs.main.querySelector('[data-tour="capture-form"]'), form, failure);
+    assert.equal(control(form, 'body').value, '合成未保存原文', failure);
+    assert.equal(unloadRequested(app), true, failure);
+    tutorial.dispose();
+  }
+});
+
+test('finishing context preparation never restores another library or replaces a newly rendered page', async () => {
+  for (const destination of ['new-context', 'new-page']) {
+    let version = 0;
+    const app = browser({ getContext: () => ({ practiceId: version ? 'synthetic-target' : '', version }) });
+    await app.renderCapture();
+    const original = app.refs.main.querySelector('[data-tour="capture-form"]');
+    assert.equal(await app.prepareContextChange(), true);
+    if (destination === 'new-context') version++;
+    else await app.renderCapture();
+    const current = [...app.refs.main.children];
+    app.finishContextChange();
+    assert.deepEqual(app.refs.main.children, current);
+    assert.notEqual(app.refs.main.querySelector('[data-tour="capture-form"]'), original);
+  }
 });
 
 let browserRequestSequence = 0;
@@ -316,6 +358,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat, savedSession = 
   context.app.historyReadingBody = vm.runInContext('historyReadingBody', context);
   context.app.searchResultRow = vm.runInContext('searchResultRow', context);
   context.app.prepareContextChange = vm.runInContext('prepareContextChange', context);
+  context.app.finishContextChange = vm.runInContext('finishContextChange', context);
   context.app.navigate = vm.runInContext('navigate', context);
   Object.assign(context, { chapters, getCurriculum, materials, customMaterial, customSample, getMaterial, materialSample, URLSearchParams,
     localStorage: { getItem() { return null; }, setItem() {} }, sessionStorage: { getItem: key => savedSession.get(key) ?? null, setItem: (key, value) => savedSession.set(key, value), removeItem: key => savedSession.delete(key) },

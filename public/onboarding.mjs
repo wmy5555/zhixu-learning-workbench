@@ -184,7 +184,7 @@ export function createOnboarding(adapter) {
     working = true; errorText = ""; checkErrorStepId = ""; render();
     try { await action(); }
     catch (error) { errorText = error.message || "本次操作未完成，请稍后重试。"; compact = false; }
-    finally { working = false; render(); if (flash && !errorText) { locate(true); flashHighlight(); } }
+    finally { adapter.contextChangeFinished?.(); working = false; render(); if (flash && !errorText) { locate(true); flashHighlight(); } }
   }
   async function refreshProof() {
     if (!current?.practiceId || refreshing || disposed) return;
@@ -209,10 +209,12 @@ export function createOnboarding(adapter) {
   async function switchContext(id, destination) {
     if (current?.busy) throw new Error("练习任务仍在处理，请先等待完成或到任务页取消，再切换知识库。");
     if (await adapter.beforeContextChange?.() === false) return false;
-    api.setContext(id);
-    await adapter.contextChanged?.();
-    if (destination) await adapter.navigate(destination, current);
-    return true;
+    try {
+      api.setContext(id);
+      await adapter.contextChanged?.();
+      if (destination) await adapter.navigate(destination, current);
+      return true;
+    } finally { adapter.contextChangeFinished?.(); }
   }
   async function goTo(target = step()) {
     const chapter = stepChapter(target);
