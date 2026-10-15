@@ -2,6 +2,10 @@
 
 ## PR #75 新审阅阻塞（2026-10-15）
 
+后续增量读取普通评论、行内线程和总结，仍为两项未解决 P1，P2 已修复并解决线程；没有新增公开安全结果。`601a4c4` 包已在独立 Android 15 实例执行 27 项原生方法（18 日记/应用 + 9 schema）通过，包含 P2 新增两项。`eb693dd` 仅补固定网页参考已有的编辑抽屉关闭确认；5 项新增与相关 UI 共 70/70 通过，四项 CI 及 Android build/lint 成功，已核对安装摘要及实际 WebView 草稿/阅读/保存/重开流程，见 [测试结果](TEST_RESULTS.md)。
+
+两项 P1 的授权/凭据实现保持未修改，不发送重复安全初审或未修复 P1 的空复审。代码初审覆盖 `69259c1`，未把后续 P2 与 UI 变化称作已获云端复审；P1 继续等待既有规则要求的明确授权，保留未应用方案，PR 保持 draft，不合并。以下为初审时记录，“未执行”状态由本段和测试记录更新。
+
 候选 `f2261f52b32081c35878c14b9359ddf05d0035ba` 的[四项 CI](https://github.com/wmy5555/zhixu-learning-workbench/actions/runs/38688008461)及[Android 编译/lint](https://github.com/wmy5555/zhixu-learning-workbench/actions/runs/38688008664)全部成功。代码[初审](https://github.com/wmy5555/zhixu-learning-workbench/pull/75#issuecomment-6185293678)仍发现两项 P1 与一项 P2；已有回归和构建通过不能代替这些缺陷的修复。
 
 - [P1 恢复请求绑定](https://github.com/wmy5555/zhixu-learning-workbench/pull/75#discussion_r4279489228)：仅 ID/上下文查询不能证明结果属于当前描述，需原生重算完整描述与材料摘要，旧检查点保持未知。

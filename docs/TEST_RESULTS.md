@@ -1,5 +1,21 @@
 # 测试结果与当前边界
 
+## PR #75 当前设备与界面补证（2026-10-15）
+
+编辑抽屉关闭保护提交 `eb693dde306b0d517f706ddb288611dea48ed466`：新增 5 项状态转换回归及相关 Android 阅读、第三/四阶段、同步、网页适配测试共 **70/70 通过**，0 失败/跳过；语法、差异和 284 跟踪文件检查通过。只改 UI 与合成夹具，未改原生代码，复用 `71e553d` 已实际执行的完整 `pnpm verify` 820/820，本轮未重跑本地全套。[CI 38696795326](https://github.com/wmy5555/zhixu-learning-workbench/actions/runs/38696795326) 的 Windows/Linux Quality（均执行完整 verify）、Secrets、Dependencies 全部成功；[Android 38696794843](https://github.com/wmy5555/zhixu-learning-workbench/actions/runs/38696794843) 的应用/测试 APK 构建与 lint 成功。后续纯文档提交复用相同产品源码的本地和设备结果，最终 head CI 仍单独核对。
+
+使用本机已有 MuMu 6.6.4 与 Android 15 引擎，新建独立空白 index3（API35/x86_64），通过独立 ADB server 5041 操作，没有修改其他实例或安装新工具。`601a4c452c26638a82516f869c89d8a5458ee982` 应用 APK SHA-256 为 `58582b9fffff1edfc19ad52cf95099d50206f0f1f34d3027dcf96f4f18be522b`，测试包为 `4193b14f529b7df63c72795c52e329a27e1616abb45fed83b12420f70504f5fa`。实际执行 `LocalSourceSyncStoreTest,OnlineLearningSchemaTest`，**OK (27 tests)**、退出 0、4.512 秒，分别为 18 项日记/原文应用和 9 项 schema，包含 P2 新增两项。只使用随机缓存目录，不是旧 12 项报告，也不是完整原生套件；日志在独立工作树 `.tmp/device-acceptance-601a4c4/native-27.log`。
+
+GUI 使用 `eb693dd` 的 [artifact 11955071005](https://github.com/wmy5555/zhixu-learning-workbench/actions/runs/38696794843/artifacts/11955071005)：ZIP SHA-256 `471a0496f09ed3902147ea065f4d25fdd6298415b00908f0974a9147bf7b36c3`；应用 APK 5,251,788 字节，SHA-256 `6b06e7720082f84fd2f58827297d26274923d71830b90efe49b88412aa8e2e36`。拉回该实例已安装 base.apk，摘要一致。初次覆盖安装含签名不匹配但 ADB 返回 0，已排除该假阳性；仅卸载本任务实例内的合成测试包后重新安装，并核对新资源。没有验收同签名升级或真实资料迁移。
+
+实际 WebView CDP 指针点击与键盘输入通过：收集草稿取消离页后保留；本地选项锁定，AI/研究未配置时禁用，保存后依赖重置；保存合成 Markdown 与“2024年春”日期；资料栏折叠/展开；标题、列表、表格和代码阅读，HTML 作为文字且未执行、图片未发请求；编辑仍为原始 Markdown；关闭按钮/Esc/遮罩取消均保留草稿，明确放弃才关闭，重开原文不被草稿覆盖；保存修订并显示版本列表；强制结束并重开应用后，修订、原始标记和文字日期仍可经界面读回。WebView 为 360×616 dp、DPR4，无页面横向溢出，阅读和确认框截图已查看。脚本初轮因过短点击序列未关闭确认框，保留失败记录；核对实际点击并增加按下/抬起间隔后继续完成，未修改产品绕过断言。截图、脚本与回执仅留 `.tmp/device-acceptance-eb693dd/`，不提交公开仓库。
+
+`eb693dd` 与 `601a4c4` 的原生目录逐字相同，27 项证据复用并保留原提交归属，没有称新包重跑。没有配置真实凭据、调用供应商、付费请求、回填资料或启动网页服务。两项 P1 仍待明确修复授权，安全初审暂无可核对公开结果。真机、软键盘、旋转、最新版备份可视恢复、Wi-Fi 配对/双端传输与离线对账、通知/后台调度、真实 AI/研究和正式签名升级仍待验收/实施。未获用户确认，第五阶段未完成，PR 保持 draft，不合并。
+
+结束后已移除本任务 WebView 转发、停止专用 ADB server 5041 并关闭 index3，查询确认其 Android/进程均未运行，保留测试虚拟磁盘。原第五阶段 37 项暂存补丁再次逐字匹配原备份，SHA-256 仍为 `16dc8bc826f04bcea63f7ff675333c778667c06a90499d50dfc7fa1e2ca11de0`。
+
+以下保留此前轮次证据，其“尚未执行”状态按所述时间理解；当前新增结果以上节为准。
+
 ## PR #75 当前构建与新发现（2026-10-15）
 
 `f2261f52b32081c35878c14b9359ddf05d0035ba` 的 Windows/Linux Quality、Secrets、Dependencies 及 Android build/lint 五项全部成功（CI `38688008461`，Android `38688008664`）；最终本地 HEAD 74 个可达提交扫描无泄漏，生产依赖审计返回无已知漏洞。APK 与设备测试 APK 已构建，设备用例尚未执行。
