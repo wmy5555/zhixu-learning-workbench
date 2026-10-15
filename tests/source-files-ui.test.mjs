@@ -76,7 +76,9 @@ function imageFixture() {
 const imageReceipt = (id = 'upload-a', byte = 'a') => ({ id, noteId: 'unbound-preallocated-note', attachment: { id: byte.repeat(64) + '.png', name: '合成.png', kind: 'image' } });
 
 test('image controls read the current rich draft and undo only their still-identical insertion', async () => {
-  const f = imageFixture(), receipt = imageReceipt(), initial = f.value;
+  const f = imageFixture(), receipt = imageReceipt();
+  f.value += '\n![' + receipt.attachment.name + '](../.zhixu-attachments/' + receipt.attachment.id + ')\n';
+  const initial = f.value;
   await f.controls.children[0].click();
   f.picker.onUploaded(receipt);
   assert.match(f.value, /可视化中尚未同步/);
