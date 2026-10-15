@@ -205,7 +205,7 @@ test('destructive practice, proposal and relationship branches are independent a
   assert.match(service.getNote(versionNote.id).body, /版本 A/);
   assert.equal(service.getNote(main.id).hash, main.hash, 'History restoration must leave main knowledge intact');
   assert.equal(service.getNote(main.id).meta.stage, 'learning');
-  assert.equal(service.getNote(main.id).meta.privacy, 'cloud');
+  assert.equal(service.getNote(main.id).meta.privacy, 'local', 'old-client classification input is ignored without rewriting rollback metadata');
   const preview = service.merge({ keepId: duplicates.roles.mergeKeep, mergeId: duplicates.roles.mergeOther });
   service.merge({ ...preview, preview: false });
   const deletion = service.getNote(duplicates.roles.deleteNote);

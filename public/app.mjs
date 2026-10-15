@@ -193,7 +193,6 @@ function noteMeta(note) {
   return el("div", { class: "item-meta" }, [
     badge(labels.kind(note.kind)),
     badge(labels.stage(meta.stage), stateTone(meta.stage)),
-    meta.privacy === "local" ? badge("仅本地", "good") : badge("允许云端", "warn"),
     state.bootstrap?.settings?.mcp?.chatgptEnabled && state.bootstrap?.settings?.mcp?.chatgptAllowRead ? badge("另已授权 ChatGPT 读取", "warn") : null,
     meta.topic ? badge(meta.topic, "accent") : null,
   ]);
@@ -426,14 +425,8 @@ async function renderCapture() {
   process.addEventListener("change", syncResearchOption);
   // reset 事件在浏览器恢复默认值之前触发，等恢复完成后再同步依赖。
   sourceForm.addEventListener("reset", () => queueMicrotask(() => { bodyEditor?.setValue(body.defaultValue || ""); syncResearchOption(); }));
-  const localOnly = el("input", { name: "localOnly", type: "checkbox" });
-  if (isMobilePrototype()) {
-    localOnly.checked = localOnly.defaultChecked = true;
-    localOnly.disabled = true;
-    sourceForm.addEventListener("reset", () => queueMicrotask(() => { localOnly.checked = true; syncResearchOption(); }));
-    syncResearchOption();
-  }
-  const titleField = field("标题（可选）", title, "留空会先保存原文，再用资料拆解的模型生成标题；无需勾选 AI 拆解。仅本地或模型未配置时暂用原文片段，可手动填写；生成可能产生调用费用。");
+  if (isMobilePrototype()) syncResearchOption();
+  const titleField = field("标题（可选）", title, "留空会先使用原文片段作为标题；主动 AI 拆解时一同生成标题，也可手动填写。");
   titleField.classList.add("span-2");
   const bodyField = bodyEditor ? el("div", { class: "field" }, [el("span", { class: "field-label", text: "原文" }), bodyEditor,
     el("small", { class: "field-hint", text: "网页或模型输出中的指令不会获得程序权限。" })]) : field("原文", body, "网页或模型输出中的指令不会获得程序权限。");
@@ -453,12 +446,11 @@ async function renderCapture() {
       bodyField,
       sourceField,
     ]),
-    el("label", { class: "check-field" }, [localOnly, el("span", { text: "仅本地，不发送给配置的模型或联网服务；ChatGPT 的独立读取授权另行管理" })]),
-    el("label", { class: "check-field" }, [process, el("span", { text: "保存后提交 AI 拆解任务" })]),
+    el("label", { class: "check-field" }, [process, el("span", { text: "保存后使用 AI 拆解（发送所需原文给已配置的服务，可能计费）" })]),
     el("label", { class: "check-field" }, [research, el("span", { text: "拆解时联网检验正确性并寻找反例（可选，需同时勾选 AI 拆解）" })]),
     el("div", { class: "form-actions" }, [button("保存原始资料", { kind: "primary", type: "submit" }), button("清空", { onClick: () => sourceForm.reset() })]),
   );
-  const captureValues = () => ({ ...serializeForm(sourceForm), body: bodyEditor?.getValue() ?? body.value, localOnly: localOnly.checked, process: process.checked, research: research.checked });
+  const captureValues = () => ({ ...serializeForm(sourceForm), body: bodyEditor?.getValue() ?? body.value, process: process.checked, research: research.checked });
   const importItems = () => fileDrafts.map(({ item, title, editor }) => ({ ...item, title: title.value, body: editor.getValue() }));
   const draftValues = () => JSON.stringify({ capture: captureValues(), files: importItems(), filesLoading });
   protectUnsavedInput(sourceForm, draftValues, "收集内容");
@@ -469,14 +461,14 @@ async function renderCapture() {
     const submitted = JSON.stringify(data);
     const item = {
       title: data.title, body: data.body, platform: data.platform, author: data.author,
-      url: data.url, date: data.date, locator: data.locator, privacy: isMobilePrototype() || localOnly.checked ? "local" : "cloud",
+      url: data.url, date: data.date, locator: data.locator,
     };
     try {
       const submit = sourceForm.querySelector("button[type='submit']");
       saving = true; submit.disabled = true;
       const result = await api.import({ items: [item], captureMode: "text", process: process.checked, research: process.checked && research.checked });
       if (JSON.stringify(captureValues()) === submitted) sourceForm.reset();
-      toast(`已保存 ${asArray(result.notes).length || 1} 条原始资料${!String(item.title || "").trim() ? "，标题待生成；暂用原文片段，可在系统任务查看进度" : ""}`, "success");
+      toast(`已保存 ${asArray(result.notes).length || 1} 条原始资料${!String(item.title || "").trim() ? "，暂用原文片段作为标题" : ""}`, "success");
       await refreshBootstrap();
     } catch (error) { handleError(error); }
     finally { saving = false; sourceForm.querySelector("button[type='submit']").disabled = false; }
@@ -701,14 +693,14 @@ function relationControls(note) {
   } });
   return el("details", { class: "child-more-actions", dataset: { tour: "note-relations" } }, [
     el("summary", { text: "查找关联" }),
-    el("div", { class: "page-stack original-body" }, [el("p", { class: "fine-print", text: "默认仅在本机查找可探索的材料。AI 分析会发送获准材料，并可能产生费用。" }),
+    el("div", { class: "page-stack original-body" }, [el("p", { class: "fine-print", text: "默认仅在本机查找可探索的材料。主动 AI 分析会发送所需材料，并可能产生费用。" }),
       el("div", { class: "notice info" }, [
         el("strong", { text: "什么时候使用 AI 分析？" }),
         el("ul", {}, [
           el("li", { text: "先用本机查找：想找同一主题的材料，或只是快速浏览可能的联系时，先不勾选 AI。" }),
           el("li", { text: "再考虑 AI：本机结果不够贴切，或想比较说法不同但机制、用途相似的知识，分辨它们是否相互支持、存在冲突或适用条件不同时。" }),
         ]),
-        el("p", { class: "fine-print", text: "开启前请确认相关材料允许外发，并已配置 AI。分析结果只是建议，请核对原文依据后再决定是否接受；AI 不一定能找到有用的关联。" }),
+        el("p", { class: "fine-print", text: "主动开启后会发送相关材料给已配置的 AI。分析结果只是建议，请核对原文依据后再决定是否接受；AI 不一定能找到有用的关联。" }),
       ]),
       el("label", { class: "check-field" }, [useAI, el("span", { text: "本次允许 AI 分析关联（可能产生费用）" })]),
       el("div", { class: "form-actions" }, [run, button("查看关联结果", { kind: "text", onClick: () => { closeDrawer(); navigate("discover"); } })]), status]),
@@ -763,7 +755,6 @@ async function previewNoteLinks(noteId) {
     openDrawer("核对 Obsidian 链接", "稳定身份与可读链接", el("div", { class: "page-stack" }, [
       el("p", { text: "请核对来源、主题和关系链接。确认后仅更新应用维护的链接区块。" }),
       preview.conflict ? el("div", { class: "notice danger", text: "链接区块已被手动修改，请先处理冲突；本次不会覆盖。" }) : null,
-      preview.privacyChanged ? el("div", { class: "notice info", text: "链接中包含仅本地知识的标题。确认更新后，这份笔记也将收紧为仅本地，避免这些标题被外发。" }) : null,
       el("div", { class: "two-column" }, [el("section", {}, [el("h3", { text: "更新前" }), sourceReadingBody(preview.before, '', '无')]), el("section", {}, [el("h3", { text: "更新后" }), sourceReadingBody(preview.body, '', '无')])]),
       button(preview.changed ? "确认更新链接" : "链接已是最新", { kind: "primary", disabled: !preview.changed || Boolean(preview.conflict), onClick: async () => {
         try { await api.syncLinks(noteId, { expectedHash: preview.expectedHash }); toast("可读链接已更新", "success"); await openNote(noteId); }
@@ -824,7 +815,7 @@ function renderSourceGroupDrawer(source) {
     button("删除", { kind: "danger", disabled: isMobilePrototype(), title: isMobilePrototype() ? "样机暂不支持删除" : "", onClick: () => deleteNote(source) }),
   ]);
   content.append(noteMeta(source), headActions);
-  if (source.meta?.titlePending) content.append(el('p', { class: 'muted', text: '暂用原文片段作为标题，标题尚未生成。可手动编辑，或到“系统 → 任务”查看标题生成进度及重试。' }));
+  if (source.meta?.titlePending) content.append(el('p', { class: 'muted', text: '暂用原文片段作为标题，标题尚未生成。可手动编辑，或在主动 AI 拆解时生成。' }));
 
   if (children.length) {
     const key = `${api.getContext().practiceId || ''}:${source.id}`;
@@ -902,7 +893,7 @@ async function runConfirmedStructure(key, title, run) {
     if (typeof title === 'function') title = await title();
     if (contextChanged()) return;
     if (!await confirmAction({ title: '重新分析资料结构？', confirmText: '确认重新分析',
-      message: `${title ? `《${title}》：` : ''}将把获准外发的原文和当前拆解条目发送给已配置的 AI 服务，重新分析逻辑关系和分支层级，可能产生调用费用。原文与条目正文保留，成功后更新结构建议。` })) return;
+      message: `${title ? `《${title}》：` : ''}将把必要原文和当前拆解条目发送给已配置的 AI 服务，重新分析逻辑关系和分支层级，可能产生调用费用。原文与条目正文保留，成功后更新结构建议。` })) return;
     if (contextChanged()) {
       toast('知识库已切换，本次分析未提交。请在当前资料中重新操作。', 'info'); return;
     }
@@ -1094,7 +1085,6 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
           }
         } }) : null,
       ]),
-      tour(field("隐私", selectControl([["local", "仅本地"], ["cloud", "允许云端"]], meta.privacy || "local", "privacy"), "此项控制模型、搜索与向量服务；系统中授予 ChatGPT 的独立读取权限仍有效。"), "note-privacy"),
       field("知识主题", el("input", { name: "topic", value: meta.topic || "", placeholder: "可留空" })),
       learningGoalField(meta.depth),
     ]),
@@ -1105,7 +1095,7 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
   );
   let initialFields = editorValues();
   if (isMobilePrototype()) {
-    for (const name of ["privacy", "depth", "researchIntervalDays"]) form.querySelector(`[name="${name}"]`).disabled = true;
+    for (const name of ["depth", "researchIntervalDays"]) form.querySelector(`[name="${name}"]`).disabled = true;
   }
   let originalValues = JSON.stringify(editorValues()), saving = false;
   form.hasUnsavedChanges = () => JSON.stringify(editorValues()) !== originalValues;
@@ -1147,8 +1137,8 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
       if (bodyEditor && !data.body.trim()) throw new Error("正文不能为空。");
       if (!isMobilePrototype() && note.kind === "source" && (!Number.isInteger(Number(data.researchIntervalDays)) || Number(data.researchIntervalDays) < 1 || Number(data.researchIntervalDays) > 365)) throw new Error("核验有效天数应为 1–365 的整数。");
       const sourceMeta = note.kind === "source" ? { platform: data.platform || "", author: data.author || "", url: data.url || "", date: data.date || "", locator: data.locator || "", researchIntervalDays: Number(data.researchIntervalDays) } : {};
-      const changedMeta = Object.fromEntries(Object.entries({ privacy: data.privacy, topic: data.topic, depth: data.depth, ...sourceMeta }).filter(([key]) => data[key] !== initialFields[key]));
-      if (isMobilePrototype()) for (const key of ["privacy", "depth", "researchIntervalDays"]) delete changedMeta[key];
+      const changedMeta = Object.fromEntries(Object.entries({ topic: data.topic, depth: data.depth, ...sourceMeta }).filter(([key]) => data[key] !== initialFields[key]));
+      if (isMobilePrototype()) for (const key of ["depth", "researchIntervalDays"]) delete changedMeta[key];
       const updated = await api.updateNote(note.id, { body: data.body, title: data.title, expectedHash: previousHash, meta: changedMeta });
       if (!currentEditor(context, open)) return;
       note = { ...note, ...updated };
@@ -1690,7 +1680,7 @@ async function renderTopics() {
   const actions = el("div", { class: "item-actions" }, [button("AI 建议学习包", { onClick: suggestTopics }), create]);
   clear(refs.main).append(el("div", { class: "page-stack", dataset: { tour: "topics-list" } }, [
     sectionHeading("主题学习包", "跨日期组织相关内容，也允许零散材料仅供查阅", actions),
-    el("div", { class: "notice info", text: "AI 建议只使用明确允许外发的材料，并以“AI 整理建议”呈现建议顺序和前置缺口；不会自动创建或确认主题学习包。你可以审阅后用“新建主题学习包”手动采用。" }),
+    el("div", { class: "notice info", text: "主动生成 AI 建议时使用所需材料，并以“AI 整理建议”呈现建议顺序和前置缺口；不会自动创建或确认主题学习包。你可以审阅后用“新建主题学习包”手动采用。" }),
     topics.length ? el("div", { class: "card-grid" }, topics.map(topicCard)) : emptyState("还没有主题学习包", "创建一个真实想解决的问题，再选择涉及的知识和前置内容。", create.cloneNode(true)),
   ]));
   if (!topics.length) refs.main.querySelector(".empty-state button")?.addEventListener("click", createTopicDrawer);
@@ -1841,7 +1831,7 @@ async function renderDiscover() {
     selectControl([["", "内容类别"], ["source", "原始资料"], ["knowledge", "知识"], ["mistake", "错题"], ["topic", "主题学习包"], ["report", "AI 整理建议"]], state.searchFilters.kind, "kind"),
     selectControl([["", "学习状态"], ["reference", "仅供查阅"], ["candidate", "待选学"], ["learning", "正在学习"], ["integrated", "已整理个人理解"], ["core", "重点知识"], ["retired", "不再使用"]], state.searchFilters.stage, "stage"),
     button("搜索", { kind: "primary", type: "submit" }),
-  ]), el("label", { class: "check-field" }, [allowCloudQuery, el("span", { text: "允许将本次查询发给已配置的外部服务" })]), el("p", { class: "fine-print", text: "默认关闭：只运行本地关键词检索。开启后，本次查询可用于语义检索；仍只有标为允许云端的材料可以外发。" }), el("details", {}, [el("summary", { text: "按来源、主题与时间进一步筛选" }), el("div", { class: "form-grid" }, [
+  ]), el("label", { class: "check-field" }, [allowCloudQuery, el("span", { text: "允许将本次查询发给已配置的外部服务" })]), el("p", { class: "fine-print", text: "默认关闭：只运行本地关键词检索。开启后，本次查询可用于语义检索；仅在主动操作中发送所需材料，不因保存资料自动建外部索引。" }), el("details", {}, [el("summary", { text: "按来源、主题与时间进一步筛选" }), el("div", { class: "form-grid" }, [
     field("来源", selectControl([["", "全部来源"], ...sources.map((source) => [source.id, source.title || source.id])], state.searchFilters.source, "source")),
     field("知识主题", el("input", { name: "topic", value: state.searchFilters.topic, placeholder: "精确主题名称" })),
     field("起始日期", el("input", { name: "from", type: "date", value: state.searchFilters.from })),
@@ -1982,7 +1972,7 @@ async function renderOutput() {
   const sourceScope = el("input", { type: "checkbox", name: "source", checked: previous ? previous.scope.includes('source') : true });
   const knowledgeScope = el("input", { type: "checkbox", name: "knowledge", checked: previous ? previous.scope.includes('knowledge') : true });
   const allowCloudQuestion = el("input", { type: "checkbox", checked: previous?.privacy === 'cloud' });
-  form.append(sectionHeading("有依据的问答与输出", "默认优先个人知识，并让你看见实际使用了哪些资料"), field("问题或输出目标", question), el("div", { class: "form-grid" }, [field("输出方式", mode), field("取材范围", el("div", { class: "segmented" }, [el("label", { class: "check-field" }, [knowledgeScope, "知识笔记"]), el("label", { class: "check-field" }, [sourceScope, "原始来源"])]))]), el("label", { class: "check-field" }, [allowCloudQuestion, el("span", { text: "允许将本次问题发给已配置的外部模型" })]), el("p", { class: "fine-print", text: "默认关闭：只在本机检索并列出已有材料。开启后，本次问题与标为允许云端的相关材料可发送给模型；仅本地材料不会外发。" }), el("div", { class: "notice info", text: "找不到、证据冲突或内容过期时，回答应明确说明。问答和草稿不会自动成为个人知识。" }), button("开始生成", { kind: "primary", type: "submit" }));
+  form.append(sectionHeading("有依据的问答与输出", "默认优先个人知识，并让你看见实际使用了哪些资料"), field("问题或输出目标", question), el("div", { class: "form-grid" }, [field("输出方式", mode), field("取材范围", el("div", { class: "segmented" }, [el("label", { class: "check-field" }, [knowledgeScope, "知识笔记"]), el("label", { class: "check-field" }, [sourceScope, "原始来源"])]))]), el("label", { class: "check-field" }, [allowCloudQuestion, el("span", { text: "允许将本次问题发给已配置的外部模型" })]), el("p", { class: "fine-print", text: "默认关闭：只在本机检索并列出已有材料。开启后，本次问题与相关材料会发送给模型，资料不需要另设外发分类。" }), el("div", { class: "notice info", text: "找不到、证据冲突或内容过期时，回答应明确说明。问答和草稿不会自动成为个人知识。" }), button("开始生成", { kind: "primary", type: "submit" }));
   const answerArea = el("section", { dataset: { tour: "output-result" } });
   const draftsPanel = await renderDraftsPanel();
   const retryNotice = el('p', { class: 'notice info', dataset: { outputRetry: 'true' }, text: '上次提交尚未取得完成回执。保持输入不变后重试会继续原请求；修改输入会开始新请求，可能产生新的调用。' });
@@ -2247,8 +2237,8 @@ async function settingsPanel() {
   const mcpPanel = el("section", { class: "panel" }, [sectionHeading("MCP 接入", "本机客户端与 ChatGPT 网页端分别授权"), el("label", { class: "check-field" }, [mcpEnabled, "启用本地 MCP 服务"]), el("label", { class: "check-field" }, [proposals, "允许本机客户端提交写入提案"]),
     el("hr"), el("h3", { text: "ChatGPT 会话收集与知识库读取" }),
     el("label", { class: "check-field" }, [chatgptEnabled, "启用 ChatGPT 接入，允许新增第一层会话资料"]),
-    el("label", { class: "check-field" }, [chatgptAllowRead, "允许 ChatGPT 检索和读取知识库（包含仅本地资料）"]),
-    el("p", { class: "fine-print", text: "读取许可独立授予 ChatGPT：读到的原文会进入 ChatGPT 上下文，其他模型与搜索服务仍沿用每份资料的外发许可。保存后生效：取消读取仍可收集会话；关闭接入后两项能力都停止，再开启需重新勾选读取。保存设置不会自动建立网页端连接。" }),
+    el("label", { class: "check-field" }, [chatgptAllowRead, "允许 ChatGPT 检索和读取知识库"]),
+    el("p", { class: "fine-print", text: "读取许可独立授予 ChatGPT：读到的原文会进入 ChatGPT 上下文，其他模型与搜索服务仍只按各自的主动操作使用所需内容。保存后生效：取消读取仍可收集会话；关闭接入后两项能力都停止，再开启需重新勾选读取。保存设置不会自动建立网页端连接。" }),
     el("p", { class: "fine-print", text: "连接后说“将该会话内容整理进知序”。保存角色原文与独立摘要，缺失历史会如实标注；不会自动覆盖、核验或晋级。电脑、知序和私有隧道都需保持运行。" }),
     el("a", { href: "/chatgpt-setup.html", target: "_blank", rel: "noopener", text: "打开 ChatGPT 连接指南" }),
     el("p", { class: "fine-print", text: "连接状态与实际操作记录可在“诊断与 MCP”中查看；已启用不代表网页端已接通。" })]);
@@ -2498,11 +2488,11 @@ async function diagnosticsPanel() {
   return el("div", { class: "page-stack" }, [
     data.usageNotice ? el("p", { class: "notice info", text: data.usageNotice }) : null,
     el("section", { class: "stats" }, [statCard("今日调用", usage.callsToday ?? calls.length, "实际记录"), statCard("本月费用", usage.costMonth === null || usage.costMonth === undefined ? "未知" : usage.costMonth, "供应商价格未知时不估算"), statCard("索引条目", index.documents ?? index.count ?? 0, "可重建衍生数据"), statCard("MCP", mcp.connected ? "已连接" : mcp.enabled || mcp.chatgptEnabled ? "已启用" : "未启用", "以实际状态为准")]),
-    el("section", { class: "panel soft", dataset: { tour: "system-diagnostics" } }, [sectionHeading("系统怎样工作", "只展示可核对的输入、工具调用与结果，不展示模型隐藏推理"), el("div", { class: "step-list" }, [step("1. 切分与索引", "本地资料被拆成检索片段；关键词索引可离线使用，向量索引按隐私许可构建。", true), step("2. 召回候选", "关键词与可选语义结果分别返回，再合并为有限候选。", true), step("3. 形成回答", "只有实际召回且可用的材料进入回答，并返回引用与限制。", true), step("4. MCP 调用", "外部客户端共用知识服务。ChatGPT 可按独立许可读取或新增会话资料；修改已有笔记仍需确认。", true)])]),
+    el("section", { class: "panel soft", dataset: { tour: "system-diagnostics" } }, [sectionHeading("系统怎样工作", "只展示可核对的输入、工具调用与结果，不展示模型隐藏推理"), el("div", { class: "step-list" }, [step("1. 切分与索引", "本地资料被拆成检索片段；关键词索引可离线使用，向量索引需由你主动补建。", true), step("2. 召回候选", "关键词与可选语义结果分别返回，再合并为有限候选。", true), step("3. 形成回答", "只有实际召回且可用的材料进入回答，并返回引用与限制。", true), step("4. MCP 调用", "外部客户端共用知识服务。ChatGPT 可按独立许可读取或新增会话资料；修改已有笔记仍需确认。", true)])]),
     el("div", { class: "two-column" }, [
       el("section", { class: "panel", dataset: { tour: "system-index" } }, [sectionHeading("存储与索引", "Vault 内容是知识权威，索引可重建"), keyValueObject(storage),
         el("p", { text: `检索片段 ${number(index.count)} 条，已有向量 ${number(index.vectors)} 条，待补建 ${number(index.pending)} 条。` }),
-        el("p", { class: "fine-print", text: "保存知识只更新本地索引。点击补建后，仅获准外发且缺少向量的片段会发送给已配置的嵌入服务，可能产生费用。" }),
+        el("p", { class: "fine-print", text: "保存知识只更新本地索引。点击补建后，本次所需且缺少向量的片段会发送给已配置的嵌入服务，可能产生费用。" }),
         el("div", { class: "form-actions" }, [button("只补建缺失向量", { kind: "primary", disabled: !number(index.pending), onClick: async () => { try { const result = await api.updateIndex(); toast(`补建任务已${labels.state(result.state)}`, "success"); } catch (error) { handleError(error); } } }), button("全量重建索引", { onClick: async () => { try { const result = await api.rebuildIndex(); toast(`索引任务已${labels.state(result.state)}`, "success"); } catch (error) { handleError(error); } } })]),
         asArray(storage.pendingLinks).length ? el("section", {}, [sectionHeading("待更新的 Obsidian 链接", "文件改名后，先核对预览再更新引用"), el("div", { class: "list" }, storage.pendingLinks.map(note => el("div", { class: "list-item no-icon" }, [el("strong", { text: note.title }), button("核对链接", { kind: "text compact", onClick: () => previewNoteLinks(note.id) })])))]) : null]),
       el("section", { class: "panel" }, [sectionHeading("MCP 状态", "MCP 是外部 AI 应用调用知识工具的协议，不替代模型 API"), keyValueObject(mcp), el("div", { class: "notice info", text: "本机 MCP 只能读取或提交待确认修改。ChatGPT 入口独立控制会话新增和知识库读取；会话导入不覆盖已有资料。开关和本机调用记录不能证明网页端已连接，请完成连接指南中的实际收集验证。" }), el("a", { href: "/chatgpt-setup.html", target: "_blank", rel: "noopener", text: "ChatGPT 连接与验收步骤" })]),
@@ -2734,7 +2724,6 @@ async function fillTutorialSample(sample, step) {
   if (!edits.length) { toast("请先打开这一项对应的输入表单，再填入示例。", "error"); return; }
   if (edits.some(item => item.control.value && item.control.value !== String(item.value)) && !await confirmAction({ title: "用示例填入当前表单？", message: "当前输入尚未提交，填入后可以继续修改。", confirmText: "填入示例" })) return;
   edits.forEach(({ control, value }) => { if (control.markdownEditor) control.markdownEditor.setValue(value); else control.value = String(value); control.dispatchEvent(new Event("input", { bubbles: true })); control.dispatchEvent(new Event("change", { bubbles: true })); });
-  if (step.id === "capture-save") { const local = root.querySelector('[name="localOnly"]'); if (local) local.checked = true; }
   toast("示例已填入；请检查后亲自保存或提交。", "success");
 }
 

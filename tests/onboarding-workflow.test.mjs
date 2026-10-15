@@ -168,8 +168,8 @@ test('all twelve tutorial chapters complete through isolated HTTP actions withou
   async function complete(stepId, expected) {
     const step = flatSteps.find(item => item.id === stepId);
     assert.ok(step, stepId);
-    const result = await guide('checkpoint', { stepId, mode: 'check' });
-    const expectedStatus = expected || (step.kind === 'case' ? 'demonstrated' : 'done');
+    const result = await guide('checkpoint', { stepId, mode: step.kind === 'read' ? 'read' : 'check' });
+    const expectedStatus = expected || (['case', 'read'].includes(step.kind) ? 'demonstrated' : 'done');
     assert.equal(result.progress[stepId].status, expectedStatus, `Tutorial progress after ${stepId}`);
     expectedProgress.set(stepId, expectedStatus);
     verified.add(stepId); return result;
@@ -196,11 +196,11 @@ test('all twelve tutorial chapters complete through isolated HTTP actions withou
   await complete('setup-preferences');
   const sharedSettings = main.settings();
 
-  // 2–3: Save original input, authorize it, process it, and retain manual structure.
+  // 2–3: Save original input, read operation guidance, process it, and retain manual structure.
   const imported = await practice('import', { items: [{ ...readingExample, privacy: 'local' }] });
   const sourceId = imported.notes[0].id;
   await complete('capture-save');
-  await edit(sourceId, { meta: { privacy: 'cloud' } }); await complete('capture-permission');
+  await complete('capture-permission');
   const batch = await Promise.all(['reading-card.md', 'finding-clues.txt'].map(async file => {
     const response = await fetch(base + `/tutorial-examples/${file}`); assert.equal(response.status, 200);
     return { title: file, body: await response.text(), privacy: 'local' };
@@ -235,8 +235,8 @@ test('all twelve tutorial chapters complete through isolated HTTP actions withou
   await practice('recommendations'); await complete('library-suggestions');
 
   // 5–6: User answers, repeated same-day work, and a genuinely due cross-day review.
-  await edit(roles.source, { meta: { privacy: 'cloud' } }); await complete('study-source-permission');
-  await edit(roles.explain, { meta: { privacy: 'cloud' } }); await complete('study-permission');
+  await complete('study-source-permission');
+  await complete('study-permission');
   const plan = await practice('today/generate', {}); await complete('study-plan');
   const applyPlan = plan.items.find(item => item.noteId === roles.apply);
   await practice(`today/${encodeURIComponent(applyPlan.id)}/action`, { action: 'defer', days: 1 }); await complete('study-defer');

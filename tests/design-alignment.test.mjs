@@ -76,21 +76,21 @@ test('research suggestions open the source without scheduling external work; ign
   assert.equal(s.recommendations().suggestions.length,1);
 });
 
-test('incremental index updates only missing authorised chunks and rejects stale response writes',async t=>{
+test('incremental index updates only missing requested chunks and rejects stale response writes',async t=>{
   const sent=[];let mutate;
   const s=harness(t,{embed:async({texts})=>{sent.push(texts);mutate?.();mutate=null;return{vectors:texts.map(()=>[1,0])};}});
   s.updateSettings({embedding:{enabled:true,model:'test-model'}});
   const cloud=knowledge(s,'允许索引',{privacy:'cloud'});knowledge(s,'本地敏感标题');
   s.queue('index',{},'one');await s.runJobs();
-  assert.equal(sent.length,1);assert.equal(s.diagnostics().index.pending,0);
+  assert.equal(sent.length,2);assert.equal(s.diagnostics().index.pending,0);
   s.store.update(cloud.id,{expectedHash:s.getNote(cloud.id).hash,meta:{stage:'learning'}});
-  s.queue('index',{},'two');await s.runJobs();assert.equal(sent.length,1);
+  s.queue('index',{},'two');await s.runJobs();assert.equal(sent.length,2);
   s.store.update(cloud.id,{expectedHash:s.getNote(cloud.id).hash,body:'准备索引的新正文'});
   mutate=()=>s.store.update(cloud.id,{expectedHash:s.getNote(cloud.id).hash,body:'请求期间改过的正文'});
   s.queue('index',{},'three');await s.runJobs();
   assert.equal(s.diagnostics().index.pending,1);
   assert.equal(s.store.db.prepare('SELECT vector FROM index_chunks WHERE noteId=?').get(cloud.id).vector,null);
-  assert.ok(sent.every(batch=>batch.every(text=>!text.includes('本地敏感标题'))));
+  assert.ok(sent.some(batch=>batch.some(text=>text.includes('本地敏感标题'))), 'an explicit index action no longer classifies legacy local notes');
 });
 
 test('processed knowledge can receive explicitly requested structured AI relations; local refresh preserves them',async t=>{

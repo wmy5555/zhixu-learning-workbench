@@ -13,7 +13,7 @@
   <div class="guide-note"><strong>保存什么，什么时候算成功？</strong><p>保存的是本次传入的消息，不保证包含完整历史或附件。摘要会明确标注为 ChatGPT 生成。只有返回资料编号和“已保存”回执，才算知序完成写入；在知识库中打开记录是最后的核对步骤。</p></div>
   <h2>1. 在知序选择权限</h2>
   <p>进入「系统 → 能力设置 → MCP 接入」，勾选「启用 ChatGPT 接入，允许新增第一层会话资料」，然后保存。</p>
-  <p>如果还想在聊天中查找已有知识，再勾选「允许 ChatGPT 检索和读取知识库」。<strong>这个独立授权包含标为“仅本地”的资料，读到的内容会进入 ChatGPT 上下文。</strong>它不会替其他模型、搜索或向量服务打开外发权限。取消读取许可后仍可收集；关闭接入后两项能力立即停止。</p>
+  <p>如果还想在聊天中查找已有知识，再勾选「允许 ChatGPT 检索和读取知识库」。<strong>读到的资料会进入 ChatGPT 上下文，此项仍需单独开启。</strong>它不会自动运行 AI 拆解、研究或向量索引。取消读取许可后仍可收集；关闭接入后两项能力立即停止。</p>
   <h2>2. 建立通往这台电脑的私有连接</h2>
   <p>网页端不能直接访问这台电脑的 <code>127.0.0.1</code>。使用 OpenAI 的 <a href="https://developers.openai.com/api/docs/guides/secure-mcp-tunnels" target="_blank" rel="noopener noreferrer">Secure MCP Tunnel（私有连接隧道）</a>，让本机主动连接 OpenAI。知序仍只监听本机地址。</p>
   <ol>

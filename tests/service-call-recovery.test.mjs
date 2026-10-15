@@ -93,6 +93,22 @@ function restoreBackup(service, backup) {
   return service.restore({ backup, preview: false, token: preview.token });
 }
 
+test('ask request identity binds every explicit input and never authorizes external use', async t => {
+  const { h, note, input } = askFixture(t);
+  const updated = h.service.store.update(note.id, { expectedHash: note.hash, meta: { privacy: 'local' } });
+  assert.equal(updated.meta.privacy, 'local', 'legacy metadata is deliberately not the active permission');
+  const localInput = { ...input, privacy: 'local' };
+  const local = await h.service.ask(localInput);
+  assert.equal(local.generated, false);
+  assert.equal(h.attempts, 0, 'a request identity alone cannot authorize a model call');
+  for (const changed of [{ question: '另一条合成问题' }, { scope: ['source'] }, { mode: 'draft' }, { privacy: 'cloud' }]) {
+    await assert.rejects(h.service.ask({ ...localInput, ...changed }), { code: 'ASK_REQUEST_CONFLICT' });
+    assert.equal(h.attempts, 0);
+  }
+  await h.service.ask({ ...input, requestId: 'new-explicit-cloud-operation' });
+  assert.equal(h.attempts, 1, 'a new explicit AI action can use required text without legacy material labels');
+});
+
 test('restored completed ask cannot bypass a local unfinished call or substitute another machine response', async t => {
   const { h, note, input } = askFixture(t);
   const restore = failWrite(h.service, (ns, data) => ns === 'calls' && data.phase === 'accounted');
@@ -243,13 +259,13 @@ test('ask with an unknown response stays blocked after restart and known-cost co
   assert.equal(h.service.store.records('drafts').length, 0);
 });
 
-for (const change of ['disabled', 'material', 'permission']) test(`ask recovered response preserves the ${change} gate`, async t => {
+for (const change of ['disabled', 'material', 'citation']) test(`ask recovered response preserves the ${change} gate`, async t => {
   const { h, input, note } = askFixture(t);
   const restore = failWrite(h.service, (ns, data) => ns === 'calls' && data.phase === 'accounted');
   await assert.rejects(h.service.ask(input), { code: 'CALL_ACCOUNTING_FAILED' }); restore();
   h.service.recoverCall(h.service.callRecovery().pending[0].id, { action: 'recover' });
   if (change === 'disabled') h.service.updateSettings({ ai: { enabled: false } });
-  else h.service.editNote(note.id, { expectedHash: note.hash, ...(change === 'permission' ? { meta: { privacy: 'local' } } : { body: '用户修改过的合成材料。' }) });
+  else h.service.editNote(note.id, { expectedHash: note.hash, ...(change === 'citation' ? { meta: { sources: [{ id: 'missing-source', role: 'input' }] } } : { body: '用户修改过的合成材料。' }) });
   await assert.rejects(h.service.ask(input), { code: change === 'disabled' ? 'CAPABILITY_DISABLED' : 'SOURCE_CHANGED' });
   assert.equal(h.attempts, 1);
   assert.equal(h.service.store.records('drafts').length, 0);
@@ -274,12 +290,12 @@ test('ask rejects a restored operation whose input conflicts with retained local
   assert.equal(h.attempts, 1);
 });
 
-test('ask rechecks material permission after the model responds and before saving', async t => {
+test('ask rechecks the material version after the model responds and before saving', async t => {
   let release;
   const { h, note, input } = askFixture(t, () => new Promise(resolve => { release = resolve; }));
   const first = h.service.ask(input);
   while (!release) await new Promise(resolve => setImmediate(resolve));
-  h.service.editNote(note.id, { expectedHash: note.hash, meta: { privacy: 'local' } });
+  h.service.editNote(note.id, { expectedHash: note.hash, body: '请求期间由用户修改的合成资料。' });
   release(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ answer: `合成回答 [${note.id}]`, citationIds: [note.id] }) } }] })));
   await assert.rejects(first, { code: 'SOURCE_CHANGED' });
   assert.equal(h.attempts, 1);
@@ -374,13 +390,13 @@ test('disabled model capability cannot apply recovered grade feedback', async t 
   assert.equal(h.attempts, 1);
 });
 
-test('closing material cloud permission prevents applying an already saved grade', async t => {
+test('a changed material version prevents applying an already saved grade', async t => {
   const h = harness(t), { note, session, job } = h.start();
   const restore = failWrite(h.service, (namespace, data) => namespace === 'calls' && data.phase === 'accounted');
   await h.service.runJobs(); restore();
   const [pending] = h.service.callRecovery().pending;
   h.service.recoverCall(pending.id, { action: 'recover' });
-  h.service.editNote(note.id, { expectedHash: note.hash, meta: { privacy: 'local' } });
+  h.service.editNote(note.id, { expectedHash: note.hash, body: '补记后由用户修改的合成学习材料。' });
   await h.retry(job);
   assert.equal(h.service.store.get('jobs', job.id).code, 'SOURCE_CHANGED');
   assert.equal(h.service.session(session.id).turns[0].feedback, undefined);

@@ -50,7 +50,7 @@
 
 调用方应使用 `error.code`，不要解析错误文字。主要 code 为：
 
-- `PRIVACY_LOCAL`：数据不允许外发。
+- `PRIVACY_LOCAL`：本次操作未启用外部服务，或文件/引用完整性检查未通过。`OUTBOUND_INTENT_REQUIRED`：旧任务需通过主动操作或任务重试继续。
 - `CAPABILITY_DISABLED`：能力开关未开启。
 - `MISSING_CREDENTIALS`：相应密钥不存在。
 - `INVALID_CONFIG`、`INVALID_INPUT`、`INVALID_URL`：配置或输入无效。

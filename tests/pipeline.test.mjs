@@ -303,7 +303,7 @@ test('hybrid search and ask remain local by default even with cloud notes and ca
   assert.equal(search.diagnostics.limitations.some(item => item.includes('本次查询仅留本地')), true);
   const answer = await service.ask({ question: '玄鸟', scope: ['knowledge'] });
   assert.equal(answer.citations[0]?.id, note.id);
-  assert.match(answer.answer, /本次问题仅限本地/);
+  assert.match(answer.answer, /本次未启用 AI/);
   assert.deepEqual(mock.events, []);
 });
 
@@ -345,7 +345,7 @@ test('fabricated citation lists and fabricated inline ids are both rejected with
   assert.equal(service.store.records('drafts').length, 0);
 });
 
-test('merging cloud and local knowledge produces a local retained note', async t => {
+test('merging keeps conservative legacy metadata for rollback', async t => {
   const { service } = await harness(t);
   const cloud = createKnowledge(service, { title: '云端材料', body: '云端正文', privacy: 'cloud' });
   const local = createKnowledge(service, { title: '本地材料', body: '本地正文', privacy: 'local' });

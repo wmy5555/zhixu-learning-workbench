@@ -576,7 +576,7 @@ test('prompt settings API requires CSRF and persists edited templates', async t 
 });
 
 
-test('HTTP blank-title capture preserves text with no model config and exposes title waiting in safe status', async t => {
+test('HTTP blank-title capture stays local without creating a title task', async t => {
   const app = await startApp(t), session = await webSession(app);
   const body = '合成标题验收原文，不可通过任务轮询暴露。';
   const captured = await request(app.baseUrl, '/api/import', { method: 'POST', headers: session.headers, body: { items: [{ title: '   ', body, privacy: 'local' }], process: false } });
@@ -584,19 +584,27 @@ test('HTTP blank-title capture preserves text with no model config and exposes t
   const [source] = captured.body.notes, [job] = captured.body.jobs;
   assert.equal(source.body, body);
   assert.equal(source.meta.titlePending, true);
-  assert.equal(job.type, 'title');
+  assert.equal(job, undefined);
   assert.equal(app.service.listNotes({ kind: 'knowledge' }).length, 0);
   await app.service.runJobs();
   const detail = await request(app.baseUrl, '/api/notes/' + source.id, { headers: session.headers });
   assert.equal(detail.body.body, body);
-  assert.equal(detail.body.titleGeneration.state, 'waiting');
-  assert.equal(detail.body.titleGeneration.code, 'PRIVACY_LOCAL');
+  assert.equal(detail.body.titleGeneration.state, 'idle');
+  assert.equal(detail.body.titleGeneration.code, null);
   const status = await request(app.baseUrl, '/api/jobs?view=status', { headers: session.headers });
-  assert.equal(status.body.jobs.find(item => item.id === job.id).type, 'title');
+  assert.equal(status.body.jobs.length, 0);
   assert.doesNotMatch(status.text, /"body"|"prompt"|"payload"/);
   assert.equal(app.service.store.records('calls').length, 0);
 });
 
+
+for (const action of ['update', 'rebuild']) test(`HTTP index ${action} captures current identities and hashes at the explicit POST`, async t => {
+  const app = await startApp(t), session = await webSession(app);
+  const source = app.service.store.create({ kind: 'source', title: '合成点击时资料', body: '合成原文。' });
+  const result = await request(app.baseUrl, `/api/index/${action}`, { method: 'POST', headers: session.headers, body: { snapshots: [{ noteId: 'forged', hash: 'forged' }] } });
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.body.payload.snapshots, [{ noteId: source.id, hash: source.hash }]);
+});
 
 test('concurrent start POSTs with one intent return one persisted session and a new intent starts again', async t => {
   const app = await startApp(t), session = await webSession(app);
