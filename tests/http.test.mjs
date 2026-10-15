@@ -504,6 +504,14 @@ test('HTTP blank-title capture stays local without creating a title task', async
 });
 
 
+for (const action of ['update', 'rebuild']) test(`HTTP index ${action} captures current identities and hashes at the explicit POST`, async t => {
+  const app = await startApp(t), session = await webSession(app);
+  const source = app.service.store.create({ kind: 'source', title: '合成点击时资料', body: '合成原文。' });
+  const result = await request(app.baseUrl, `/api/index/${action}`, { method: 'POST', headers: session.headers, body: { snapshots: [{ noteId: 'forged', hash: 'forged' }] } });
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.body.payload.snapshots, [{ noteId: source.id, hash: source.hash }]);
+});
+
 test('concurrent start POSTs with one intent return one persisted session and a new intent starts again', async t => {
   const app = await startApp(t), session = await webSession(app);
   const note = app.service.store.create({ kind: 'knowledge', title: '合成个人观点', body: '合成测试正文', meta: { stage: 'learning', privacy: 'local' } });

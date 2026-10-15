@@ -120,10 +120,15 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     return issues;
   };
   const eligible = n => usable(n, learningNow()) && !materialLimitations(n).length;
+  function indexSnapshots() {
+    store.scan();
+    return store.list().map(note => ({ noteId: note.id, hash: note.hash }));
+  }
   function queue(type, payload, dedupKey) {
     if (pausing || stopped) fail('当前任务正在暂停，请稍后继续。', 'BUSY', 409);
     const existing = store.records('jobs').find(j => j.dedupKey === dedupKey && ['queued','running','waiting'].includes(j.state));
     if (existing && dedupKey) return existing;
+    if (type === 'index') payload = { ...payload, snapshots: indexSnapshots() };
     return putJob({ id: randomUUID(), type, outboundIntentVersion: 1, state: 'queued', payload, dedupKey, progress: 0, error: '', createdAt: now(), attempts: 0 });
   }
   function updateSettings(input) {
@@ -191,7 +196,14 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     const previous = processJobs(id, source.hash);
     const pending = previous.find(job => ['queued','running','waiting'].includes(job.state));
     // Clicking AI decomposition is the current intent, including a retained pre-upgrade task.
-    if (pending) return processReply(pending.state === 'waiting' && pending.outboundIntentVersion !== 1 ? jobAction(pending.id, { action: 'retry' }) : pending, true);
+    if (pending) {
+      if (pending.state === 'waiting' && pending.outboundIntentVersion !== 1) {
+        if (pausing || stopped) fail('当前任务正在暂停，请稍后继续。', 'BUSY', 409);
+        putJob({ ...pending, payload: { ...pending.payload, research: payload.research }, dedupKey: `process:${id}:${source.hash}${payload.research ? ':research' : ''}` });
+        return processReply(jobAction(pending.id, { action: 'retry' }), true);
+      }
+      return processReply(pending, true);
+    }
     if (['failed','cancelled'].includes(previous[0]?.state)) return processReply(previous[0], true);
     // Repeated decomposition reuses its record, including errors that require an explicit task retry.
     // The separate research action may refresh evidence, but still reuses the extracted candidates.
@@ -849,7 +861,9 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     if(discoveryIssue)throw discoveryIssue;
   }
   async function rebuildIndex(job, signal) {
-    store.scan(); const snapshots=store.list(), ids=snapshots.map(n=>n.id);
+    const snapshots = job.payload.snapshots;
+    if (!Array.isArray(snapshots) || snapshots.some(n => typeof n?.noteId !== 'string' || !n.noteId || typeof n.hash !== 'string' || !n.hash)) fail('索引任务缺少点击时的资料版本；请主动重试以使用当前资料。', 'OUTBOUND_INTENT_REQUIRED');
+    const ids=snapshots.map(n=>n.noteId);
     for(let i=0;i<ids.length;i++) {
       store.scan(); if(!store.row(ids[i]))continue;
       const n=store.read(ids[i]), model=settings().embedding.model;
@@ -886,7 +900,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     catch(error){if(store.get('jobs',job.id)?.state!=='cancelled')putJob({...job,state:['OUTBOUND_INTENT_REQUIRED','PRIVACY_LOCAL','DISABLED','NOT_CONFIGURED','BUDGET_EXCEEDED','SOURCE_BUDGET','BUDGET_UNKNOWN','RESEARCH_INCOMPLETE','AI_DISABLED','MISSING_KEY','CAPABILITY_DISABLED','MISSING_CREDENTIALS'].includes(error.code)?'waiting':'failed',error:String(error.message).slice(0,800),code:error.code||'TASK_FAILED'});}
     finally{processing=false;controller=null;currentJob=null;}
   }
-  function jobAction(id,{action}){if(pausing||stopped)fail('任务正在暂停，请稍后继续。','BUSY',409);const job=store.get('jobs',id);if(!job)fail('任务不存在。','NOT_FOUND',404);if(action==='cancel'){if(currentJob===id)controller?.abort();return putJob({...job,state:'cancelled',error:'用户取消；已保存的输入和回答保留。'});}if(action==='retry'){if(job.type==='structure'&&!['running','done'].includes(job.state)){const source=getNote(job.payload.noteId);job.payload.basis=structureBasis(source,sourceChildren(source.id));job.dedupKey=`structure:${source.id}:${hash(JSON.stringify(job.payload.basis))}`;const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}if(['running','done'].includes(job.state))fail('该任务当前不可重试。');if(job.type==='title'){const source=getNote(job.payload.noteId);if(!needsTitle(source))fail('标题已经填写，保留当前标题。','TITLE_ALREADY_SET');job.payload={noteId:source.id,hash:source.hash};job.dedupKey=`title:${source.id}:${source.hash}`;const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}if(job.type==='process'){const source=getNote(job.payload.noteId);if(source.hash!==job.payload.hash){job.payload={noteId:source.id,hash:source.hash,research:job.payload.research===true,...(needsTitle(source)?{titleRequested:true}:{})};job.dedupKey=`process:${source.id}:${source.hash}${job.payload.research ? ':research' : ''}`;job.progress=0;}const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}return putJob({...job,outboundIntentVersion:1,state:'queued',error:'',code:null});}fail('任务操作无效。');}
+  function jobAction(id,{action}){if(pausing||stopped)fail('任务正在暂停，请稍后继续。','BUSY',409);const job=store.get('jobs',id);if(!job)fail('任务不存在。','NOT_FOUND',404);if(action==='cancel'){if(currentJob===id)controller?.abort();return putJob({...job,state:'cancelled',error:'用户取消；已保存的输入和回答保留。'});}if(action==='retry'){if(job.type==='structure'&&!['running','done'].includes(job.state)){const source=getNote(job.payload.noteId);job.payload.basis=structureBasis(source,sourceChildren(source.id));job.dedupKey=`structure:${source.id}:${hash(JSON.stringify(job.payload.basis))}`;const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}if(['running','done'].includes(job.state))fail('该任务当前不可重试。');if(job.type==='title'){const source=getNote(job.payload.noteId);if(!needsTitle(source))fail('标题已经填写，保留当前标题。','TITLE_ALREADY_SET');job.payload={noteId:source.id,hash:source.hash};job.dedupKey=`title:${source.id}:${source.hash}`;const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}if(job.type==='process'){const source=getNote(job.payload.noteId);if(source.hash!==job.payload.hash){job.payload={noteId:source.id,hash:source.hash,research:job.payload.research===true,...(needsTitle(source)?{titleRequested:true}:{})};job.dedupKey=`process:${source.id}:${source.hash}${job.payload.research ? ':research' : ''}`;job.progress=0;}const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}if(job.type==='index')job.payload={...job.payload,snapshots:indexSnapshots()};return putJob({...job,outboundIntentVersion:1,state:'queued',error:'',code:null});}fail('任务操作无效。');}
   function pauseJobs() {
     if (pausePromise) return pausePromise;
     pausing = true;
