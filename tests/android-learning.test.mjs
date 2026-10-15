@@ -89,6 +89,49 @@ test('persisted start intent metadata is optional for legacy sessions but paired
   assert.deepEqual(validateLearningState(saved), saved);
 });
 
+test('restored start intents cannot redirect an explicit request to different saved session parameters', () => {
+  const service = app(), started = service.learning.startStudy({ noteId: id(1), requestId: 'bound-restored-start' }), saved = service.state;
+  const mutations = [
+    ...['noteId', 'planId', 'topicId', 'mistakeId'].map(field => record => { record.startIntent[field] = id(99); }),
+    record => { record.startIntent.noteId = null; },
+    record => { record.planId = 'invented-plan'; },
+    record => { record.topicId = id(90); },
+    record => { record.mistakeId = id(80); },
+  ];
+  for (const mutate of mutations) {
+    const invalid = structuredClone(saved); mutate(invalid.records.sessions[started.id]);
+    const restored = JSON.parse(JSON.stringify(invalid));
+    assert.throws(() => validateLearningState(restored), /开始学习参数与会话不一致/);
+    assert.throws(() => createAndroidLearning({ state: restored, clock }), /开始学习参数与会话不一致/, 'malicious restored metadata must fail before replay is available');
+  }
+  assert.deepEqual(service.state, saved);
+});
+
+test('saved start intents retain explicit context and valid plan and mistake derivation through reopen', () => {
+  const service = app(), topic = service.learning.createTopic({ title: '合成主题', noteIds: [id(1)] });
+  const original = service.learning.startStudy({ noteId: id(1) });
+  service.learning.answerStudy(original.id, { answer: '保留的合成回答', requestId: 'binding-answer' });
+  const mistake = service.createMistake(original.id, { omission: '遗漏条件', correction: '核对条件', reason: '比较原文', nextQuestion: '条件改变后如何判断？' });
+  const planId = 'synthetic-mistake-plan';
+  service.store.put('plans', planId, { id: planId, noteId: id(1), topicId: topic.id, mistakeId: mistake.id, state: 'pending', minutes: 5 });
+  const inputs = [
+    { noteId: id(1), requestId: 'direct-binding' },
+    { mistakeId: mistake.id, requestId: 'mistake-derived-note' },
+    { noteId: id(1), planId, requestId: 'plan-derived-context' },
+    { planId, requestId: 'plan-and-mistake-derived' },
+    { noteId: id(1), planId, topicId: topic.id, mistakeId: mistake.id, requestId: 'explicit-context' },
+  ];
+  const sessions = inputs.map(input => service.learning.startStudy(input));
+  assert.equal(sessions[1].startIntent.noteId, null);
+  assert.equal(sessions[1].noteId, id(1));
+  for (const session of sessions.slice(2)) { assert.equal(session.topicId, topic.id); assert.equal(session.mistakeId, mistake.id); }
+  assert.equal(sessions[2].startIntent.topicId, null);
+  assert.equal(sessions[2].startIntent.mistakeId, null);
+  const restored = JSON.parse(JSON.stringify(service.state)), reopened = createAndroidLearning({ state: restored, clock });
+  for (const [index, input] of inputs.entries()) assert.equal(reopened.learning.startStudy(input).id, sessions[index].id);
+  assert.deepEqual(reopened.state, restored);
+});
+
 test('offline answers survive reconstruction, remain unassessed and never create feedback jobs', async () => {
   const service = app(), session = service.learning.startStudy({ noteId: id(1) });
   const answered = service.learning.answerStudy(session.id, { answer: '我的合成回答', requestId: 'answer-one' });

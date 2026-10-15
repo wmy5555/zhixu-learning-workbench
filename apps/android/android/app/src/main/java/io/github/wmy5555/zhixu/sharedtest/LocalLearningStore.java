@@ -598,7 +598,15 @@ public final class LocalLearningStore {
             allowedFields(intent, "noteId", "planId", "topicId", "mistakeId");
             for (String field : Arrays.asList("noteId", "planId", "topicId", "mistakeId")) {
                 if (!intent.has(field)) throw invalid("开始学习参数不完整。");
-                if (!intent.isNull(field)) clientText(intent.opt(field), 256, false);
+                if (record.has(field) && !record.isNull(field)) clientText(record.opt(field), 256, false);
+                if (!intent.isNull(field) && !clientText(intent.opt(field), 256, false).equals(record.opt(field))) throw invalid("开始学习参数与会话不一致。");
+            }
+            // Validate the stored resolution, without depending on later edits to the historical plan or mistake.
+            boolean hasPlan = record.has("planId") && !record.isNull("planId");
+            boolean hasMistake = record.has("mistakeId") && !record.isNull("mistakeId");
+            if (intent.isNull("planId") && hasPlan || intent.isNull("noteId") && !hasMistake) throw invalid("开始学习参数与会话不一致。");
+            for (String field : Arrays.asList("topicId", "mistakeId")) {
+                if (intent.isNull(field) && record.has(field) && !record.isNull(field) && !hasPlan) throw invalid("开始学习参数与会话不一致。");
             }
         }
         boolean online = "online".equals(record.opt("assessmentMode"));

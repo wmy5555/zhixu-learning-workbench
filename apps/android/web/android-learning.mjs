@@ -43,8 +43,16 @@ export function validateLearningState(state) {
           inputObject(record.startIntent, ['noteId', 'planId', 'topicId', 'mistakeId'], '开始学习参数');
           for (const field of ['noteId', 'planId', 'topicId', 'mistakeId']) {
             if (!Object.hasOwn(record.startIntent, field)) fail('开始学习参数不完整。');
-            if (record.startIntent[field] !== null) idText(record.startIntent[field]);
+            if (record[field] != null) idText(record[field]);
+            if (record.startIntent[field] !== null) {
+              idText(record.startIntent[field]);
+              if (record.startIntent[field] !== record[field]) fail('开始学习参数与会话不一致。');
+            }
           }
+          // Only topic/mistake may be inherited from a plan; only a mistake can supply an omitted note.
+          if (record.startIntent.planId === null && record.planId != null
+              || record.startIntent.noteId === null && record.mistakeId == null
+              || ['topicId', 'mistakeId'].some(field => record.startIntent[field] === null && record[field] != null && record.planId == null)) fail('开始学习参数与会话不一致。');
           if (record.id !== key || startRequests.has(record.startRequestId)) fail('开始学习的防重标识重复或会话身份不一致。');
           startRequests.add(record.startRequestId);
         }

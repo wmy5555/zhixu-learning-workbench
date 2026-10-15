@@ -56,6 +56,55 @@ public final class OnlineLearningSchemaTest extends AndroidTestCase {
             assertEquals("empty", store.load().getString("revision"));
         }
     }
+    public void testStartIntentBindingsRejectForgedBackupBeforeRestore() throws Exception {
+        JSONObject valid = state(), session = readingSession().put("startRequestId", "synthetic-start").put("startIntent", startIntent());
+        valid.getJSONObject("records").put("sessions", new JSONObject().put("session", session));
+        JSONObject saved = store.commit("empty", valid), pack = store.backup();
+        LocalLearningStore target = new LocalLearningStore(new File(root, "synthetic-binding-rejections"), "formal");
+        for (int variant = 0; variant < 8; variant++) {
+            JSONObject forged = new JSONObject(valid.toString()), record = forged.getJSONObject("records").getJSONObject("sessions").getJSONObject("session");
+            switch (variant) {
+                case 0: record.getJSONObject("startIntent").put("noteId", "other-knowledge"); break;
+                case 1: record.getJSONObject("startIntent").put("planId", "other-plan"); break;
+                case 2: record.getJSONObject("startIntent").put("topicId", "other-topic"); break;
+                case 3: record.getJSONObject("startIntent").put("mistakeId", "other-mistake"); break;
+                case 4: record.getJSONObject("startIntent").put("noteId", JSONObject.NULL); break;
+                case 5: record.put("planId", "invented-plan"); break;
+                case 6: record.put("topicId", "invented-topic"); break;
+                case 7: record.put("mistakeId", "invented-mistake"); break;
+            }
+            invalid(() -> target.commit("empty", forged));
+            JSONObject forgedPack = new JSONObject(pack.toString()); forgedPack.getJSONObject("manifest").put("records", forged.getJSONObject("records"));
+            invalid(() -> target.previewRestore(forgedPack));
+            try { target.restoreBackup("unissued-preview-token"); fail("Forged backup must not create a usable restore preview"); }
+            catch (LocalSourceStore.StoreException expected) { assertEquals("INVALID_PREVIEW", expected.code); }
+            assertEquals("empty", target.load().getString("revision"));
+            assertEquals(saved.toString(), store.load().toString());
+        }
+    }
+    public void testStartIntentBindingsKeepExplicitAndPlanMistakeDerivedContextsInBackups() throws Exception {
+        for (int variant = 0; variant < 4; variant++) {
+            JSONObject session = readingSession().put("startRequestId", "synthetic-start"), intent = startIntent();
+            if (variant == 2) {
+                session.put("mistakeId", "mistake"); intent.put("noteId", JSONObject.NULL).put("mistakeId", "mistake");
+            } else {
+                session.put("planId", "plan").put("topicId", "topic").put("mistakeId", "mistake"); intent.put("planId", "plan");
+                if (variant == 0) intent.put("topicId", "topic").put("mistakeId", "mistake");
+                if (variant == 3) intent.put("noteId", JSONObject.NULL);
+            }
+            session.put("startIntent", intent); JSONObject state = state();
+            state.getJSONObject("records").put("sessions", new JSONObject().put("session", session));
+            JSONObject saved = store.commit(store.load().getString("revision"), state);
+            assertEquals(saved.toString(), new LocalLearningStore(root, "formal").load().toString());
+            LocalLearningStore target = new LocalLearningStore(new File(root, "synthetic-binding-restored-" + variant), "formal");
+            JSONObject preview = target.previewRestore(store.backup()), restored = target.restoreBackup(preview.getString("token"));
+            JSONObject restoredSession = restored.getJSONObject("state").getJSONObject("records").getJSONObject("sessions").getJSONObject("session");
+            for (String field : new String[] {"noteId", "planId", "topicId", "mistakeId"}) {
+                assertEquals(intent.opt(field), restoredSession.getJSONObject("startIntent").opt(field));
+                assertEquals(session.opt(field), restoredSession.opt(field));
+            }
+        }
+    }
     public void testOnlineJobsReopenAndBackupButNeverCredentialsOrAuthorization() throws Exception {
         JSONObject state = state(), job = job("formal"); job.getJSONObject("requests").put("extract", new JSONObject().put("requestId", UUID.randomUUID().toString()).put("state", "unknown").put("capability", "model")); state.getJSONObject("records").put("jobs", new JSONObject().put(job.getString("id"), job));
         JSONObject saved = store.commit("empty", state); assertEquals(saved.toString(), new LocalLearningStore(root, "formal").load().toString());
