@@ -535,6 +535,8 @@ input[type="color"] { height: 44px; padding: 5px 8px; cursor: pointer; }
 .markdown-table-scroll table { width: max-content; min-width: 100%; border-collapse: collapse; }
 .markdown-table-scroll th, .markdown-table-scroll td { border: 1px solid var(--line); padding: 7px 10px; max-width: 36rem; }
 .markdown-table-scroll th { background: var(--panel); }
+.original-body .markdown-table-scroll table { width: 100%; table-layout: fixed; }
+.original-body .markdown-table-scroll th, .original-body .markdown-table-scroll td { overflow-wrap: anywhere; white-space: normal; }
 .markdown-align-left { text-align: left; }
 .markdown-align-center { text-align: center; }
 .markdown-align-right { text-align: right; }
