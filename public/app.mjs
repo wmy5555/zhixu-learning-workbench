@@ -1,6 +1,9 @@
 import { api, ApiError, startSession } from "./api.mjs";
 import { parseSourceFile } from "./source-exchange.mjs";
 import { renderMarkdown } from "./markdown-reader.mjs";
+import { createMarkdownEditor } from "./markdown-editor.mjs";
+import { createFileImportPanel, attachmentPanel, canProcessFile, sourceFileNotice, imageInsertControls } from "./source-files.mjs";
+import { attachmentUrl } from "./api.mjs";
 import { createProcessFeedback } from "./process-feedback.mjs";
 import { createSourceMap } from "./source-map.mjs";
 import { initSidebar } from "./sidebar.mjs";
@@ -103,8 +106,12 @@ function sourceBodyPreview(value, length = 420) {
   return text.length > length ? `${text.slice(0, length)}\n…` : text;
 }
 
-function sourceReadingBody(value, className = '', emptyText = '暂无原文') {
-  return renderMarkdown(value, { className: `prose ${className}`.trim(), emptyText });
+function sourceReadingBody(value, className = '', emptyText = '暂无原文', note = null) {
+  const images = [note?.meta?.sourceFile, ...(note?.meta?.attachments || [])].filter(file => file?.kind === 'image');
+  return renderMarkdown(value, { className: `prose ${className}`.trim(), emptyText, imageResolver: target => {
+    const file = images.find(item => target === '../.zhixu-attachments/' + item.id);
+    return file ? attachmentUrl(note.id, file.id) : '';
+  } });
 }
 
 function historyReadingBody(note, version) {
@@ -192,7 +199,6 @@ function noteMeta(note) {
   return el("div", { class: "item-meta" }, [
     badge(labels.kind(note.kind)),
     badge(labels.stage(meta.stage), stateTone(meta.stage)),
-    meta.privacy === "local" ? badge("仅本地", "good") : badge("允许云端", "warn"),
     state.bootstrap?.settings?.mcp?.chatgptEnabled && state.bootstrap?.settings?.mcp?.chatgptAllowRead ? badge("另已授权 ChatGPT 读取", "warn") : null,
     meta.topic ? badge(meta.topic, "accent") : null,
   ]);
@@ -218,9 +224,17 @@ function closeDrawer() {
 
 async function requestCloseDrawer() {
   if (!refs.drawer.classList.contains("is-open")) return;
-  const form = refs.drawerBody.querySelector("form");
-  if (form?.confirmDiscardChanges && !await form.confirmDiscardChanges()) return;
+  if (!await confirmDrawerDiscard()) return;
   closeDrawer();
+}
+
+function drawerInputForm() {
+  return refs.drawer.classList.contains("is-open") ? refs.drawerBody.querySelector("form") : null;
+}
+
+async function confirmDrawerDiscard() {
+  const form = drawerInputForm();
+  return !form?.confirmDiscardChanges || await form.confirmDiscardChanges();
 }
 
 async function refreshBootstrap() {
@@ -241,13 +255,19 @@ async function refreshCompletedSource(sourceId) {
 }
 
 async function navigate(view, options = {}) {
-  if (!await confirmUnsavedInputDiscard()) return;
+  const context = api.getContext(), mainForm = unsavedInputForm(), drawerForm = drawerInputForm();
+  if (!await confirmUnsavedInputDiscard()) return false;
+  if (!options.keepDrawer && !await confirmDrawerDiscard()) return false;
+  const latest = api.getContext();
+  if (latest.version !== context.version || latest.practiceId !== context.practiceId
+    || unsavedInputForm() !== mainForm || drawerInputForm() !== drawerForm) return false;
   setPage(view);
   if (!options.keepDrawer) closeDrawer();
   showLoading();
   try {
     await renderCurrent();
     refs.main.focus({ preventScroll: true });
+    return true;
   } catch (error) {
     renderFailure(error, () => navigate(view));
   }
@@ -399,6 +419,8 @@ async function renderCapture() {
   const sourceForm = el("form", { class: "panel capture-form", dataset: { tour: "capture-form" } });
   const title = el("input", { name: "title", placeholder: "可留空，根据原文生成便于检索的标题" });
   const body = el("textarea", { name: "body", placeholder: "粘贴原文。系统会保留这份原始快照，不用摘要替代。", required: true, rows: 12 });
+  const bodyEditor = !isMobilePrototype() ? createMarkdownEditor(body) : null;
+  let fileDrafts = [], fileLoadVersion = 0, filesLoading = false, importing = false, saving = false;
   const process = el("input", { name: "process", type: "checkbox" });
   const research = el("input", { name: "research", type: "checkbox", disabled: true });
   const syncResearchOption = () => {
@@ -408,17 +430,12 @@ async function renderCapture() {
   };
   process.addEventListener("change", syncResearchOption);
   // reset 事件在浏览器恢复默认值之前触发，等恢复完成后再同步依赖。
-  sourceForm.addEventListener("reset", () => queueMicrotask(syncResearchOption));
-  const localOnly = el("input", { name: "localOnly", type: "checkbox" });
-  if (isMobilePrototype()) {
-    localOnly.checked = localOnly.defaultChecked = true;
-    localOnly.disabled = true;
-    sourceForm.addEventListener("reset", () => queueMicrotask(() => { localOnly.checked = true; syncResearchOption(); }));
-    syncResearchOption();
-  }
-  const titleField = field("标题（可选）", title, "留空会先保存原文，再用资料拆解的模型生成标题；无需勾选 AI 拆解。仅本地或模型未配置时暂用原文片段，可手动填写；生成可能产生调用费用。");
+  sourceForm.addEventListener("reset", () => queueMicrotask(() => { bodyEditor?.setValue(body.defaultValue || ""); syncResearchOption(); }));
+  if (isMobilePrototype()) syncResearchOption();
+  const titleField = field("标题（可选）", title, "留空会先使用原文片段作为标题；主动 AI 拆解时一同生成标题，也可手动填写。");
   titleField.classList.add("span-2");
-  const bodyField = field("原文", body, "网页或模型输出中的指令不会获得程序权限。");
+  const bodyField = bodyEditor ? el("div", { class: "field" }, [el("span", { class: "field-label", text: "原文" }), bodyEditor,
+    el("small", { class: "field-hint", text: "网页或模型输出中的指令不会获得程序权限。" })]) : field("原文", body, "网页或模型输出中的指令不会获得程序权限。");
   bodyField.classList.add("span-2");
   const sourceField = field("来源信息", el("div", { class: "form-grid capture-source-grid" }, [
     el("input", { name: "platform", placeholder: "平台，例如：网页 / 抖音 / AI 对话" }),
@@ -435,53 +452,66 @@ async function renderCapture() {
       bodyField,
       sourceField,
     ]),
-    el("label", { class: "check-field" }, [localOnly, el("span", { text: "仅本地，不发送给配置的模型或联网服务；ChatGPT 的独立读取授权另行管理" })]),
-    el("label", { class: "check-field" }, [process, el("span", { text: "保存后提交 AI 拆解任务" })]),
+    el("label", { class: "check-field" }, [process, el("span", { text: "保存后使用 AI 拆解（发送所需原文给已配置的服务，可能计费）" })]),
     el("label", { class: "check-field" }, [research, el("span", { text: "拆解时联网检验正确性并寻找反例（可选，需同时勾选 AI 拆解）" })]),
     el("div", { class: "form-actions" }, [button("保存原始资料", { kind: "primary", type: "submit" }), button("清空", { onClick: () => sourceForm.reset() })]),
   );
-  const draftValues = () => JSON.stringify({ ...serializeForm(sourceForm), localOnly: localOnly.checked, process: process.checked, research: research.checked });
+  const captureValues = () => ({ ...serializeForm(sourceForm), body: bodyEditor?.getValue() ?? body.value, process: process.checked, research: research.checked });
+  const importItems = () => fileDrafts.map(({ item, title, editor }) => ({ ...item, title: title.value, body: editor.getValue() }));
+  const draftValues = () => JSON.stringify({ capture: captureValues(), files: importItems(), filesLoading });
   protectUnsavedInput(sourceForm, draftValues, "收集内容");
   sourceForm.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const data = serializeForm(sourceForm);
+    if (saving) return;
+    const data = captureValues();
+    const submitted = JSON.stringify(data);
     const item = {
       title: data.title, body: data.body, platform: data.platform, author: data.author,
-      url: data.url, date: data.date, locator: data.locator, privacy: isMobilePrototype() || localOnly.checked ? "local" : "cloud",
+      url: data.url, date: data.date, locator: data.locator,
     };
     try {
       const submit = sourceForm.querySelector("button[type='submit']");
-      submit.disabled = true;
+      saving = true; submit.disabled = true;
       const result = await api.import({ items: [item], captureMode: "text", process: process.checked, research: process.checked && research.checked });
-      sourceForm.reset();
-      toast(`已保存 ${asArray(result.notes).length || 1} 条原始资料${!String(item.title || "").trim() ? "，标题待生成；暂用原文片段，可在系统任务查看进度" : ""}`, "success");
+      if (JSON.stringify(captureValues()) === submitted) sourceForm.reset();
+      toast(`已保存 ${asArray(result.notes).length || 1} 条原始资料${!String(item.title || "").trim() ? "，暂用原文片段作为标题" : ""}`, "success");
       await refreshBootstrap();
     } catch (error) { handleError(error); }
-    finally { sourceForm.querySelector("button[type='submit']").disabled = false; }
+    finally { saving = false; sourceForm.querySelector("button[type='submit']").disabled = false; }
   });
 
   const fileInput = el("input", { type: "file", accept: ".txt,.md,text/plain,text/markdown", multiple: true });
   const fileList = el("div", { class: "list" });
   const batchPanel = el("section", { class: "panel", dataset: { tour: "capture-batch" } }, [
-    sectionHeading("批量导入", "支持 UTF-8 文本和 Markdown，每个文件保留为一份原始资料"),
+    sectionHeading("批量导入", "支持 UTF-8 文本和 Markdown，预览并编辑后再保存为原始资料"),
     field("选择文件", fileInput, "文件内容先在浏览器读取，再通过本地会话保存。"),
     fileList,
-    el("div", { class: "form-actions" }, [button("导入所选文件", { kind: "primary", disabled: true })]),
+    el("div", { class: "form-actions" }, [button("导入所选文件", { kind: "primary", disabled: true }), button("清空导入预览", { onClick: () => resetFileDrafts() })]),
   ]);
   const importButton = batchPanel.querySelector(".primary-button");
   if (isMobilePrototype()) {
     fileInput.disabled = true;
     batchPanel.append(el("p", { class: "muted", text: "样机暂不支持文件导入，请先粘贴文本。" }));
   }
-  fileInput.addEventListener("change", () => {
-    clear(fileList);
-    asArray([...fileInput.files]).forEach((file) => fileList.append(el("div", { class: "list-item no-icon" }, [el("div", { class: "item-copy" }, [el("h3", { text: file.name }), el("p", { text: `${Math.ceil(file.size / 1024)} KB` })])] )));
-    importButton.disabled = !fileInput.files.length;
-  });
-  importButton.addEventListener("click", async () => {
+  const syncImportButton = () => { importButton.disabled = filesLoading || importing || !fileDrafts.length; };
+  function resetFileDrafts() {
+    if (importing) return;
+    fileLoadVersion++; filesLoading = false;
+    fileDrafts.forEach(({ editor }) => editor.destroy()); fileDrafts = [];
+    fileInput.value = ""; clear(fileList); syncImportButton();
+  }
+  fileInput.addEventListener("change", async () => {
+    const files = [...fileInput.files], request = ++fileLoadVersion;
+    if (importing) return;
+    if (!files.length) { filesLoading = false; syncImportButton(); return; }
+    if (fileDrafts.length && !await confirmAction({ title: "替换导入预览？", message: "已有文件预览尚未保存，替换会放弃其中的修改。取消可保留当前预览。", confirmText: "替换预览", danger: true })) {
+      if (request === fileLoadVersion) { fileInput.value = ""; filesLoading = false; syncImportButton(); }
+      return;
+    }
+    if (request !== fileLoadVersion || refs.main.querySelector('[data-tour="capture-form"]') !== sourceForm) return;
+    filesLoading = true; syncImportButton();
     try {
-      importButton.disabled = true;
-      const items = await Promise.all([...fileInput.files].map(async (file) => {
+      const items = await Promise.all(files.map(async (file) => {
         if (file.size > 2 * 1024 * 1024) throw new Error(`${file.name} 过大；每份原文最多 500000 个字符。`);
         let text;
         try {
@@ -490,13 +520,34 @@ async function renderCapture() {
         catch { throw new Error(`${file.name} 不是有效的 UTF-8 文件。`); }
         return parseSourceFile({ name: file.name, text });
       }));
+      if (request !== fileLoadVersion || refs.main.querySelector('[data-tour="capture-form"]') !== sourceForm) return;
+      fileDrafts.forEach(({ editor }) => editor.destroy()); clear(fileList);
+      fileDrafts = items.map((item, index) => {
+        const title = el("input", { value: item.title, required: true, ariaLabel: `导入标题 ${index + 1}` });
+        const textarea = el("textarea", { rows: 10 });
+        const editor = createMarkdownEditor(textarea, { value: item.body });
+        fileList.append(el("details", { class: "panel soft markdown-import-preview", open: true }, [
+          el("summary", { text: `预览并编辑：${files[index].name}` }), field("标题", title), editor,
+        ]));
+        editor.mount(refs.main);
+        return { item, title, editor };
+      });
+    } catch (error) { if (request === fileLoadVersion) handleError(error); }
+    finally { if (request === fileLoadVersion) { filesLoading = false; syncImportButton(); } }
+  });
+  importButton.addEventListener("click", async () => {
+    if (importing || filesLoading || !fileDrafts.length) return;
+    try {
+      importing = true; fileInput.disabled = true; syncImportButton();
+      const items = importItems();
       const result = await api.import({ items, captureMode: "files", process: false });
       toast(`已导入 ${asArray(result.notes).length || items.length} 个文件`, "success");
-      fileInput.value = "";
-      clear(fileList);
+      // A successful request must not erase edits made while it was in flight.
+      importing = false;
+      if (JSON.stringify(importItems()) === JSON.stringify(items)) resetFileDrafts();
       await refreshBootstrap();
     } catch (error) { handleError(error); }
-    finally { importButton.disabled = !fileInput.files.length; }
+    finally { importing = false; fileInput.disabled = isMobilePrototype(); syncImportButton(); }
   });
 
   const flowPanel = el("section", { class: "panel soft" }, [
@@ -508,7 +559,9 @@ async function renderCapture() {
       step("4. 个人理解", "只有你的确认，才能形成正式的个人知识。", false),
     ]),
   ]);
-  clear(refs.main).append(el("div", { class: "page-stack" }, [capabilityNotice(), el("div", { class: "split-layout capture-layout" }, [sourceForm, el("div", { class: "page-stack" }, [batchPanel, flowPanel])])]));
+  const filesPanel = !isMobilePrototype() ? createFileImportPanel({ onSaved: () => refreshBootstrap(), onError: handleError }) : null;
+  clear(refs.main).append(el("div", { class: "page-stack" }, [capabilityNotice(), el("div", { class: "split-layout capture-layout" }, [sourceForm, el("div", { class: "page-stack" }, [batchPanel, filesPanel, flowPanel])])]));
+  bodyEditor?.mount(refs.main);
 }
 
 function step(title, copy, done) {
@@ -647,14 +700,14 @@ function relationControls(note) {
   } });
   return el("details", { class: "child-more-actions", dataset: { tour: "note-relations" } }, [
     el("summary", { text: "查找关联" }),
-    el("div", { class: "page-stack original-body" }, [el("p", { class: "fine-print", text: "默认仅在本机查找可探索的材料。AI 分析会发送获准材料，并可能产生费用。" }),
+    el("div", { class: "page-stack original-body" }, [el("p", { class: "fine-print", text: "默认仅在本机查找可探索的材料。主动 AI 分析会发送所需材料，并可能产生费用。" }),
       el("div", { class: "notice info" }, [
         el("strong", { text: "什么时候使用 AI 分析？" }),
         el("ul", {}, [
           el("li", { text: "先用本机查找：想找同一主题的材料，或只是快速浏览可能的联系时，先不勾选 AI。" }),
           el("li", { text: "再考虑 AI：本机结果不够贴切，或想比较说法不同但机制、用途相似的知识，分辨它们是否相互支持、存在冲突或适用条件不同时。" }),
         ]),
-        el("p", { class: "fine-print", text: "开启前请确认相关材料允许外发，并已配置 AI。分析结果只是建议，请核对原文依据后再决定是否接受；AI 不一定能找到有用的关联。" }),
+        el("p", { class: "fine-print", text: "主动开启后会发送相关材料给已配置的 AI。分析结果只是建议，请核对原文依据后再决定是否接受；AI 不一定能找到有用的关联。" }),
       ]),
       el("label", { class: "check-field" }, [useAI, el("span", { text: "本次允许 AI 分析关联（可能产生费用）" })]),
       el("div", { class: "form-actions" }, [run, button("查看关联结果", { kind: "text", onClick: () => { closeDrawer(); navigate("discover"); } })]), status]),
@@ -709,7 +762,6 @@ async function previewNoteLinks(noteId) {
     openDrawer("核对 Obsidian 链接", "稳定身份与可读链接", el("div", { class: "page-stack" }, [
       el("p", { text: "请核对来源、主题和关系链接。确认后仅更新应用维护的链接区块。" }),
       preview.conflict ? el("div", { class: "notice danger", text: "链接区块已被手动修改，请先处理冲突；本次不会覆盖。" }) : null,
-      preview.privacyChanged ? el("div", { class: "notice info", text: "链接中包含仅本地知识的标题。确认更新后，这份笔记也将收紧为仅本地，避免这些标题被外发。" }) : null,
       el("div", { class: "two-column" }, [el("section", {}, [el("h3", { text: "更新前" }), sourceReadingBody(preview.before, '', '无')]), el("section", {}, [el("h3", { text: "更新后" }), sourceReadingBody(preview.body, '', '无')])]),
       button(preview.changed ? "确认更新链接" : "链接已是最新", { kind: "primary", disabled: !preview.changed || Boolean(preview.conflict), onClick: async () => {
         try { await api.syncLinks(noteId, { expectedHash: preview.expectedHash }); toast("可读链接已更新", "success"); await openNote(noteId); }
@@ -770,7 +822,7 @@ function renderSourceGroupDrawer(source) {
     button("删除", { kind: "danger", disabled: isMobilePrototype(), title: isMobilePrototype() ? "样机暂不支持删除" : "", onClick: () => deleteNote(source) }),
   ]);
   content.append(noteMeta(source), headActions);
-  if (source.meta?.titlePending) content.append(el('p', { class: 'muted', text: '暂用原文片段作为标题，标题尚未生成。可手动编辑，或到“系统 → 任务”查看标题生成进度及重试。' }));
+  if (source.meta?.titlePending) content.append(el('p', { class: 'muted', text: '暂用原文片段作为标题，标题尚未生成。可手动编辑，或在主动 AI 拆解时生成。' }));
 
   if (children.length) {
     const key = `${api.getContext().practiceId || ''}:${source.id}`;
@@ -784,10 +836,11 @@ function renderSourceGroupDrawer(source) {
 
   const original = el("details", { class: "original-material", dataset: { tour: "note-original" } }, [
     el("summary", {}, [el("span", { text: "查看原始资料全文" }), el("small", { text: `${String(source.body || "").length} 字` })]),
-    sourceReadingBody(source.body, 'original-body'),
+    sourceReadingBody(source.body, 'original-body', '暂无原文', source),
   ]);
   if (isMobilePrototype()) original.open = true;
   content.append(original);
+  if (attachmentPanel(source)) content.append(attachmentPanel(source));
 
   const currentUrl = safeExternalUrl(meta.url);
   if (meta.platform || meta.author || meta.date || meta.locator || currentUrl) content.append(el("details", { class: "source-metadata" }, [
@@ -810,7 +863,7 @@ function renderSourceGroupDrawer(source) {
     sectionHeading("继续整理", "生成的拆解会继续归入这个窗口。"),
     el("div", { class: "form-actions" }, [
       processControls(source, source.id),
-      button("手动整理为待选学", { onClick: () => manualExtract(source, source.id) }),
+      button("手动整理为待选学", { disabled: !canProcessFile(source), onClick: () => manualExtract(source, source.id) }),
     ]),
     jobs.length ? el("div", { class: "group-job-list" }, jobs.slice(0, 3).map((job) => el("div", { class: "group-job" }, [
       badge(labels.state(job.state), stateTone(job.state)),
@@ -818,7 +871,7 @@ function renderSourceGroupDrawer(source) {
     ]))) : null,
   ]));
 
-  if (!children.length) content.append(emptyState("尚未形成拆解", "可以提交 AI 拆解，按需勾选联网核验，或手动整理一条待选学知识。"));
+  if (!children.length) content.append(emptyState("尚未形成拆解", canProcessFile(source) ? "可以提交 AI 拆解，按需勾选联网核验，或手动整理一条待选学知识。" : sourceFileNotice(source)));
   clear(refs.drawerBody).append(content);
   refs.drawerBody.querySelectorAll('[data-structure-submit]').forEach(updateStructureButton);
   refs.drawerBody.querySelectorAll('.structure-job-status').forEach(updateStructureStatus);
@@ -848,7 +901,7 @@ async function runConfirmedStructure(key, title, run) {
     if (typeof title === 'function') title = await title();
     if (contextChanged()) return;
     if (!await confirmAction({ title: '重新分析资料结构？', confirmText: '确认重新分析',
-      message: `${title ? `《${title}》：` : ''}将把获准外发的原文和当前拆解条目发送给已配置的 AI 服务，重新分析逻辑关系和分支层级，可能产生调用费用。原文与条目正文保留，成功后更新结构建议。` })) return;
+      message: `${title ? `《${title}》：` : ''}将把必要原文和当前拆解条目发送给已配置的 AI 服务，重新分析逻辑关系和分支层级，可能产生调用费用。原文与条目正文保留，成功后更新结构建议。` })) return;
     if (contextChanged()) {
       toast('知识库已切换，本次分析未提交。请在当前资料中重新操作。', 'info'); return;
     }
@@ -978,7 +1031,7 @@ function renderNoteDrawer(note) {
   const nextActions = el("div", { class: "form-actions", dataset: { tour: "note-lifecycle" } });
   if (note.kind === "source") nextActions.append(
     processControls(note),
-    button("手动整理为待选学", { onClick: () => manualExtract(note) }),
+    button("手动整理为待选学", { disabled: !canProcessFile(note), onClick: () => manualExtract(note) }),
   );
   if (note.kind === "knowledge") nextActions.append(
     button("开始学习", { kind: "primary", onClick: event => beginStudy(note.id, undefined, {}, event.currentTarget || event.target) }),
@@ -1006,6 +1059,10 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
   const form = el("form", { class: "page-stack" });
   const title = el("input", { name: "title", value: note.title || "", required: true });
   const body = el("textarea", { name: "body", textContent: note.body || "", rows: 18, required: true });
+  const imageUploads = [];
+  const imageControls = note.kind === "source" && !isMobilePrototype() ? imageInsertControls(body, imageUploads, { getNote: () => note }) : null;
+  const bodyEditor = imageControls ? createMarkdownEditor(body, { value: note.body || "", ...imageControls.editorOptions }) : null;
+  const editorValues = () => { const values = serializeForm(form); if (bodyEditor) values.body = bodyEditor.getValue(); if (imageControls) values.attachmentUploadIds = [...imageUploads]; return values; };
   const sourceFields = note.kind === "source" ? el("section", { class: "panel soft" }, [
     sectionHeading("来源信息", "补充或修正当前来源，不会改写最初收集快照"),
     el("div", { class: "form-grid" }, [
@@ -1019,14 +1076,15 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
   ]) : null;
   form.append(
     el("div", { class: "notice", text: "保存时会核对内容哈希；若文件已被 Obsidian 或其他窗口修改，本次保存会停下并显示冲突。" }),
-    field("标题", title), field("正文", tour(body, "note-body")),
+    field("标题", title), bodyEditor ? el("div", { class: "field" }, [el("span", { class: "field-label", text: "正文" }), tour(bodyEditor, "note-body")]) : field("正文", tour(body, "note-body")),
+    ...(imageControls ? [imageControls] : []),
     ...(sourceFields ? [sourceFields] : []),
     el("div", { class: "form-grid" }, [
       el("div", { class: "field" }, [
         field("学习状态", el("input", { value: labels.stage(meta.stage), disabled: true }), "学习状态请通过相应操作调整，以便保留理由。"),
         note.kind === "knowledge" ? button("前往状态操作", { kind: "text compact", onClick: async () => {
           const context = api.getContext();
-          if (JSON.stringify(serializeForm(form)) !== originalValues && !await confirmAction({ title: "前往状态操作？", message: "当前修改尚未保存。请取消并先保存；也可以放弃这些修改，返回这条知识的详情进行状态操作。", confirmText: "放弃修改并前往" })) return;
+          if (JSON.stringify(editorValues()) !== originalValues && !await confirmAction({ title: "前往状态操作？", message: "当前修改尚未保存。请取消并先保存；也可以放弃这些修改，返回这条知识的详情进行状态操作。", confirmText: "放弃修改并前往" })) return;
           const latest = api.getContext();
           if (latest.practiceId !== context.practiceId || latest.version !== context.version || refs.drawerBody.querySelector("form") !== form) return;
           renderNoteDrawer(note);
@@ -1038,23 +1096,25 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
           }
         } }) : null,
       ]),
-      tour(field("隐私", selectControl([["local", "仅本地"], ["cloud", "允许云端"]], meta.privacy || "local", "privacy"), "此项控制模型、搜索与向量服务；系统中授予 ChatGPT 的独立读取权限仍有效。"), "note-privacy"),
       field("知识主题", el("input", { name: "topic", value: meta.topic || "", placeholder: "可留空" })),
       learningGoalField(meta.depth),
     ]),
-    el("div", { class: "form-actions" }, [button("保存修改", { kind: "primary", type: "submit" }), button("取消", { onClick: () => returnToSourceId ? refreshSourceGroup(returnToSourceId).catch(handleError) : renderNoteDrawer(note) })]),
+    el("div", { class: "form-actions" }, [button("保存修改", { kind: "primary", type: "submit" }), button("取消", { onClick: async () => {
+      if (!await form.confirmDiscardChanges()) return;
+      await leaveEditor(JSON.stringify(editorValues())).catch(handleError);
+    } })]),
   );
-  const initialFields = serializeForm(form);
+  let initialFields = editorValues();
   if (isMobilePrototype()) {
-    for (const name of ["privacy", "depth", "researchIntervalDays"]) form.querySelector(`[name="${name}"]`).disabled = true;
+    for (const name of ["depth", "researchIntervalDays"]) form.querySelector(`[name="${name}"]`).disabled = true;
   }
-  const originalValues = JSON.stringify(serializeForm(form));
-  form.hasUnsavedChanges = () => JSON.stringify(serializeForm(form)) !== originalValues;
+  let originalValues = JSON.stringify(editorValues()), saving = false;
+  form.hasUnsavedChanges = () => JSON.stringify(editorValues()) !== originalValues;
   let confirmingDiscard = false;
   form.confirmDiscardChanges = async () => {
     if (confirmingDiscard) return false;
     const context = api.getContext();
-    if (JSON.stringify(serializeForm(form)) !== originalValues) {
+    if (JSON.stringify(editorValues()) !== originalValues) {
       confirmingDiscard = true;
       try {
         if (!await confirmAction({ title: "放弃未保存的修改？", message: "当前修改尚未保存。取消可继续编辑；确认放弃后，本次输入不会保存。", confirmText: "放弃修改", danger: true })) return false;
@@ -1063,25 +1123,58 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
     const latest = api.getContext();
     return latest.practiceId === context.practiceId && latest.version === context.version && refs.drawerBody.querySelector("form") === form;
   };
+  const currentEditor = (context, open) => {
+    const latest = api.getContext();
+    return latest.practiceId === context.practiceId && latest.version === context.version
+      && refs.drawerBody.querySelector("form") === form && refs.drawer.classList.contains("is-open") === open;
+  };
+  async function leaveEditor(snapshot, context = api.getContext(), open = refs.drawer.classList.contains("is-open")) {
+    const canLeave = () => currentEditor(context, open) && JSON.stringify(editorValues()) === snapshot;
+    if (!canLeave()) return;
+    const source = returnToSourceId ? await api.note(returnToSourceId) : null;
+    if (!canLeave()) return;
+    if (source) { if (!isExcerptOnly(source)) renderSourceGroupDrawer(source); }
+    else renderNoteDrawer(note);
+    if (state.view === "library") await renderLibrary();
+  }
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const data = serializeForm(form);
+    if (saving) return;
+    const data = editorValues(), submitted = JSON.stringify(data), context = api.getContext();
+    const open = refs.drawer.classList.contains("is-open"), previousHash = note.hash;
+    const submit = form.querySelector("button[type='submit']");
+    saving = true; submit.disabled = true;
     try {
+      if (bodyEditor && !data.body.trim()) throw new Error("正文不能为空。");
       if (!isMobilePrototype() && note.kind === "source" && (!Number.isInteger(Number(data.researchIntervalDays)) || Number(data.researchIntervalDays) < 1 || Number(data.researchIntervalDays) > 365)) throw new Error("核验有效天数应为 1–365 的整数。");
       const sourceMeta = note.kind === "source" ? { platform: data.platform || "", author: data.author || "", url: data.url || "", date: data.date || "", locator: data.locator || "", researchIntervalDays: Number(data.researchIntervalDays) } : {};
-      const changedMeta = Object.fromEntries(Object.entries({ privacy: data.privacy, topic: data.topic, depth: data.depth, ...sourceMeta }).filter(([key]) => data[key] !== initialFields[key]));
-      if (isMobilePrototype()) for (const key of ["privacy", "depth", "researchIntervalDays"]) delete changedMeta[key];
-      const updated = await api.updateNote(note.id, { body: data.body, title: data.title, expectedHash: note.hash, meta: changedMeta });
-      toast(updated.hash === note.hash ? "内容未改变，已确认当前设置" : "已保存，并保留版本记录", "success");
+      const changedMeta = Object.fromEntries(Object.entries({ topic: data.topic, depth: data.depth, ...sourceMeta }).filter(([key]) => data[key] !== initialFields[key]));
+      if (isMobilePrototype()) for (const key of ["depth", "researchIntervalDays"]) delete changedMeta[key];
+      const updated = await api.updateNote(note.id, { body: data.body, title: data.title, expectedHash: previousHash, meta: changedMeta,
+        ...(imageControls ? { attachmentUploadIds: data.attachmentUploadIds } : {}) });
+      if (!currentEditor(context, open)) return;
+      const bound = new Set(data.attachmentUploadIds || []);
+      for (let i = imageUploads.length - 1; i >= 0; i--) if (bound.has(imageUploads[i])) imageUploads.splice(i, 1);
+      note = { ...note, ...updated };
+      initialFields = data;
+      const savedValues = JSON.stringify({ ...data, ...(imageControls ? { attachmentUploadIds: [] } : {}) });
+      originalValues = savedValues;
+      toast(updated.hash === previousHash ? "内容未改变，已确认当前设置" : "已保存，并保留版本记录", "success");
       await refreshBootstrap();
-      if (returnToSourceId) await refreshSourceGroup(returnToSourceId);
-      else {
-        renderNoteDrawer(updated);
-        if (state.view === "library") await renderLibrary();
+      if (!currentEditor(context, open)) return;
+      if (JSON.stringify(editorValues()) !== savedValues) {
+        toast("提交时的版本已保存；后续输入仍在当前草稿，请再次保存。", "info");
+        return;
       }
-    } catch (error) { handleError(error); }
+      await leaveEditor(savedValues, context, open);
+      if (currentEditor(context, open) && JSON.stringify(editorValues()) !== savedValues) {
+        toast("提交时的版本已保存；后续输入仍在当前草稿，请再次保存。", "info");
+      }
+    } catch (error) { if (currentEditor(context, open)) handleError(error); }
+    finally { saving = false; submit.disabled = false; }
   });
   clear(refs.drawerBody).append(form);
+  bodyEditor?.mount(refs.drawerBody);
 }
 
 async function deleteNote(note, returnToSourceId = "") {
@@ -1110,6 +1203,8 @@ function processControls(note, returnToSourceId = "") {
     el("div", { class: "process-status", role: "status", ariaLive: "polite", hidden: true }),
     el("p", { class: "muted", text: "默认只拆解。生成后可手动联网核验整份资料；已有拆解会复用，人工编辑内容将生成修订建议。" }),
   ]);
+  controls.dataset.fileBlocked = canProcessFile(note) ? '' : 'true';
+  if (sourceFileNotice(note)) controls.append(el('p', { class: 'notice', text: sourceFileNotice(note) }));
   updateProcessControls(controls);
   return controls;
 }
@@ -1117,10 +1212,12 @@ function processControls(note, returnToSourceId = "") {
 function updateProcessControls(controls) {
   const status = processFeedback.status(controls.dataset.processNoteId);
   const pending = Boolean(status?.active);
-  controls.querySelector(".process-submit").disabled = pending;
+  const disabled = pending || controls.dataset.fileBlocked === 'true';
+  controls.querySelector(".process-submit").disabled = disabled;
   controls.querySelector(".process-submit").textContent = pending ? (status.type === 'structure' ? '逻辑关系分析中…' : "AI 拆解处理中…") : "提交 AI 拆解";
-  controls.querySelector(".process-research").disabled = pending;
-  controls.querySelector("input").disabled = pending;
+  controls.querySelector(".process-research").disabled = disabled;
+  controls.querySelector("input").disabled = disabled;
+  if (disabled) controls.querySelector("input").checked = false;
   const indicator = controls.querySelector(".process-status");
   indicator.hidden = !status;
   clear(indicator).append(...[pending ? el("span", { class: "spinner process-spinner", ariaHidden: "true" }) : null,
@@ -1603,7 +1700,7 @@ async function renderTopics() {
   const actions = el("div", { class: "item-actions" }, [button("AI 建议学习包", { onClick: suggestTopics }), create]);
   clear(refs.main).append(el("div", { class: "page-stack", dataset: { tour: "topics-list" } }, [
     sectionHeading("主题学习包", "跨日期组织相关内容，也允许零散材料仅供查阅", actions),
-    el("div", { class: "notice info", text: "AI 建议只使用明确允许外发的材料，并以“AI 整理建议”呈现建议顺序和前置缺口；不会自动创建或确认主题学习包。你可以审阅后用“新建主题学习包”手动采用。" }),
+    el("div", { class: "notice info", text: "主动生成 AI 建议时使用所需材料，并以“AI 整理建议”呈现建议顺序和前置缺口；不会自动创建或确认主题学习包。你可以审阅后用“新建主题学习包”手动采用。" }),
     topics.length ? el("div", { class: "card-grid" }, topics.map(topicCard)) : emptyState("还没有主题学习包", "创建一个真实想解决的问题，再选择涉及的知识和前置内容。", create.cloneNode(true)),
   ]));
   if (!topics.length) refs.main.querySelector(".empty-state button")?.addEventListener("click", createTopicDrawer);
@@ -1754,7 +1851,7 @@ async function renderDiscover() {
     selectControl([["", "内容类别"], ["source", "原始资料"], ["knowledge", "知识"], ["mistake", "错题"], ["topic", "主题学习包"], ["report", "AI 整理建议"]], state.searchFilters.kind, "kind"),
     selectControl([["", "学习状态"], ["reference", "仅供查阅"], ["candidate", "待选学"], ["learning", "正在学习"], ["integrated", "已整理个人理解"], ["core", "重点知识"], ["retired", "不再使用"]], state.searchFilters.stage, "stage"),
     button("搜索", { kind: "primary", type: "submit" }),
-  ]), el("label", { class: "check-field" }, [allowCloudQuery, el("span", { text: "允许将本次查询发给已配置的外部服务" })]), el("p", { class: "fine-print", text: "默认关闭：只运行本地关键词检索。开启后，本次查询可用于语义检索；仍只有标为允许云端的材料可以外发。" }), el("details", {}, [el("summary", { text: "按来源、主题与时间进一步筛选" }), el("div", { class: "form-grid" }, [
+  ]), el("label", { class: "check-field" }, [allowCloudQuery, el("span", { text: "允许将本次查询发给已配置的外部服务" })]), el("p", { class: "fine-print", text: "默认关闭：只运行本地关键词检索。开启后，本次查询可用于语义检索；仅在主动操作中发送所需材料，不因保存资料自动建外部索引。" }), el("details", {}, [el("summary", { text: "按来源、主题与时间进一步筛选" }), el("div", { class: "form-grid" }, [
     field("来源", selectControl([["", "全部来源"], ...sources.map((source) => [source.id, source.title || source.id])], state.searchFilters.source, "source")),
     field("知识主题", el("input", { name: "topic", value: state.searchFilters.topic, placeholder: "精确主题名称" })),
     field("起始日期", el("input", { name: "from", type: "date", value: state.searchFilters.from })),
@@ -1864,33 +1961,76 @@ async function actRelation(id, action) {
   catch (error) { handleError(error); }
 }
 
+const outputRequests = new Map(), activeOutputRequests = new Set();
+const outputRequestKey = context => `zhixu.outputRequest.v1:${context.practiceId || 'formal'}`;
+function pendingOutputRequest(context) {
+  const key = outputRequestKey(context);
+  if (!outputRequests.has(key)) {
+    let saved = null;
+    try {
+      saved = JSON.parse(sessionStorage.getItem(key) || 'null');
+      if (!saved || typeof saved.requestId !== 'string' || !saved.input || typeof saved.input.question !== 'string' || !Array.isArray(saved.input.scope)) saved = null;
+    } catch { /* The current page can still retain a submitted intent. */ }
+    outputRequests.set(key, saved);
+  }
+  return outputRequests.get(key);
+}
+function rememberOutputRequest(context, request) {
+  const key = outputRequestKey(context);
+  outputRequests.set(key, request);
+  try { if (request) sessionStorage.setItem(key, JSON.stringify(request)); else sessionStorage.removeItem(key); }
+  catch { if (request) toast('浏览器未能保留重试标识；请保持此页面打开，避免刷新后重复提交。', 'error'); }
+}
+
 async function renderOutput() {
+  const context = api.getContext(), pending = pendingOutputRequest(context), previous = pending?.input;
   const wrapper = el("div", { class: "page-stack" });
   const form = el("form", { class: "panel", dataset: { tour: "output-form" } });
   const question = el("textarea", { name: "question", rows: 5, required: true, placeholder: "例如：根据我已有的资料，解释 RAG 为什么不能保证答案一定正确。" });
-  const mode = selectControl([["answer", "回答问题"], ["outline", "组织提纲"], ["draft", "生成草稿"]], "answer", "mode");
-  const sourceScope = el("input", { type: "checkbox", name: "source", checked: true });
-  const knowledgeScope = el("input", { type: "checkbox", name: "knowledge", checked: true });
-  const allowCloudQuestion = el("input", { type: "checkbox", checked: false });
-  form.append(sectionHeading("有依据的问答与输出", "默认优先个人知识，并让你看见实际使用了哪些资料"), field("问题或输出目标", question), el("div", { class: "form-grid" }, [field("输出方式", mode), field("取材范围", el("div", { class: "segmented" }, [el("label", { class: "check-field" }, [knowledgeScope, "知识笔记"]), el("label", { class: "check-field" }, [sourceScope, "原始来源"])]))]), el("label", { class: "check-field" }, [allowCloudQuestion, el("span", { text: "允许将本次问题发给已配置的外部模型" })]), el("p", { class: "fine-print", text: "默认关闭：只在本机检索并列出已有材料。开启后，本次问题与标为允许云端的相关材料可发送给模型；仅本地材料不会外发。" }), el("div", { class: "notice info", text: "找不到、证据冲突或内容过期时，回答应明确说明。问答和草稿不会自动成为个人知识。" }), button("开始生成", { kind: "primary", type: "submit" }));
+  question.value = previous?.question || '';
+  const mode = selectControl([["answer", "回答问题"], ["outline", "组织提纲"], ["draft", "生成草稿"]], previous?.mode || "answer", "mode");
+  const sourceScope = el("input", { type: "checkbox", name: "source", checked: previous ? previous.scope.includes('source') : true });
+  const knowledgeScope = el("input", { type: "checkbox", name: "knowledge", checked: previous ? previous.scope.includes('knowledge') : true });
+  const allowCloudQuestion = el("input", { type: "checkbox", checked: previous?.privacy === 'cloud' });
+  form.append(sectionHeading("有依据的问答与输出", "默认优先个人知识，并让你看见实际使用了哪些资料"), field("问题或输出目标", question), el("div", { class: "form-grid" }, [field("输出方式", mode), field("取材范围", el("div", { class: "segmented" }, [el("label", { class: "check-field" }, [knowledgeScope, "知识笔记"]), el("label", { class: "check-field" }, [sourceScope, "原始来源"])]))]), el("label", { class: "check-field" }, [allowCloudQuestion, el("span", { text: "允许将本次问题发给已配置的外部模型" })]), el("p", { class: "fine-print", text: "默认关闭：只在本机检索并列出已有材料。开启后，本次问题与相关材料会发送给模型，资料不需要另设外发分类。" }), el("div", { class: "notice info", text: "找不到、证据冲突或内容过期时，回答应明确说明。问答和草稿不会自动成为个人知识。" }), button("开始生成", { kind: "primary", type: "submit" }));
   const answerArea = el("section", { dataset: { tour: "output-result" } });
   const draftsPanel = await renderDraftsPanel();
+  const retryNotice = el('p', { class: 'notice info', dataset: { outputRetry: 'true' }, text: '上次提交尚未取得完成回执。保持输入不变后重试会继续原请求；修改输入会开始新请求，可能产生新的调用。' });
+  retryNotice.hidden = !pending;
+  form.append(retryNotice);
   if (state.lastOutput) renderAnswer(answerArea, state.lastOutput);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    const latest = api.getContext();
+    if (latest.version !== context.version || latest.practiceId !== context.practiceId) { toast('知识库已切换，请在当前页面重新提交。', 'info'); return; }
+    if (activeOutputRequests.has(outputRequestKey(context))) { toast('这次问答仍在执行，请等待后再重试。', 'info'); return; }
     const scope = [];
     if (knowledgeScope.checked) scope.push("knowledge");
     if (sourceScope.checked) scope.push("source");
     if (!scope.length) { toast("请至少选择一个取材范围", "error"); return; }
+    const input = { question: question.value, scope, mode: mode.value, privacy: allowCloudQuestion.checked ? 'cloud' : 'local' };
+    const retained = pendingOutputRequest(context);
+    const request = retained && JSON.stringify(retained.input) === JSON.stringify(input) ? retained : { requestId: crypto.randomUUID(), input };
+    rememberOutputRequest(context, request);
+    activeOutputRequests.add(outputRequestKey(context));
+    const controls = [question, mode, sourceScope, knowledgeScope, allowCloudQuestion, form.querySelector('[type="submit"]')].filter(Boolean);
+    controls.forEach(control => { control.disabled = true; });
     state.lastOutput = null;
     clear(answerArea).append(el("div", { class: "loading-panel" }, [el("span", { class: "spinner" }), el("p", { text: "正在检索并组织已有资料…" })]));
     try {
-      const result = await api.ask({ question: question.value, scope, mode: mode.value, privacy: allowCloudQuestion.checked ? "cloud" : "local" });
+      const result = await api.ask({ ...input, requestId: request.requestId });
+      rememberOutputRequest(context, null);
+      retryNotice.hidden = true;
+      refs.main.querySelectorAll('[data-output-retry]').forEach(notice => { notice.hidden = true; });
       state.lastOutput = result;
       renderAnswer(answerArea, result);
       try { await refreshDraftsPanel(); }
       catch { toast("结果已保存，但输出工作区暂时未能刷新。", "error"); }
-    } catch (error) { clear(answerArea).append(emptyState("本次生成未完成", errorMessage(error), button("重试", { onClick: () => form.requestSubmit() }))); }
+    } catch (error) { retryNotice.hidden = false; clear(answerArea).append(emptyState("本次生成未完成", errorMessage(error), el('div', { class: 'form-actions' }, [
+      button("重试原请求", { onClick: () => form.requestSubmit() }),
+      button(input.privacy === 'cloud' ? '另起新请求（可能再次计费）' : '另起新请求', { onClick: () => { rememberOutputRequest(context, null); form.requestSubmit(); } }),
+    ]))); }
+    finally { activeOutputRequests.delete(outputRequestKey(context)); controls.forEach(control => { control.disabled = false; }); }
   });
   wrapper.append(...[capabilityNotice(), form, answerArea, draftsPanel].filter(Boolean));
   clear(refs.main).append(wrapper);
@@ -1983,6 +2123,7 @@ async function renderSystem() {
     wrapper.append(await createUsagePanel({
       load: filters => api.usage(filters), settings: await api.settings(), readOnly: Boolean(api.getContext?.().practiceId),
       save: payload => api.updateUsageSettings(payload),
+      loadRecovery: () => api.callRecovery(), recoverCall: (id, payload) => api.recoverCall(id, payload),
     }));
   }
   else if (state.systemTab === "jobs") wrapper.append(await jobsPanel());
@@ -2116,8 +2257,8 @@ async function settingsPanel() {
   const mcpPanel = el("section", { class: "panel" }, [sectionHeading("MCP 接入", "本机客户端与 ChatGPT 网页端分别授权"), el("label", { class: "check-field" }, [mcpEnabled, "启用本地 MCP 服务"]), el("label", { class: "check-field" }, [proposals, "允许本机客户端提交写入提案"]),
     el("hr"), el("h3", { text: "ChatGPT 会话收集与知识库读取" }),
     el("label", { class: "check-field" }, [chatgptEnabled, "启用 ChatGPT 接入，允许新增第一层会话资料"]),
-    el("label", { class: "check-field" }, [chatgptAllowRead, "允许 ChatGPT 检索和读取知识库（包含仅本地资料）"]),
-    el("p", { class: "fine-print", text: "读取许可独立授予 ChatGPT：读到的原文会进入 ChatGPT 上下文，其他模型与搜索服务仍沿用每份资料的外发许可。保存后生效：取消读取仍可收集会话；关闭接入后两项能力都停止，再开启需重新勾选读取。保存设置不会自动建立网页端连接。" }),
+    el("label", { class: "check-field" }, [chatgptAllowRead, "允许 ChatGPT 检索和读取知识库"]),
+    el("p", { class: "fine-print", text: "读取许可独立授予 ChatGPT：读到的原文会进入 ChatGPT 上下文，其他模型与搜索服务仍只按各自的主动操作使用所需内容。保存后生效：取消读取仍可收集会话；关闭接入后两项能力都停止，再开启需重新勾选读取。保存设置不会自动建立网页端连接。" }),
     el("p", { class: "fine-print", text: "连接后说“将该会话内容整理进知序”。保存角色原文与独立摘要，缺失历史会如实标注；不会自动覆盖、核验或晋级。电脑、知序和私有隧道都需保持运行。" }),
     el("a", { href: "/chatgpt-setup.html", target: "_blank", rel: "noopener", text: "打开 ChatGPT 连接指南" }),
     el("p", { class: "fine-print", text: "连接状态与实际操作记录可在“诊断与 MCP”中查看；已启用不代表网页端已接通。" })]);
@@ -2346,7 +2487,7 @@ async function importDemo() {
 }
 
 async function confirmRestore() {
-  const ok = await confirmAction({ title: "执行恢复？", message: "应用会先生成安全备份，再按预览结果恢复知识与运行记录。", confirmText: "确认恢复", danger: true });
+  const ok = await confirmAction({ title: "执行恢复？", message: "应用会先生成安全备份，再恢复资料与记录。恢复后的外部能力默认关闭，未完成任务等待你确认；本机未结清调用仍保留。", confirmText: "确认恢复", danger: true });
   if (!ok) return;
   try {
     await api.restore({ backup: state.restoreBackup, preview: false, token: state.restoreToken });
@@ -2367,11 +2508,11 @@ async function diagnosticsPanel() {
   return el("div", { class: "page-stack" }, [
     data.usageNotice ? el("p", { class: "notice info", text: data.usageNotice }) : null,
     el("section", { class: "stats" }, [statCard("今日调用", usage.callsToday ?? calls.length, "实际记录"), statCard("本月费用", usage.costMonth === null || usage.costMonth === undefined ? "未知" : usage.costMonth, "供应商价格未知时不估算"), statCard("索引条目", index.documents ?? index.count ?? 0, "可重建衍生数据"), statCard("MCP", mcp.connected ? "已连接" : mcp.enabled || mcp.chatgptEnabled ? "已启用" : "未启用", "以实际状态为准")]),
-    el("section", { class: "panel soft", dataset: { tour: "system-diagnostics" } }, [sectionHeading("系统怎样工作", "只展示可核对的输入、工具调用与结果，不展示模型隐藏推理"), el("div", { class: "step-list" }, [step("1. 切分与索引", "本地资料被拆成检索片段；关键词索引可离线使用，向量索引按隐私许可构建。", true), step("2. 召回候选", "关键词与可选语义结果分别返回，再合并为有限候选。", true), step("3. 形成回答", "只有实际召回且可用的材料进入回答，并返回引用与限制。", true), step("4. MCP 调用", "外部客户端共用知识服务。ChatGPT 可按独立许可读取或新增会话资料；修改已有笔记仍需确认。", true)])]),
+    el("section", { class: "panel soft", dataset: { tour: "system-diagnostics" } }, [sectionHeading("系统怎样工作", "只展示可核对的输入、工具调用与结果，不展示模型隐藏推理"), el("div", { class: "step-list" }, [step("1. 切分与索引", "本地资料被拆成检索片段；关键词索引可离线使用，向量索引需由你主动补建。", true), step("2. 召回候选", "关键词与可选语义结果分别返回，再合并为有限候选。", true), step("3. 形成回答", "只有实际召回且可用的材料进入回答，并返回引用与限制。", true), step("4. MCP 调用", "外部客户端共用知识服务。ChatGPT 可按独立许可读取或新增会话资料；修改已有笔记仍需确认。", true)])]),
     el("div", { class: "two-column" }, [
       el("section", { class: "panel", dataset: { tour: "system-index" } }, [sectionHeading("存储与索引", "Vault 内容是知识权威，索引可重建"), keyValueObject(storage),
         el("p", { text: `检索片段 ${number(index.count)} 条，已有向量 ${number(index.vectors)} 条，待补建 ${number(index.pending)} 条。` }),
-        el("p", { class: "fine-print", text: "保存知识只更新本地索引。点击补建后，仅获准外发且缺少向量的片段会发送给已配置的嵌入服务，可能产生费用。" }),
+        el("p", { class: "fine-print", text: "保存知识只更新本地索引。点击补建后，本次所需且缺少向量的片段会发送给已配置的嵌入服务，可能产生费用。" }),
         el("div", { class: "form-actions" }, [button("只补建缺失向量", { kind: "primary", disabled: !number(index.pending), onClick: async () => { try { const result = await api.updateIndex(); toast(`补建任务已${labels.state(result.state)}`, "success"); } catch (error) { handleError(error); } } }), button("全量重建索引", { onClick: async () => { try { const result = await api.rebuildIndex(); toast(`索引任务已${labels.state(result.state)}`, "success"); } catch (error) { handleError(error); } } })]),
         asArray(storage.pendingLinks).length ? el("section", {}, [sectionHeading("待更新的 Obsidian 链接", "文件改名后，先核对预览再更新引用"), el("div", { class: "list" }, storage.pendingLinks.map(note => el("div", { class: "list-item no-icon" }, [el("strong", { text: note.title }), button("核对链接", { kind: "text compact", onClick: () => previewNoteLinks(note.id) })])))]) : null]),
       el("section", { class: "panel" }, [sectionHeading("MCP 状态", "MCP 是外部 AI 应用调用知识工具的协议，不替代模型 API"), keyValueObject(mcp), el("div", { class: "notice info", text: "本机 MCP 只能读取或提交待确认修改。ChatGPT 入口独立控制会话新增和知识库读取；会话导入不覆盖已有资料。开关和本机调用记录不能证明网页端已连接，请完成连接指南中的实际收集验证。" }), el("a", { href: "/chatgpt-setup.html", target: "_blank", rel: "noopener", text: "ChatGPT 连接与验收步骤" })]),
@@ -2522,8 +2663,9 @@ async function navigateTutorial(step, tutorial) {
   }
   if (step.tab && step.view === "system") state.systemTab = step.tab;
   if (step.view === "study") state.studyTab = requestedTab;
-  if (!sameView) await navigate(step.view || "today");
+  if (!sameView) { if (await navigate(step.view || "today") === false) return; }
   else if (!openStudyConfirmation && !step.target?.startsWith("note-") && !["topic-editor", "topic-detail", "draft-editor"].includes(step.target) && refs.drawer.classList.contains("is-open")) {
+    if (!await confirmDrawerDiscard()) return;
     closeDrawer();
     if (["library", "topics"].includes(step.view)) await renderCurrent();
   }
@@ -2601,8 +2743,7 @@ async function fillTutorialSample(sample, step) {
   const edits = Object.entries(sample).map(([key, value]) => ({ key: aliases[key] || key, value })).filter(item => allowed.has(item.key)).map(item => ({ ...item, control: root.querySelector(`[name="${item.key}"]`) })).filter(item => item.control && !item.control.disabled);
   if (!edits.length) { toast("请先打开这一项对应的输入表单，再填入示例。", "error"); return; }
   if (edits.some(item => item.control.value && item.control.value !== String(item.value)) && !await confirmAction({ title: "用示例填入当前表单？", message: "当前输入尚未提交，填入后可以继续修改。", confirmText: "填入示例" })) return;
-  edits.forEach(({ control, value }) => { control.value = String(value); control.dispatchEvent(new Event("input", { bubbles: true })); control.dispatchEvent(new Event("change", { bubbles: true })); });
-  if (step.id === "capture-save") { const local = root.querySelector('[name="localOnly"]'); if (local) local.checked = true; }
+  edits.forEach(({ control, value }) => { if (control.markdownEditor) control.markdownEditor.setValue(value); else control.value = String(value); control.dispatchEvent(new Event("input", { bubbles: true })); control.dispatchEvent(new Event("change", { bubbles: true })); });
   toast("示例已填入；请检查后亲自保存或提交。", "success");
 }
 
@@ -2621,7 +2762,7 @@ refs.refresh.addEventListener("click", async () => {
 });
 refs.drawerClose.addEventListener("click", requestCloseDrawer);
 refs.drawerBackdrop.addEventListener("click", requestCloseDrawer);
-document.addEventListener("keydown", (event) => { if (event.key === "Escape") requestCloseDrawer(); });
+document.addEventListener("keydown", (event) => { if (event.key === "Escape") return requestCloseDrawer(); });
 
 function unsavedInputForm() {
   return refs.main.querySelector('[data-tour="capture-form"]') || refs.main.querySelector('[data-tour="study-session"]');
@@ -2654,13 +2795,14 @@ async function confirmUnsavedInputDiscard() {
 
 async function prepareContextChange() {
   if (!await confirmUnsavedInputDiscard()) return false;
+  if (!await confirmDrawerDiscard()) return false;
   showLoading();
   return true;
 }
 
 // Only inspect the live form; sensitive draft text never enters browser storage.
 window.addEventListener("beforeunload", (event) => {
-  if (!unsavedInputForm()?.hasUnsavedChanges()) return;
+  if (!unsavedInputForm()?.hasUnsavedChanges() && !drawerInputForm()?.hasUnsavedChanges?.()) return;
   event.preventDefault();
   // Legacy Chrome/Edge also require a nonempty returnValue to request the prompt.
   event.returnValue = "unsaved";

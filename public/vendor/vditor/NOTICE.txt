@@ -1,0 +1,18 @@
+Self-hosted editor subset from npm vditor 4.0.0, copied without modification.
+Official npm metadata: https://registry.npmjs.org/vditor/4.0.0
+Official release: https://github.com/Vanessa219/vditor/releases/tag/v4.0.0
+Package integrity: sha512-JUeSmmNNxXaq4j29F6OZ/vLgyM/Wt/SpSK4o/gyrc02uTsS+iTeC0ofajxbW29WSJ4LFMec4nrywVul51PrLvg==
+Per-file SHA-256 values are recorded in manifest.json and tested against the installed pinned package.
+
+Vditor: MIT; root LICENSE retained from the npm package.
+Bundled diff-match-patch 1.0.5: Apache-2.0; DIFF-MATCH-PATCH-LICENSE.txt retained from the installed package.
+Bundled Lute runtime reports Version 1.7.6: MulanPSL-2.0; LUTE-LICENSE.txt from https://github.com/88250/lute/blob/v1.7.6/LICENSE
+Lute's v1.7.6 go.mod declares Chroma v0.10.0, GopherJS v1.17.2, golang.org/x/text v0.7.0 and regexp2 v1.8.1. Their licenses are retained conservatively for the bundled compiled runtime:
+- Chroma: MIT; CHROMA-LICENSE.txt from https://github.com/alecthomas/chroma/blob/v0.10.0/COPYING
+- GopherJS: BSD-2-Clause; GOPHERJS-LICENSE.txt from https://github.com/gopherjs/gopherjs/blob/v1.17.2/LICENSE (same text as v1.20.2)
+- Go text: BSD-3-Clause; GO-TEXT-LICENSE.txt from https://github.com/golang/text/blob/v0.7.0/LICENSE
+- regexp2: MIT; REGEXP2-LICENSE.txt from https://github.com/dlclark/regexp2/blob/v1.8.1/LICENSE
+The bundled runtime embeds go1.21.13: BSD-3-Clause; GO-LICENSE.txt from https://github.com/golang/go/blob/go1.21.13/LICENSE
+
+Only core editor, CSS, Chinese locale, ant icons, Lute and light/dark content CSS are distributed here. Optional formula/chart/PlantUML renderers, fonts and emoji image collections are not included or requested by the adapter. This notice describes the checked sources, not an independently reconstructed byte-level SBOM of upstream's compiled Lute binary.
+No license for the Zhixu application itself is selected by these third-party notices.

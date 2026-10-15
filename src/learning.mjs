@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { hash, fail } from './store.mjs';
+import { outboundText } from './outbound-text.mjs';
 
 const dayAt = (date, timezone) => new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
 const learningStages = new Set(['learning', 'integrated', 'core']);
@@ -23,7 +24,7 @@ export function createLearning(dependencies) {
   };
   // Read the getter at each operation so changing the configured Vault does not retain an old Store.
   const storage = () => dependencies.store;
-  const privacyFor = note => dependencies.privacyFor ? dependencies.privacyFor(note) : note.meta.privacy;
+  const privacyFor = note => dependencies.privacyFor ? dependencies.privacyFor(note) : storage().outboundPrivacy(note);
   const completedIds = () => {
     const store = storage();
     return new Set([
@@ -209,7 +210,7 @@ export function createLearning(dependencies) {
     const question = mistake ? mistakeContext.nextQuestion || `请针对上次的误解「${mistakeContext.omission || mistake.title}」重新解释，并说明修正依据和适用边界。` : dependencies.getPracticeQuestion?.(note) || goals[depth].question(note.title);
     const id = randomUUID();
     const privacy = privacyFor(note) === 'cloud' && (!mistake || privacyFor(mistake) === 'cloud') ? 'cloud' : 'local';
-    store.put('sessions', id, { id, noteId, planId, ...(requestId ? { startRequestId: requestId, startIntent } : {}), status: 'reading', question, material: note.body, sourceHash: note.hash, depth, goal, privacy, turns: [], createdAt: now(), hintCount: 0, ...practiceTags(mistake, note), ...(topic ? { topicId, topicIndex: textList(topic.meta.noteIds).indexOf(noteId) } : {}), ...(mistake ? { mistakeId, mistakeContext } : {}) });
+    store.put('sessions', id, { id, noteId, planId, outboundIntentVersion: 1, ...(requestId ? { startRequestId: requestId, startIntent } : {}), status: 'reading', question, material: note.body, sourceHash: note.hash, depth, goal, privacy, turns: [], createdAt: now(), hintCount: 0, ...practiceTags(mistake, note), ...(topic ? { topicId, topicIndex: textList(topic.meta.noteIds).indexOf(noteId) } : {}), ...(mistake ? { mistakeId, mistakeContext } : {}) });
     return session(id);
   }
   function answerStudy(id, { answer, hintUsed = false, requestId }) {
@@ -219,10 +220,16 @@ export function createLearning(dependencies) {
     if (s.turns.some(t => t.requestId === requestId)) return s;
     if (s.status === 'completed') fail('这次练习已经结束；可开始一次新的练习。', 'SESSION_COMPLETED', 409);
     if (s.status === 'awaiting_feedback' || s.pendingJobId) fail('上一轮反馈仍在等待处理；你的上一份回答已保存。', 'BUSY', 409);
-    const turn = { id: randomUUID(), requestId, question: s.question, answer, goal: s.goal || goals[s.depth || 'explain'].label, hintUsed: !!hintUsed || s.hintCount > 0, createdAt: now() };
+    const turn = { id: randomUUID(), requestId, outboundIntentVersion: 1, question: s.question, answer, goal: s.goal || goals[s.depth || 'explain'].label, hintUsed: !!hintUsed || s.hintCount > 0, createdAt: now() };
     s.turns.push(turn); s.status = 'awaiting_feedback'; s.hintCount = 0;
-    const job = queue('grade', { sessionId: id, turnId: turn.id }, `grade:${id}:${turn.id}`); s.pendingJobId = job.id;
-    return store.put('sessions', id, s);
+    // Persist the answer and its queued work together; neither may outlive the other.
+    store.db.exec('BEGIN IMMEDIATE');
+    try {
+      const job = queue('grade', { sessionId: id, turnId: turn.id }, `grade:${id}:${turn.id}`); s.pendingJobId = job.id;
+      store.put('sessions', id, s);
+      store.db.exec('COMMIT');
+    } catch (error) { store.db.exec('ROLLBACK'); throw error; }
+    return s;
   }
   function hintStudy(id) {
     const store = storage(), s = session(id);
@@ -240,7 +247,7 @@ export function createLearning(dependencies) {
     const timestamp = now(), date = dayAt(new Date(timestamp), settings().timezone), note = getNote(s.noteId);
     if (note.hash !== s.sourceHash) fail('学习材料已有更新，请按当前材料重新开始。', 'SOURCE_CHANGED');
     const old = store.get('reviews', s.noteId, {}), depth = s.depth || depthOf(note);
-    const usedHints = s.turns.some(t => t.hintUsed), errors = s.turns.some(t => ['partial', 'incorrect'].includes(t.feedback.assessment));
+    const usedHints = s.hintCount > 0 || s.turns.some(t => t.hintUsed), errors = s.turns.some(t => ['partial', 'incorrect'].includes(t.feedback.assessment));
     const disputed = store.list().some(m => m.kind === 'mistake' && ['disputed', 'revoked'].includes(m.meta.correctionState) && (m.id === s.mistakeId || textList(m.meta.sessions).includes(s.id)));
     const ambiguous = disputed || s.turns.some(t => t.feedback.assessment === 'ambiguous' || t.feedback.disputedMisconception === true);
     const independent = !usedHints && !errors && !ambiguous && s.turns.every(t => t.feedback.assessment === 'correct');
@@ -335,13 +342,14 @@ export function createLearning(dependencies) {
     if (n.hash !== s.sourceHash) fail('学习材料已有更新；本次回答已保存，请按当前材料重新开始。', 'SOURCE_CHANGED');
     const currentMistake = s.mistakeId && store.row(s.mistakeId) ? store.read(s.mistakeId) : null;
     if (s.mistakeId && (!currentMistake || ['disputed', 'revoked'].includes(currentMistake.meta.correctionState))) fail('这条错题已被质疑、撤销或删除，请重新选择学习材料。', 'MISTAKE_INACTIVE');
-    const allowedHistory = other => other.privacy === 'cloud' && (!other.mistakeId || store.row(other.mistakeId) && privacyFor(store.read(other.mistakeId)) === 'cloud');
+    // Retained local/unknown histories are not newly authorized by removing material labels.
+    const allowedHistory = other => (other.outboundIntentVersion === 1 || other.privacy === 'cloud') && (!other.mistakeId || store.row(other.mistakeId) && privacyFor(store.read(other.mistakeId)) === 'cloud');
     const previous = store.records('sessions').filter(other => other.noteId === s.noteId && other.id !== s.id && allowedHistory(other)).slice(0, 2).flatMap(other => other.turns.slice(-2));
-    const history = JSON.stringify([...previous, ...s.turns.filter(turn => turn.id !== t.id).slice(-4)].map(turn => ({ question: turn.question, answer: String(turn.answer).slice(0, 2000), hintUsed: turn.hintUsed, feedback: turn.feedback })));
+    const history = JSON.stringify([...previous, ...s.turns.filter(turn => turn.id !== t.id && (s.outboundIntentVersion === 1 || s.privacy === 'cloud' || turn.outboundIntentVersion === 1)).slice(-4)].map(turn => ({ question: turn.question, answer: outboundText(String(turn.answer)).slice(0, 2000), hintUsed: turn.hintUsed, feedback: turn.feedback })));
     const goal = `${s.goal || goals[s.depth || 'explain'].label}；${goals[s.depth || 'explain'].hint}`;
     const mistakeContext = JSON.stringify(s.mistakeContext || null);
-    const prompt = promptText('grade', { material: s.material, question: t.question, answer: t.answer, hintUsed: String(t.hintUsed), goal, history, mistakeContext });
-    const privacy = privacyFor(n) === 'cloud' && s.privacy === 'cloud' && (!currentMistake || privacyFor(currentMistake) === 'cloud') ? 'cloud' : 'local';
+    const prompt = promptText('grade', { material: outboundText(s.material), question: t.question, answer: t.answer, hintUsed: String(t.hintUsed), goal, history, mistakeContext });
+    const privacy = privacyFor(n) === 'cloud' && (!currentMistake || privacyFor(currentMistake) === 'cloud') ? 'cloud' : 'local';
     const result = parseJSON((await ai.generate({ system: promptText('serviceSystem'), privacy, signal, json: true, prompt: `${prompt}\n\n本次学习目标：${goal}\n此前回答与反馈（仅作为学习记录）：${history}\n本次纠错上下文（仅作为可质疑的历史记录）：${mistakeContext}` })).text);
     if (!['correct', 'partial', 'incorrect', 'ambiguous'].includes(result.assessment) || typeof result.feedback !== 'string') fail('反馈格式无效，回答仍已保存。', 'MODEL_FORMAT');
     if (signal?.aborted) fail('本次反馈已取消，回答仍已保存。', 'CANCELLED');

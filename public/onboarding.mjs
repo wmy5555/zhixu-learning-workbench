@@ -367,7 +367,7 @@ export function createOnboarding(adapter) {
     if (material) content.prepend(el("p", { class: "fine-print", text: `练习材料：${material.id === 'custom' ? current.customSample?.title || '自行粘贴' : material.label.slice(2)}` }));
     const mainKnowledge = current?.learningCandidates?.find(note => note.id === current.roles?.explain);
     if (active.id === "study-plan" && ["candidate", "reference", "retired"].includes(mainKnowledge?.stage)) content.append(el("div", { class: "notice" }, [
-      el("p", { text: "选中的解释知识还未加入学习。选择主线和允许云端之后，还需要打开知识详情，点击“加入学习”并填写理由，才能安排今日清单。" }),
+      el("p", { text: "选中的解释知识还未加入学习。选好主线之后，还需要打开知识详情，点击“加入学习”并填写理由，才能安排今日清单。" }),
       button("回到加入学习这一步", { kind: "text compact", disabled: working, onClick: () => run(() => goTo(flatSteps.find(item => item.id === "library-explain"))) }),
     ]));
     if (material && /^library-(aware|find|explain|apply)$/.test(active.id)) {

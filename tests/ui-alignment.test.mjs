@@ -18,6 +18,8 @@ const onboardingCss = await readFile(new URL('../public/onboarding.css', import.
 const uiSource = await readFile(new URL('../public/ui.mjs', import.meta.url), 'utf8');
 const markdownSource = await readFile(new URL('../public/markdown-reader.mjs', import.meta.url), 'utf8');
 const appSource = await readFile(new URL('../public/app.mjs', import.meta.url), 'utf8');
+const editorSource = await readFile(new URL('../public/markdown-editor.mjs', import.meta.url), 'utf8');
+const fileUiSource = await readFile(new URL('../public/source-files.mjs', import.meta.url), 'utf8');
 const onboardingSource = await readFile(new URL('../public/onboarding.mjs', import.meta.url), 'utf8');
 const sourceMapSource = (await readFile(new URL('../public/source-map.mjs', import.meta.url), 'utf8')).replace(/^import.*;$/m, '').replaceAll('export ', '');
 
@@ -38,6 +40,7 @@ class Element {
   get options() { return this.children; }
   replaceChildren(...children) { this._text = ''; this.children = []; this.append(...children); }
   addEventListener(name, handler) { this.events[name] = handler; }
+  dispatchEvent(event) { this.events[event.type]?.(event); return true; }
   setAttribute(name, value) { this.attributes[name] = value; }
   reset() {
     this.events.reset?.();
@@ -84,7 +87,7 @@ test('capture protects every field and option on unload without changing the liv
   const app = browser(); await app.renderCapture();
   const form = app.refs.main.querySelector('[data-tour="capture-form"]');
   assert.equal(unloadRequested(app), false);
-  for (const name of ['title', 'body', 'platform', 'author', 'url', 'date', 'locator', 'localOnly', 'process', 'research']) {
+  for (const name of ['title', 'body', 'platform', 'author', 'url', 'date', 'locator', 'process', 'research']) {
     const input = control(form, name);
     if (input.type === 'checkbox') input.checked = true; else input.value = '合成草稿';
     assert.equal(unloadRequested(app), true, name);
@@ -93,11 +96,11 @@ test('capture protects every field and option on unload without changing the liv
     assert.equal(unloadRequested(app), false, `reverted ${name}`);
   }
   control(form, 'body').value = '合成长原文'.repeat(100);
-  control(form, 'localOnly').checked = true;
+  control(form, 'process').checked = true;
   const pending = click(app.refs.refresh);
   await click(findButton(app.dialogs, '取消')); await pending;
   assert.equal(control(form, 'body').value, '合成长原文'.repeat(100));
-  assert.equal(control(form, 'localOnly').checked, true);
+  assert.equal(control(form, 'process').checked, true);
   await click(findButton(form, '清空')); await Promise.resolve();
   assert.equal(unloadRequested(app), false);
 });
@@ -264,9 +267,9 @@ test('dirty capture through real onboarding resume cancels in the original libra
   tutorial.dispose();
 });
 
-function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
+let browserRequestSequence = 0;
+function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat, savedSession = new Map()) {
   api = { getContext: () => ({ practiceId: '', version: 0 }), ...api };
-  let requestSequence = 0;
   const roots = new Map();
   const document = {
     documentElement: new Element('html'),
@@ -280,20 +283,25 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
   };
   document.createTextNode = value => { const node = new Element('text'); node.textContent = value; return node; };
   const context = vm.createContext({
-    api, document, initSidebar, createProcessFeedback, parseSourceFile, TextDecoder, Node: Element, URL, Intl: Object.assign(Object.create(Intl), { DateTimeFormat: dateTimeFormat }), Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => `request-ui-${++requestSequence}` },
+    api, document, request: async () => ({ uploads: [] }), uploadAttachment: (...args) => api.uploadAttachment(...args), initSidebar, createProcessFeedback, parseSourceFile, TextDecoder, Node: Element, URL, Intl: Object.assign(Object.create(Intl), { DateTimeFormat: dateTimeFormat }), Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => `request-ui-${++browserRequestSequence}` },
     FormData: class {
       constructor(form) { this.form = form; }
       entries() { return descendants(this.form).filter(node => node.name && !node.disabled && ['input', 'textarea', 'select'].includes(node.tagName)).map(node => [node.name, String(node.tagName === 'select' ? node.children.find(option => option.selected)?.value || '' : node.value)]); }
     },
-    ApiError: class extends Error {}, startSession: async () => {},
+    ApiError: class extends Error {}, startSession: async () => {}, Event,
     window: { zhixuAppearance: { getAccent: () => null, getTheme: () => 'light', resolvedTheme: () => 'light', previewAccent: () => ({}), getMode: () => 'light', palette: () => ({}) }, matchMedia: () => ({ matches: false, addEventListener() {} }), history: { replaceState() {} }, location: { hash: '' }, setTimeout() {}, events: {}, addEventListener(name, handler) { this.events[name] = handler; } },
   });
   const stripped = appSource.replace(/import[\s\S]*?from "\.\/api\.mjs";\s*/, '').replace(/import[\s\S]*?from "\.\/ui\.mjs";\s*/, '').replace(/^init\(\);\s*$/m, '').replace('const { createUsagePanel } = await import("./usage.mjs");', '');
-  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + ('const renderMarkdown = (() => {\n' + markdownSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn renderMarkdown;\n})();') + '\n' + sourceMapSource + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { renderSourceGroupDrawer, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
+  // Exercise our actual attachment UI functions; FilePond's browser-only lifecycle
+  // is covered by the separate browser flow, not the minimal DOM fixture.
+  vm.runInContext(fileUiSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') +
+    '\ncreateFilePicker = async (_input, options) => { api.onImagePicker?.(options); return { getFiles: () => [] }; };\nthis.attachmentUrl = (id, asset, download = false) => "/api/notes/" + id + "/attachments?asset=" + asset + (download ? "&download=1" : "");', context);
+  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + ('const renderMarkdown = (() => {\n' + markdownSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn renderMarkdown;\n})();') + '\nconst createMarkdownEditor = (() => {\n' + editorSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn createMarkdownEditor;\n})();\n' + sourceMapSource + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { renderSourceGroupDrawer, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
   context.app.beginStudy = vm.runInContext('beginStudy', context);
   context.app.manualExtract = vm.runInContext('manualExtract', context);
   context.app.serializeForm = vm.runInContext('serializeForm', context);
   context.app.processControls = vm.runInContext('processControls', context);
+  context.app.attachmentPanel = vm.runInContext('attachmentPanel', context);
   context.app.refreshBootstrap = vm.runInContext('refreshBootstrap', context);
   context.app.processFeedback = vm.runInContext('processFeedback', context);
   context.app.renderSourceGroupDrawer = vm.runInContext('renderSourceGroupDrawer', context);
@@ -308,8 +316,9 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
   context.app.historyReadingBody = vm.runInContext('historyReadingBody', context);
   context.app.searchResultRow = vm.runInContext('searchResultRow', context);
   context.app.prepareContextChange = vm.runInContext('prepareContextChange', context);
+  context.app.navigate = vm.runInContext('navigate', context);
   Object.assign(context, { chapters, getCurriculum, materials, customMaterial, customSample, getMaterial, materialSample, URLSearchParams,
-    localStorage: { getItem() { return null; }, setItem() {} }, sessionStorage: { getItem() { return null; }, setItem() {} },
+    localStorage: { getItem() { return null; }, setItem() {} }, sessionStorage: { getItem: key => savedSession.get(key) ?? null, setItem: (key, value) => savedSession.set(key, value), removeItem: key => savedSession.delete(key) },
     MutationObserver: class { observe() {} disconnect() {} },
   });
   Object.assign(context.window, { setInterval() {}, clearInterval() {}, clearTimeout() {} });
@@ -536,22 +545,19 @@ test('Android capture remains local and never starts processing or research, inc
   const app = browser({ runtime: { kind: 'android-prototype' }, import: async payload => { imports.push(plain(payload)); return { notes: [{}] }; }, bootstrap: async () => ({}) });
   app.renderCapture();
   const form = app.refs.main.querySelector('[data-tour="capture-form"]');
-  const localOnly = control(form, 'localOnly');
+  assert.equal(control(form, 'localOnly'), undefined);
   const process = control(form, 'process');
   const research = control(form, 'research');
-  assert.equal(localOnly.checked, true);
-  assert.equal(localOnly.disabled, true);
   assert.equal(process.disabled, true);
   assert.equal(research.disabled, true);
 
   form.reset();
   await Promise.resolve();
-  assert.equal(localOnly.checked, true, 'reset must preserve the local-only choice');
   assert.equal(process.disabled, true);
   assert.equal(research.disabled, true);
   await form.events.submit({ preventDefault() {} });
   assert.equal(imports.length, 1);
-  assert.equal(imports[0].items[0].privacy, 'local');
+  assert.equal(Object.hasOwn(imports[0].items[0], 'privacy'), false);
   assert.equal(imports[0].process, false);
   assert.equal(imports[0].research, false);
 });
@@ -563,7 +569,7 @@ test('capture form uses the full available column and source metadata stays read
   const body = control(form, 'body');
   const platform = control(form, 'platform');
   assert.ok(form.parentNode.classList.contains('capture-layout'));
-  assert.ok(body.parentNode.classList.contains('span-2'));
+  assert.ok((body.markdownEditor?.parentNode || body.parentNode).classList.contains('span-2'));
   assert.ok(form.classList.contains('capture-form'));
   assert.ok(platform.parentNode.parentNode.classList.contains('span-2'));
   assert.ok(platform.parentNode.classList.contains('capture-source-grid'));
@@ -582,7 +588,8 @@ test('Android source editing omits disabled privacy, depth, and research interva
   const app = browser({ runtime: { kind: 'android-prototype' }, updateNote: async (id, payload) => { updates.push({ id, payload: plain(payload) }); return { id, hash: 'new-hash' }; }, bootstrap: async () => ({}) });
   app.renderNoteEditor({ id: 'synthetic-source', kind: 'source', title: '原始资料', body: '原文', hash: 'old-hash', meta: { privacy: 'cloud', depth: 'advanced', researchIntervalDays: 14 } });
   const form = app.refs.drawerBody.querySelector('form');
-  for (const name of ['privacy', 'depth', 'researchIntervalDays']) assert.equal(control(form, name).disabled, true, `${name} should be disabled`);
+  assert.equal(control(form, 'privacy'), undefined);
+  for (const name of ['depth', 'researchIntervalDays']) assert.equal(control(form, name).disabled, true, `${name} should be disabled`);
   control(form, 'title').value = '更新标题';
   await form.events.submit({ preventDefault() {} });
   assert.equal(updates.length, 1);
@@ -1009,7 +1016,7 @@ test('ChatGPT capture and read controls persist independently and disclose the l
   let panel = await app.settingsPanel();
   assert.equal(control(panel, 'chatgptEnabled').checked, false);
   assert.equal(control(panel, 'chatgptAllowRead').checked, false);
-  assert.match(panel.textContent, /包含仅本地资料/); assert.match(panel.textContent, /不会自动建立网页端连接/);
+  assert.match(panel.textContent, /允许 ChatGPT 检索和读取知识库/); assert.match(panel.textContent, /不会自动建立网页端连接/);
   control(panel, 'chatgptEnabled').checked = true;
   const form = descendants(panel).find(node => node.tagName === 'form');
   await form.events.submit({ preventDefault() {} });
@@ -1097,11 +1104,100 @@ test('capture research requires AI processing and clears on deselection, clear, 
   assert.equal(writes[1].research, false);
   const fileInput = descendants(app.refs.main).find(node => node.type === 'file');
   fileInput.files = [{ name: '合成伴读.txt', size: 20, arrayBuffer: async () => new TextEncoder().encode('仅测试单文件导入的入口标识。').buffer }];
-  fileInput.events.change();
+  await fileInput.events.change();
   await click(findButton(app.refs.main, '导入所选文件'));
   assert.equal(writes[2].captureMode, 'files');
   assert.equal(writes[2].items.length, 1);
   assert.equal(writes[2].process, false);
+});
+
+const markdownFile = (name, text) => ({ name, size: new TextEncoder().encode(text).length, arrayBuffer: async () => new TextEncoder().encode(text).buffer });
+
+test('capture reads the live Markdown draft for submit and unload; clear and save reset that draft', async () => {
+  const writes = [];
+  const app = browser({ import: async payload => { writes.push(plain(payload)); return { notes: [{}] }; }, bootstrap: async () => ({}) });
+  await app.renderCapture();
+  const form = app.refs.main.querySelector('[data-tour="capture-form"]'), body = control(form, 'body');
+  const editor = body.markdownEditor;
+  assert.ok(editor); assert.equal(unloadRequested(app), false);
+  editor.setValue('# 草稿\r\n\r\n**保留**\r\n');
+  assert.equal(unloadRequested(app), true);
+  click(findButton(form, '清空')); await Promise.resolve();
+  assert.equal(editor.getValue(), ''); assert.equal(unloadRequested(app), false);
+  editor.setValue('# 新意图\r\n\r\n- 正文\r\n');
+  await form.events.submit({ preventDefault() {} }); await Promise.resolve();
+  assert.equal(writes[0].items[0].body, '# 新意图\r\n\r\n- 正文\r\n');
+  assert.equal(editor.getValue(), ''); assert.equal(unloadRequested(app), false);
+  // Rich input can be ahead of Vditor's delayed textarea synchronization.
+  editor.getValue = () => '**最新可视化输入**';
+  assert.equal(body.value, ''); assert.equal(unloadRequested(app), true);
+  await form.events.submit({ preventDefault() {} });
+  assert.equal(writes[1].items[0].body, '**最新可视化输入**');
+});
+
+test('text and Markdown import previews preserve bytes and metadata; edits and failed saves remain protected', async () => {
+  const writes = []; let fail = true;
+  const app = browser({ import: async payload => { writes.push(plain(payload)); if (fail) throw new Error('合成保存失败'); return { notes: [{}, {}] }; }, bootstrap: async () => ({}) });
+  await app.renderCapture();
+  const input = descendants(app.refs.main).find(node => node.type === 'file');
+  const original = '# 导入\r\n\r\n|甲|乙|\r\n|---|---|\r\n|1|2|\r\n\r\n```js\r\nconst x = 1;\r\n```\r\n';
+  input.files = [markdownFile('保真.md', original), markdownFile('第二份.txt', '无末尾换行')];
+  await input.events.change();
+  const previews = app.refs.main.querySelectorAll('.markdown-import-preview');
+  assert.equal(previews.length, 2); assert.equal(writes.length, 0, 'preview does not save');
+  const editors = previews.map(preview => preview.querySelector('textarea').markdownEditor);
+  assert.equal(editors[0].getValue(), original); assert.equal(editors[1].getValue(), '无末尾换行');
+  previews[1].querySelector('input').value = '编辑标题';
+  editors[1].getValue = () => '# 可视化已编辑\n\n**保留格式**\n';
+  assert.equal(unloadRequested(app), true);
+  await click(findButton(app.refs.main, '导入所选文件'));
+  assert.equal(app.refs.main.querySelectorAll('.markdown-import-preview').length, 2);
+  assert.equal(findButton(app.refs.main, '导入所选文件').disabled, false);
+  fail = false;
+  await click(findButton(app.refs.main, '导入所选文件'));
+  assert.equal(writes[1].items[0].body, original);
+  assert.equal(writes[1].items[0].locator, '保真.md'); assert.equal(writes[1].items[0].privacy, 'local');
+  assert.equal(writes[1].items[1].title, '编辑标题'); assert.match(writes[1].items[1].body, /\*\*保留格式\*\*/);
+  assert.equal(writes[1].captureMode, 'files'); assert.equal(writes[1].process, false);
+  assert.equal(app.refs.main.querySelectorAll('.markdown-import-preview').length, 0);
+  assert.equal(unloadRequested(app), false);
+});
+
+test('late file reads cannot resurrect cleared or superseded previews and invalid files never save', async () => {
+  let release; const writes = [];
+  const app = browser({ import: async payload => { writes.push(payload); return {}; } });
+  await app.renderCapture();
+  const input = descendants(app.refs.main).find(node => node.type === 'file');
+  input.files = [{ name: '慢文件.md', size: 4, arrayBuffer: () => new Promise(resolve => { release = resolve; }) }];
+  const pending = input.events.change();
+  assert.equal(unloadRequested(app), true); assert.equal(findButton(app.refs.main, '导入所选文件').disabled, true);
+  click(findButton(app.refs.main, '清空导入预览'));
+  release(new TextEncoder().encode('迟到').buffer); await pending;
+  assert.equal(app.refs.main.querySelectorAll('.markdown-import-preview').length, 0);
+  assert.equal(unloadRequested(app), false);
+  let first;
+  input.files = [{ name: '旧文件.md', size: 4, arrayBuffer: () => new Promise(resolve => { first = resolve; }) }];
+  const older = input.events.change();
+  input.files = [markdownFile('新文件.md', '# 新内容\r\n')]; await input.events.change();
+  first(new TextEncoder().encode('旧内容').buffer); await older;
+  assert.match(app.refs.main.querySelector('.markdown-import-preview').textContent, /新文件/);
+  click(findButton(app.refs.main, '清空导入预览'));
+  input.files = [{ name: '无效.md', size: 2, arrayBuffer: async () => Uint8Array.of(0xff).buffer }];
+  await input.events.change(); await click(findButton(app.refs.main, '导入所选文件'));
+  assert.equal(writes.length, 0); assert.equal(findButton(app.refs.main, '导入所选文件').disabled, true);
+});
+
+test('new capture edits during a save are retained and duplicate submission is ignored', async () => {
+  let release; const writes = [];
+  const app = browser({ import: payload => { writes.push(plain(payload)); return new Promise(resolve => { release = resolve; }); }, bootstrap: async () => ({}) });
+  await app.renderCapture();
+  const form = app.refs.main.querySelector('[data-tour="capture-form"]'), editor = control(form, 'body').markdownEditor;
+  editor.setValue('已提交的正文');
+  const pending = form.events.submit({ preventDefault() {} });
+  await form.events.submit({ preventDefault() {} }); assert.equal(writes.length, 1);
+  editor.setValue('保存期间继续填写的新正文');
+  release({ notes: [{}] }); await pending;
+  assert.equal(editor.getValue(), '保存期间继续填写的新正文'); assert.equal(unloadRequested(app), true);
 });
 
 test('evidence expands on demand, retains roles and locators, and rejects executable URLs', async () => {
@@ -1153,14 +1249,14 @@ test('global discovery defaults to local and exploration candidates cannot be ac
   assert.deepEqual(plain(calls), [{ useAI: false }, { useAI: true }]);
 });
 
-test('link previews display privacy tightening and block synchronization of manually edited sections', async () => {
+test('link previews block synchronization of manually edited sections without reclassifying material', async () => {
   let writes = 0;
   const preview = { before: '原文', body: '新链接', expectedHash: 'v1', changed: true, conflict: true, privacyChanged: true };
   const app = browser({ linksPreview: async () => preview, syncLinks: async () => { writes++; } });
   await app.previewNoteLinks('note-a');
   const panel = app.refs.drawerBody;
   assert.equal(findButton(panel, '确认更新链接').disabled, true);
-  assert.match(panel.textContent, /收紧为仅本地/);
+  assert.doesNotMatch(panel.textContent, /收紧为仅本地/);
   assert.match(panel.textContent, /不会覆盖/);
   assert.equal(writes, 0);
 });
@@ -1264,7 +1360,7 @@ test('state shortcut cancellation retains every unsaved field and explicit disca
   const note = { id: 'synthetic-draft', kind: 'knowledge', title: '标题', body: '正文', meta: {} };
   app.renderNoteEditor(note);
   const form = app.refs.drawerBody.children[0];
-  for (const [name, value] of [['title', '未保存标题'], ['body', '未保存正文'], ['privacy', 'cloud'], ['topic', '未保存主题'], ['depth', 'aware']]) {
+  for (const [name, value] of [['title', '未保存标题'], ['body', '未保存正文'], ['topic', '未保存主题'], ['depth', 'aware']]) {
     const input = control(form, name), original = input.value;
     if (name === 'body') input.textContent = value; else input.value = value;
     const before = JSON.stringify(app.serializeForm(form));
@@ -1304,7 +1400,7 @@ test('state shortcut ignores stale confirmations after switching libraries or op
   }
 });
 
-test('note editor user drawer exits preserve changed fields until explicit discard and cancel still abandons editing', async () => {
+test('note editor user exits including cancel preserve changed fields until explicit discard', async () => {
   for (const kind of ['source', 'knowledge']) {
     const note = { id: `synthetic-${kind}`, kind, title: '合成标题', body: '合成正文', meta: {} };
     let reads = 0, writes = 0;
@@ -1312,13 +1408,13 @@ test('note editor user drawer exits preserve changed fields until explicit disca
     app.refs.drawer.classList.add('is-open');
     app.renderNoteEditor(note, kind === 'source' ? { returnToSourceId: note.id } : {});
     const form = app.refs.drawerBody.children[0];
-    const fields = [['title', '修改标题'], ['body', '修改正文'], ['topic', '修改主题'], ['privacy', 'cloud'], ['depth', 'aware']];
+    const fields = [['title', '修改标题'], ['body', '修改正文'], ['topic', '修改主题'], ['depth', 'aware']];
     if (kind === 'source') fields.push(['platform', '合成平台'], ['author', '合成作者'], ['url', 'https://example.com/'], ['date', '2026年春'], ['locator', '第2页'], ['researchIntervalDays', '7']);
     for (const [name, value] of fields) {
       const input = control(form, name), original = input.value;
       input.value = value; // Browser fill changes textarea.value, not textContent.
       const before = JSON.stringify(app.serializeForm(form));
-      for (const exit of [() => click(app.refs.drawerClose), () => click(app.refs.drawerBackdrop), () => app.document.events.keydown({ key: 'Escape' })]) {
+      for (const exit of [() => click(app.refs.drawerClose), () => click(app.refs.drawerBackdrop), () => app.document.events.keydown({ key: 'Escape' }), () => click(findButton(form, '取消'))]) {
         const pending = exit();
         assert.match(app.dialogs.textContent, /放弃未保存的修改/);
         await click(findButton(app.dialogs, '取消')); await pending;
@@ -1330,8 +1426,10 @@ test('note editor user drawer exits preserve changed fields until explicit disca
     }
     assert.equal(reads, 0); assert.equal(writes, 0);
     control(form, 'body').value = '确认放弃的正文';
-    await click(findButton(form, '取消'));
-    assert.equal(app.dialogs.querySelectorAll('.dialog').length, 0, 'cancel deliberately abandons editing without another confirmation');
+    const cancelling = click(findButton(form, '取消'));
+    assert.match(app.dialogs.textContent, /放弃未保存的修改/);
+    await click(findButton(app.dialogs, '放弃修改')); await cancelling;
+    assert.equal(app.dialogs.querySelectorAll('.dialog').length, 0);
     assert.notEqual(app.refs.drawerBody.children[0], form);
     assert.equal(reads, kind === 'source' ? 1 : 0); assert.equal(writes, 0);
     app.renderNoteEditor(note);
@@ -1341,6 +1439,121 @@ test('note editor user drawer exits preserve changed fields until explicit disca
     assert.equal(app.refs.drawer.classList.contains('is-open'), false);
     app.document.events.keydown({ key: 'Escape' });
     assert.equal(app.dialogs.querySelectorAll('.dialog').length, 0, 'a discarded hidden editor must not prompt on later Escape');
+  }
+});
+
+test('rich source draft survives cancel, navigation and library preparation until explicit discard', async () => {
+  const source = { id: 'rich-drawer-source', kind: 'source', title: '合成原文', body: '# 初始\n', hash: 'base', meta: {} };
+  const app = browser(); app.state.view = 'library'; app.refs.drawer.classList.add('is-open');
+  app.renderNoteEditor(source);
+  const form = app.refs.drawerBody.children[0], editor = form.querySelector('.markdown-editor');
+  const richDraft = '# 初始\n\n**尚未同步到文本框的富文本修改**\n';
+  editor.getValue = () => richDraft;
+  assert.equal(control(form, 'body').value, source.body);
+  assert.equal(unloadRequested(app), true);
+  for (const exit of [() => click(findButton(form, '取消')), () => app.navigate('capture'), () => app.prepareContextChange()]) {
+    const pending = exit();
+    await Promise.resolve(); // Navigation first resolves the main-page form guard.
+    assert.match(app.dialogs.textContent, /放弃未保存的修改/);
+    await click(findButton(app.dialogs, '取消')); await pending;
+    assert.equal(app.refs.drawerBody.children[0], form);
+    assert.equal(editor.getValue(), richDraft); assert.equal(app.state.view, 'library');
+    assert.equal(app.refs.drawer.classList.contains('is-open'), true);
+  }
+  const leaving = app.navigate('capture'); await Promise.resolve();
+  await click(findButton(app.dialogs, '放弃修改')); assert.equal(await leaving, true);
+  assert.equal(app.state.view, 'capture'); assert.equal(app.refs.drawer.classList.contains('is-open'), false);
+  assert.equal(unloadRequested(app), false, 'a discarded hidden editor does not block the new page');
+});
+
+test('slow source saves retain later rich input and advance the hash and metadata baseline for the next save', async () => {
+  const source = { id: 'slow-rich-source', kind: 'source', title: '合成原文', body: '# 初始\n', hash: 'base', meta: {} };
+  const writes = []; let release;
+  const app = browser({ updateNote: async (id, payload) => {
+    writes.push(plain(payload));
+    if (writes.length === 1) await new Promise(resolve => { release = resolve; });
+    return { ...source, title: payload.title, body: payload.body, hash: `saved-${writes.length}` };
+  }, bootstrap: async () => ({}) });
+  app.refs.drawer.classList.add('is-open'); app.renderNoteEditor(source);
+  const form = app.refs.drawerBody.children[0], editor = form.querySelector('.markdown-editor');
+  let richDraft = '# 第一轮富文本提交\n'; editor.getValue = () => richDraft;
+  control(form, 'author').value = '已提交的合成作者';
+  const pending = form.events.submit({ preventDefault() {} });
+  assert.equal(findButton(form, '保存修改').disabled, true);
+  await form.events.submit({ preventDefault() {} }); assert.equal(writes.length, 1);
+  richDraft += '\n**保存途中继续输入**\n'; control(form, 'title').value = '保存途中修改标题';
+  release(); await pending;
+  assert.equal(app.refs.drawerBody.children[0], form); assert.equal(editor.getValue(), richDraft);
+  assert.equal(form.hasUnsavedChanges(), true); assert.equal(findButton(form, '保存修改').disabled, false);
+  assert.equal(writes[0].expectedHash, 'base'); assert.doesNotMatch(writes[0].body, /保存途中/);
+  await form.events.submit({ preventDefault() {} });
+  assert.equal(writes[1].expectedHash, 'saved-1'); assert.match(writes[1].body, /保存途中继续输入/);
+  assert.equal(writes[1].title, '保存途中修改标题');
+  assert.deepEqual(writes[1].meta, {}, 'metadata already saved by the first request is not resubmitted as a new change');
+  assert.notEqual(app.refs.drawerBody.children[0], form);
+});
+
+test('image saves snapshot uploads, retain failure drafts and bind only submitted receipts while later uploads stay dirty', async () => {
+  const source = { id: 'image-draft-source', kind: 'source', title: '合成插图资料', body: '保留的原文', hash: 'base', meta: {} };
+  let picker, release, reject;
+  const writes = [], app = browser({ onImagePicker: options => { picker = options; }, updateNote: async (_id, payload) => {
+    writes.push(plain(payload));
+    if (writes.length < 3) await new Promise((yes, no) => { release = yes; reject = no; });
+    return { ...source, body: payload.body, hash: 'saved-' + writes.length };
+  }, bootstrap: async () => ({}) });
+  app.refs.drawer.classList.add('is-open'); app.renderNoteEditor(source);
+  const form = app.refs.drawerBody.children[0], editor = form.querySelector('.markdown-editor');
+  const receipts = ['a', 'b', 'c'].map(letter => ({ id: 'upload-' + letter, attachment: { id: letter.repeat(64) + '.png', name: letter + '.png', kind: 'image' } }));
+  await click(findButton(form, '插入本地图片'));
+  picker.onUploaded(receipts[0]);
+  const first = form.events.submit({ preventDefault() {} });
+  picker.onUploaded(receipts[1]);
+  reject(new Error('synthetic save failure')); await first;
+  assert.equal(app.refs.drawerBody.children[0], form);
+  assert.deepEqual(writes[0].attachmentUploadIds, ['upload-a']);
+  assert.ok(editor.getValue().includes(receipts[1].attachment.id));
+  const second = form.events.submit({ preventDefault() {} });
+  assert.deepEqual(writes[1].attachmentUploadIds, ['upload-a', 'upload-b']);
+  picker.onUploaded(receipts[2]);
+  release(); await second;
+  assert.equal(app.refs.drawerBody.children[0], form);
+  assert.equal(form.hasUnsavedChanges(), true);
+  assert.ok(editor.getValue().includes(receipts[2].attachment.id));
+  await form.events.submit({ preventDefault() {} });
+  assert.deepEqual(writes[2].attachmentUploadIds, ['upload-c']);
+  assert.equal(writes[2].expectedHash, 'saved-2');
+  assert.notEqual(app.refs.drawerBody.children[0], form);
+});
+
+test('source save keeps later input during bootstrap or parent loading and never redraws a closed or replaced editor', async () => {
+  const source = { id: 'late-source-save', kind: 'source', title: '合成原文', body: '初始正文', hash: 'base', meta: {} };
+  for (const phase of ['bootstrap', 'parent', 'closed', 'replacement', 'context']) {
+    let release, reach, version = 0;
+    const gate = new Promise(resolve => { release = resolve; });
+    const reached = new Promise(resolve => { reach = resolve; });
+    const app = browser({
+      getContext: () => ({ practiceId: String(version), version }),
+      updateNote: async () => { if (['closed', 'replacement', 'context'].includes(phase)) { reach(); await gate; } return { ...source, hash: 'saved' }; },
+      bootstrap: async () => { if (phase === 'bootstrap') { reach(); await gate; } return {}; },
+      note: async () => { if (phase === 'parent') { reach(); await gate; } return source; },
+    });
+    app.refs.drawer.classList.add('is-open'); app.renderNoteEditor(source, { returnToSourceId: source.id });
+    const form = app.refs.drawerBody.children[0]; control(form, 'body').value = '已提交正文';
+    const saving = form.events.submit({ preventDefault() {} }); await reached;
+    if (phase === 'closed') {
+      const closing = click(app.refs.drawerClose);
+      await click(findButton(app.dialogs, '放弃修改')); await closing;
+    } else if (phase === 'replacement') app.renderNoteEditor({ ...source, id: 'new-editor' });
+    else if (phase === 'context') version++;
+    else control(form, 'body').value = '后续输入仍未保存';
+    const current = app.refs.drawerBody.children[0], wasOpen = app.refs.drawer.classList.contains('is-open');
+    release(); await saving;
+    assert.equal(app.refs.drawerBody.children[0], current, phase);
+    assert.equal(app.refs.drawer.classList.contains('is-open'), wasOpen, phase);
+    if (phase === 'bootstrap' || phase === 'parent') {
+      assert.equal(control(form, 'body').value, '后续输入仍未保存', phase); assert.equal(form.hasUnsavedChanges(), true, phase);
+      assert.match(app.toasts.textContent, /后续输入仍在当前草稿/, phase);
+    }
   }
 });
 
@@ -1424,9 +1637,28 @@ test('saving an untouched source editor submits no display defaults; actual chan
   assert.deepEqual(writes[2].meta, {}, 'an implicit local privacy default is not a source edit');
   app.renderNoteEditor({ ...source, meta: {} });
   const localForm = app.refs.drawerBody.children[0];
-  control(localForm, 'privacy').children.forEach(option => { option.selected = option.value === 'cloud'; });
+  assert.equal(control(localForm, 'privacy'), undefined);
+  control(localForm, 'topic').value = '新主题';
   await localForm.events.submit({ preventDefault() {} });
-  assert.deepEqual(writes[3].meta, { privacy: 'cloud' }, 'an actual privacy change remains explicit');
+  assert.deepEqual(writes[3].meta, { topic: '新主题' }, 'remaining editable fields still persist');
+});
+
+test('source form reads the current editor draft for dirty checks and hash-protected save, rather than a stale textarea', async () => {
+  const source = { id: 'editor-source', kind: 'source', title: '合成原文', body: '# 原文\r\n\r\n保留', hash: 'original-hash', meta: {} };
+  const writes = [];
+  const app = browser({ updateNote: async (id, body) => { writes.push(plain(body)); throw new Error('合成冲突'); } });
+  app.renderNoteEditor(source);
+  const form = app.refs.drawerBody.children[0], editor = form.querySelector('.markdown-editor');
+  assert.equal(form.hasUnsavedChanges(), false);
+  assert.equal(editor.getValue(), source.body);
+  const richDraft = '# 原文\n\n**可视化编辑尚未同步 textarea**\n';
+  editor.getValue = () => richDraft;
+  assert.equal(form.hasUnsavedChanges(), true);
+  await form.events.submit({ preventDefault() {} });
+  assert.equal(writes[0].body, richDraft);
+  assert.equal(writes[0].expectedHash, source.hash);
+  assert.equal(app.refs.drawerBody.children[0], form);
+  assert.equal(editor.getValue(), richDraft);
 });
 
 test('empty daily plans show the actual reasons with working knowledge and budget entry points', async () => {
@@ -1671,6 +1903,63 @@ test('a failed new output request cannot restore a previous successful answer', 
   assert.doesNotMatch(app.refs.main.querySelector('[data-tour="output-result"]').textContent, /上一轮旧答案/);
 });
 
+test('output retries retain the submitted identity across redraw and reload; successful regeneration is new', async () => {
+  const fixture = tutorialFixture(), storage = new Map(), calls = [];
+  let reject = true;
+  const api = { ...fixture.api, ask: async input => { calls.push(input); if (reject) throw new Error('合成回执丢失'); return { answer: '合成回答', draftId: 'draft' }; } };
+  let app = browser(api, Intl.DateTimeFormat, storage); app.state.bootstrap = fixture.bootstrap;
+  await app.renderOutput();
+  app.refs.main.querySelector('[name="question"]').value = '合成问题';
+  await app.refs.main.querySelector('[data-tour="output-form"]').events.submit({ preventDefault() {} });
+  const id = calls[0].requestId;
+  await app.renderStudy(); await app.renderOutput();
+  assert.equal(app.refs.main.querySelector('[name="question"]').value, '合成问题');
+  await app.refs.main.querySelector('[data-tour="output-form"]').events.submit({ preventDefault() {} });
+  app = browser(api, Intl.DateTimeFormat, storage); app.state.bootstrap = fixture.bootstrap;
+  await app.renderOutput();
+  assert.equal(app.refs.main.querySelector('[name="question"]').value, '合成问题');
+  reject = false;
+  await app.refs.main.querySelector('[data-tour="output-form"]').events.submit({ preventDefault() {} });
+  assert.deepEqual(calls.map(c => c.requestId), [id, id, id]);
+  assert.equal(storage.size, 0);
+  assert.equal(app.refs.main.querySelector('[data-output-retry]').hidden, true);
+  await app.refs.main.querySelector('[data-tour="output-form"]').events.submit({ preventDefault() {} });
+  assert.notEqual(calls[3].requestId, id);
+});
+
+test('output prevents concurrent submits and isolates failed intents by input and library', async () => {
+  const fixture = tutorialFixture(), calls = [];
+  let release, context = { practiceId: '', version: 0 };
+  const app = browser({ ...fixture.api, getContext: () => context, ask: input => { calls.push(input); return new Promise((resolve, reject) => { release = () => reject(new Error('合成失败')); }); } });
+  app.state.bootstrap = fixture.bootstrap;
+  await app.renderOutput();
+  const submit = () => app.refs.main.querySelector('[data-tour="output-form"]').events.submit({ preventDefault() {} });
+  app.refs.main.querySelector('[name="question"]').value = '正式库问题';
+  const first = submit(); await submit();
+  assert.equal(calls.length, 1);
+  assert.equal(app.refs.main.querySelector('[name="question"]').disabled, true);
+  release(); await first;
+  const original = calls[0].requestId;
+  app.refs.main.querySelector('[name="question"]').value = '更改问题';
+  const changed = submit(); release(); await changed;
+  assert.notEqual(calls[1].requestId, original);
+  context = { practiceId: 'practice', version: 1 }; await app.renderOutput();
+  assert.equal(app.refs.main.querySelector('[name="question"]').value, '');
+  app.refs.main.querySelector('[name="question"]').value = '更改问题';
+  const practice = submit(); release(); await practice;
+  assert.notEqual(calls[2].requestId, calls[1].requestId);
+  context = { practiceId: '', version: 2 }; await app.renderOutput();
+  const retry = submit(); release(); await retry;
+  assert.equal(calls[3].requestId, calls[1].requestId);
+  // Explicit regeneration can retire a failed intent even when the text is identical.
+  const form = app.refs.main.querySelector('[data-tour="output-form"]');
+  let regenerated;
+  form.requestSubmit = () => { regenerated = submit(); };
+  await click(findButton(app.refs.main, '另起新请求'));
+  release(); await regenerated;
+  assert.notEqual(calls[4].requestId, calls[3].requestId);
+});
+
 test('topic locating preserves only the matching subject and create or edit mode', async () => {
   const fixture = tutorialFixture(); const app = browser(fixture.api); app.state.bootstrap = fixture.bootstrap;
   const locate = id => app.navigateTutorial(flatSteps.find(step => step.id === id), { roles: fixture.roles });
@@ -1772,12 +2061,15 @@ test('capture accepts blank titles independently of decomposition and explains l
     const title = control(form, 'title');
     assert.notEqual(title.required, true);
     assert.match(form.textContent, /标题（可选）/);
-    assert.match(form.textContent, /无需勾选 AI 拆解.*调用费用/);
+    assert.match(form.textContent, /原文片段作为标题.*主动 AI 拆解/);
+    assert.equal(control(form, 'localOnly'), undefined);
+    assert.doesNotMatch(app.noteMeta({ kind: 'source', meta: { privacy: 'local' } }).textContent, /仅本地|允许云端/);
     title.value = '';
     control(form, 'body').textContent = '合成无标题正文';
     await form.events.submit({ preventDefault() {} });
     assert.equal(writes[0].items[0].title, '');
     assert.equal(writes[0].items[0].body, '合成无标题正文');
+    assert.equal(Object.hasOwn(writes[0].items[0], 'privacy'), false);
     assert.equal(writes[0].process, false);
     assert.equal(writes[0].research, false);
   }
@@ -1930,4 +2222,41 @@ test('successful start of another intent retires uncertain keys before returning
   assert.notEqual(requests[2].requestId, requests[0].requestId, 'moving on successfully retires old uncertain intent');
   assert.notEqual(app.state.currentStudy.id, firstSession.id, 'deliberate return starts a new session');
   assert.equal(backend.service.store.records('sessions').length, 3);
+});
+
+
+test('binary first-layer controls disable AI/research until DOCX has extracted text', () => {
+  const app = browser();
+  for (const format of ['png','pdf','doc','docx']) {
+    const note = {id: 'synthetic-' + format, kind: 'source', meta: {sourceFile: {format}, textExtraction: {text: ''}}};
+    const controls = app.processControls(note);
+    assert.equal(findButton(controls, '提交 AI 拆解').disabled, true);
+    assert.equal(findButton(controls, '联网核验事实与适用条件').disabled, true);
+    assert.equal(controls.querySelector('input').disabled, true);
+    assert.equal(Boolean(controls.querySelector('input').checked), false);
+  }
+  const word = app.processControls({id:'word', kind:'source', meta:{sourceFile:{format:'docx'}, textExtraction:{text:'已提取文字'}}});
+  assert.equal(findButton(word, '提交 AI 拆解').disabled, false);
+  assert.equal(word.querySelector('input').disabled, false);
+  assert.equal(Boolean(word.querySelector('input').checked), false);
+  const plain = app.processControls({id:'text',kind:'source',meta:{}});
+  assert.equal(findButton(plain, '提交 AI 拆解').disabled, false);
+});
+
+test('PDF attachment explains viewer failure and keeps the same protected original download', () => {
+  const app = browser();
+  const file = { id: 'public-file.pdf', name: '公开50 MB.pdf', kind: 'pdf', format: 'pdf', size: 50_000_000 };
+  const panel = app.attachmentPanel({ id: 'source-pdf', meta: { sourceFile: file } });
+  assert.match(panel.textContent, /空白、灰屏或加载失败/);
+  assert.match(panel.textContent, /本机 PDF 阅读器/);
+  const links = descendants(panel).filter(node => node.tagName === 'a');
+  const preview = links.find(node => node.textContent === '在浏览器中查看 PDF');
+  const download = links.find(node => node.textContent === '下载原件');
+  assert.equal(preview.attributes.href, '/api/notes/source-pdf/attachments?asset=public-file.pdf');
+  assert.equal(preview.attributes.target, '_blank');
+  assert.equal(preview.attributes.rel, 'noopener noreferrer');
+  assert.equal(download.attributes.href, preview.attributes.href + '&download=1');
+  assert.equal(download.attributes.download, file.name);
+  const image = app.attachmentPanel({ id: 'image', meta: { sourceFile: { ...file, kind: 'image', format: 'png' } } });
+  assert.doesNotMatch(image.textContent, /灰屏/);
 });

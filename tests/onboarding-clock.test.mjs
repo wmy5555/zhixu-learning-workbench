@@ -222,7 +222,8 @@ test('semantic diagnostics distinguish real vector comparisons from every keywor
   assert.equal((await search()).diagnostics.semanticUsed, false);
   const vectors = (id, vector, model = 'controlled-vector') => service.store.db.prepare('UPDATE index_chunks SET vector=?,model=? WHERE noteId=?').run(JSON.stringify(vector), model, id);
   vectors(local.id, [1, 0]);
-  assert.equal((await search()).diagnostics.semanticUsed, false, 'private vectors must not qualify');
+  assert.equal((await search()).diagnostics.semanticUsed, true, 'existing vectors no longer depend on legacy material metadata');
+  vectors(local.id, [1, 0], 'old-model');
   vectors(note.id, [1, 0], 'old-model');
   assert.equal((await search()).diagnostics.semanticUsed, false, 'another embedding model must not qualify');
   vectors(note.id, [1]);

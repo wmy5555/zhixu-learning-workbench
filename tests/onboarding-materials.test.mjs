@@ -125,9 +125,7 @@ for (const materialId of [...materials.map(item => item.id), 'custom']) test(`${
   assert.equal((await guide('checkpoint', { stepId: 'capture-save' })).progress['capture-save'].status, 'done');
   assert.equal((await practice(`notes/${source.id}/process`, { research: false })).state, 'queued');
   await pump();
-  assert.equal((await practice('jobs')).jobs.find(job => job.type === 'process').state, 'waiting', 'no automatic cloud permission');
-  await edit(source.id, { privacy: 'cloud' });
-  await practice(`notes/${source.id}/process`, { research: false }); await pump();
+  assert.equal((await practice('jobs')).jobs.find(job => job.type === 'process').state, 'done', 'the active decomposition uses required source text without material permission edits');
   current = await request('/api/onboarding/state');
   assert.equal(current.roles.source, source.id);
   assert.equal(current.learningCandidates.length, 2);
@@ -159,7 +157,7 @@ for (const materialId of [...materials.map(item => item.id), 'custom']) test(`${
   await practice(`notes/${knowledgeId}/promote`, { stage: 'learning', depth: 'explain', reason: marker });
   const sourceBefore = await practice(`notes/${source.id}`);
   const sourceSaved = await edit(source.id, { privacy: 'cloud' });
-  assert.equal(sourceSaved.hash, sourceBefore.hash, 'reconfirming source permission must not invalidate the processed source version');
+  assert.equal(sourceSaved.hash, sourceBefore.hash, 'ignored legacy classification input must not invalidate the processed source version');
   assert.deepEqual((await practice(`notes/${knowledgeId}/evidence`)).limitations, []);
   const plan = await practice('today/generate', {});
   assert.ok(plan.items.some(item => item.noteId === knowledgeId && item.state === 'pending'));
