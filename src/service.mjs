@@ -570,15 +570,16 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   }
   const activeAsks = new Set();
   const askBasis = (input, prepared) => hash(JSON.stringify([input, prepared.references]));
+  const askCalls = id => (ai.getCallEvidence ? ai.getCallEvidence(`ask:${id}`) : callLedger.evidence(`ask:${id}`)).filter(call => call.phase !== 'cancelled');
   const askContext = (id, step, input, operation, basisHash) => ai.withCallContext
     ? ai.withCallContext({ key: `ask:${id}:${step}`, jobId: `ask:${id}`, turnId: `${hash(JSON.stringify(input))}${basisHash ? `:${basisHash}` : ''}`, singleRequest: true }, operation) : operation();
   function checkAskCalls(request, { fresh = false } = {}) {
-    const calls = store.records('callLedger').filter(call => call.jobId === `ask:${request.id}` && call.phase !== 'cancelled');
+    const calls = askCalls(request.id);
     if (calls.some(call => call.phase !== 'accounted')) fail('原请求仍有未决调用，请先完成本地记账或核对；备份中的完成状态不会替代本机证据。', 'CALL_RECOVERY_REQUIRED', 409);
     const modelCalls = calls.filter(call => call.capability === 'model');
     // A freshly returned test override may have no transport ledger. A restored
     // completed record never inherits that trust from missing evidence.
-    if ((modelCalls.length || request.callId || request.generated && !fresh) && (modelCalls.length !== 1 || modelCalls[0].id !== request.callId || store.get('callResults', request.callId)?.entry?.ok !== true)) fail('此完成记录与本机调用证据不一致。请核对恢复前安全备份和输出草稿；不会将其他调用的草稿当作原请求结果，也不会重新发送。', 'CALL_RECOVERY_REQUIRED', 409);
+    if ((modelCalls.length || request.callId || request.generated && !fresh) && (modelCalls.length !== 1 || modelCalls[0].id !== request.callId || !modelCalls[0].ok)) fail('此完成记录与本机调用证据不一致。请核对恢复前安全备份和输出草稿；不会将其他调用的草稿当作原请求结果，也不会重新发送。', 'CALL_RECOVERY_REQUIRED', 409);
   }
   function askResult(request, options) {
     checkAskCalls(request, options);
@@ -601,7 +602,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     const input = { question, scope: [...new Set(scope)].sort(), mode, privacy };
     let request = store.get('askRequests', requestId);
     if (request && JSON.stringify(request.input) !== JSON.stringify(input)) fail('此请求标识已用于其他输入；请明确开始一次新的生成。', 'ASK_REQUEST_CONFLICT', 409);
-    const priorCalls = store.records('callLedger').filter(call => call.jobId === `ask:${requestId}` && call.phase !== 'cancelled');
+    const priorCalls = askCalls(requestId);
     if (request && priorCalls.some(call => call.turnId !== `${hash(JSON.stringify(input))}${call.capability === 'model' ? `:${request.basisHash}` : ''}`)) fail('原请求输入或取材与本机调用证据不一致；不会应用其他回答或再次发送。', 'ASK_REQUEST_CONFLICT', 409);
     if (activeAsks.has(requestId)) fail('这次问答仍在执行，请等待后再重试。', 'BUSY', 409);
     if (request?.completed) return askResult(request);

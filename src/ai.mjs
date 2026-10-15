@@ -1262,5 +1262,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     throw fail('INVALID_CAPABILITY', '未知的外部能力。');
   }
 
-  return { generate, embed, search, readPage, research, researchBatch, withBudget, withCallContext, test };
+  return { generate, embed, search, readPage, research, researchBatch, withBudget, withCallContext, test,
+    ...(typeof callLedger?.evidence === 'function' ? { getCallEvidence: jobId => callLedger.evidence(jobId) } : {}),
+  };
 }

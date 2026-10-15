@@ -128,6 +128,13 @@ export function createCallLedger({ store, getStore = () => store, at = () => new
     read(getStore(), id);
     return getStore().get('callResults', id);
   }
+  function evidence(jobId) {
+    const current = getStore();
+    // The adapter may be shared by an isolated practice library. Its owner
+    // remains authoritative; callers need no response bodies or billing data.
+    return current.records('callLedger').filter(row => row.jobId === jobId).map(({ id, phase, capability, turnId }) =>
+      ({ id, phase, capability, turnId, ok: current.get('callResults', id)?.entry?.ok === true }));
+  }
   function replay(key, { contextKey, singleRequest = false } = {}) {
     // A grading round has one external request. Its existing response wins even
     // when a retry's prompt/provider fingerprint changed after receipt.
@@ -143,5 +150,5 @@ export function createCallLedger({ store, getStore = () => store, at = () => new
     if (!result) fail('CALL_RESULT_MISSING', '已有调用的响应缺失，不能重新发送。');
     return { ...result, callId: row.id };
   }
-  return { reserve, dispatch, received, accounted, unknown, cancel, finish: id => active.delete(id), listPending, recover, confirm, getResult, replay };
+  return { reserve, dispatch, received, accounted, unknown, cancel, finish: id => active.delete(id), listPending, recover, confirm, getResult, evidence, replay };
 }
