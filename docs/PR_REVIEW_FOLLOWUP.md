@@ -222,3 +222,17 @@ PR #59 浏览器证据与自动回归分开记录：dot 在原候选 511aaa1 的
 旧等待联网任务从普通拆解入口继续时，原实现沿用 research:true；现在按本次 research 布尔值更新原任务载荷与去重键，再续跑已有任务。任务页明确重试仍保留原联网选项。没有加回资料分类或额外确认，也没有整合在途候选。
 
 8 项新增回归先实际得到 7 失败/1 通过，修复后 8/8 通过；随后完整 pnpm verify 实际 752/752、0失败/跳过/取消，256文件检查和20条合成检索通过。仅合成资料及受控适配器，真实供应商请求为零。当前修复的四项 CI 另按新 SHA 核对；没有增加云端请求，仍由统筹主执行统一去重与整合。
+
+### 主动边界浏览器验收与候选整合接点
+
+补充实际 Chrome 点击验证索引入队后新增/修改并重开实例、资料详情以只拆解继续旧联网任务、任务页明确重试原联网任务；三项均符合当次操作范围，详见 TEST_RESULTS.md。此后只修改诊断页一处遗留分类文案和验收说明，没有新增功能、权限或依赖。修改前重新读取 #76 普通评论、行内线程及审阅总结，均无新增意见；未自动发云端审查或合并，仍由统筹主执行处理。
+
+以下接点根据各 PR 具体候选源码只读核对，本分支没有合并或部署它们。提交变化后需重核相关接点，不能把此表视为组合验收通过。
+
+| 候选与核对版本 | 具体整合位置及必须同时保留的实现 | 整合后定向验收 |
+| --- | --- | --- |
+| [#69 账本与恢复](https://github.com/wmy5555/zhixu-learning-workbench/pull/69)，`8b10b88d1e289e138f063aae55fcbd7c9fc37f81` | `src/service.mjs` 的 queue/runJobs/jobAction/recoverJobs/restore：保留本候选意图标记、入队索引快照、旧任务暂停和重试范围，同时保留 #69 withCallContext、未知账本结果保护、恢复前关闭能力与任务等待。不要用本候选旧版 restore 覆盖其设置及账本恢复逻辑。`askContext` 保留请求幂等/重放和本次查询选项。`src/learning.mjs` 的新回答标记写入 #69 原子入队事务内。 | 复用 material-ai-consent 的8项范围回归，结合 backup-reliability、learning-reliability、settings-reliability、ai/ai-batch/usage。重点验证相同任务身份重试但范围变化时的账本输入绑定、未知结果不自动重发、恢复后不能因新标记自动续发、回答事务失败回滚及旧历史隔离。 |
+| [#73 附件](https://github.com/wmy5555/zhixu-learning-workbench/pull/73)，`657ef2cb6bac1959d68886f1ff16a7caf43793b5` | `src/service.mjs` importItems/processNote/requestSourceStructure/extractNote/processSource/editNote：合并本候选严格主动拆解和不自动补标题，保留 #73 assertTextSource/processingText、提取文字及原文件哈希守卫、附件字段只读、图片绑定及成功后完成绑定。收集表单仅删分类控件及旧参数，不删除附件上传/重置/脏状态保护。 | source-files、source-files-ui 与 material-ai-consent 组合；普通附件保存零外发，主动拆解只使用经哈希核验的提取文字，图像/PDF/失败提取及被篡改提取内容不能借取消分类进入 AI。 |
+| [#74 编辑器](https://github.com/wmy5555/zhixu-learning-workbench/pull/74)，`d4c7771d7eb42c20584007155db8db57d2988e98` | `public/app.mjs` 的收集及 renderNoteEditor：使用 #74 createMarkdownEditor/editorValues/getValue 和保存期间继续输入的保护；仅移除 privacy 表单、变更元数据及禁用字段列表项。不能退回旧 serializeForm/textarea 读取，否则编辑器正文与未保存保护会失效。 | markdown-editor、ui-alignment 结合分类移除：富编辑器保存/清空/离开保护、保存期间继续输入、无分类字段，以及拆解关闭清除联网勾选、重开与保存重置不恢复勾选。 |
+
+上述组合回归尚未运行；统筹确定整合候选和单一部署顺序后再执行，不能各分支并发占用正式4318。真实供应商、正式迁移和最终用户确认仍单独待验收。
