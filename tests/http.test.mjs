@@ -126,6 +126,27 @@ async function webSession(app) {
   };
 }
 
+test('ask identity stays within session/CSRF and library boundaries and prevents duplicate drafts', async t => {
+  const app = await startApp(t), session = await webSession(app);
+  const input = { requestId: 'synthetic-http-ask', question: '合成问题', privacy: 'local' };
+  const post = (body, headers = session.headers, endpoint = '/api/ask') => request(app.baseUrl, endpoint, { method: 'POST', headers, body });
+  assert.equal((await post(input, {})).status, 401);
+  assert.equal((await post(input, { Cookie: session.cookie })).status, 403);
+  const first = await post(input), retry = await post(input);
+  assert.equal(first.status, 200);
+  assert.deepEqual(retry.body, first.body);
+  assert.equal(app.service.store.records('drafts').length, 1);
+  assert.equal((await post({ ...input, question: '其他问题' })).body.code, 'ASK_REQUEST_CONFLICT');
+  assert.equal((await post({ ...input, requestId: '../bad' })).status, 400);
+  const practice = await request(app.baseUrl, '/api/onboarding/start', { method: 'POST', headers: session.headers, body: {} });
+  app.service.updateSettings({ ai: { enabled: true } });
+  app.onboarding.tested('model'); // Synthetic readiness only; both asks remain local.
+  const separate = await post(input, session.headers, `/api/practice/${practice.body.practiceId}/ask`);
+  assert.equal(separate.status, 200);
+  assert.notEqual(separate.body.draftId, first.body.draftId);
+  assert.equal(app.service.store.records('drafts').length, 1);
+});
+
 test('Today reflects an explicitly promoted candidate and generate POST returns its current plan', async t => {
   const app = await startApp(t), session = await webSession(app);
   const note = app.service.store.create({ kind: 'knowledge', title: '合成今日候选', body: '合成个人观点', meta: { stage: 'candidate', depth: 'explain', privacy: 'local', epistemicType: 'personal_view' } });

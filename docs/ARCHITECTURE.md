@@ -53,6 +53,8 @@ Vault 中保存 source（原始资料）、knowledge（结构化/个人知识）
 
 `src/call-ledger.mjs` 持久化 `callLedger`、`callResults` 与 `calls`。调用先预留、再发送、保存受限响应、最后记账；结果未知或记账失败暂停新请求，独立于月预算是否为 0。已有完整响应先补记账，再由原任务复用；批改的 `singleRequest` 按原轮次识别，即使模型或提示词改变也不重发。人工费用确认不补造响应，未知费用继续阻塞，已知费用只解除符合其他条件的新操作限制。恢复备份按整个调用身份保留本机原有证据，导入账本必须满足响应及费用记录的关联约束。
 
+交互问答以可选 `requestId` 记录 `askRequests`：先保存规范化输入和草稿身份，再保存检索引用及版本准备状态；检索嵌入与回答生成分别使用 `withCallContext(...singleRequest:true)`。调用证据同时绑定请求身份、输入及取材版本摘要，不能把同一标识用于不同输入或分叉依据。重试重读材料并核对版本、外发权限与能力，生成后写草稿前再次核对；已保存响应优先复用，不按问题文本去重。草稿和完成标记同一事务提交；完成后同 ID 读取现有草稿，保留人工编辑。若旧备份丢失了操作状态但本机仍有该身份的调用记录，保守阻止重发，不补造输入状态。浏览器 sessionStorage 只保留已提交且未收到成功回执的输入/身份，按正式库与练习库隔离；成功或明确另起请求时清除。
+
 本次已完成调用恢复 15 项、备份恢复 17 项及设置相关 67 项定向测试；最终综合验证、浏览器界面和真实供应商验收仍待完成。没有新增依赖或第三方资产，Android 未同步本次网页改动。
 
 ## 模块与协作边界
@@ -75,7 +77,7 @@ JSON 请求/响应；正常状态 200/201；错误 `{error,code}`。GET /api/boo
 - POST /api/notes/:id/process → job；POST /api/notes/:id/promote `{stage,reason,depth}` → note；POST /api/notes/:id/confirm `{body,expectedHash}` → note（只有用户确认个人理解）。
 - POST /api/notes/merge `{keepId,mergeId,expectedHash,mergeHash,preview:true|false}` → 预览或 note；保留不同观点，绝不自动语义合并。
 - GET /api/search?q=&mode=keyword|semantic|hybrid&stage=&topic=&kind=&source=&from=&to= → `{results,diagnostics}`。
-- POST /api/ask `{question,scope:['knowledge','source'],mode:'answer'|'outline'|'draft'}` → `{answer,citations,limitations,draftId}`。
+- POST /api/ask `{question,scope:['knowledge','source'],mode:'answer'|'outline'|'draft',privacy:'local'|'cloud',requestId?}` → `{requestId,answer,citations,limitations,draftId,generated}`。请求标识为 1–100 位字母、数字、下划线或短横线；同 ID 不同输入返回 `ASK_REQUEST_CONFLICT`。旧调用省略标识时自动创建新身份，无法由相同问题文本找回旧请求。
 - GET /api/drafts → `{drafts}`；PUT /api/drafts/:id `{body,usedIds:[]}` → draft；POST /api/drafts/:id/capture `{body,title,privacy}` → source。
 - GET /api/today → `{date,items,minutes,budget}`；POST /api/today/generate → same；POST /api/today/:id/action `{action:'skip'|'defer'|'pause',days:1}`。
 - POST /api/study/start `{noteId,planId?}` → session；GET /api/study/:id → session；POST /api/study/:id/answer `{answer,hintUsed,requestId}` → session（保存回答后排 AI 批改，离线仍保存）；POST /api/study/:id/hint → `{hint}`；POST /api/study/:id/confirm `{body}` → note。

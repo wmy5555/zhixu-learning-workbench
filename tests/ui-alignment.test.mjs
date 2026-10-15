@@ -264,9 +264,9 @@ test('dirty capture through real onboarding resume cancels in the original libra
   tutorial.dispose();
 });
 
-function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
+let browserRequestSequence = 0;
+function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat, savedSession = new Map()) {
   api = { getContext: () => ({ practiceId: '', version: 0 }), ...api };
-  let requestSequence = 0;
   const roots = new Map();
   const document = {
     documentElement: new Element('html'),
@@ -280,7 +280,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
   };
   document.createTextNode = value => { const node = new Element('text'); node.textContent = value; return node; };
   const context = vm.createContext({
-    api, document, initSidebar, createProcessFeedback, parseSourceFile, TextDecoder, Node: Element, URL, Intl: Object.assign(Object.create(Intl), { DateTimeFormat: dateTimeFormat }), Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => `request-ui-${++requestSequence}` },
+    api, document, initSidebar, createProcessFeedback, parseSourceFile, TextDecoder, Node: Element, URL, Intl: Object.assign(Object.create(Intl), { DateTimeFormat: dateTimeFormat }), Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => `request-ui-${++browserRequestSequence}` },
     FormData: class {
       constructor(form) { this.form = form; }
       entries() { return descendants(this.form).filter(node => node.name && !node.disabled && ['input', 'textarea', 'select'].includes(node.tagName)).map(node => [node.name, String(node.tagName === 'select' ? node.children.find(option => option.selected)?.value || '' : node.value)]); }
@@ -309,7 +309,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat) {
   context.app.searchResultRow = vm.runInContext('searchResultRow', context);
   context.app.prepareContextChange = vm.runInContext('prepareContextChange', context);
   Object.assign(context, { chapters, getCurriculum, materials, customMaterial, customSample, getMaterial, materialSample, URLSearchParams,
-    localStorage: { getItem() { return null; }, setItem() {} }, sessionStorage: { getItem() { return null; }, setItem() {} },
+    localStorage: { getItem() { return null; }, setItem() {} }, sessionStorage: { getItem: key => savedSession.get(key) ?? null, setItem: (key, value) => savedSession.set(key, value), removeItem: key => savedSession.delete(key) },
     MutationObserver: class { observe() {} disconnect() {} },
   });
   Object.assign(context.window, { setInterval() {}, clearInterval() {}, clearTimeout() {} });
@@ -1669,6 +1669,63 @@ test('a failed new output request cannot restore a previous successful answer', 
   assert.equal(app.state.lastOutput, null);
   await app.renderOutput();
   assert.doesNotMatch(app.refs.main.querySelector('[data-tour="output-result"]').textContent, /上一轮旧答案/);
+});
+
+test('output retries retain the submitted identity across redraw and reload; successful regeneration is new', async () => {
+  const fixture = tutorialFixture(), storage = new Map(), calls = [];
+  let reject = true;
+  const api = { ...fixture.api, ask: async input => { calls.push(input); if (reject) throw new Error('合成回执丢失'); return { answer: '合成回答', draftId: 'draft' }; } };
+  let app = browser(api, Intl.DateTimeFormat, storage); app.state.bootstrap = fixture.bootstrap;
+  await app.renderOutput();
+  app.refs.main.querySelector('[name="question"]').value = '合成问题';
+  await app.refs.main.querySelector('[data-tour="output-form"]').events.submit({ preventDefault() {} });
+  const id = calls[0].requestId;
+  await app.renderStudy(); await app.renderOutput();
+  assert.equal(app.refs.main.querySelector('[name="question"]').value, '合成问题');
+  await app.refs.main.querySelector('[data-tour="output-form"]').events.submit({ preventDefault() {} });
+  app = browser(api, Intl.DateTimeFormat, storage); app.state.bootstrap = fixture.bootstrap;
+  await app.renderOutput();
+  assert.equal(app.refs.main.querySelector('[name="question"]').value, '合成问题');
+  reject = false;
+  await app.refs.main.querySelector('[data-tour="output-form"]').events.submit({ preventDefault() {} });
+  assert.deepEqual(calls.map(c => c.requestId), [id, id, id]);
+  assert.equal(storage.size, 0);
+  assert.equal(app.refs.main.querySelector('[data-output-retry]').hidden, true);
+  await app.refs.main.querySelector('[data-tour="output-form"]').events.submit({ preventDefault() {} });
+  assert.notEqual(calls[3].requestId, id);
+});
+
+test('output prevents concurrent submits and isolates failed intents by input and library', async () => {
+  const fixture = tutorialFixture(), calls = [];
+  let release, context = { practiceId: '', version: 0 };
+  const app = browser({ ...fixture.api, getContext: () => context, ask: input => { calls.push(input); return new Promise((resolve, reject) => { release = () => reject(new Error('合成失败')); }); } });
+  app.state.bootstrap = fixture.bootstrap;
+  await app.renderOutput();
+  const submit = () => app.refs.main.querySelector('[data-tour="output-form"]').events.submit({ preventDefault() {} });
+  app.refs.main.querySelector('[name="question"]').value = '正式库问题';
+  const first = submit(); await submit();
+  assert.equal(calls.length, 1);
+  assert.equal(app.refs.main.querySelector('[name="question"]').disabled, true);
+  release(); await first;
+  const original = calls[0].requestId;
+  app.refs.main.querySelector('[name="question"]').value = '更改问题';
+  const changed = submit(); release(); await changed;
+  assert.notEqual(calls[1].requestId, original);
+  context = { practiceId: 'practice', version: 1 }; await app.renderOutput();
+  assert.equal(app.refs.main.querySelector('[name="question"]').value, '');
+  app.refs.main.querySelector('[name="question"]').value = '更改问题';
+  const practice = submit(); release(); await practice;
+  assert.notEqual(calls[2].requestId, calls[1].requestId);
+  context = { practiceId: '', version: 2 }; await app.renderOutput();
+  const retry = submit(); release(); await retry;
+  assert.equal(calls[3].requestId, calls[1].requestId);
+  // Explicit regeneration can retire a failed intent even when the text is identical.
+  const form = app.refs.main.querySelector('[data-tour="output-form"]');
+  let regenerated;
+  form.requestSubmit = () => { regenerated = submit(); };
+  await click(findButton(app.refs.main, '另起新请求'));
+  release(); await regenerated;
+  assert.notEqual(calls[4].requestId, calls[3].requestId);
 });
 
 test('topic locating preserves only the matching subject and create or edit mode', async () => {

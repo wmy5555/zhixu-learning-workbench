@@ -58,6 +58,7 @@ test('invalid backup payloads leave Markdown, runtime records, indexes and histo
     b => { b.records.push(structuredClone(b.records[0])); },
     b => { b.records.push({ namespace: 'jobs', key: 'broken', json: JSON.stringify({ id: 'broken', state: 'running', payload: null }) }); },
     b => { b.records.push({ namespace: 'vaultRelations', key: 'broken', json: JSON.stringify({ id: 'broken', ownerIds: null }) }); },
+    b => { b.records.push({ namespace: 'askRequests', key: 'broken', json: JSON.stringify({ id: 'broken', input: { question: '合成问题' }, completed: true }) }); },
     b => { const at = new Date().toISOString(); b.records.push({ namespace: 'callLedger', key: 'incomplete', json: JSON.stringify({ id: 'incomplete', phase: 'received', capability: 'model', model: 'model', reservedCost: null, createdAt: at, updatedAt: at }) }); },
     b => { const at = new Date().toISOString(); b.records.push({ namespace: 'callLedger', key: 'missing-cost', json: JSON.stringify({ id: 'missing-cost', phase: 'unknown', capability: 'model', model: 'model', reservedCost: null, createdAt: at, updatedAt: at }) }); },
     b => { b.versions[0].hash = '0'.repeat(64); },
@@ -73,6 +74,21 @@ test('invalid backup payloads leave Markdown, runtime records, indexes and histo
     assert.deepEqual(snapshot(h), current);
     assert.equal(fs.existsSync(path.join(h.dataDir, 'backups')), false);
   }
+});
+
+test('submitted ask intent and prepared state round-trip without accepting malformed references', t => {
+  const h = harness(t), input = { question: '合成问题', scope: ['knowledge','source'], mode: 'answer', privacy: 'cloud' };
+  const initial = { id: 'initial-ask', input, draftId: 'initial-draft', createdAt: new Date().toISOString() };
+  const prepared = { ...initial, id: 'prepared-ask', basisHash: 'a'.repeat(64), prepared: { generated: true, references: [{ id: h.note.id, hash: h.note.hash, cloud: true }], citations: [{ id: h.note.id, title: h.note.title, excerpt: h.note.body, sources: [] }], limitations: [] } };
+  h.store.put('askRequests', initial.id, initial);
+  h.store.put('askRequests', prepared.id, prepared);
+  const backup = h.store.backup();
+  h.store.restore(backup);
+  assert.deepEqual(h.store.get('askRequests', initial.id), initial);
+  assert.deepEqual(h.store.get('askRequests', prepared.id), prepared);
+  const malformed = structuredClone(backup), row = malformed.records.find(r => r.key === prepared.id);
+  const value = JSON.parse(row.json); value.prepared.references[0].cloud = 'yes'; row.json = JSON.stringify(value);
+  assert.throws(() => h.store.validateBackup(malformed), /问答准备状态/);
 });
 
 test('inconsistent relationship mirrors and file collisions fail during preview without scanning current edits', t => {

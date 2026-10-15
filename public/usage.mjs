@@ -194,7 +194,7 @@ function recoveryPanel(pending, readOnly, recoverCall, refresh) {
     const status = el('p', { role: 'status', class: 'fine-print' });
     const card = el('div', { class: 'page-stack' }, [
       el('p', { text: `${names[record.capability] || '外部请求'} · ${record.model || '未记录模型'} · ${record.createdAt || ''}` }),
-      el('p', { text: record.hasResult ? '已收到结果，等待完成本地记账。补记后可在任务页继续，使用已保存的结果。' : '没有完整结果，无法判断服务是否已收费。请先核对供应商记录，原请求不会自动重发。' }), status,
+      el('p', { text: record.hasResult ? '已收到结果，等待完成本地记账。补记后返回原来的学习任务或问答与输出继续，使用已保存的结果。' : '没有完整结果，无法判断服务是否已收费。请先核对供应商记录，原请求不会自动重发。' }), status,
     ]);
     if (readOnly) card.append(el('p', { text: '请返回正式库的用量与费用页面处理。' }));
     else if (record.hasResult || record.phase === 'reserved') {

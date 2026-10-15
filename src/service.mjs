@@ -568,28 +568,88 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     const ids = new Set(relations.flatMap(r => [r.fromId,r.toId])); ids.delete(id);
     return { relations, notes: store.list().filter(n => ids.has(n.id) && !n.meta.supersededBy && n.meta.stage !== 'retired') };
   }
-  async function ask({ question, scope = ['knowledge','source'], mode = 'answer', privacy = 'local' }) {
+  const activeAsks = new Set();
+  const askBasis = (input, prepared) => hash(JSON.stringify([input, prepared.references]));
+  const askContext = (id, step, input, operation, basisHash) => ai.withCallContext
+    ? ai.withCallContext({ key: `ask:${id}:${step}`, jobId: `ask:${id}`, turnId: `${hash(JSON.stringify(input))}${basisHash ? `:${basisHash}` : ''}`, singleRequest: true }, operation) : operation();
+  function askResult(request) {
+    const draft = store.get('drafts', request.draftId);
+    if (!draft) fail('原请求的草稿已不存在；不会重新调用模型。', 'ASK_RESULT_MISSING', 409);
+    return { requestId: request.id, answer: draft.body, citations: draft.citations, limitations: draft.limitations, draftId: draft.id, generated: request.generated };
+  }
+  function checkAskMaterials({ references, generated }) {
+    store.scan();
+    if (generated && !settings().ai.enabled) fail('模型能力已关闭；原请求尚未完成。', 'CAPABILITY_DISABLED', 403);
+    for (const reference of references) {
+      const note = store.row(reference.id) && store.read(reference.id);
+      if (!note || note.hash !== reference.hash || materialLimitations(note).length || generated && reference.cloud && privacyFor(note) !== 'cloud') fail('原请求的取材已变化；未应用旧回答，也不会重新调用。请检查材料后明确开始新请求。', 'SOURCE_CHANGED', 409);
+    }
+  }
+  async function ask({ question, scope = ['knowledge','source'], mode = 'answer', privacy = 'local', requestId = randomUUID() }) {
     if (!String(question || '').trim()) fail('请填写问题或输出目标。');
-    const result = await search(question, { scope, mode: 'hybrid', limit: 8, privacy });
+    if (typeof requestId !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(requestId)) fail('问答请求标识无效。');
+    if (typeof question !== 'string' || question.length > 500000 || !Array.isArray(scope) || !scope.length || scope.some(kind => !['knowledge','source'].includes(kind)) || !['answer','outline','draft'].includes(mode) || !['local','cloud'].includes(privacy)) fail('问答请求参数无效。');
+    const input = { question, scope: [...new Set(scope)].sort(), mode, privacy };
+    let request = store.get('askRequests', requestId);
+    if (request && JSON.stringify(request.input) !== JSON.stringify(input)) fail('此请求标识已用于其他输入；请明确开始一次新的生成。', 'ASK_REQUEST_CONFLICT', 409);
+    const priorCalls = store.records('callLedger').filter(call => call.jobId === `ask:${requestId}` && call.phase !== 'cancelled');
+    if (request && priorCalls.some(call => call.turnId !== `${hash(JSON.stringify(input))}${call.capability === 'model' ? `:${request.basisHash}` : ''}`)) fail('原请求输入或取材与本机调用证据不一致；不会应用其他回答或再次发送。', 'ASK_REQUEST_CONFLICT', 409);
+    if (activeAsks.has(requestId)) fail('这次问答仍在执行，请等待后再重试。', 'BUSY', 409);
+    if (request?.completed) return askResult(request);
+    if (!request) {
+      // Restore may retain local billing evidence without the older operation.
+      // Missing input state must never turn a known intent into another charge.
+      if (priorCalls.length) fail('此请求已有调用，但准备状态缺失；请核对已有记录，不会重新发送。', 'CALL_RECOVERY_REQUIRED', 409);
+      request = store.put('askRequests', requestId, { id: requestId, input, draftId: randomUUID(), createdAt: now() });
+    }
+    activeAsks.add(requestId);
+    try {
+      if (!request.prepared) {
+        const prepared = await prepareAsk(requestId, input);
+        request = store.put('askRequests', requestId, { ...request, prepared, basisHash: askBasis(input, prepared) });
+      }
+      if (request.basisHash !== askBasis(input, request.prepared)) fail('原请求准备状态不一致；不会应用旧回答或再次发送。', 'ASK_REQUEST_CONFLICT', 409);
+      const { citations, limitations, references } = request.prepared;
+      let { answer, generated } = request.prepared;
+      checkAskMaterials(request.prepared);
+      if (generated) {
+        const cloud = references.filter(n => n.cloud).map(n => store.read(n.id));
+        const prompt = promptText('ask',{question,mode,outputType:mode === 'answer' ? '回答' : mode === 'outline' ? '包含观点、证据、案例、反方、限制、未知的提纲' : '可编辑草稿',materials:JSON.stringify(cloud.map(n=>({id:n.id,kind:n.kind,stage:n.meta.stage,title:n.title,body:n.body.slice(0,6000),sources:n.meta.sources,evidence:n.meta.evidence,personalUnderstanding:n.meta.personalUnderstanding})))});
+        const result = parseJSON((await askContext(requestId, 'answer', input, () => ai.generate({ system: promptText('serviceSystem'), prompt, privacy: 'cloud', json: true }), request.basisHash)).text);
+        const allowed = new Set(references.filter(n => n.cloud).map(n => n.id));
+        if (!Array.isArray(result.citationIds) || !result.citationIds.length || result.citationIds.some(id => !allowed.has(id)) || typeof result.answer !== 'string') fail('回答引用不符合实际检索材料；已拒绝保存。', 'INVALID_CITATION', 422);
+        const inline = [...result.answer.matchAll(/\[([^\]\n]+)\]/g)].map(m=>m[1]);
+        if (!inline.length || inline.some(id=>!allowed.has(id)) || result.citationIds.some(id=>!inline.includes(id))) fail('正文中的引用与材料清单不一致；已拒绝保存。','INVALID_CITATION',422);
+        answer = result.answer;
+        citations.splice(0, citations.length, ...citations.filter(c => result.citationIds.includes(c.id)));
+      }
+      checkAskMaterials(request.prepared);
+      store.db.exec('BEGIN IMMEDIATE');
+      try {
+        store.put('drafts', request.draftId, { id: request.draftId, mode, question, body: answer, citations, limitations, usedIds: [], createdAt: now() });
+        request = store.put('askRequests', requestId, { id: requestId, input, draftId: request.draftId, createdAt: request.createdAt, basisHash: request.basisHash, completed: true, generated });
+        store.db.exec('COMMIT');
+      } catch (error) { store.db.exec('ROLLBACK'); throw error; }
+      return askResult(request);
+    } finally { activeAsks.delete(requestId); }
+  }
+  async function prepareAsk(requestId, input) {
+    const { question, scope, privacy } = input;
+    const result = await askContext(requestId, 'search', input, () => search(question, { scope, mode: 'hybrid', limit: 8, privacy }));
     const usableResults = result.results.filter(n => !n.limitations.length), cloud = usableResults.filter(n => privacyFor(n) === 'cloud');
     const citations = usableResults.map(n => ({ id: n.id, title: n.title, excerpt: n.snippet, sources: (n.meta.sources || []).map(s => { const source = store.row(s.id) ? store.read(s.id) : null; return { ...s, title: source?.title, url: source?.meta.url, excerpt: source?.body.slice(0,500) }; }) }));
     const limitations = [...result.diagnostics.limitations];
-    let answer, modelGenerated = false;
+    const references = usableResults.map(n => ({ id: n.id, hash: n.hash, cloud: cloud.some(c => c.id === n.id) }));
+    for (const citation of citations) for (const source of citation.sources) if (store.row(source.id) && !references.some(n => n.id === source.id)) references.push({ id: source.id, hash: store.read(source.id).hash, cloud: false });
+    let answer, generated = false;
     if (!usableResults.length) answer = '知识库中没有找到可直接支持这个问题的当前材料。请补充来源或调整查找范围。';
     else if (privacy !== 'cloud' || !cloud.length || !settings().ai.enabled) { answer = '已找到以下材料，可在本地阅读。本次问题仅限本地、模型未启用或材料仅限本地，尚未生成答案。\n\n' + citations.map(c => `- ${c.title} [${c.id}]\n${c.excerpt}`).join('\n\n'); limitations.push('未进行 AI 生成。'); }
     else {
       if (cloud.length < usableResults.length) limitations.push('仅本地资料已留在本机，未交给外部模型。');
-      const prompt = promptText('ask',{question,mode,outputType:mode === 'answer' ? '回答' : mode === 'outline' ? '包含观点、证据、案例、反方、限制、未知的提纲' : '可编辑草稿',materials:JSON.stringify(cloud.map(n=>({id:n.id,kind:n.kind,stage:n.meta.stage,title:n.title,body:n.body.slice(0,6000),sources:n.meta.sources,evidence:n.meta.evidence,personalUnderstanding:n.meta.personalUnderstanding})))});
-      const generated = parseJSON((await ai.generate({ system: promptText('serviceSystem'), prompt, privacy: 'cloud', json: true })).text);
-      const allowed = new Set(cloud.map(n => n.id));
-      if (!Array.isArray(generated.citationIds) || !generated.citationIds.length || generated.citationIds.some(id => !allowed.has(id)) || typeof generated.answer !== 'string') fail('回答引用不符合实际检索材料；已拒绝保存。', 'INVALID_CITATION', 422);
-      const inline = [...generated.answer.matchAll(/\[([^\]\n]+)\]/g)].map(m=>m[1]);
-      if (!inline.length || inline.some(id=>!allowed.has(id)) || generated.citationIds.some(id=>!inline.includes(id))) fail('正文中的引用与材料清单不一致；已拒绝保存。','INVALID_CITATION',422);
-      answer = generated.answer; modelGenerated = true; limitations.push('AI 草稿需自行审阅，引用存在不等于每个主张都获支持。');
-      citations.splice(0,citations.length,...citations.filter(c => generated.citationIds.includes(c.id)));
+      generated = true;
+      limitations.push('AI 草稿需自行审阅，引用存在不等于每个主张都获支持。');
     }
-    const id = randomUUID(); store.put('drafts', id, { id, mode, question, body: answer, citations, limitations, usedIds: [], createdAt: now() });
-    return { answer, citations, limitations, draftId: id, generated: modelGenerated };
+    return { answer, generated, citations, limitations, references };
   }
   function updateDraft(id, { body, usedIds = [] }) {
     const d = store.get('drafts', id); if (!d) fail('草稿不存在。', 'NOT_FOUND', 404);
