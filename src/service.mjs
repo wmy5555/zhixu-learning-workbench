@@ -14,6 +14,8 @@ import { createLifecycle } from './knowledge-lifecycle.mjs';
 import { createChatgptBridge } from './chatgpt.mjs';
 import { buildUsageReport } from './usage.mjs';
 import { structureBasis, structureRecord, structureView } from './source-structure.mjs';
+import { createSourceFiles } from './source-files.mjs';
+import { assertTextSource, processingText } from './attachments.mjs';
 
 export const defaults = {
   dailyMinutes: 25, timezone: 'Asia/Shanghai', scheduleTime: '08:00', focusTopics: [], pausedIds: [],
@@ -52,6 +54,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   }
   vaultDir ||= path.resolve('vault');
   let store = new Store({ dataDir, vaultDir, backupPurpose: practice ? practicePurpose : undefined });
+  let sourceFiles;
   let jobRevision = randomUUID();
   let jobSnapshot = 0;
   const secret = practice ? { has: () => false, get: () => '' } : createSecrets(dataDir, { db: store.db, getBinding: capability => {
@@ -189,6 +192,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   const processReply = (job, reused = false) => ({ ...publicJob(job), reused, jobRevision, jobSnapshot: ++jobSnapshot });
   function processNote(id, { research = false, reuseExtracted = false } = {}) {
     const source = getNote(id);
+    assertTextSource(source);
     if (source.kind !== 'source') fail('请选择原始资料重新加工。');
     const payload = { noteId: id, hash: source.hash, research: research === true, ...(needsTitle(source) ? { titleRequested: true } : {}) };
     for (const task of store.records('jobs')) if (task.type === 'title' && task.payload.noteId === id && ['queued','waiting'].includes(task.state)) putJob({ ...task, state: 'cancelled', code: 'CANCELLED', error: '标题将与资料拆解一同生成。' });
@@ -334,6 +338,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   const sourceChildren = id => store.list().filter(n => n.kind === 'knowledge' && !n.meta.excerptOnly && parentIds(n).includes(id)).sort(childOrder);
   function requestSourceStructure(id) {
     const source = getNote(id), notes = sourceChildren(id);
+    assertTextSource(source);
     if (source.kind !== 'source' || source.meta.excerptOnly) fail('请选择原始资料。');
     if (!notes.length) fail('请先拆解或手动整理资料，再分析逻辑关系。');
     const basis = structureBasis(source, notes);
@@ -351,7 +356,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     };
     assertCurrent();
     const result = await ai.generate({ system: promptText('serviceSystem'), privacy: 'cloud', signal, json: true,
-      prompt: promptText('sourceStructure', { source: source.body, notes: JSON.stringify(notes.map(n => ({ id: n.id, title: n.title, body: n.body }))) }) });
+      prompt: promptText('sourceStructure', { source: processingText(source), notes: JSON.stringify(notes.map(n => ({ id: n.id, title: n.title, body: n.body }))) }) });
     if (signal.aborted) fail('任务已取消。', 'CANCELLED');
     assertCurrent();
     const record = structureRecord(source, notes, parseJSON(result.text).structure);
@@ -428,6 +433,12 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   }
   function editNote(id, input) {
     const old = getNote(id), meta = { ...(input.meta || {}) };
+    for (const key of ['sourceFile', 'textExtraction', 'attachments']) {
+      if (Object.hasOwn(meta, key)) fail('附件与转换来源只能通过专用导入接口更新。');
+    }
+    if (old.kind !== 'source' && String(input.body || '').includes('.zhixu-attachments/')) fail('非文本附件仅限第一层原始资料。', 'SOURCE_FILE_ONLY', 409);
+    const binding = input.attachmentUploadIds?.length ? sourceFiles.bindImages(old, input.attachmentUploadIds) : null;
+    if (binding) meta.attachments = binding.attachments;
     // Content edits cannot impersonate a completed learning/confirmation action.
     for (const k of ['titlePending','titlePlaceholder','titleOrigin','confirmedAt','confirmedBy','personalUnderstanding','researchLimitations','evidence','supersededBy','generatedBodyHash','userEdited','learningEvidence']) delete meta[k];
     if (meta.stage && meta.stage !== old.meta.stage) fail('请通过晋级操作调整阶段。');
@@ -438,8 +449,9 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     if (!input.expectedHash || input.expectedHash !== old.hash) fail('文件已发生变化。请查看当前版本，再合并你的修改。', 'CONFLICT', 409);
     // Reconfirming unchanged fields must not create a new source version.
     if ((input.title === undefined || input.title === old.title) && (input.body === undefined || input.body === old.body)
-      && Object.entries(meta).every(([key, value]) => JSON.stringify(value) === JSON.stringify(old.meta[key]))) return old;
+      && Object.entries(meta).every(([key, value]) => JSON.stringify(value) === JSON.stringify(old.meta[key]))) { binding?.complete(); return old; }
     const result = store.update(id, { ...input, meta: { ...meta, ...(old.kind === 'source' && input.title !== undefined && input.title !== old.title ? { titlePending: false, titleOrigin: 'manual' } : {}), ...(old.kind === 'knowledge' ? { userEdited: true } : {}) } });
+    binding?.complete();
     if (old.kind === 'knowledge') requestRelations(id);
     return result;
   }
@@ -460,6 +472,8 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   }
   function extractNote(sourceId, { title, body, topic = '', reason = '', depth = 'explain', claimType = 'fact' }) {
     const source = getNote(sourceId); if (source.kind !== 'source') fail('手动整理必须关联一份原始资料。');
+    assertTextSource(source);
+    if (String(body || '').includes('.zhixu-attachments/')) fail('非文本附件仅限第一层原始资料。', 'SOURCE_FILE_ONLY', 409);
     if (!String(body || '').trim() || !String(title || '').trim()) fail('请填写待选学知识标题和正文。');
     const limitation = claimType === 'opinion' ? [] : ['这份手工材料含需查证的事实；请对原始资料运行联网加工，再采用带证据的候选条目。'];
     const note = store.create({ kind: 'knowledge', title, body, meta: { stage:'candidate', sources:[{id:sourceId,role:'input'}], topic, depth:depths.includes(depth)?depth:'explain', promotionReason:reason, userStructured:true, claimType, researchLimitations:limitation } });
@@ -699,6 +713,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   }
   async function processSource(job, signal) {
     let source = getNote(job.payload.noteId);
+    assertTextSource(source);
     // A preceding title-only task may have updated this version while processing was queued.
     if (source.hash !== job.payload.hash && store.records('jobs').some(task => task.type === 'title' && task.state === 'done' && task.payload.noteId === source.id && task.payload.hash === job.payload.hash && task.payload.resultHash === source.hash)) {
       job.payload.hash = source.hash; job.dedupKey = `process:${source.id}:${source.hash}${job.payload.research ? ':research' : ''}`; putJob(job);
@@ -708,7 +723,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     let extracted = validExtraction(job.payload.extracted) ? job.payload.extracted
       : processJobs(source.id, source.hash).find(previous => previous.id !== job.id && validExtraction(previous.payload.extracted))?.payload.extracted;
     if (!extracted) {
-      extracted = parseJSON((await ai.generate({ system: `${promptText('serviceSystem')}\n${sourceExtractionStructure}\n${extractionResearchContract}${needsTitle(source) ? '\n'+sourceTitleContract : ''}`, privacy: privacyFor(source), signal, json: true, prompt: promptText('sourceExtract',{source:source.body}) })).text);
+      extracted = parseJSON((await ai.generate({ system: `${promptText('serviceSystem')}\n${sourceExtractionStructure}\n${extractionResearchContract}${needsTitle(source) ? '\n'+sourceTitleContract : ''}`, privacy: privacyFor(source), signal, json: true, prompt: promptText('sourceExtract',{source:processingText(source)}) })).text);
       if (!Array.isArray(extracted.candidates) || !extracted.candidates.length || extracted.candidates.length > 8) fail('拆解结果格式不正确。', 'MODEL_FORMAT');
     }
     if (signal.aborted) fail('任务已取消。', 'CANCELLED');
@@ -1000,7 +1015,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     const chunks=store.db.prepare('SELECT COUNT(*) count,SUM(CASE WHEN vector IS NOT NULL AND model=? THEN 1 ELSE 0 END) vectors FROM index_chunks').get(settings().embedding.model);
     const pending=store.missingEmbeddings({model:settings().embedding.model,noteIds:allowed.map(n=>n.id)}).length;
     const pendingLinks=store.pendingManagedLinks().map(p=>({id:p.id,title:store.read(p.id).title,conflict:p.conflict}));
-    return {usage:usage(),calls:store.records('calls').slice(0,100),index:{...chunks,pending,notes:notes.length,method:'中文关键词与可选语义检索；现有片段保留，缺失向量需手动更新，保存资料不会自动外发'},mcp:{...settings().mcp,transport:'stdio',tools:['search_knowledge','read_note','read_source','related_knowledge','propose_change'],events:store.records('mcpCalls').slice(0,30)},storage:{vaultDir:store.vaultDir,dataDir:store.dataDir,conflicts:store.conflicts,pendingLinks,retention:'删除移除当前文件与检索缓存；历史版本和你此前导出的备份仍保留。JSON备份只包含Markdown与运行记录；附件和.obsidian请另行备份整个Vault。'},sessions:store.records('sessions').slice(0,20)};
+    return {usage:usage(),calls:store.records('calls').slice(0,100),index:{...chunks,pending,notes:notes.length,method:'中文关键词与可选语义检索；现有片段保留，缺失向量需手动更新，保存资料不会自动外发'},mcp:{...settings().mcp,transport:'stdio',tools:['search_knowledge','read_note','read_source','related_knowledge','propose_change'],events:store.records('mcpCalls').slice(0,30)},storage:{vaultDir:store.vaultDir,dataDir:store.dataDir,conflicts:store.conflicts,pendingLinks,retention:'删除移除当前文件与检索缓存；历史版本和你此前导出的备份仍保留。JSON备份包含Markdown、运行记录及笔记/历史引用的受管理附件；完整JSON最多100 MB（100,000,000字节）。外部附件和.obsidian仍需另存整个Vault；撤销上传不删除字节。'},sessions:store.records('sessions').slice(0,20)};
   }
   function backup(){const config=settings(), result={...store.backup(),...(practice?{purpose:practicePurpose}:{}),preferences:practice?Object.fromEntries(practicePreferences.map(key=>[key,config[key]])):config};assertBackupSize(result);return result;}
   function restore({backup:input,preview=true,token}) {
@@ -1063,9 +1078,16 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   }
   recoverJobs();
   const chatgpt = createChatgptBridge({ getStore: () => store, settings, search: tracked(search), getNote, related });
+  sourceFiles = createSourceFiles({ store, getNote });
+  const uploadFile = input => sourceFiles.receive(input);
+  const revertUpload = id => sourceFiles.revert(id);
+  const commitFile = tracked(input => sourceFiles.commit(input));
+  const readFile = (id, assetId) => sourceFiles.read(id, assetId);
+  const pendingUploads = () => sourceFiles.pending();
   return { get store(){return store;}, get processing(){return processing;}, get hasPendingOperations(){return processing||activeOperations>0||pausing;}, chatgpt, learningNow, settings, updateSettings, getPrompts, updatePrompts, usage, usageReport, updateUsageSettings, callRecovery, recoverCall, ai, importItems, processNote, requestSourceStructure, listNotes, publicNote, publicJob, library, readPublicNote, noteEvidence, linksPreview, syncLinks, getNote, editNote, extractNote, promote, confirmNote, merge, search:tracked(search), today, planAction, startStudy, session, answerStudy, hintStudy, confirmStudy, finishStudy, mistakeAction, topics, createTopic, updateTopic, topicAction, recommendations, recommendationAction, requestRelations, relationReview, relationAction, related, ask:tracked(ask), updateDraft, propose, proposalAction, queue, runJobs, pauseJobs, jobAction, tick, demo, diagnostics, backup, restore,
     jobStatuses,
     bootstrap(){return{settings:settings(),stats:{notes:store.list().filter(n=>!n.meta.excerptOnly).length,sources:store.list().filter(n=>n.kind==='source'&&!n.meta.excerptOnly).length,knowledge:store.list().filter(n=>n.kind==='knowledge').length,pending:store.records('jobs').filter(j=>['waiting','failed'].includes(j.state)).length},today:today(),notes:listNotes().filter(n=>!n.meta.excerptOnly).map(publicNote),jobs:store.records('jobs').map(publicJob),jobRevision,jobSnapshot:++jobSnapshot,conflicts:store.conflicts,capabilities:{offline:true,model:settings().ai.enabled,embedding:settings().embedding.enabled,search:settings().search.enabled}};},
+    uploadFile, revertUpload, commitFile, readFile, pendingUploads,
     async close(){stopped=true;if(practice)await pauseJobs();else{controller?.abort();while(processing||activeOperations)await new Promise(resolve=>setTimeout(resolve,20));}store.close();}
   };
 }

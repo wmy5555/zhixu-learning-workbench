@@ -40,6 +40,18 @@ function descendants(node) { return [node, ...node.children.flatMap(descendants)
 function tags(node, tag) { return descendants(node).filter(item => item.tagName === tag); }
 function attribute(node, name) { return node.attributes[name] ?? node[name]; }
 
+test('inline images render only an explicitly resolved bound same-origin attachment', () => {
+  const { render } = browser(), id = 'a'.repeat(64) + '.png';
+  const markdown = `![合成](../.zhixu-attachments/${id}) ![remote](https://example.com/a.png) ![active](data:image/svg+xml;base64,AAAA)`;
+  assert.equal(tags(render(markdown), 'img').length, 0);
+  const url = '/api/notes/source/attachments?asset=' + id;
+  const rendered = render(markdown, { imageResolver: value => value === '../.zhixu-attachments/' + id ? url : null });
+  assert.equal(tags(rendered, 'img').length, 1);
+  assert.equal(attribute(tags(rendered, 'img')[0], 'src'), url);
+  assert.match(rendered.textContent, /https:\/\/example.com/);
+  assert.equal(tags(render(markdown, { imageResolver: () => 'javascript:alert(1)' }), 'img').length, 0);
+});
+
 test('the shared reader renders the supported body structures with semantic DOM', () => {
   const { render } = browser();
   const body = '# 标题\n\n正文含 **重点** 和 __另一重点__。\n换行保留\n\n- 一项\n- 二项\n\n3. 第三步\n4. 第四步\n\n> 引用 **条件**\n\n| 项目 | 说明 |\n| --- | ---: |\n| 甲 | [资料](https://example.com/read) |';

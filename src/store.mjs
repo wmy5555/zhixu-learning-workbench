@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomUUID, createHash } from 'node:crypto';
 import YAML from 'yaml';
 import { assertBackupSize, backupObject, validBackupId, validateBackupPath, validateBackupMarkdown, validateBackupRecord, BACKUP_ITEM_MAX_BYTES, BACKUP_MAX_BYTES } from './backup-contract.mjs';
+import { includeAttachments, validateAttachments, installAttachments } from './attachment-backup.mjs';
 
 export const now = () => new Date().toISOString();
 export const hash = value => createHash('sha256').update(value).digest('hex');
@@ -414,13 +415,20 @@ export class Store {
     if (!preview.changed) return this.read(id);
     return this.update(id, { expectedHash, body: preview.body, meta: preview.meta });
   }
-  create({ id = randomUUID(), kind = 'knowledge', title, body, meta = {} }) {
+  create({ id = randomUUID(), kind = 'knowledge', title, body, meta = {}, exclusive = false }) {
     if (!folders[kind]) fail('不支持的知识文件类型。');
     if (!String(title || '').trim() || !String(body || '').trim()) fail('标题和正文不能为空。');
     if (this.row(id)) fail('内容 id 已存在。', 'CONFLICT', 409);
     const file = assertTree(path.join(this.vaultDir, folders[kind], `${id}.md`), this.vaultDir);
     const fields = { ...meta, id, kind, title: String(title).slice(0, 200), createdAt: now(), updatedAt: now() };
-    const raw = serialize('', fields, String(body)); atomicWrite(file, raw);
+    const raw = serialize('', fields, String(body));
+    if (exclusive) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const temporary = file + '.' + randomUUID() + '.tmp';
+      try { fs.writeFileSync(temporary, raw, { flag: 'wx', mode: 0o600 }); fs.linkSync(temporary, file); }
+      catch (error) { if (error.code === 'EEXIST') fail('资料目标已有文件，未覆盖。', 'CONFLICT', 409); throw error; }
+      finally { if (fs.existsSync(temporary)) fs.unlinkSync(temporary); }
+    } else atomicWrite(file, raw);
     const result = this.upsert(file, raw, id); this.version(this.row(id), kind === 'source' ? '原始输入快照' : '首次创建'); this.syncMirrors(); return result;
   }
   update(id, { body, title, meta = {}, expectedHash }) {
@@ -453,17 +461,17 @@ export class Store {
   backup() {
     this.scan();
     if (this.conflicts.length) fail('Vault 中仍有冲突或无法解析的 Markdown；为避免静默遗漏，修复后再备份。', 'BACKUP_CONFLICT', 409);
-    const backup = { format: 'learning-workbench-backup', version: 1, ...(this.backupPurpose ? { purpose: this.backupPurpose } : {}), createdAt: now(), scope: { managedMarkdown: true, runtimeRecords: true, attachments: false, obsidianConfig: false }, notes: this.db.prepare('SELECT id,path,raw FROM notes').all(), records: this.db.prepare("SELECT * FROM records WHERE namespace NOT IN ('settings','changed','restore')").all(), versions: this.db.prepare('SELECT * FROM versions').all() };
+    const backup = includeAttachments(this.vaultDir, { format: 'learning-workbench-backup', version: 1, ...(this.backupPurpose ? { purpose: this.backupPurpose } : {}), createdAt: now(), scope: { managedMarkdown: true, runtimeRecords: true, attachments: false, obsidianConfig: false }, notes: this.db.prepare('SELECT id,path,raw FROM notes').all(), records: this.db.prepare("SELECT * FROM records WHERE namespace NOT IN ('settings','changed','restore','attachmentUploads')").all(), versions: this.db.prepare('SELECT * FROM versions').all() });
     this.validateBackup(backup);
     return backup;
   }
   validateBackup(backup) {
-    if (!backupObject(backup) || backup.format !== 'learning-workbench-backup' || backup.version !== 1 || !Array.isArray(backup.notes) || !Array.isArray(backup.records) || !Array.isArray(backup.versions)) fail('备份格式不正确。');
+    if (!backupObject(backup) || backup.format !== 'learning-workbench-backup' || ![1,2].includes(backup.version) || !Array.isArray(backup.notes) || !Array.isArray(backup.records) || !Array.isArray(backup.versions)) fail('备份格式不正确。');
     assertBackupSize(backup);
     if (backup.purpose !== this.backupPurpose) fail('备份用途与当前知识库不一致。', 'BACKUP_PURPOSE_MISMATCH', 409);
     if (backup.preferences !== undefined && !backupObject(backup.preferences)) fail('备份偏好设置必须为键值对象。');
     if (backup.createdAt !== undefined && (typeof backup.createdAt !== 'string' || !Number.isFinite(Date.parse(backup.createdAt)))) fail('备份创建时间无效。');
-    if (backup.scope !== undefined && (!backupObject(backup.scope) || backup.scope.managedMarkdown !== true || backup.scope.runtimeRecords !== true || backup.scope.attachments !== false || backup.scope.obsidianConfig !== false)) fail('备份范围无效；此格式仅支持受管理 Markdown 和运行记录。');
+    if (backup.scope !== undefined && (!backupObject(backup.scope) || backup.scope.managedMarkdown !== true || backup.scope.runtimeRecords !== true || backup.scope.attachments !== (backup.version === 2) || backup.scope.obsidianConfig !== false)) fail('备份范围无效；此格式仅支持受管理 Markdown 和运行记录。');
     const validId = validBackupId;
     const validatePath = value => {
       validateBackupPath(value);
@@ -530,7 +538,8 @@ export class Store {
         parent = path.dirname(parent);
       }
     }
-    return { notes: backup.notes.length, records: backup.records.length, versions: backup.versions.length, replaces: this.list().length, retention: '恢复前自动备份；JSON 只覆盖本应用索引的 Markdown、运行记录和历史版本。附件、.obsidian 与其他未索引文件不会写入或删除，需另行复制整个 Vault 保存。' };
+    validateAttachments(this.vaultDir, backup);
+    return { notes: backup.notes.length, records: backup.records.length, versions: backup.versions.length, attachments: backup.attachments?.length || 0, replaces: this.list().length, retention: '恢复前自动备份；JSON 包含受管理 Markdown、运行记录、历史版本及受管理附件；附件按哈希只增补，不覆盖。外部附件、.obsidian 与其他未索引文件不会写入或删除，需另行复制整个 Vault 保存。' };
   }
   restore(backup, { settings } = {}) {
     this.assertAvailable();
@@ -542,6 +551,7 @@ export class Store {
     const safety = this.backup(), oldSettings = this.get('settings', 'main');
     if (backupObject(oldSettings)) safety.preferences = oldSettings;
     durableWrite(safetyFile, assertBackupSize(safety));
+    installAttachments(this.vaultDir, validateAttachments(this.vaultDir, backup));
     const currentRows = this.db.prepare('SELECT * FROM notes').all();
     const currentPaths = new Set(currentRows.map(row => row.path.toLowerCase()));
     const restoreId = randomUUID();

@@ -215,9 +215,28 @@ test('image property hook removes direct URL mutation controls and returns the e
   f.root.destroy();
 });
 
+test('staged image lifecycle receives the exact rich draft before and after its own insertion', async () => {
+  const attachmentId = 'c'.repeat(64) + '.png';
+  let insertion;
+  const f = fixture('原文\r\n', { uploadImage: async () => ({ attachmentId, markdownUrl: '../.zhixu-attachments/' + attachmentId,
+    onInserted: value => { insertion = value; } }) });
+  await f.root.switchMode('rich');
+  f.editor.insertValue('\n用户继续输入');
+  const before = f.root.getValue();
+  f.host.events.paste({ preventDefault() {}, stopImmediatePropagation() {}, clipboardData: { files: [{ name: '合成.png', type: 'image/png' }] } });
+  await new Promise(setImmediate);
+  assert.equal(insertion.before, before);
+  assert.equal(insertion.after, f.root.getValue());
+  assert.match(insertion.after, /用户继续输入/);
+  assert.ok(insertion.after.includes('../.zhixu-attachments/' + attachmentId));
+  assert.doesNotMatch(insertion.after, /blob:|data:image/);
+  f.root.destroy();
+});
+
 test('attachment display URLs must stay on a controlled same-origin note attachment endpoint', () => {
   const origin = 'http://127.0.0.1:4329';
   assert.equal(controlledAssetUrl('/api/notes/source/attachments?asset=abc.png', origin), `${origin}/api/notes/source/attachments?asset=abc.png`);
+  assert.equal(controlledAssetUrl('/api/practice/practice-a/notes/source/attachments?asset=abc.png', origin), `${origin}/api/practice/practice-a/notes/source/attachments?asset=abc.png`);
   for (const value of ['https://remote.invalid/a.png', 'blob:abc', 'file:///C:/secret', 'data:image/svg+xml,a', '/api/settings?asset=a', '/api/notes/x/attachments', '//remote.invalid/api/notes/a/attachments?asset=x']) assert.equal(controlledAssetUrl(value, origin), '');
 });
 

@@ -19,6 +19,7 @@ const uiSource = await readFile(new URL('../public/ui.mjs', import.meta.url), 'u
 const markdownSource = await readFile(new URL('../public/markdown-reader.mjs', import.meta.url), 'utf8');
 const appSource = await readFile(new URL('../public/app.mjs', import.meta.url), 'utf8');
 const editorSource = await readFile(new URL('../public/markdown-editor.mjs', import.meta.url), 'utf8');
+const fileUiSource = await readFile(new URL('../public/source-files.mjs', import.meta.url), 'utf8');
 const onboardingSource = await readFile(new URL('../public/onboarding.mjs', import.meta.url), 'utf8');
 const sourceMapSource = (await readFile(new URL('../public/source-map.mjs', import.meta.url), 'utf8')).replace(/^import.*;$/m, '').replaceAll('export ', '');
 
@@ -39,6 +40,7 @@ class Element {
   get options() { return this.children; }
   replaceChildren(...children) { this._text = ''; this.children = []; this.append(...children); }
   addEventListener(name, handler) { this.events[name] = handler; }
+  dispatchEvent(event) { this.events[event.type]?.(event); return true; }
   setAttribute(name, value) { this.attributes[name] = value; }
   reset() {
     this.events.reset?.();
@@ -281,20 +283,25 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat, savedSession = 
   };
   document.createTextNode = value => { const node = new Element('text'); node.textContent = value; return node; };
   const context = vm.createContext({
-    api, document, initSidebar, createProcessFeedback, parseSourceFile, TextDecoder, Node: Element, URL, Intl: Object.assign(Object.create(Intl), { DateTimeFormat: dateTimeFormat }), Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => `request-ui-${++browserRequestSequence}` },
+    api, document, request: async () => ({ uploads: [] }), uploadAttachment: (...args) => api.uploadAttachment(...args), initSidebar, createProcessFeedback, parseSourceFile, TextDecoder, Node: Element, URL, Intl: Object.assign(Object.create(Intl), { DateTimeFormat: dateTimeFormat }), Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => `request-ui-${++browserRequestSequence}` },
     FormData: class {
       constructor(form) { this.form = form; }
       entries() { return descendants(this.form).filter(node => node.name && !node.disabled && ['input', 'textarea', 'select'].includes(node.tagName)).map(node => [node.name, String(node.tagName === 'select' ? node.children.find(option => option.selected)?.value || '' : node.value)]); }
     },
-    ApiError: class extends Error {}, startSession: async () => {},
+    ApiError: class extends Error {}, startSession: async () => {}, Event,
     window: { zhixuAppearance: { getAccent: () => null, getTheme: () => 'light', resolvedTheme: () => 'light', previewAccent: () => ({}), getMode: () => 'light', palette: () => ({}) }, matchMedia: () => ({ matches: false, addEventListener() {} }), history: { replaceState() {} }, location: { hash: '' }, setTimeout() {}, events: {}, addEventListener(name, handler) { this.events[name] = handler; } },
   });
   const stripped = appSource.replace(/import[\s\S]*?from "\.\/api\.mjs";\s*/, '').replace(/import[\s\S]*?from "\.\/ui\.mjs";\s*/, '').replace(/^init\(\);\s*$/m, '').replace('const { createUsagePanel } = await import("./usage.mjs");', '');
+  // Exercise our actual attachment UI functions; FilePond's browser-only lifecycle
+  // is covered by the separate browser flow, not the minimal DOM fixture.
+  vm.runInContext(fileUiSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') +
+    '\ncreateFilePicker = async (_input, options) => { api.onImagePicker?.(options); return { getFiles: () => [] }; };\nthis.attachmentUrl = (id, asset, download = false) => "/api/notes/" + id + "/attachments?asset=" + asset + (download ? "&download=1" : "");', context);
   vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + ('const renderMarkdown = (() => {\n' + markdownSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn renderMarkdown;\n})();') + '\nconst createMarkdownEditor = (() => {\n' + editorSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn createMarkdownEditor;\n})();\n' + sourceMapSource + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { renderSourceGroupDrawer, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
   context.app.beginStudy = vm.runInContext('beginStudy', context);
   context.app.manualExtract = vm.runInContext('manualExtract', context);
   context.app.serializeForm = vm.runInContext('serializeForm', context);
   context.app.processControls = vm.runInContext('processControls', context);
+  context.app.attachmentPanel = vm.runInContext('attachmentPanel', context);
   context.app.refreshBootstrap = vm.runInContext('refreshBootstrap', context);
   context.app.processFeedback = vm.runInContext('processFeedback', context);
   context.app.renderSourceGroupDrawer = vm.runInContext('renderSourceGroupDrawer', context);
@@ -1486,6 +1493,38 @@ test('slow source saves retain later rich input and advance the hash and metadat
   assert.notEqual(app.refs.drawerBody.children[0], form);
 });
 
+test('image saves snapshot uploads, retain failure drafts and bind only submitted receipts while later uploads stay dirty', async () => {
+  const source = { id: 'image-draft-source', kind: 'source', title: '合成插图资料', body: '保留的原文', hash: 'base', meta: {} };
+  let picker, release, reject;
+  const writes = [], app = browser({ onImagePicker: options => { picker = options; }, updateNote: async (_id, payload) => {
+    writes.push(plain(payload));
+    if (writes.length < 3) await new Promise((yes, no) => { release = yes; reject = no; });
+    return { ...source, body: payload.body, hash: 'saved-' + writes.length };
+  }, bootstrap: async () => ({}) });
+  app.refs.drawer.classList.add('is-open'); app.renderNoteEditor(source);
+  const form = app.refs.drawerBody.children[0], editor = form.querySelector('.markdown-editor');
+  const receipts = ['a', 'b', 'c'].map(letter => ({ id: 'upload-' + letter, attachment: { id: letter.repeat(64) + '.png', name: letter + '.png', kind: 'image' } }));
+  await click(findButton(form, '插入本地图片'));
+  picker.onUploaded(receipts[0]);
+  const first = form.events.submit({ preventDefault() {} });
+  picker.onUploaded(receipts[1]);
+  reject(new Error('synthetic save failure')); await first;
+  assert.equal(app.refs.drawerBody.children[0], form);
+  assert.deepEqual(writes[0].attachmentUploadIds, ['upload-a']);
+  assert.ok(editor.getValue().includes(receipts[1].attachment.id));
+  const second = form.events.submit({ preventDefault() {} });
+  assert.deepEqual(writes[1].attachmentUploadIds, ['upload-a', 'upload-b']);
+  picker.onUploaded(receipts[2]);
+  release(); await second;
+  assert.equal(app.refs.drawerBody.children[0], form);
+  assert.equal(form.hasUnsavedChanges(), true);
+  assert.ok(editor.getValue().includes(receipts[2].attachment.id));
+  await form.events.submit({ preventDefault() {} });
+  assert.deepEqual(writes[2].attachmentUploadIds, ['upload-c']);
+  assert.equal(writes[2].expectedHash, 'saved-2');
+  assert.notEqual(app.refs.drawerBody.children[0], form);
+});
+
 test('source save keeps later input during bootstrap or parent loading and never redraws a closed or replaced editor', async () => {
   const source = { id: 'late-source-save', kind: 'source', title: '合成原文', body: '初始正文', hash: 'base', meta: {} };
   for (const phase of ['bootstrap', 'parent', 'closed', 'replacement', 'context']) {
@@ -2183,4 +2222,41 @@ test('successful start of another intent retires uncertain keys before returning
   assert.notEqual(requests[2].requestId, requests[0].requestId, 'moving on successfully retires old uncertain intent');
   assert.notEqual(app.state.currentStudy.id, firstSession.id, 'deliberate return starts a new session');
   assert.equal(backend.service.store.records('sessions').length, 3);
+});
+
+
+test('binary first-layer controls disable AI/research until DOCX has extracted text', () => {
+  const app = browser();
+  for (const format of ['png','pdf','doc','docx']) {
+    const note = {id: 'synthetic-' + format, kind: 'source', meta: {sourceFile: {format}, textExtraction: {text: ''}}};
+    const controls = app.processControls(note);
+    assert.equal(findButton(controls, '提交 AI 拆解').disabled, true);
+    assert.equal(findButton(controls, '联网核验事实与适用条件').disabled, true);
+    assert.equal(controls.querySelector('input').disabled, true);
+    assert.equal(Boolean(controls.querySelector('input').checked), false);
+  }
+  const word = app.processControls({id:'word', kind:'source', meta:{sourceFile:{format:'docx'}, textExtraction:{text:'已提取文字'}}});
+  assert.equal(findButton(word, '提交 AI 拆解').disabled, false);
+  assert.equal(word.querySelector('input').disabled, false);
+  assert.equal(Boolean(word.querySelector('input').checked), false);
+  const plain = app.processControls({id:'text',kind:'source',meta:{}});
+  assert.equal(findButton(plain, '提交 AI 拆解').disabled, false);
+});
+
+test('PDF attachment explains viewer failure and keeps the same protected original download', () => {
+  const app = browser();
+  const file = { id: 'public-file.pdf', name: '公开50 MB.pdf', kind: 'pdf', format: 'pdf', size: 50_000_000 };
+  const panel = app.attachmentPanel({ id: 'source-pdf', meta: { sourceFile: file } });
+  assert.match(panel.textContent, /空白、灰屏或加载失败/);
+  assert.match(panel.textContent, /本机 PDF 阅读器/);
+  const links = descendants(panel).filter(node => node.tagName === 'a');
+  const preview = links.find(node => node.textContent === '在浏览器中查看 PDF');
+  const download = links.find(node => node.textContent === '下载原件');
+  assert.equal(preview.attributes.href, '/api/notes/source-pdf/attachments?asset=public-file.pdf');
+  assert.equal(preview.attributes.target, '_blank');
+  assert.equal(preview.attributes.rel, 'noopener noreferrer');
+  assert.equal(download.attributes.href, preview.attributes.href + '&download=1');
+  assert.equal(download.attributes.download, file.name);
+  const image = app.attachmentPanel({ id: 'image', meta: { sourceFile: { ...file, kind: 'image', format: 'png' } } });
+  assert.doesNotMatch(image.textContent, /灰屏/);
 });

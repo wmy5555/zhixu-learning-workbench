@@ -54,7 +54,7 @@ export function validateBackupMarkdown(raw, id) {
 }
 export function validateBackupRecord(row) {
   const maxBytes = row?.namespace === 'callResults' ? BACKUP_CALL_RESULT_MAX_BYTES : BACKUP_ITEM_MAX_BYTES;
-  if (!backupObject(row) || typeof row.namespace !== 'string' || !/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(row.namespace) || ['settings','changed','restore'].includes(row.namespace) || typeof row.key !== 'string' || !row.key || row.key.length > 500 || /[\x00-\x1f\x7f]/.test(row.key) || typeof row.json !== 'string' || Buffer.byteLength(row.json) > maxBytes) invalid('备份运行记录不正确。');
+  if (!backupObject(row) || typeof row.namespace !== 'string' || !/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(row.namespace) || ['settings','changed','restore','attachmentUploads'].includes(row.namespace) || typeof row.key !== 'string' || !row.key || row.key.length > 500 || /[\x00-\x1f\x7f]/.test(row.key) || typeof row.json !== 'string' || Buffer.byteLength(row.json) > maxBytes) invalid('备份运行记录不正确。');
   let value;
   try { value = JSON.parse(row.json); } catch { invalid('备份运行记录不是有效 JSON。'); }
   if (row.namespace === 'chatgptCaptureRate') {

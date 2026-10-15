@@ -69,6 +69,39 @@ export async function startSession() {
   return data;
 }
 
+export function attachmentUrl(noteId, assetId, download = false) {
+  const base = practiceId ? '/api/practice/' + encodeURIComponent(practiceId) : '/api';
+  return base + '/notes/' + encodeURIComponent(noteId) + '/attachments' + toQuery({ asset: assetId, ...(download ? { download: 1 } : {}) });
+}
+
+// FilePond custom transport: one binary file, same session/CSRF/context as JSON API.
+export function uploadAttachment(file, { uploadId, progress, load, error, abort }) {
+  const xhr = new XMLHttpRequest(), version = contextVersion, id = practiceId;
+  let cancelled = false, settled = false;
+  inFlight++;
+  const finish = callback => { if (settled) return; settled = true; inFlight--; callback(); };
+  (async () => {
+    try {
+      if (!csrfToken) await startSession();
+      if (cancelled) return;
+      const base = id ? '/api/practice/' + encodeURIComponent(id) : '/api';
+      xhr.open('POST', base + '/uploads' + toQuery({ name: file.name, uploadId }));
+      xhr.setRequestHeader('X-CSRF-Token', csrfToken);
+      xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+      xhr.upload.onprogress = event => progress(event.lengthComputable, event.loaded, event.total);
+      xhr.onload = () => finish(() => {
+        let data; try { data = JSON.parse(xhr.responseText); } catch { error('上传响应无效，可重试相同文件'); return; }
+        if (version !== contextVersion || xhr.status < 200 || xhr.status >= 300) error(data.error || '上传未完成');
+        else load(data.id, data);
+      });
+      xhr.onerror = () => finish(() => error('上传连接中断，可重试相同文件'));
+      xhr.onabort = () => finish(abort);
+      xhr.send(file);
+    } catch (cause) { finish(() => error(cause.message)); }
+  })();
+  return { abort() { cancelled = true; xhr.abort(); finish(abort); } };
+}
+
 export async function request(path, options = {}) {
   const version = contextVersion;
   const id = options.scope === "main" ? "" : practiceId;

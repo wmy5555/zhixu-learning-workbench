@@ -50,7 +50,7 @@ export function controlledAssetUrl(value, origin) {
   if (typeof value !== 'string' || !value || /[\x00-\x20\x7f]/.test(value)) return '';
   try {
     const url = new URL(value, origin);
-    return url.origin === origin && /^\/api\/notes\/[^/]+\/attachments$/.test(url.pathname)
+    return url.origin === origin && /^\/api(?:\/practice\/[^/]+)?\/notes\/[^/]+\/attachments$/.test(url.pathname)
       && url.searchParams.has('asset') && !url.username && !url.password ? url.href : '';
   } catch { return ''; }
 }
@@ -91,7 +91,8 @@ export function guardEditorImages(lute, { assetResolver, origin }) {
 /**
  * The caller owns uploads and their commit/revert lifecycle.
  * assetResolver(markdownUrl) -> controlled same-origin displayUrl, or null.
- * uploadImage(File) -> { attachmentId, markdownUrl, displayUrl? } after local staging.
+ * uploadImage(File) -> { attachmentId, markdownUrl, onInserted? } after local staging.
+ * onInserted({ before, after }) lets the caller undo only its unchanged insertion.
  * Only markdownUrl (stable ../.zhixu-attachments/<id>) enters the saved Markdown.
  */
 export function createMarkdownEditor(textarea, { value = textarea.value, loadEditor = loadMarkdownEditor, assetResolver, uploadImage, onChange = () => {} } = {}) {
@@ -229,7 +230,9 @@ export function createMarkdownEditor(textarea, { value = textarea.value, loadEdi
         if (disposed || request !== generation) return;
         if (!asset?.attachmentId || asset.markdownUrl !== `../.zhixu-attachments/${asset.attachmentId}` || !/^[a-f0-9]{64}\.(png|jpg|gif|webp)$/.test(asset.attachmentId)) throw new Error('附件未返回稳定图片引用，未插入正文。');
         const name = file.name.replace(/[\[\]\\\r\n]/g, '');
+        const before = getValue();
         editor.insertValue(`![${name}](${asset.markdownUrl})\n`, true); changed();
+        asset.onInserted?.({ before, after: getValue() });
       }
     } catch (error) { status.textContent = error.message; }
   }
