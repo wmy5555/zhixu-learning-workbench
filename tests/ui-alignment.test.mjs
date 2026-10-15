@@ -84,7 +84,7 @@ test('capture protects every field and option on unload without changing the liv
   const app = browser(); await app.renderCapture();
   const form = app.refs.main.querySelector('[data-tour="capture-form"]');
   assert.equal(unloadRequested(app), false);
-  for (const name of ['title', 'body', 'platform', 'author', 'url', 'date', 'locator', 'localOnly', 'process', 'research']) {
+  for (const name of ['title', 'body', 'platform', 'author', 'url', 'date', 'locator', 'process', 'research']) {
     const input = control(form, name);
     if (input.type === 'checkbox') input.checked = true; else input.value = '合成草稿';
     assert.equal(unloadRequested(app), true, name);
@@ -93,11 +93,11 @@ test('capture protects every field and option on unload without changing the liv
     assert.equal(unloadRequested(app), false, `reverted ${name}`);
   }
   control(form, 'body').value = '合成长原文'.repeat(100);
-  control(form, 'localOnly').checked = true;
+  control(form, 'process').checked = true;
   const pending = click(app.refs.refresh);
   await click(findButton(app.dialogs, '取消')); await pending;
   assert.equal(control(form, 'body').value, '合成长原文'.repeat(100));
-  assert.equal(control(form, 'localOnly').checked, true);
+  assert.equal(control(form, 'process').checked, true);
   await click(findButton(form, '清空')); await Promise.resolve();
   assert.equal(unloadRequested(app), false);
 });
@@ -536,22 +536,19 @@ test('Android capture remains local and never starts processing or research, inc
   const app = browser({ runtime: { kind: 'android-prototype' }, import: async payload => { imports.push(plain(payload)); return { notes: [{}] }; }, bootstrap: async () => ({}) });
   app.renderCapture();
   const form = app.refs.main.querySelector('[data-tour="capture-form"]');
-  const localOnly = control(form, 'localOnly');
+  assert.equal(control(form, 'localOnly'), undefined);
   const process = control(form, 'process');
   const research = control(form, 'research');
-  assert.equal(localOnly.checked, true);
-  assert.equal(localOnly.disabled, true);
   assert.equal(process.disabled, true);
   assert.equal(research.disabled, true);
 
   form.reset();
   await Promise.resolve();
-  assert.equal(localOnly.checked, true, 'reset must preserve the local-only choice');
   assert.equal(process.disabled, true);
   assert.equal(research.disabled, true);
   await form.events.submit({ preventDefault() {} });
   assert.equal(imports.length, 1);
-  assert.equal(imports[0].items[0].privacy, 'local');
+  assert.equal(Object.hasOwn(imports[0].items[0], 'privacy'), false);
   assert.equal(imports[0].process, false);
   assert.equal(imports[0].research, false);
 });
@@ -582,7 +579,8 @@ test('Android source editing omits disabled privacy, depth, and research interva
   const app = browser({ runtime: { kind: 'android-prototype' }, updateNote: async (id, payload) => { updates.push({ id, payload: plain(payload) }); return { id, hash: 'new-hash' }; }, bootstrap: async () => ({}) });
   app.renderNoteEditor({ id: 'synthetic-source', kind: 'source', title: '原始资料', body: '原文', hash: 'old-hash', meta: { privacy: 'cloud', depth: 'advanced', researchIntervalDays: 14 } });
   const form = app.refs.drawerBody.querySelector('form');
-  for (const name of ['privacy', 'depth', 'researchIntervalDays']) assert.equal(control(form, name).disabled, true, `${name} should be disabled`);
+  assert.equal(control(form, 'privacy'), undefined);
+  for (const name of ['depth', 'researchIntervalDays']) assert.equal(control(form, name).disabled, true, `${name} should be disabled`);
   control(form, 'title').value = '更新标题';
   await form.events.submit({ preventDefault() {} });
   assert.equal(updates.length, 1);
@@ -1009,7 +1007,7 @@ test('ChatGPT capture and read controls persist independently and disclose the l
   let panel = await app.settingsPanel();
   assert.equal(control(panel, 'chatgptEnabled').checked, false);
   assert.equal(control(panel, 'chatgptAllowRead').checked, false);
-  assert.match(panel.textContent, /包含仅本地资料/); assert.match(panel.textContent, /不会自动建立网页端连接/);
+  assert.match(panel.textContent, /允许 ChatGPT 检索和读取知识库/); assert.match(panel.textContent, /不会自动建立网页端连接/);
   control(panel, 'chatgptEnabled').checked = true;
   const form = descendants(panel).find(node => node.tagName === 'form');
   await form.events.submit({ preventDefault() {} });
@@ -1153,14 +1151,14 @@ test('global discovery defaults to local and exploration candidates cannot be ac
   assert.deepEqual(plain(calls), [{ useAI: false }, { useAI: true }]);
 });
 
-test('link previews display privacy tightening and block synchronization of manually edited sections', async () => {
+test('link previews block synchronization of manually edited sections without reclassifying material', async () => {
   let writes = 0;
   const preview = { before: '原文', body: '新链接', expectedHash: 'v1', changed: true, conflict: true, privacyChanged: true };
   const app = browser({ linksPreview: async () => preview, syncLinks: async () => { writes++; } });
   await app.previewNoteLinks('note-a');
   const panel = app.refs.drawerBody;
   assert.equal(findButton(panel, '确认更新链接').disabled, true);
-  assert.match(panel.textContent, /收紧为仅本地/);
+  assert.doesNotMatch(panel.textContent, /收紧为仅本地/);
   assert.match(panel.textContent, /不会覆盖/);
   assert.equal(writes, 0);
 });
@@ -1264,7 +1262,7 @@ test('state shortcut cancellation retains every unsaved field and explicit disca
   const note = { id: 'synthetic-draft', kind: 'knowledge', title: '标题', body: '正文', meta: {} };
   app.renderNoteEditor(note);
   const form = app.refs.drawerBody.children[0];
-  for (const [name, value] of [['title', '未保存标题'], ['body', '未保存正文'], ['privacy', 'cloud'], ['topic', '未保存主题'], ['depth', 'aware']]) {
+  for (const [name, value] of [['title', '未保存标题'], ['body', '未保存正文'], ['topic', '未保存主题'], ['depth', 'aware']]) {
     const input = control(form, name), original = input.value;
     if (name === 'body') input.textContent = value; else input.value = value;
     const before = JSON.stringify(app.serializeForm(form));
@@ -1312,7 +1310,7 @@ test('note editor user drawer exits preserve changed fields until explicit disca
     app.refs.drawer.classList.add('is-open');
     app.renderNoteEditor(note, kind === 'source' ? { returnToSourceId: note.id } : {});
     const form = app.refs.drawerBody.children[0];
-    const fields = [['title', '修改标题'], ['body', '修改正文'], ['topic', '修改主题'], ['privacy', 'cloud'], ['depth', 'aware']];
+    const fields = [['title', '修改标题'], ['body', '修改正文'], ['topic', '修改主题'], ['depth', 'aware']];
     if (kind === 'source') fields.push(['platform', '合成平台'], ['author', '合成作者'], ['url', 'https://example.com/'], ['date', '2026年春'], ['locator', '第2页'], ['researchIntervalDays', '7']);
     for (const [name, value] of fields) {
       const input = control(form, name), original = input.value;
@@ -1424,9 +1422,10 @@ test('saving an untouched source editor submits no display defaults; actual chan
   assert.deepEqual(writes[2].meta, {}, 'an implicit local privacy default is not a source edit');
   app.renderNoteEditor({ ...source, meta: {} });
   const localForm = app.refs.drawerBody.children[0];
-  control(localForm, 'privacy').children.forEach(option => { option.selected = option.value === 'cloud'; });
+  assert.equal(control(localForm, 'privacy'), undefined);
+  control(localForm, 'topic').value = '新主题';
   await localForm.events.submit({ preventDefault() {} });
-  assert.deepEqual(writes[3].meta, { privacy: 'cloud' }, 'an actual privacy change remains explicit');
+  assert.deepEqual(writes[3].meta, { topic: '新主题' }, 'remaining editable fields still persist');
 });
 
 test('empty daily plans show the actual reasons with working knowledge and budget entry points', async () => {
@@ -1772,12 +1771,15 @@ test('capture accepts blank titles independently of decomposition and explains l
     const title = control(form, 'title');
     assert.notEqual(title.required, true);
     assert.match(form.textContent, /标题（可选）/);
-    assert.match(form.textContent, /无需勾选 AI 拆解.*调用费用/);
+    assert.match(form.textContent, /原文片段作为标题.*主动 AI 拆解/);
+    assert.equal(control(form, 'localOnly'), undefined);
+    assert.doesNotMatch(app.noteMeta({ kind: 'source', meta: { privacy: 'local' } }).textContent, /仅本地|允许云端/);
     title.value = '';
     control(form, 'body').textContent = '合成无标题正文';
     await form.events.submit({ preventDefault() {} });
     assert.equal(writes[0].items[0].title, '');
     assert.equal(writes[0].items[0].body, '合成无标题正文');
+    assert.equal(Object.hasOwn(writes[0].items[0], 'privacy'), false);
     assert.equal(writes[0].process, false);
     assert.equal(writes[0].research, false);
   }

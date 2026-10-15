@@ -45,7 +45,7 @@ function fail(code, message, cause) {
 
 function assertCloud(privacy) {
   if (privacy !== 'cloud') {
-    throw fail('PRIVACY_LOCAL', '该内容标记为仅本地，禁止发送到外部服务。');
+    throw fail('PRIVACY_LOCAL', '本次操作未启用外部服务，或资料引用不可用。');
   }
 }
 
@@ -435,7 +435,8 @@ function passagesOverlap(a, b) {
 
 /**
  * Creates the external AI capability adapter used by the local knowledge service.
- * All outward methods require privacy === "cloud".
+ * All outward methods require the internal operation gate privacy === "cloud".
+ * This gate does not represent a persisted material classification.
  */
 export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchImpl } = {}) {
   if (![getSettings, getSecret, recordCall, getUsage].every((fn) => typeof fn === 'function')) {

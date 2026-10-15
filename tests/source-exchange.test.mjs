@@ -198,7 +198,7 @@ test("duplicate JSON keys and malformed recognized formats are rejected", () => 
   assert.equal(globalThis[marker], undefined);
 });
 
-test("parsed exchange imports through the existing local-only source service", t => {
+test("parsed exchange imports through the source service without creating an AI task", t => {
   const root = fs.mkdtempSync(path.join(path.resolve(import.meta.dirname, "../.tmp"), "source-exchange-"));
   const service = createService({ dataDir: path.join(root, "data"), vaultDir: path.join(root, "vault") });
   t.after(() => { service.store.close(); fs.rmSync(root, { recursive: true, force: true }); });
@@ -207,7 +207,7 @@ test("parsed exchange imports through the existing local-only source service", t
   const result = service.importItems({ items: [item], process: false, research: false });
   const note = result.notes[0];
   assert.equal(note.body, body);
-  assert.equal(note.meta.privacy, "local");
+  assert.notEqual(note.meta.privacy, "cloud");
   assert.equal(note.meta.stage, "reference");
   assert.deepEqual(note.meta.origins[0], {
     platform: "网页", author: "作者", url: "https://example.test/a", date: "2026-10-07",

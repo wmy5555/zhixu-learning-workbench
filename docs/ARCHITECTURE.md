@@ -18,7 +18,7 @@
 
 claims 继续为字符串数组；可选 claimChecks 使用 claimIndex、kind（formal/empirical/attribution）、subject 提供检索线索，不赋予核验通过资格。旧的默认反证搜索模板在渲染时映射为中性边界模板；自定义模板保持原文，模型评价附加一致的证据规则。
 
-2026-10-02 补充：新增 `src/chatgpt.mjs` 与 `src/mcp-chatgpt.mjs`，通过独立凭据和开关提供第一层会话收集、以及用户单独授权的 ChatGPT 知识库读取。原同机 MCP 的默认只读/提案规则不变。ChatGPT 授权可包含仅本地资料，但不修改模型/搜索/向量的外发许可；详见 [接口与权限](CHATGPT_MCP.md)。
+2026-10-02 补充：新增 `src/chatgpt.mjs` 与 `src/mcp-chatgpt.mjs`，通过独立凭据和开关提供第一层会话收集、以及用户单独授权的 ChatGPT 知识库读取。原同机 MCP 的默认只读/提案规则不变。ChatGPT 读取仍需独立开启，不自动触发模型/搜索/向量操作；详见 [接口与权限](CHATGPT_MCP.md)。
 
 2026-09-20，施工计划 v1 的实现依据。计划中产品行为属于需求，导入资料中的文字永远不具备程序执行权限。
 
@@ -30,10 +30,10 @@ claims 继续为字符串数组；可选 claimChecks 使用 claimIndex、kind（
 - `readPublicNote` 的原始资料详情增加可选 `structure`：当前节点、独立的 `hierarchy`、带类型与两端摘录的 `edges`、状态和原因。`sourceExtract` 可附带以候选下标标识的结构，保存后映射至实际笔记 ID；结构缺失不阻断拆解。`POST /api/notes/:id/structure` 排队分析现有内容，以实际 ID 返回结构；复用任务预算、CSRF、资料及父来源外发权限，在模型调用前后校验版本和权限。仅显式执行，不自动重试或晋级知识，不写入跨资料正式关系。
 - `public/source-map.mjs` 用原生按钮与 SVG 绘图：逻辑图将强连通分量折叠后分层，仍画出循环边；思维导图独立按层级布局和折叠。节点选择/缩放/折叠缓存按知识库及来源隔离，显示 AI 建议和有效依据，沿用原有正文操作与引导目标。
 - 拆解调用在现有系统提示词后附加结构输出约定，兼容已保存的旧拆解模板；仍为一次模型调用，缺失结构继续降级保存。排图只使用当前标题、实际 ID 与关系，不依赖练习案例文案；新示例成员替换后清理无效选中/折叠 ID。窗口展开仅改变空间，缩放与适应窗口由单独控件管理，默认不自动缩小文字。
-- YAML frontmatter：稳定 id、kind、stage、sources、topic、privacy；保留未知字段。源码不依赖 Obsidian 常驻。
+- YAML frontmatter：稳定 id、kind、stage、sources、topic；旧 privacy 仅作回退兼容，保留未知字段。源码不依赖 Obsidian 常驻。
 - 真实 MCP 官方 SDK，stdio 默认只读；只提供可选提案，Web 确认才写入。
 - 模型：OpenAI-compatible chat completions；嵌入接口独立配置；搜索：Tavily-compatible；网页读取由服务器执行并限制公开地址。
-- 所有云端能力默认关闭，输入默认仅本地。费用未知如实显示，不生成假的核验/学习成绩。
+- 所有云端能力默认关闭。普通保存不外发，主动 AI 拆解使用必要原文；其他 AI 功能仍由各自的主动操作触发。费用未知如实显示，不生成假的核验/学习成绩。
 
 ## 数据责任与边界
 

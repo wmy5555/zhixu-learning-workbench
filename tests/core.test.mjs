@@ -332,24 +332,24 @@ test('draft records are not indexed or returned as knowledge', async t => {
   assert.equal(h.service.store.db.prepare("SELECT COUNT(*) AS count FROM index_chunks WHERE noteId='draft-only'").get().count, 0);
 });
 
-test('local-only source processing reaches the offline privacy guard without external research', async t => {
+test('explicit decomposition passes its operation gate despite legacy local input', async t => {
   const events = [];
   const h = await makeHarness(t, { aiOverride: offlineAI(events) });
   h.service.updateSettings({ ai: { enabled: true } });
   const imported = h.service.importItems({
-    items: [{ title: '私有资料', body: '不允许外发的私人原文', privacy: 'local' }],
+    items: [{ title: '合成旧资料', body: '合成原文用于受控测试', privacy: 'local' }],
     process: true, research: true,
   });
   await h.service.runJobs();
 
   assert.equal(events.length, 1);
   assert.equal(events[0].capability, 'generate');
-  assert.equal(events[0].input.privacy, 'local');
+  assert.equal(events[0].input.privacy, 'cloud');
   assert.equal(events.some(event => event.capability === 'research'), false);
   const job = h.service.store.get('jobs', imported.jobs[0].id);
   assert.equal(job.state, 'waiting');
   assert.equal(job.code, 'PRIVACY_LOCAL');
-  assert.equal(h.service.getNote(imported.notes[0].id).body, '不允许外发的私人原文');
+  assert.equal(h.service.getNote(imported.notes[0].id).body, '合成原文用于受控测试');
 });
 
 test('local-only search and ask stay offline even when model settings are enabled', async t => {
@@ -361,7 +361,7 @@ test('local-only search and ask stay offline even when model settings are enable
   const result = await h.service.ask({ question: '若木', scope: ['knowledge'] });
   assert.equal(events.length, 0);
   assert.equal(result.citations[0]?.id, note.id);
-  assert.match(result.answer, /模型未启用或材料仅限本地/);
+  assert.match(result.answer, /本次未启用 AI/);
   assert.equal(result.limitations.includes('未进行 AI 生成。'), true);
   assert.equal(result.generated, false);
   assert.equal(h.service.store.get('drafts', result.draftId)?.mode, 'answer');

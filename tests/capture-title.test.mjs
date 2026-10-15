@@ -16,16 +16,25 @@ async function harness(t, generate) {
   t.after(async () => { await service.close(); await rm(root, { recursive: true, force: true }); });
   return service;
 }
+// Explicit title requests model retained title-task retries; ordinary capture has no such request.
+function captureForTitle(s, options) {
+  const result = s.importItems(options);
+  const source = result.notes[0];
+  if (!options.process && source.meta.titlePending && !s.store.records('jobs').some(j => j.type === 'title' && j.payload.noteId === source.id)) {
+    result.jobs.push(s.queue('title', { noteId: source.id, hash: source.hash }, `title:${source.id}:${source.hash}`));
+  }
+  return result;
+}
 const input = (title = '', privacy = 'cloud') => ({ title, body: '合成材料：条件不同，检索策略也需要调整。\n下一段保留原文。', privacy });
 async function drain(service) {
   for (let i = 0; i < 12 && service.store.records('jobs').some(job => job.state === 'queued'); i++) await service.runJobs();
 }
 
-test('blank title saves the source first and generates without decomposition using the shared AI', async t => {
+test('an explicitly requested title task preserves source and uses the shared AI', async t => {
   const calls = [];
   const s = await harness(t, async request => { calls.push(request); return { text: JSON.stringify({ sourceTitle: '条件变化下的检索策略' }) }; });
   s.updatePrompts({ prompts: { sourceTitle: 'CUSTOM_TITLE 原文：{{source}}' } });
-  const result = s.importItems({ items: [input('  \t ')] });
+  const result = captureForTitle(s, { items: [input('  \t ')] });
   assert.equal(calls.length, 0);
   const source = result.notes[0];
   assert.equal(source.body, input().body);
@@ -53,7 +62,7 @@ test('capture and decomposition share one generation and use the updated version
     assert.match(request.prompt, /sourceTitle/);
     return { text: JSON.stringify(extraction('检索策略的条件与调整')) };
   });
-  const { notes: [source], jobs: [job] } = s.importItems({ items: [input()], process: true });
+  const { notes: [source], jobs: [job] } = captureForTitle(s, { items: [input()], process: true });
   await s.runJobs();
   const current = s.getNote(source.id), saved = s.store.get('jobs', job.id), [child] = s.listNotes({ kind: 'knowledge' });
   assert.equal(calls, 1);
@@ -72,10 +81,10 @@ test('manual, file and URL-source titles stay intact, including duplicate import
   const s = await harness(t, async () => { calls++; return { text: JSON.stringify(extraction('不能覆盖这个标题')) }; });
   for (const [index, extra] of [{ title: '我手填的标题' }, { title: '附件名字', platform: '本地文件', locator: '附件名字.md' }, { title: '网页自带标题', url: 'https://example.invalid/article' }].entries()) {
     const item = { ...input(), ...extra, body: input().body + index };
-    const { notes: [source], jobs } = s.importItems({ items: [item] });
+    const { notes: [source], jobs } = captureForTitle(s, { items: [item] });
     assert.equal(jobs.length, 0);
     assert.equal(source.title, extra.title);
-    assert.equal(s.importItems({ items: [{ ...item, title: '' }] }).notes[0].title, extra.title);
+    assert.equal(captureForTitle(s, { items: [{ ...item, title: '' }] }).notes[0].title, extra.title);
     const task = s.processNote(source.id);
     await drain(s);
     assert.equal(s.store.get('jobs', task.id).state, 'done');
@@ -88,8 +97,8 @@ test('manual, file and URL-source titles stay intact, including duplicate import
 test('duplicate blank captures append origins and keep a single current title request', async t => {
   let calls = 0;
   const s = await harness(t, async () => { calls++; return { text: JSON.stringify({ sourceTitle: '保留出处的合成标题' }) }; });
-  const first = s.importItems({ items: [input()] });
-  const second = s.importItems({ items: [{ ...input(), title: '重新提交不能覆盖标题', platform: '另一来源' }] });
+  const first = captureForTitle(s, { items: [input()] });
+  const second = captureForTitle(s, { items: [{ ...input(), title: '重新提交不能覆盖标题', platform: '另一来源' }] });
   assert.equal(second.notes[0].id, first.notes[0].id);
   assert.equal(second.notes[0].meta.origins.length, 2);
   assert.equal(s.store.records('jobs').length, 1);
@@ -102,7 +111,7 @@ test('duplicate blank captures append origins and keep a single current title re
 test('pending title requests combine with processing instead of making a second model call', async t => {
   let calls = 0;
   const s = await harness(t, async () => { calls++; return { text: JSON.stringify(extraction('合并请求的标题')) }; });
-  const { notes: [source], jobs: [title] } = s.importItems({ items: [input()] });
+  const { notes: [source], jobs: [title] } = captureForTitle(s, { items: [input()] });
   const job = s.processNote(source.id);
   await drain(s);
   assert.equal(calls, 1);
@@ -118,7 +127,7 @@ test('a title already running can finish before queued processing without losing
     if (request.system.includes('资料拆解输出约定')) return { text: JSON.stringify(extraction('不能再次覆盖')) };
     ready(); return await new Promise(resolve => { release = () => resolve({ text: JSON.stringify({ sourceTitle: '先完成标题' }) }); });
   });
-  const { notes: [source] } = s.importItems({ items: [input()] });
+  const { notes: [source] } = captureForTitle(s, { items: [input()] });
   const running = s.runJobs(); await started;
   const process = s.processNote(source.id);
   release(); await running; await drain(s);
@@ -135,7 +144,7 @@ for (const [label, value] of [['missing', undefined], ['blank', '   '], ['too lo
       titleCalls++; return { text: JSON.stringify({ sourceTitle: '补全后的检索标题' }) };
     });
     s.updatePrompts({ prompts: { sourceExtract: '旧自定义拆解模板：{{source}}' } });
-    const { notes: [source], jobs: [process] } = s.importItems({ items: [input()], process: true });
+    const { notes: [source], jobs: [process] } = captureForTitle(s, { items: [input()], process: true });
     await s.runJobs();
     const before = s.getNote(source.id), [child] = s.listNotes({ kind: 'knowledge' });
     const title = s.store.records('jobs').find(job => job.type === 'title');
@@ -163,10 +172,10 @@ for (const [label, value] of [['missing', undefined], ['blank', '   '], ['too lo
   });
 }
 
-for (const [label, privacy] of [['model disabled', 'cloud'], ['local only', 'local']]) {
+for (const [label, privacy] of [['legacy cloud metadata with model disabled', 'cloud'], ['legacy local metadata with model disabled', 'local']]) {
   test(label + ' preserves blank-title input and waits without automatically resubmitting', async t => {
     const s = await harness(t);
-    const { notes: [source], jobs: [job] } = s.importItems({ items: [input('', privacy)] });
+    const { notes: [source], jobs: [job] } = captureForTitle(s, { items: [input('', privacy)] });
     await s.runJobs();
     const waiting = s.store.get('jobs', job.id);
     assert.equal(waiting.state, 'waiting');
@@ -182,7 +191,7 @@ for (const [label, privacy] of [['model disabled', 'cloud'], ['local only', 'loc
 
 test('title failures keep source and temporary title and expose the original error', async t => {
   const s = await harness(t, async () => { const error = new Error('受控网络失败'); error.code = 'NETWORK_ERROR'; throw error; });
-  const { notes: [source], jobs: [job] } = s.importItems({ items: [input()] });
+  const { notes: [source], jobs: [job] } = captureForTitle(s, { items: [input()] });
   await s.runJobs();
   assert.equal(s.store.get('jobs', job.id).state, 'failed');
   assert.equal(s.readPublicNote(source.id).titleGeneration.code, 'NETWORK_ERROR');
@@ -190,21 +199,21 @@ test('title failures keep source and temporary title and expose the original err
   assert.equal(s.getNote(source.id).title, source.title);
 });
 
-for (const change of ['title', 'body', 'privacy', 'external title', 'delete', 'cancel']) {
+for (const change of ['title', 'body', 'external metadata', 'external title', 'delete', 'cancel']) {
   test('delayed generated title cannot overwrite a concurrent ' + change + ' change', async t => {
     let release, ready;
     const started = new Promise(resolve => { ready = resolve; });
     const s = await harness(t, async () => { ready(); return new Promise(resolve => { release = () => resolve({ text: JSON.stringify({ sourceTitle: '不能覆盖当前资料' }) }); }); });
-    const { notes: [source], jobs: [job] } = s.importItems({ items: [input()] });
+    const { notes: [source], jobs: [job] } = captureForTitle(s, { items: [input()] });
     const running = s.runJobs(); await started;
     if (change === 'delete') s.store.delete(source.id, source.hash);
     else if (change === 'cancel') s.jobAction(job.id, { action: 'cancel' });
-    else if (change === 'external title') {
+    else if (['external title', 'external metadata'].includes(change)) {
       const file = path.join(s.store.vaultDir, source.path);
       const raw = await readFile(file, 'utf8'), match = raw.match(/^---\n([\s\S]*?)\n---\n/);
-      const meta = YAML.parse(match[1]); meta.title = '外部人工标题';
+      const meta = YAML.parse(match[1]); if(change === 'external title') meta.title = '外部人工标题'; else meta.privacy = 'cloud';
       await writeFile(file, '---\n' + YAML.stringify(meta) + '---\n' + raw.slice(match[0].length));
-    } else s.editNote(source.id, { expectedHash: source.hash, ...(change === 'privacy' ? { meta: { privacy: 'local' } } : { [change]: change === 'title' ? '用户人工标题' : '用户修改过的原文' }) });
+    } else s.editNote(source.id, { expectedHash: source.hash, [change]: change === 'title' ? '用户人工标题' : '用户修改过的原文' });
     release(); await running;
     assert.ok(['failed', 'cancelled'].includes(s.store.get('jobs', job.id).state));
     if (change !== 'delete') {
@@ -212,7 +221,7 @@ for (const change of ['title', 'body', 'privacy', 'external title', 'delete', 'c
       assert.notEqual(current.title, '不能覆盖当前资料');
       if (change === 'title') { assert.equal(current.title, '用户人工标题'); assert.equal(current.meta.titlePending, false); assert.throws(() => s.jobAction(job.id, { action: 'retry' }), { code: 'TITLE_ALREADY_SET' }); }
       if (change === 'body') assert.equal(current.body, '用户修改过的原文');
-      if (change === 'privacy') assert.equal(current.meta.privacy, 'local');
+      if (change === 'external metadata') assert.equal(current.meta.privacy, 'cloud');
       if (change === 'external title') { assert.equal(s.readPublicNote(source.id).meta.titlePending, false); assert.equal(current.title, '外部人工标题'); assert.throws(() => s.jobAction(job.id, { action: 'retry' }), { code: 'TITLE_ALREADY_SET' }); }
     }
   });
@@ -222,7 +231,7 @@ for (const change of ['title', 'body', 'privacy', 'external title', 'delete', 'c
 test('title-only retry keeps a current existing structure and completed extraction reusable', async t => {
   let calls = 0;
   const s = await harness(t, async request => { calls++; return { text: JSON.stringify(request.system.includes('资料拆解输出约定') ? extraction(undefined) : { sourceTitle: '单独补充的标题' }) }; });
-  const { notes: [source], jobs: [process] } = s.importItems({ items: [input()], process: true });
+  const { notes: [source], jobs: [process] } = captureForTitle(s, { items: [input()], process: true });
   await s.runJobs();
   const title = s.store.records('jobs').find(job => job.type === 'title');
   const [before] = s.listNotes({ kind: 'knowledge' });
@@ -237,7 +246,7 @@ test('title-only retry keeps a current existing structure and completed extracti
 test('missing credentials stop generation without losing source or making a supplier request', async t => {
   const s = await harness(t);
   s.updateSettings({ ai: { enabled: true, baseUrl: 'https://8.8.8.8/v1', model: 'synthetic-no-key' } });
-  const { notes: [source], jobs: [job] } = s.importItems({ items: [input()] });
+  const { notes: [source], jobs: [job] } = captureForTitle(s, { items: [input()] });
   await s.runJobs();
   assert.equal(s.store.get('jobs', job.id).state, 'waiting');
   assert.equal(s.store.get('jobs', job.id).code, 'MISSING_CREDENTIALS');
@@ -249,7 +258,7 @@ test('missing credentials stop generation without losing source or making a supp
 for (const [label, value] of [['null JSON', null], ['missing title', {}], ['empty title', { sourceTitle: '  ' }], ['Unicode line break', { sourceTitle: '标题\u2028续行' }]]) {
   test('invalid standalone title output (' + label + ') keeps the placeholder and reports a format error', async t => {
     const s = await harness(t, async () => ({ text: JSON.stringify(value) }));
-    const { notes: [source], jobs: [job] } = s.importItems({ items: [input()] });
+    const { notes: [source], jobs: [job] } = captureForTitle(s, { items: [input()] });
     await s.runJobs();
     assert.equal(s.store.get('jobs', job.id).state, 'failed');
     assert.equal(s.store.get('jobs', job.id).code, 'MODEL_FORMAT');
@@ -273,7 +282,7 @@ async function sourceAwaitingTitle(t, multiple = false) {
     if (request.prompt.includes('依据材料评价理解')) { events.push('grade'); return { text: JSON.stringify(syntheticFeedback) }; }
     events.push('title'); return { text: JSON.stringify({ sourceTitle: '不会打断学习的补充标题' }) };
   });
-  const { notes: [source] } = s.importItems({ items: [input()], process: true });
+  const { notes: [source] } = captureForTitle(s, { items: [input()], process: true });
   await drain(s);
   const title = s.store.records('jobs').find(job => job.type === 'title');
   const child = s.listNotes({ kind: 'knowledge' })[0];

@@ -226,7 +226,8 @@ export class Store {
         if (expectedHash && hash(raw) !== expectedHash) return 'local';
         ({ meta, body } = parse(raw));
       } catch { return 'local'; }
-      if (meta.privacy !== 'cloud' || (meta.id !== undefined && meta.id !== id)) return 'local';
+      // Legacy privacy is retained in Markdown for rollback, but is no longer a material classification.
+      if (meta.id !== undefined && meta.id !== id) return 'local';
       const ids = meta.managedLinkIds ?? [], start = body.indexOf(linkStart), end = body.indexOf(linkEnd);
       if (!Array.isArray(ids) || ids.some(target => typeof target !== 'string' || !target)) return 'local';
       if (meta.managedLinksHash || ids.length || start !== -1 || end !== -1) {
@@ -259,7 +260,8 @@ export class Store {
     if (scan) this.scan();
     const note = this.read(id), before = note.body;
     const rows = [], seen = new Set(), labels = { analogy: '类比', prerequisite: '前置知识', support: '支持', oppose: '反对', example: '例子', counterexample: '反例', application: '应用', correction: '修正', similarity: '相关材料' };
-    let hasLocalTarget = false;
+    // Compatibility metadata only: a rollback must not broaden an older app's permission.
+    let rollbackLocal = false;
     const plain = value => String(value || '').replace(/[\r\n<>]/g, ' ');
     const link = target => `[[${target.path.replace(/\.md$/i, '')}|${plain(target.title).replace(/[\[\]|]/g, ' ')}]]`;
     const failPreview = message => ({ id, path: note.path, expectedHash: note.hash, before, body: before, meta: {}, changed: false, conflict: message });
@@ -267,16 +269,16 @@ export class Store {
       const targetId = relation.fromId === id ? relation.toId : relation.fromId;
       if (!this.row(targetId)) continue;
       const target = this.read(targetId);
+      rollbackLocal ||= target.meta.privacy !== 'cloud';
       if (/[\[\]|#^\r\n]/.test(target.path)) return failPreview('目标文件名包含 Obsidian 链接保留符号，请先调整文件名。');
-      hasLocalTarget ||= this.outboundPrivacy(target) !== 'cloud';
       rows.push(`- ${link(target)} — ${labels[relation.type] || plain(relation.type) || '已确认联系'}${relation.explanation ? `：${plain(relation.explanation)}` : ''}${relation.use ? `；用途：${plain(relation.use)}` : ''}${relation.boundary ? `；边界：${plain(relation.boundary)}` : ''}`);
       seen.add(targetId);
     }
     if (note.kind === 'topic' && Array.isArray(note.meta.noteIds)) for (const targetId of note.meta.noteIds) {
       if (seen.has(targetId) || !this.row(targetId)) continue;
       const target = this.read(targetId);
+      rollbackLocal ||= target.meta.privacy !== 'cloud';
       if (/[\[\]|#^\r\n]/.test(target.path)) return failPreview('目标文件名包含 Obsidian 链接保留符号，请先调整文件名。');
-      hasLocalTarget ||= this.outboundPrivacy(target) !== 'cloud';
       rows.push(`- ${link(target)}`); seen.add(targetId);
     }
     const start = before.indexOf(linkStart), end = before.indexOf(linkEnd);
@@ -287,9 +289,8 @@ export class Store {
     if (!hasBlock && note.meta.managedLinksHash) return failPreview('自动链接区已被外部移除，未重新写回。');
     const block = rows.length ? `${linkStart}\n## 已确认的知识链接\n\n${rows.join('\n')}\n${linkEnd}` : '';
     const body = hasBlock ? `${before.slice(0, start)}${block}${before.slice(end + linkEnd.length)}` : block ? `${before}\n\n${block}` : before;
-    const privacyChanged = hasLocalTarget && note.meta.privacy === 'cloud';
     const managedLinkIds = [...seen], referencesChanged = stableJSON(note.meta.managedLinkIds || []) !== stableJSON(managedLinkIds);
-    return { id, path: note.path, expectedHash: note.hash, before, body, meta: { managedLinksHash: block ? hash(block) : null, managedLinkIds, ...(hasLocalTarget ? { privacy: 'local' } : {}) }, changed: body !== before || privacyChanged || referencesChanged, conflict: null, privacyChanged, privacyNotice: privacyChanged ? '链接包含仅本地笔记的标题；更新后本笔记也将保持仅本地，避免这些内容外发。' : '' };
+    return { id, path: note.path, expectedHash: note.hash, before, body, meta: { managedLinksHash: block ? hash(block) : null, managedLinkIds, ...(rollbackLocal ? { privacy: 'local' } : {}) }, changed: body !== before || rollbackLocal && note.meta.privacy === 'cloud' || referencesChanged, conflict: null };
   }
   pendingManagedLinks() {
     this.scan();

@@ -182,7 +182,7 @@ test('ChatGPT read grant exposes bounded content, can be revoked immediately, an
   const rest = await f.request(`/api/chatgpt/notes/${note.id}?offset=100&limit=20000`);
   assert.equal(rest.body.body, note.body.slice(100, 20100));
   assert.equal((await f.request(`/api/chatgpt/notes/${note.id}?limit=20001`)).status, 400);
-  assert.equal(f.app.service.store.outboundPrivacy(note), 'local');
+  assert.equal(f.app.service.store.outboundPrivacy(note), 'cloud');
   assert.equal(f.app.service.store.records('calls').length, 0);
   f.enable(false);
   assert.equal((await f.request(`/api/chatgpt/notes/${note.id}`)).body.code, 'CHATGPT_READ_DISABLED');

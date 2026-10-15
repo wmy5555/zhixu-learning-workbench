@@ -172,7 +172,7 @@ test('process status polling requires a session, omits task bodies and changes r
   app.service.restore({ backup, preview: false, token: preview.token });
   const restored = app.service.jobStatuses();
   assert.notEqual(restored.jobRevision, first.body.jobRevision);
-  assert.equal(restored.jobs.find(value => value.id === job.id).state, 'queued');
+  assert.equal(restored.jobs.find(value => value.id === job.id).state, 'waiting');
   const practice = await request(app.baseUrl, '/api/onboarding/start', { method: 'POST', headers: session.headers, body: {} });
   const practiceStatus = await request(app.baseUrl, `/api/practice/${practice.body.practiceId}/jobs?view=status`, { headers: session.headers });
   assert.equal(practiceStatus.status, 200);
@@ -482,7 +482,7 @@ test('prompt settings API requires CSRF and persists edited templates', async t 
 });
 
 
-test('HTTP blank-title capture preserves text with no model config and exposes title waiting in safe status', async t => {
+test('HTTP blank-title capture stays local without creating a title task', async t => {
   const app = await startApp(t), session = await webSession(app);
   const body = '合成标题验收原文，不可通过任务轮询暴露。';
   const captured = await request(app.baseUrl, '/api/import', { method: 'POST', headers: session.headers, body: { items: [{ title: '   ', body, privacy: 'local' }], process: false } });
@@ -490,15 +490,15 @@ test('HTTP blank-title capture preserves text with no model config and exposes t
   const [source] = captured.body.notes, [job] = captured.body.jobs;
   assert.equal(source.body, body);
   assert.equal(source.meta.titlePending, true);
-  assert.equal(job.type, 'title');
+  assert.equal(job, undefined);
   assert.equal(app.service.listNotes({ kind: 'knowledge' }).length, 0);
   await app.service.runJobs();
   const detail = await request(app.baseUrl, '/api/notes/' + source.id, { headers: session.headers });
   assert.equal(detail.body.body, body);
-  assert.equal(detail.body.titleGeneration.state, 'waiting');
-  assert.equal(detail.body.titleGeneration.code, 'PRIVACY_LOCAL');
+  assert.equal(detail.body.titleGeneration.state, 'idle');
+  assert.equal(detail.body.titleGeneration.code, null);
   const status = await request(app.baseUrl, '/api/jobs?view=status', { headers: session.headers });
-  assert.equal(status.body.jobs.find(item => item.id === job.id).type, 'title');
+  assert.equal(status.body.jobs.length, 0);
   assert.doesNotMatch(status.text, /"body"|"prompt"|"payload"/);
   assert.equal(app.service.store.records('calls').length, 0);
 });
