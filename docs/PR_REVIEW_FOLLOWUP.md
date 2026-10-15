@@ -16,6 +16,14 @@
 
 本地验证、依赖告警及 PDF 可见验收边界见 [组合验证记录](TEST_RESULTS.md#网页组合验证2026-10-15)。
 
+## 2026-10-15 PR #69 练习共享账本 P1
+
+核对当前远端 `f2860e984867497626c42edc87bc8b26a8a3c5f5`、普通评论、行内线程及总结后，采纳 [P1：Check practice calls against the shared ledger](https://github.com/wmy5555/zhixu-learning-workbench/pull/69#discussion_r4283333981)。使用真实 createAI、正式 Store 持久账本和受控传输，先在旧实现实际复现成功调用后 CALL_RECOVERY_REQUIRED、练习草稿未保存；旧 810 项和四项 CI 不覆盖该路径，已直接告知原 Web 统筹暂不采用此候选作为最终整合依据。
+
+修复通过 AI 适配器读取所属账本的最小只读证据，问答初始检查、完成提交和完成读回使用同一来源；不镜像正式账本/响应到练习库，不关闭来源核对。新增 8 项练习生产路径回归，含随机回环 HTTP 的真实会话/CSRF 路由；与原练习及问答恢复回归共 49/49 通过。实际完整验证 818/818、265 个跟踪文件及 20 条合成检索通过；新 SHA CI 推送后单独核对，不复用旧 head。实际证据见 [测试结果](TEST_RESULTS.md#pr-69-练习共享账本-p1-2026-10-15)。
+
+另核实所有者已于 [6192665987](https://github.com/wmy5555/zhixu-learning-workbench/pull/69#issuecomment-6192665987) 明确授权安全复审重试，标记 head 为 f2860e9。本轮未再发代码或安全请求、未另建审阅者；当前 P1 的 Code Review 不能等同完整独立安全报告。完整安全结果仍待取得，不合并或部署。
+
 ## 2026-10-15 PR #69 恢复接续返工
 
 用户恢复原任务后核对远端 head 仍为 `8b10b88`、Draft/open；现有评论/总结只有代码审阅，安全初审 [6137728723](https://github.com/wmy5555/zhixu-learning-workbench/pull/69#issuecomment-6137728723) 仍无可读完整结果。没有新增独立审阅或重复安全请求。已用代码初审与一次定向复审，本轮不再发新请求，也不把旧复审当本轮新修复已经受审。

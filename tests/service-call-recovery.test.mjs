@@ -20,6 +20,7 @@ function harness(t, transport = async () => response()) {
     generate: (...args) => ai.generate(...args),
     embed: (...args) => ai.embed(...args),
     withCallContext: (...args) => ai.withCallContext(...args),
+    getCallEvidence: (...args) => ai.getCallEvidence(...args),
   } };
   function open() {
     service = createService(options);
