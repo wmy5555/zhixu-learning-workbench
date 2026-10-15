@@ -18,6 +18,7 @@ const onboardingCss = await readFile(new URL('../public/onboarding.css', import.
 const uiSource = await readFile(new URL('../public/ui.mjs', import.meta.url), 'utf8');
 const markdownSource = await readFile(new URL('../public/markdown-reader.mjs', import.meta.url), 'utf8');
 const appSource = await readFile(new URL('../public/app.mjs', import.meta.url), 'utf8');
+const editorSource = await readFile(new URL('../public/markdown-editor.mjs', import.meta.url), 'utf8');
 const onboardingSource = await readFile(new URL('../public/onboarding.mjs', import.meta.url), 'utf8');
 const sourceMapSource = (await readFile(new URL('../public/source-map.mjs', import.meta.url), 'utf8')).replace(/^import.*;$/m, '').replaceAll('export ', '');
 
@@ -289,7 +290,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat, savedSession = 
     window: { zhixuAppearance: { getAccent: () => null, getTheme: () => 'light', resolvedTheme: () => 'light', previewAccent: () => ({}), getMode: () => 'light', palette: () => ({}) }, matchMedia: () => ({ matches: false, addEventListener() {} }), history: { replaceState() {} }, location: { hash: '' }, setTimeout() {}, events: {}, addEventListener(name, handler) { this.events[name] = handler; } },
   });
   const stripped = appSource.replace(/import[\s\S]*?from "\.\/api\.mjs";\s*/, '').replace(/import[\s\S]*?from "\.\/ui\.mjs";\s*/, '').replace(/^init\(\);\s*$/m, '').replace('const { createUsagePanel } = await import("./usage.mjs");', '');
-  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + ('const renderMarkdown = (() => {\n' + markdownSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn renderMarkdown;\n})();') + '\n' + sourceMapSource + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { renderSourceGroupDrawer, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
+  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + ('const renderMarkdown = (() => {\n' + markdownSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn renderMarkdown;\n})();') + '\nconst createMarkdownEditor = (() => {\n' + editorSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn createMarkdownEditor;\n})();\n' + sourceMapSource + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { renderSourceGroupDrawer, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
   context.app.beginStudy = vm.runInContext('beginStudy', context);
   context.app.manualExtract = vm.runInContext('manualExtract', context);
   context.app.serializeForm = vm.runInContext('serializeForm', context);
@@ -308,6 +309,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat, savedSession = 
   context.app.historyReadingBody = vm.runInContext('historyReadingBody', context);
   context.app.searchResultRow = vm.runInContext('searchResultRow', context);
   context.app.prepareContextChange = vm.runInContext('prepareContextChange', context);
+  context.app.navigate = vm.runInContext('navigate', context);
   Object.assign(context, { chapters, getCurriculum, materials, customMaterial, customSample, getMaterial, materialSample, URLSearchParams,
     localStorage: { getItem() { return null; }, setItem() {} }, sessionStorage: { getItem: key => savedSession.get(key) ?? null, setItem: (key, value) => savedSession.set(key, value), removeItem: key => savedSession.delete(key) },
     MutationObserver: class { observe() {} disconnect() {} },
@@ -563,7 +565,7 @@ test('capture form uses the full available column and source metadata stays read
   const body = control(form, 'body');
   const platform = control(form, 'platform');
   assert.ok(form.parentNode.classList.contains('capture-layout'));
-  assert.ok(body.parentNode.classList.contains('span-2'));
+  assert.ok((body.markdownEditor?.parentNode || body.parentNode).classList.contains('span-2'));
   assert.ok(form.classList.contains('capture-form'));
   assert.ok(platform.parentNode.parentNode.classList.contains('span-2'));
   assert.ok(platform.parentNode.classList.contains('capture-source-grid'));
@@ -1097,11 +1099,100 @@ test('capture research requires AI processing and clears on deselection, clear, 
   assert.equal(writes[1].research, false);
   const fileInput = descendants(app.refs.main).find(node => node.type === 'file');
   fileInput.files = [{ name: '合成伴读.txt', size: 20, arrayBuffer: async () => new TextEncoder().encode('仅测试单文件导入的入口标识。').buffer }];
-  fileInput.events.change();
+  await fileInput.events.change();
   await click(findButton(app.refs.main, '导入所选文件'));
   assert.equal(writes[2].captureMode, 'files');
   assert.equal(writes[2].items.length, 1);
   assert.equal(writes[2].process, false);
+});
+
+const markdownFile = (name, text) => ({ name, size: new TextEncoder().encode(text).length, arrayBuffer: async () => new TextEncoder().encode(text).buffer });
+
+test('capture reads the live Markdown draft for submit and unload; clear and save reset that draft', async () => {
+  const writes = [];
+  const app = browser({ import: async payload => { writes.push(plain(payload)); return { notes: [{}] }; }, bootstrap: async () => ({}) });
+  await app.renderCapture();
+  const form = app.refs.main.querySelector('[data-tour="capture-form"]'), body = control(form, 'body');
+  const editor = body.markdownEditor;
+  assert.ok(editor); assert.equal(unloadRequested(app), false);
+  editor.setValue('# 草稿\r\n\r\n**保留**\r\n');
+  assert.equal(unloadRequested(app), true);
+  click(findButton(form, '清空')); await Promise.resolve();
+  assert.equal(editor.getValue(), ''); assert.equal(unloadRequested(app), false);
+  editor.setValue('# 新意图\r\n\r\n- 正文\r\n');
+  await form.events.submit({ preventDefault() {} }); await Promise.resolve();
+  assert.equal(writes[0].items[0].body, '# 新意图\r\n\r\n- 正文\r\n');
+  assert.equal(editor.getValue(), ''); assert.equal(unloadRequested(app), false);
+  // Rich input can be ahead of Vditor's delayed textarea synchronization.
+  editor.getValue = () => '**最新可视化输入**';
+  assert.equal(body.value, ''); assert.equal(unloadRequested(app), true);
+  await form.events.submit({ preventDefault() {} });
+  assert.equal(writes[1].items[0].body, '**最新可视化输入**');
+});
+
+test('text and Markdown import previews preserve bytes and metadata; edits and failed saves remain protected', async () => {
+  const writes = []; let fail = true;
+  const app = browser({ import: async payload => { writes.push(plain(payload)); if (fail) throw new Error('合成保存失败'); return { notes: [{}, {}] }; }, bootstrap: async () => ({}) });
+  await app.renderCapture();
+  const input = descendants(app.refs.main).find(node => node.type === 'file');
+  const original = '# 导入\r\n\r\n|甲|乙|\r\n|---|---|\r\n|1|2|\r\n\r\n```js\r\nconst x = 1;\r\n```\r\n';
+  input.files = [markdownFile('保真.md', original), markdownFile('第二份.txt', '无末尾换行')];
+  await input.events.change();
+  const previews = app.refs.main.querySelectorAll('.markdown-import-preview');
+  assert.equal(previews.length, 2); assert.equal(writes.length, 0, 'preview does not save');
+  const editors = previews.map(preview => preview.querySelector('textarea').markdownEditor);
+  assert.equal(editors[0].getValue(), original); assert.equal(editors[1].getValue(), '无末尾换行');
+  previews[1].querySelector('input').value = '编辑标题';
+  editors[1].getValue = () => '# 可视化已编辑\n\n**保留格式**\n';
+  assert.equal(unloadRequested(app), true);
+  await click(findButton(app.refs.main, '导入所选文件'));
+  assert.equal(app.refs.main.querySelectorAll('.markdown-import-preview').length, 2);
+  assert.equal(findButton(app.refs.main, '导入所选文件').disabled, false);
+  fail = false;
+  await click(findButton(app.refs.main, '导入所选文件'));
+  assert.equal(writes[1].items[0].body, original);
+  assert.equal(writes[1].items[0].locator, '保真.md'); assert.equal(writes[1].items[0].privacy, 'local');
+  assert.equal(writes[1].items[1].title, '编辑标题'); assert.match(writes[1].items[1].body, /\*\*保留格式\*\*/);
+  assert.equal(writes[1].captureMode, 'files'); assert.equal(writes[1].process, false);
+  assert.equal(app.refs.main.querySelectorAll('.markdown-import-preview').length, 0);
+  assert.equal(unloadRequested(app), false);
+});
+
+test('late file reads cannot resurrect cleared or superseded previews and invalid files never save', async () => {
+  let release; const writes = [];
+  const app = browser({ import: async payload => { writes.push(payload); return {}; } });
+  await app.renderCapture();
+  const input = descendants(app.refs.main).find(node => node.type === 'file');
+  input.files = [{ name: '慢文件.md', size: 4, arrayBuffer: () => new Promise(resolve => { release = resolve; }) }];
+  const pending = input.events.change();
+  assert.equal(unloadRequested(app), true); assert.equal(findButton(app.refs.main, '导入所选文件').disabled, true);
+  click(findButton(app.refs.main, '清空导入预览'));
+  release(new TextEncoder().encode('迟到').buffer); await pending;
+  assert.equal(app.refs.main.querySelectorAll('.markdown-import-preview').length, 0);
+  assert.equal(unloadRequested(app), false);
+  let first;
+  input.files = [{ name: '旧文件.md', size: 4, arrayBuffer: () => new Promise(resolve => { first = resolve; }) }];
+  const older = input.events.change();
+  input.files = [markdownFile('新文件.md', '# 新内容\r\n')]; await input.events.change();
+  first(new TextEncoder().encode('旧内容').buffer); await older;
+  assert.match(app.refs.main.querySelector('.markdown-import-preview').textContent, /新文件/);
+  click(findButton(app.refs.main, '清空导入预览'));
+  input.files = [{ name: '无效.md', size: 2, arrayBuffer: async () => Uint8Array.of(0xff).buffer }];
+  await input.events.change(); await click(findButton(app.refs.main, '导入所选文件'));
+  assert.equal(writes.length, 0); assert.equal(findButton(app.refs.main, '导入所选文件').disabled, true);
+});
+
+test('new capture edits during a save are retained and duplicate submission is ignored', async () => {
+  let release; const writes = [];
+  const app = browser({ import: payload => { writes.push(plain(payload)); return new Promise(resolve => { release = resolve; }); }, bootstrap: async () => ({}) });
+  await app.renderCapture();
+  const form = app.refs.main.querySelector('[data-tour="capture-form"]'), editor = control(form, 'body').markdownEditor;
+  editor.setValue('已提交的正文');
+  const pending = form.events.submit({ preventDefault() {} });
+  await form.events.submit({ preventDefault() {} }); assert.equal(writes.length, 1);
+  editor.setValue('保存期间继续填写的新正文');
+  release({ notes: [{}] }); await pending;
+  assert.equal(editor.getValue(), '保存期间继续填写的新正文'); assert.equal(unloadRequested(app), true);
 });
 
 test('evidence expands on demand, retains roles and locators, and rejects executable URLs', async () => {
@@ -1304,7 +1395,7 @@ test('state shortcut ignores stale confirmations after switching libraries or op
   }
 });
 
-test('note editor user drawer exits preserve changed fields until explicit discard and cancel still abandons editing', async () => {
+test('note editor user exits including cancel preserve changed fields until explicit discard', async () => {
   for (const kind of ['source', 'knowledge']) {
     const note = { id: `synthetic-${kind}`, kind, title: '合成标题', body: '合成正文', meta: {} };
     let reads = 0, writes = 0;
@@ -1318,7 +1409,7 @@ test('note editor user drawer exits preserve changed fields until explicit disca
       const input = control(form, name), original = input.value;
       input.value = value; // Browser fill changes textarea.value, not textContent.
       const before = JSON.stringify(app.serializeForm(form));
-      for (const exit of [() => click(app.refs.drawerClose), () => click(app.refs.drawerBackdrop), () => app.document.events.keydown({ key: 'Escape' })]) {
+      for (const exit of [() => click(app.refs.drawerClose), () => click(app.refs.drawerBackdrop), () => app.document.events.keydown({ key: 'Escape' }), () => click(findButton(form, '取消'))]) {
         const pending = exit();
         assert.match(app.dialogs.textContent, /放弃未保存的修改/);
         await click(findButton(app.dialogs, '取消')); await pending;
@@ -1330,8 +1421,10 @@ test('note editor user drawer exits preserve changed fields until explicit disca
     }
     assert.equal(reads, 0); assert.equal(writes, 0);
     control(form, 'body').value = '确认放弃的正文';
-    await click(findButton(form, '取消'));
-    assert.equal(app.dialogs.querySelectorAll('.dialog').length, 0, 'cancel deliberately abandons editing without another confirmation');
+    const cancelling = click(findButton(form, '取消'));
+    assert.match(app.dialogs.textContent, /放弃未保存的修改/);
+    await click(findButton(app.dialogs, '放弃修改')); await cancelling;
+    assert.equal(app.dialogs.querySelectorAll('.dialog').length, 0);
     assert.notEqual(app.refs.drawerBody.children[0], form);
     assert.equal(reads, kind === 'source' ? 1 : 0); assert.equal(writes, 0);
     app.renderNoteEditor(note);
@@ -1341,6 +1434,89 @@ test('note editor user drawer exits preserve changed fields until explicit disca
     assert.equal(app.refs.drawer.classList.contains('is-open'), false);
     app.document.events.keydown({ key: 'Escape' });
     assert.equal(app.dialogs.querySelectorAll('.dialog').length, 0, 'a discarded hidden editor must not prompt on later Escape');
+  }
+});
+
+test('rich source draft survives cancel, navigation and library preparation until explicit discard', async () => {
+  const source = { id: 'rich-drawer-source', kind: 'source', title: '合成原文', body: '# 初始\n', hash: 'base', meta: {} };
+  const app = browser(); app.state.view = 'library'; app.refs.drawer.classList.add('is-open');
+  app.renderNoteEditor(source);
+  const form = app.refs.drawerBody.children[0], editor = form.querySelector('.markdown-editor');
+  const richDraft = '# 初始\n\n**尚未同步到文本框的富文本修改**\n';
+  editor.getValue = () => richDraft;
+  assert.equal(control(form, 'body').value, source.body);
+  assert.equal(unloadRequested(app), true);
+  for (const exit of [() => click(findButton(form, '取消')), () => app.navigate('capture'), () => app.prepareContextChange()]) {
+    const pending = exit();
+    await Promise.resolve(); // Navigation first resolves the main-page form guard.
+    assert.match(app.dialogs.textContent, /放弃未保存的修改/);
+    await click(findButton(app.dialogs, '取消')); await pending;
+    assert.equal(app.refs.drawerBody.children[0], form);
+    assert.equal(editor.getValue(), richDraft); assert.equal(app.state.view, 'library');
+    assert.equal(app.refs.drawer.classList.contains('is-open'), true);
+  }
+  const leaving = app.navigate('capture'); await Promise.resolve();
+  await click(findButton(app.dialogs, '放弃修改')); assert.equal(await leaving, true);
+  assert.equal(app.state.view, 'capture'); assert.equal(app.refs.drawer.classList.contains('is-open'), false);
+  assert.equal(unloadRequested(app), false, 'a discarded hidden editor does not block the new page');
+});
+
+test('slow source saves retain later rich input and advance the hash and metadata baseline for the next save', async () => {
+  const source = { id: 'slow-rich-source', kind: 'source', title: '合成原文', body: '# 初始\n', hash: 'base', meta: {} };
+  const writes = []; let release;
+  const app = browser({ updateNote: async (id, payload) => {
+    writes.push(plain(payload));
+    if (writes.length === 1) await new Promise(resolve => { release = resolve; });
+    return { ...source, title: payload.title, body: payload.body, hash: `saved-${writes.length}` };
+  }, bootstrap: async () => ({}) });
+  app.refs.drawer.classList.add('is-open'); app.renderNoteEditor(source);
+  const form = app.refs.drawerBody.children[0], editor = form.querySelector('.markdown-editor');
+  let richDraft = '# 第一轮富文本提交\n'; editor.getValue = () => richDraft;
+  control(form, 'author').value = '已提交的合成作者';
+  const pending = form.events.submit({ preventDefault() {} });
+  assert.equal(findButton(form, '保存修改').disabled, true);
+  await form.events.submit({ preventDefault() {} }); assert.equal(writes.length, 1);
+  richDraft += '\n**保存途中继续输入**\n'; control(form, 'title').value = '保存途中修改标题';
+  release(); await pending;
+  assert.equal(app.refs.drawerBody.children[0], form); assert.equal(editor.getValue(), richDraft);
+  assert.equal(form.hasUnsavedChanges(), true); assert.equal(findButton(form, '保存修改').disabled, false);
+  assert.equal(writes[0].expectedHash, 'base'); assert.doesNotMatch(writes[0].body, /保存途中/);
+  await form.events.submit({ preventDefault() {} });
+  assert.equal(writes[1].expectedHash, 'saved-1'); assert.match(writes[1].body, /保存途中继续输入/);
+  assert.equal(writes[1].title, '保存途中修改标题');
+  assert.deepEqual(writes[1].meta, {}, 'metadata already saved by the first request is not resubmitted as a new change');
+  assert.notEqual(app.refs.drawerBody.children[0], form);
+});
+
+test('source save keeps later input during bootstrap or parent loading and never redraws a closed or replaced editor', async () => {
+  const source = { id: 'late-source-save', kind: 'source', title: '合成原文', body: '初始正文', hash: 'base', meta: {} };
+  for (const phase of ['bootstrap', 'parent', 'closed', 'replacement', 'context']) {
+    let release, reach, version = 0;
+    const gate = new Promise(resolve => { release = resolve; });
+    const reached = new Promise(resolve => { reach = resolve; });
+    const app = browser({
+      getContext: () => ({ practiceId: String(version), version }),
+      updateNote: async () => { if (['closed', 'replacement', 'context'].includes(phase)) { reach(); await gate; } return { ...source, hash: 'saved' }; },
+      bootstrap: async () => { if (phase === 'bootstrap') { reach(); await gate; } return {}; },
+      note: async () => { if (phase === 'parent') { reach(); await gate; } return source; },
+    });
+    app.refs.drawer.classList.add('is-open'); app.renderNoteEditor(source, { returnToSourceId: source.id });
+    const form = app.refs.drawerBody.children[0]; control(form, 'body').value = '已提交正文';
+    const saving = form.events.submit({ preventDefault() {} }); await reached;
+    if (phase === 'closed') {
+      const closing = click(app.refs.drawerClose);
+      await click(findButton(app.dialogs, '放弃修改')); await closing;
+    } else if (phase === 'replacement') app.renderNoteEditor({ ...source, id: 'new-editor' });
+    else if (phase === 'context') version++;
+    else control(form, 'body').value = '后续输入仍未保存';
+    const current = app.refs.drawerBody.children[0], wasOpen = app.refs.drawer.classList.contains('is-open');
+    release(); await saving;
+    assert.equal(app.refs.drawerBody.children[0], current, phase);
+    assert.equal(app.refs.drawer.classList.contains('is-open'), wasOpen, phase);
+    if (phase === 'bootstrap' || phase === 'parent') {
+      assert.equal(control(form, 'body').value, '后续输入仍未保存', phase); assert.equal(form.hasUnsavedChanges(), true, phase);
+      assert.match(app.toasts.textContent, /后续输入仍在当前草稿/, phase);
+    }
   }
 });
 
@@ -1427,6 +1603,24 @@ test('saving an untouched source editor submits no display defaults; actual chan
   control(localForm, 'privacy').children.forEach(option => { option.selected = option.value === 'cloud'; });
   await localForm.events.submit({ preventDefault() {} });
   assert.deepEqual(writes[3].meta, { privacy: 'cloud' }, 'an actual privacy change remains explicit');
+});
+
+test('source form reads the current editor draft for dirty checks and hash-protected save, rather than a stale textarea', async () => {
+  const source = { id: 'editor-source', kind: 'source', title: '合成原文', body: '# 原文\r\n\r\n保留', hash: 'original-hash', meta: {} };
+  const writes = [];
+  const app = browser({ updateNote: async (id, body) => { writes.push(plain(body)); throw new Error('合成冲突'); } });
+  app.renderNoteEditor(source);
+  const form = app.refs.drawerBody.children[0], editor = form.querySelector('.markdown-editor');
+  assert.equal(form.hasUnsavedChanges(), false);
+  assert.equal(editor.getValue(), source.body);
+  const richDraft = '# 原文\n\n**可视化编辑尚未同步 textarea**\n';
+  editor.getValue = () => richDraft;
+  assert.equal(form.hasUnsavedChanges(), true);
+  await form.events.submit({ preventDefault() {} });
+  assert.equal(writes[0].body, richDraft);
+  assert.equal(writes[0].expectedHash, source.hash);
+  assert.equal(app.refs.drawerBody.children[0], form);
+  assert.equal(editor.getValue(), richDraft);
 });
 
 test('empty daily plans show the actual reasons with working knowledge and budget entry points', async () => {

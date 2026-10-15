@@ -161,3 +161,11 @@
 Capacitor 生成的默认图标和启动图属于模板资源，其许可范围随上述 Capacitor MIT 许可说明；本次未重绘、替换或另行引入媒体。2026-10-07 已在 b129246 构建的实际 APK ZIP 条目中确认 [android-third-party-notices.txt](../public/android-third-party-notices.txt) 随包收录；这不扩展上文注明的传递依赖审计范围。
 
 2026-10-07 依赖安全修复：MCP SDK 从 1.30.0 升至 1.31.0（MIT，许可文件保持存在），修复 GHSA-6qxp-vccf-f47h。旧清单版本不代表当前锁文件。
+
+## 原始资料编辑器增量（2026-10-15）
+
+新增 npm `vditor@4.0.0`（MIT）和传递依赖 `diff-match-patch@1.0.5`（Apache-2.0）。已核对官方 npm 元数据、实际包版本、锁文件 dist.integrity，复制的核心 JS/CSS、Lute、中文界面、图标及主题 CSS 用 [manifest.json](../public/vendor/vditor/manifest.json) 记录 SHA-256，测试逐字比对已安装包。Vditor 固定完整性为 `sha512-JUeSmmNNxXaq4j29F6OZ/vLgyM/Wt/SpSK4o/gyrc02uTsS+iTeC0ofajxbW29WSJ4LFMec4nrywVul51PrLvg==`。
+
+内嵌 Lute 实际报告 1.7.6，其固定 tag LICENSE 为 MulanPSL-2.0；Go/GopherJS 使用 BSD 许可，其他声明组件的许可也单独保留。详细固定来源、各许可全文和不可重建完整编译 SBOM 的限制见 [NOTICE](../public/vendor/vditor/NOTICE.txt)。未分发可选 KaTeX、图表、PlantUML、字体或 emoji 图片集合；未更改项目自身许可证。旧 93 包历史清单不代表当前锁文件的完整最新依赖树。
+
+编辑器vendor目录通过 `.gitattributes` 的 `-text` 保持上游原字节，避免Windows Git自动换行破坏已登记SHA-256；测试还用 `core.autocrlf=true` 的真实Git导出核对，不对哈希进行换行归一化或忽略差异。

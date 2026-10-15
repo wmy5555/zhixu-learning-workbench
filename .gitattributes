@@ -1,0 +1,2 @@
+# Preserve upstream vendored bytes, including on Windows core.autocrlf=true.
+public/vendor/vditor/** -text
