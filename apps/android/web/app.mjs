@@ -3,6 +3,7 @@ import { createProcessFeedback } from "./process-feedback.mjs";
 import { createSourceMap } from "./source-map.mjs";
 import { initSidebar } from "./sidebar.mjs";
 import { parseSourceFile } from "./source-exchange.mjs";
+import { renderMarkdown } from "./markdown-reader.mjs";
 import { createAndroidDataPanel } from "./android-data.mjs";
 import { createAndroidSyncPanel } from "./android-sync.mjs";
 import {
@@ -58,7 +59,68 @@ const state = {
   restoreBackup: null,
   restoreToken: "",
   sourceMaps: new Map(),
+  libraryFoldState: new Map(),
 };
+let libraryRenderSequence = 0;
+let libraryRegionSequence = 0;
+
+function libraryFoldControl(key, title, content) {
+  const context = api.getContext();
+  const scopedKey = `${context.practiceId || 'formal'}:${key}`;
+  let collapsed = state.libraryFoldState.get(scopedKey) === true;
+  content.id = `library-region-${++libraryRegionSequence}`;
+  const control = button('', { kind: 'quiet compact', onClick: () => {
+    const latest = api.getContext();
+    if (latest.version !== context.version || latest.practiceId !== context.practiceId) return;
+    const form = refs.drawer.classList.contains('is-open') ? refs.drawerBody.querySelector('form') : null;
+    const inputForm = typeof unsavedInputForm === 'function' ? unsavedInputForm()
+      : refs.main.querySelector('[data-tour="capture-form"]') || refs.main.querySelector('[data-tour="study-session"]');
+    if (!collapsed && (form?.hasUnsavedChanges?.() || inputForm?.hasUnsavedChanges?.())) {
+      toast('请先保存当前编辑，再折叠内容。', 'info');
+      return;
+    }
+    collapsed = !collapsed;
+    state.libraryFoldState.set(scopedKey, collapsed);
+    sync();
+  } });
+  control.classList.add('library-fold-toggle');
+  control.setAttribute('aria-controls', content.id);
+  function sync() {
+    content.hidden = collapsed;
+    control.textContent = `${collapsed ? '展开' : '折叠'}${title}`;
+    control.setAttribute('aria-expanded', String(!collapsed));
+  }
+  sync();
+  return control;
+}
+
+function librarySection(key, title, copy, content, count, unit) {
+  const body = el('div', { class: 'library-section-body' }, content);
+  const control = libraryFoldControl(key, title, body);
+  return el('section', { class: 'library-content-section', dataset: { librarySection: key } }, [
+    sectionHeading(title, copy, el('div', { class: 'section-actions' }, [badge(`${count} ${unit}`), control])), body,
+  ]);
+}
+
+function sourceBodyPreview(value, length = 420) {
+  const text = String(value || '');
+  return text.length > length ? `${text.slice(0, length)}\n…` : text;
+}
+
+function sourceReadingBody(value, className = '', emptyText = '暂无原文') {
+  return renderMarkdown(value, { className: `prose ${className}`.trim(), emptyText });
+}
+
+function historyReadingBody(note, version) {
+  if (note.kind !== 'source') return el('pre', { class: 'mono-block', text: version.raw || version.body || '此版本没有可显示的正文快照' });
+  const raw = String(version.raw || '');
+  const frontmatter = raw.match(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/);
+  const body = version.body ?? (frontmatter ? raw.slice(frontmatter[0].length) : raw);
+  return el('div', { class: 'history-reading-body' }, [
+    frontmatter ? el('pre', { class: 'mono-block history-metadata', text: frontmatter[0] }) : null,
+    sourceReadingBody(body, '', '此版本没有可显示的正文快照'),
+  ]);
+}
 let onboarding = null;
 function isMobilePrototype() { return api.runtime?.kind === "android-prototype"; }
 function onlineReady(name) { const value = state.bootstrap?.capabilities?.[name]; return value === true || value?.ready === true; }
@@ -515,15 +577,30 @@ function step(title, copy, done) {
 }
 
 async function renderLibrary() {
-  const data = await api.library(state.libraryFilters);
+  const sequence = ++libraryRenderSequence;
+  const context = api.getContext(), view = state.view;
+  const filters = { ...state.libraryFilters };
+  const current = () => {
+    const latest = api.getContext();
+    return sequence === libraryRenderSequence && latest.practiceId === context.practiceId && latest.version === context.version && state.view === view;
+  };
+  const filtered = Boolean(String(filters.q || '').trim() || filters.kind || filters.stage);
+  if (filtered) {
+    const oldAdvice = refs.main.querySelector('[data-tour="library-recommendations"]');
+    if (oldAdvice) oldAdvice.hidden = true;
+  }
+  let data;
+  try { data = await api.library(filters); }
+  catch (error) { if (current()) throw error; return; }
+  if (!current()) return;
   const groups = asArray(data.groups).filter((group) => group?.source && !isExcerptOnly(group.source));
   const standalone = asArray(data.standalone).filter((note) => !isExcerptOnly(note));
   const form = el("form", { class: "filter-bar", dataset: { tour: "library-filter" } });
-  const q = el("input", { name: "q", value: state.libraryFilters.q, placeholder: "搜索标题和正文" });
+  const q = el("input", { name: "q", value: filters.q, placeholder: "搜索标题和正文" });
   form.append(
     el("div", { class: "search-input" }, q),
-    selectControl([["", "内容类别"], ["source", "原始资料"], ["knowledge", "知识"], ["mistake", "错题"], ["topic", "主题学习包"], ["report", "AI 整理建议"]], state.libraryFilters.kind, "kind"),
-    selectControl([["", "学习状态"], ["reference", "仅供查阅"], ["candidate", "待选学"], ["learning", "正在学习"], ["integrated", "已整理个人理解"], ["core", "重点知识"], ["retired", "不再使用"]], state.libraryFilters.stage, "stage"),
+    selectControl([["", "内容类别"], ["source", "原始资料"], ["knowledge", "知识"], ["mistake", "错题"], ["topic", "主题学习包"], ["report", "AI 整理建议"]], filters.kind, "kind"),
+    selectControl([["", "学习状态"], ["reference", "仅供查阅"], ["candidate", "待选学"], ["learning", "正在学习"], ["integrated", "已整理个人理解"], ["core", "重点知识"], ["retired", "不再使用"]], filters.stage, "stage"),
     button("筛选", { kind: "primary", type: "submit" }),
   );
   form.addEventListener("submit", (event) => {
@@ -532,11 +609,23 @@ async function renderLibrary() {
     recordTourEvent("library-filter");
     renderLibrary().catch(handleError);
   });
+  const keepLatestFilters = () => {
+    if (refs.main.querySelector('[data-tour="library-filter"]') !== form) return;
+    const latest = api.getContext();
+    if (latest.version !== context.version || latest.practiceId !== context.practiceId) return;
+    state.libraryFilters = serializeForm(form);
+    // A response must not replace a newer query that is still being typed.
+    libraryRenderSequence++;
+    const advice = refs.main.querySelector('[data-tour="library-recommendations"]');
+    if (advice) advice.hidden = true;
+  };
+  form.addEventListener('input', keepLatestFilters);
+  form.addEventListener('change', keepLatestFilters);
   const groupCards = groups.map((group) => sourceGroupCard(group));
   const standaloneCards = standalone.map((note) => el("article", { class: "card" }, [
     el("div", { class: "card-head" }, [badge(labels.kind(note.kind)), badge(labels.stage(note.meta?.stage), stateTone(note.meta?.stage))]),
     el("h3", { text: note.title || "未命名" }),
-    el("p", { text: truncate(readableBody(note.body), 135) || "暂无正文" }),
+    note.kind === 'source' ? sourceReadingBody(sourceBodyPreview(note.body), 'markdown-preview') : el("p", { text: truncate(readableBody(note.body), 135) || "暂无正文" }),
     el("div", { class: "card-foot" }, [el("span", { text: formatDate(note.updatedAt, true) }), button("查看", { kind: "text", onClick: () => openNote(note.id) })]),
   ]));
   const visibleCount = groups.length + standalone.length;
@@ -545,15 +634,25 @@ async function renderLibrary() {
     el("strong", { text: `检测到 ${conflicts.length} 个文件冲突` }),
     el("div", { text: "重复稳定 ID、解析错误或并发修改不会被静默覆盖。请打开相关条目处理。" }),
   ]) : null;
-  clear(refs.main).append(el("div", { class: "page-stack" }, [
+  // Only actual matches may expand a source into its explicitly linked children.
+  // A group retained for one matching child must not include its siblings' advice.
+  let visibleIds = null;
+  if (filtered) {
+    visibleIds = new Set(asArray(data.matchingIds));
+    for (const group of groups) if (visibleIds.has(group.source.id)) for (const child of asArray(group.children)) visibleIds.add(child.id);
+  }
+  const advice = isMobilePrototype() ? mobileNotice() : await recommendationsPanel(visibleIds);
+  if (!current()) return;
+  const page = el("div", { class: "page-stack" }, [
     conflictPanel,
     el("section", {}, [sectionHeading("资料与拆解", `${groups.length} 份原始资料，${standalone.length} 条独立内容；核验依据可在知识详情中展开`, button("收集资料", { kind: "primary", onClick: () => navigate("capture") })), form]),
-    isMobilePrototype() ? mobileNotice() : await recommendationsPanel(),
+    advice,
     visibleCount ? el("div", { class: "library-sections", dataset: { tour: "library-content" } }, [
-      groups.length ? el("section", {}, [sectionHeading("原始资料", "每份资料及其拆解集中在同一个窗口"), el("div", { class: "card-grid group-grid" }, groupCards)]) : null,
-      standalone.length ? el("section", {}, [sectionHeading("独立内容", "没有归属于某份原始资料的内容"), el("div", { class: "card-grid" }, standaloneCards)]) : null,
+      groups.length ? librarySection('sources', '原始资料', '每份资料及其拆解集中在同一个窗口', el("div", { class: "card-grid group-grid" }, groupCards), groups.length, '份资料') : null,
+      standalone.length ? librarySection('standalone', '独立内容', '没有归属于某份原始资料的内容', el("div", { class: "card-grid" }, standaloneCards), standalone.length, '条内容') : null,
     ]) : emptyState("没有匹配的内容", "尝试清除筛选，或先收集一份原始资料。", button("清除筛选", { onClick: () => { state.libraryFilters = { q: "", kind: "", stage: "" }; renderLibrary(); } })),
-  ]));
+  ]);
+  clear(refs.main).append(page);
 }
 
 function isExcerptOnly(note) {
@@ -565,7 +664,7 @@ function evidenceRow(evidence) {
   return el("article", { class: "citation" }, [
     el("div", { class: "card-head" }, [el("strong", { text: evidence.title || "保存的核验来源" }), badge(sourceRole(evidence.role))]),
     url ? el("a", { href: url, target: "_blank", rel: "noopener noreferrer", text: "打开原始网页" }) : null,
-    el("div", { class: "prose", text: evidence.excerpt || "未保存可展示的正文摘录。" }),
+    sourceReadingBody(evidence.excerpt, '', '未保存可展示的正文摘录。'),
     evidence.rationale ? el("p", { text: `与主张的关系：${evidence.rationale}` }) : null,
     evidence.locator ? el("p", { class: "fine-print", text: `原文定位：${evidence.locator}` }) : null,
     evidence.fetchedAt ? el("p", { class: "fine-print", text: `读取时间：${formatDate(evidence.fetchedAt, true)}` }) : null,
@@ -584,7 +683,7 @@ function evidenceDetails(noteId, sources = null) {
       const data = sources === null ? await api.evidence(noteId) : { evidence: sources };
       if (isMobilePrototype()) {
         clear(content).append(el("p", { text: "这里是整理时保留的原始来源快照，不是联网核验结果。保留来源不表示事实正确，手机尚不能联网核验。" }));
-        if (data.sourceSnapshot) content.append(el("h3", { text: data.sourceSnapshot.title || "保存的原文" }), el("div", { class: "prose", text: data.sourceSnapshot.body || "未保留正文" }));
+        if (data.sourceSnapshot) content.append(el("h3", { text: data.sourceSnapshot.title || "保存的原文" }), sourceReadingBody(data.sourceSnapshot.body, '', '未保留正文'));
         else content.append(el("p", { text: "此条目没有保留原始来源快照。" }));
         if (asArray(data.limitations).length) content.append(el("ul", {}, data.limitations.map(value => el("li", { text: value }))));
         loaded = true; return;
@@ -630,12 +729,16 @@ function relationControls(note) {
   ]);
 }
 
-async function recommendationsPanel() {
-  const panel = el("section", { class: "panel", dataset: { tour: "library-recommendations" } }, [sectionHeading("知识使用建议", "根据实际采用、学习和已有关系提出建议；是否调整由你决定，不自动宣称掌握")]);
+async function recommendationsPanel(visibleIds = null) {
+  if (visibleIds && !visibleIds.size) return null;
+  const panel = el('div', { class: 'page-stack' });
+  let suggestionCount = 0;
   try {
     const data = await api.recommendations();
     recordTourEvent("recommendations-open");
-    const suggestions = asArray(data.suggestions);
+    const suggestions = asArray(data.suggestions).filter(suggestion => !visibleIds || [suggestion.noteId, suggestion.sourceId, suggestion.relatedId].some(id => typeof id === 'string' && visibleIds.has(id)));
+    if (visibleIds && !suggestions.length) return null;
+    suggestionCount = suggestions.length;
     panel.append(suggestions.length ? el("div", { class: "list" }, suggestions.map(suggestion => el("article", { class: "list-item no-icon recommendation-card" }, [
       el("div", { class: "item-copy" }, [el("h3", { text: suggestion.title || "知识建议", title: suggestion.title || "知识建议" }), el("p", { text: truncate(suggestion.reason, 160) }),
         el("div", { class: "item-meta" }, [badge(({ promotion: "调整学习阶段", relearn: "重新学习", reference: "转为查阅", merge: "检查重复", research: "补充研究" })[suggestion.type] || "建议"), suggestion.targetStage ? badge(labels.stage(suggestion.targetStage)) : null]),
@@ -660,8 +763,11 @@ async function recommendationsPanel() {
         button("暂不采用", { kind: "text compact", onClick: async () => { try { await api.recommendationAction(suggestion.id, { action: "dismiss" }); await renderLibrary(); } catch (error) { handleError(error); } } }),
       ]),
     ]))) : el("p", { class: "muted", text: "目前没有新的调整建议。继续学习或标记输出中实际采用的知识后，可再次查看。" }));
-  } catch (error) { panel.append(el("p", { text: `建议暂不可用：${errorMessage(error)}` })); }
-  return panel;
+  } catch (error) { if (visibleIds) return null; panel.append(el("p", { text: `建议暂不可用：${errorMessage(error)}` })); }
+  const section = librarySection('recommendations', '知识使用建议', '根据实际采用、学习和已有关系提出建议；是否调整由你决定，不自动宣称掌握', panel, suggestionCount, '条建议');
+  section.classList.add('panel');
+  section.dataset.tour = 'library-recommendations';
+  return section;
 }
 
 async function previewNoteLinks(noteId) {
@@ -672,7 +778,7 @@ async function previewNoteLinks(noteId) {
       el("p", { text: "请核对来源、主题和关系链接。确认后仅更新应用维护的链接区块。" }),
       preview.conflict ? el("div", { class: "notice danger", text: "链接区块已被手动修改，请先处理冲突；本次不会覆盖。" }) : null,
       preview.privacyChanged ? el("div", { class: "notice info", text: "链接中包含仅本地知识的标题。确认更新后，这份笔记也将收紧为仅本地，避免这些标题被外发。" }) : null,
-      el("div", { class: "two-column" }, [el("section", {}, [el("h3", { text: "更新前" }), el("div", { class: "prose", text: preview.before || "无" })]), el("section", {}, [el("h3", { text: "更新后" }), el("div", { class: "prose", text: preview.body || "无" })])]),
+      el("div", { class: "two-column" }, [el("section", {}, [el("h3", { text: "更新前" }), sourceReadingBody(preview.before, '', '无')]), el("section", {}, [el("h3", { text: "更新后" }), sourceReadingBody(preview.body, '', '无')])]),
       button(preview.changed ? "确认更新链接" : "链接已是最新", { kind: "primary", disabled: !preview.changed || Boolean(preview.conflict), onClick: async () => {
         try { await api.syncLinks(noteId, { expectedHash: preview.expectedHash }); toast("可读链接已更新", "success"); await openNote(noteId); }
         catch (error) { handleError(error); }
@@ -690,7 +796,7 @@ function sourceGroupCard(group) {
   return el("article", { class: "card source-group-card" }, [
     el("div", { class: "card-head" }, [badge("原始资料", "accent"), badge(`${children.length} 条拆解`, children.length ? "good" : "neutral")]),
     el("h3", { text: source.title || "未命名原始资料" }),
-    el("p", { text: truncate(source.body, 130) || "暂无原文" }),
+    sourceReadingBody(sourceBodyPreview(source.body), 'markdown-preview'),
     childPreview.length ? el("div", { class: "group-child-preview" }, childPreview.map((child) => el("div", { class: "group-child-preview-item" }, [
       el("span", { text: child.title || "未命名拆解" }),
       badge(labels.stage(child.meta?.stage), stateTone(child.meta?.stage)),
@@ -755,7 +861,7 @@ function renderSourceGroupDrawer(source) {
 
   const original = el("details", { class: "original-material", dataset: { tour: "note-original" } }, [
     el("summary", {}, [el("span", { text: "查看原始资料全文" }), el("small", { text: `${String(source.body || "").length} 字` })]),
-    el("div", { class: "prose original-body", text: source.body || "暂无原文" }),
+    sourceReadingBody(source.body, 'original-body'),
   ]);
   if (isMobilePrototype()) original.open = true;
   content.append(original);
@@ -862,7 +968,7 @@ function childSection(note, source, index) {
       el("div", {}, [el("p", { class: "eyebrow", text: `拆解 ${index + 1}` }), el("h3", { text: note.title || "未命名拆解" })]),
       el("div", { class: "item-meta" }, [badge(labels.stage(meta.stage), stateTone(meta.stage)), meta.topic ? badge(meta.topic, "accent") : null]),
     ]),
-    el("div", { class: "prose child-note-body", text: readableBody(note.body) || "暂无正文" }),
+    sourceReadingBody(readableBody(note.body), 'child-note-body', '暂无正文'),
     isMobilePrototype() ? el("p", { class: "muted", text: "知识历史保留在学习记录备份中，手机暂不逐版查看或恢复。" }) : null,
     evidenceDetails(note.id),
     limitations.length ? el("div", { class: "notice danger child-limitations" }, [
@@ -895,7 +1001,7 @@ function renderNoteDrawer(note) {
     button("删除", { kind: "danger", disabled: isMobilePrototype(), onClick: () => deleteNote(note) }),
   ]);
   if (note.kind === "knowledge" && !isMobilePrototype()) headActions.insertBefore(button("合并", { onClick: () => renderMerge(note) }), headActions.lastChild);
-  content.append(noteMeta(note), headActions, el("div", { class: "prose", text: readableBody(note.body) || "暂无正文" }));
+  content.append(noteMeta(note), headActions, sourceReadingBody(readableBody(note.body), '', '暂无正文'));
   if (isMobilePrototype()) content.append(el("p", { class: "muted", text: "该条目的历史随学习记录备份保留，手机暂不提供逐版查看与恢复。" }));
   if (note.kind === "knowledge") { content.append(evidenceDetails(note.id)); if (!isMobilePrototype()) content.append(relationControls(note)); }
   if (!isMobilePrototype()) content.append(button("查看 Obsidian 链接更新", { onClick: () => previewNoteLinks(note.id) }));
@@ -1199,7 +1305,7 @@ async function renderMerge(note, relatedId = "") {
       const other = candidates.find((item) => item.id === select.value);
       try {
         const result = await api.merge({ keepId: note.id, mergeId: other.id, expectedHash: note.hash, mergeHash: other.hash, preview: true });
-        clear(preview).append(el("section", { class: "panel soft" }, [el("div", { class: "notice", text: result.warning || "请核对预览后再确认。" }), el("div", { class: "prose", text: result.after || "" }), button("确认合并", { kind: "danger", onClick: async () => {
+        clear(preview).append(el("section", { class: "panel soft" }, [el("div", { class: "notice", text: result.warning || "请核对预览后再确认。" }), sourceReadingBody(result.after), button("确认合并", { kind: "danger", onClick: async () => {
           const ok = await confirmAction({ title: "确认合并？", message: "将保留两份观点与来源，另一条知识会标为被替代。", confirmText: "合并", danger: true });
           if (!ok) return;
           try {
@@ -1233,7 +1339,7 @@ async function renderHistory(note, { returnToSourceId = "" } = {}) {
           el("h3", { text: formatDate(version.createdAt || version.updatedAt, true) }),
           el("p", { text: isMobilePrototype() ? version.id === "original" ? "最初收集的原文" : "修改前保留的版本" : version.reason || version.hash || "历史版本" }),
           ...(isMobilePrototype() && note.kind === "source" ? [el("p", { text: "恢复将同时替换标题、正文和以下来源信息；空字段会清除当前值。" }), el("pre", { class: "mono-block", text: version.meta ? androidSourceVersionSummary(version) : "未取得此版本的来源信息，暂不能恢复。" })] : []),
-          el("details", {}, [el("summary", { text: "审阅旧版本正文" }), el("pre", { class: "mono-block", text: version.raw || version.body || "此版本没有可显示的正文快照" })]),
+          el("details", {}, [el("summary", { text: "审阅旧版本正文" }), historyReadingBody(note, version)]),
         ]),
         button("恢复此版本", { disabled: isMobilePrototype() && note.kind === "source" && !version.meta, onClick: () => restoreVersion(note, version, returnToSourceId) }),
       ]))) : emptyState("没有可用的历史版本", "首次修改后，旧版本会出现在这里。"),
@@ -1413,7 +1519,7 @@ async function studySessionPanel() {
         el("h2", { text: "理解内容后，再隐藏原文主动回忆" }),
         el("p", { class: "muted", text: "隐藏后请用自己的语言解释问题、条件和边界。重新查看原文会被记录为使用提示。" }),
       ]),
-      el("section", { class: "panel", dataset: { tour: "study-material" } }, [sectionHeading("学习材料", "完整正文，仅在阅读阶段显示"), el("div", { class: "prose", text: session.material || "这次会话没有可显示的材料。" })]),
+      el("section", { class: "panel", dataset: { tour: "study-material" } }, [sectionHeading("学习材料", "完整正文，仅在阅读阶段显示"), sourceReadingBody(session.material, '', '这次会话没有可显示的材料。')]),
       evidenceDetails(session.noteId),
       tour(button("隐藏材料，开始回忆", { kind: "primary", onClick: () => { state.studyMaterialVisible = false; recordTourEvent("study-hide"); renderStudy().catch(handleError); } }), "study-hide"),
     ]);
@@ -1516,7 +1622,7 @@ function androidStudySession(session) {
   const current = () => api.getContext().version === context.version && api.getContext().practiceId === context.practiceId && state.currentStudy?.id === session.id && state.view === view;
   const wrapper = el("div", { class: "page-stack" }, [el("div", { class: "notice info", text: completed ? "本轮已结束并保存记录，未批改。记录不表示回答正确或已经掌握。" : turns.length ? "回答已保存在手机 · 未批改。你可以继续回答，也可以结束并保存记录。" : "先阅读材料，再用自己的话回答。默认只保存原答；可独立选择外发材料与原答请求 AI 批改。" })]);
   if (state.studyMaterialVisible && !turns.length) {
-    wrapper.append(el("section", { class: "panel" }, [sectionHeading("学习材料"), el("div", { class: "prose", text: session.material || "暂无材料" })]), button("隐藏材料，开始回忆", { kind: "primary", onClick: async () => { state.studyMaterialVisible = false; await renderStudy(); } }));
+    wrapper.append(el("section", { class: "panel" }, [sectionHeading("学习材料"), sourceReadingBody(session.material, '', '暂无材料')]), button("隐藏材料，开始回忆", { kind: "primary", onClick: async () => { state.studyMaterialVisible = false; await renderStudy(); } }));
     return wrapper;
   }
   const form = el("form", { class: "page-stack", dataset: { tour: "study-session", sessionId: session.id } });
@@ -1926,7 +2032,7 @@ function searchResultRow(result) {
     el("div", { class: "item-symbol", text: note.kind === "source" ? "源" : note.kind === "mistake" ? "错" : "知" }),
     el("div", { class: "item-copy" }, [
       el("h3", { text: note.title || "未命名" }),
-      el("p", { text: truncate(readableBody(result.excerpt || note.body), 180) || "暂无摘要" }),
+      note.kind === 'source' ? sourceReadingBody(sourceBodyPreview(result.excerpt || note.body), 'markdown-preview', '暂无摘要') : el("p", { text: truncate(readableBody(result.excerpt || note.body), 180) || "暂无摘要" }),
       reasons ? el("p", { text: Array.isArray(reasons) ? reasons.join(" · ") : String(reasons) }) : null,
       el("div", { class: "item-meta" }, [badge(labels.kind(note.kind)), note.meta?.stage ? badge(labels.stage(note.meta.stage), stateTone(note.meta.stage)) : null, result.score !== undefined ? badge(`相关度 ${Number(result.score).toFixed(2)}`) : null]),
     ]),
@@ -2772,8 +2878,8 @@ async function openProposal(proposal) {
   openDrawer(proposal.title || "写入提案", isMobilePrototype() ? "研究修订待确认" : "MCP 待确认", el("div", { class: "page-stack" }, [
     el("div", { class: "notice", text: isMobilePrototype() ? "这里显示真实研究形成的修订建议。左侧为刚读取的当前内容；接受前再次检查版本，不自动覆盖你的编辑。" : "这里显示外部客户端建议的修改。接受前会检查目标文件是否已经变化。" }),
     el("div", { class: "two-column" }, [
-      el("section", { class: "panel soft" }, [el("p", { class: "eyebrow", text: "修改前" }), el("h3", { text: "当前内容" }), el("div", { class: "prose", text: proposal.before || "未返回修改前内容；请勿在无法核对时接受。" })]),
-      el("section", { class: "panel soft" }, [el("p", { class: "eyebrow", text: "修改后" }), el("h3", { text: "外部建议稿" }), el("div", { class: "prose", text: proposal.body || proposal.proposedBody || "未提供建议正文" })]),
+      el("section", { class: "panel soft" }, [el("p", { class: "eyebrow", text: "修改前" }), el("h3", { text: "当前内容" }), sourceReadingBody(proposal.before, '', '未返回修改前内容；请勿在无法核对时接受。')]),
+      el("section", { class: "panel soft" }, [el("p", { class: "eyebrow", text: "修改后" }), el("h3", { text: "外部建议稿" }), sourceReadingBody(proposal.body || proposal.proposedBody, '', '未提供建议正文')]),
     ]),
     proposal.diff ? el("pre", { class: "mono-block", text: proposal.diff }) : null,
     proposal.reason ? el("div", { class: "notice info", text: `提案理由：${proposal.reason}` }) : null,

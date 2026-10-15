@@ -17,6 +17,8 @@ export class Element {
       toggle: (name, force) => { const next = force ?? !this.classList.contains(name); next ? this.classList.add(name) : this.classList.remove(name); return next; },
     };
   }
+  set innerHTML(_) { throw new Error('Reading must not execute HTML'); }
+  insertAdjacentHTML() { throw new Error('Reading must not execute HTML'); }
   set textContent(value) { this._text = String(value); this.children = []; }
   get textContent() { return this._text + this.children.map(child => child.textContent ?? String(child)).join(""); }
   append(...children) {
@@ -68,8 +70,8 @@ function stripImports(source) {
 }
 
 export async function createAndroidBrowser({ api = {}, confirmations = [] } = {}) {
-  const [ui, app, sourceExchange, androidData, androidSync] = await Promise.all([
-    read("ui.mjs"), read("app.mjs"), read("source-exchange.mjs"), read("android-data.mjs"), read("android-sync.mjs"),
+  const [ui, app, sourceExchange, androidData, androidSync, reader] = await Promise.all([
+    read("ui.mjs"), read("app.mjs"), read("source-exchange.mjs"), read("android-data.mjs"), read("android-sync.mjs"), read("markdown-reader.mjs"),
   ]);
   const roots = new Map();
   const document = {
@@ -83,12 +85,14 @@ export async function createAndroidBrowser({ api = {}, confirmations = [] } = {}
     matchMedia: () => ({ matches: false, addEventListener() {} }),
     history: { replaceState() {} }, location: { hash: "" }, setTimeout() {}, addEventListener() {},
   };
+  let requestSequence = 0;
   const context = vm.createContext({
     api: { runtime: { kind: "android-prototype" }, getContext: () => ({ practiceId: "", version: 0 }),
       androidSync: async () => ({ context: 'formal', connected: false, sources: [], events: 0 }), ...api },
     document, window, localStorage: { getItem: key => local.get(key) || null, setItem: (key, value) => local.set(key, value) },
     Node: Element, ApiError: class extends Error {}, URL, Intl, Date, Map, Set, Promise, JSON, RegExp, TextEncoder, TextDecoder, queueMicrotask,
-    crypto: { randomUUID: () => "synthetic-request-id" },
+    crypto: { randomUUID: () => `00000000-0000-4000-8000-${String(++requestSequence).padStart(12, '0')}` },
+    fetch() { throw new Error('Reading must not request network resources'); },
     FormData: class {
       constructor(form) { this.form = form; }
       entries() { return descendants(this.form).filter(node => node.name && !node.disabled && ["input", "textarea", "select"].includes(node.tagName))
@@ -101,14 +105,14 @@ export async function createAndroidBrowser({ api = {}, confirmations = [] } = {}
   });
   context.toasts = [];
   context.confirmAction = async () => confirmations.length ? confirmations.shift() : true;
-  vm.runInContext(stripImports(ui) + "\n" + stripImports(sourceExchange) + "\n" + stripImports(androidData) + "\n" + stripImports(androidSync), context);
+  vm.runInContext(stripImports(ui) + "\n" + stripImports(sourceExchange) + "\n" + stripImports(androidData) + "\n" + stripImports(androidSync) + "\n" + stripImports(reader), context);
   context.confirmAction = async options => {
     context.confirmPrompts.push(options);
     return confirmations.length ? confirmations.shift() : true;
   };
   context.confirmPrompts = [];
   const appCode = stripImports(app).replace(/^init\(\);\s*$/m, "")
-    + "\nthis.androidApp = { navigate, renderCapture, renderSourceGroupDrawer, renderNoteDrawer, renderNoteEditor, manualExtract, renderStudy, androidMistakeForm, switchAndroidLibrary, renderHistory, renderSystem, state, refs };";
+    + "\nthis.androidApp = { navigate, renderLibrary, renderCapture, renderSourceGroupDrawer, renderNoteDrawer, renderNoteEditor, manualExtract, renderStudy, androidMistakeForm, switchAndroidLibrary, renderHistory, renderSystem, state, refs };";
   vm.runInContext(appCode, context);
   return { app: context.androidApp, document, context, Element, descendants };
 }
