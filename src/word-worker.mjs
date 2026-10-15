@@ -34,7 +34,7 @@ try {
   const result = await mammoth.extractRawText({ buffer: bytes });
   let text = result.value;
   if (!text.trim()) text = '';
-  const warnings = ['仅提取可读取文字；图片、图表、公式、修订、页眉页脚、嵌入对象及版式不保证覆盖，不代表完整文档。请核对后再主动提交AI。', ...result.messages.slice(0, 20).map(item => String(item.message).slice(0, 300))];
+  const warnings = ['仅提取可读取文字；图片、图表、公式、修订、脚注、尾注、批注、页眉页脚、嵌入对象及版式不保证覆盖，不代表完整文档。请核对后再主动提交AI。', ...result.messages.slice(0, 20).map(item => String(item.message).slice(0, 300))];
   if (text.length > 500000) { text = text.slice(0, 500000); warnings.push('提取文字超过 500000 字符，已截断；AI只处理可见提取部分。'); }
   parentPort.postMessage({ status: text.trim() ? 'partial' : 'empty', text, warnings: text.trim() ? warnings : ['未提取到文字；文件可能仅包含图片或不支持的对象。原文件保留，不能提交AI。'], tool: 'mammoth@1.13.0' });
 } catch {

@@ -115,6 +115,42 @@ test('converter terminates on timeout and subsequent conversion is usable', asyn
   assert.equal((await extractWord(file)).status, 'partial');
 });
 
+test('published Word fixtures preserve actual format coverage and survive multi-file backup restore', async t => {
+  const h = await harness(t), samples = path.resolve(import.meta.dirname, '../node_modules/mammoth/test/test-data');
+  const cases = [
+    ['tables.docx', /Top left[\s\S]*Bottom right/, 'partial'],
+    ['simple-list.docx', /Apple[\s\S]*Banana/, 'partial'],
+    ['text-box.docx', /Datum plane/, 'partial'],
+    ['strict-format.docx', /Test/, 'partial'],
+    ['footnotes.docx', /^Ouch\.\s*$/, 'partial'],
+    ['endnotes.docx', /^Ouch\.\s*$/, 'partial'],
+    ['comments.docx', /^Ouch\.\s*$/, 'partial'],
+    ['tiny-picture.docx', /^$/, 'empty'],
+  ];
+  const imported = [];
+  for (const [name, expected, status] of cases) {
+    const bytes = fs.readFileSync(path.join(samples, name)), uploaded = upload(h.service, name, bytes);
+    await h.reopen();
+    assert.ok(h.service.pendingUploads().some(item => item.id === uploaded.id));
+    const { note } = await h.service.commitFile({ uploadId: uploaded.id });
+    assert.equal(note.meta.textExtraction.status, status);
+    assert.match(note.meta.textExtraction.text, expected);
+    if (status === 'partial') assert.match(note.meta.textExtraction.warnings.join(''), /脚注、尾注、批注/);
+    else assert.throws(() => h.service.processNote(note.id), { code: 'SOURCE_FILE_ONLY' });
+    imported.push({ note, bytes, uploaded });
+  }
+  const backup = h.service.backup(), other = await harness(t);
+  assert.equal(backup.version, 2);
+  assert.equal(backup.attachments.length, cases.length);
+  const preview = other.service.restore({ backup });
+  other.service.restore({ backup, preview: false, token: preview.token });
+  await other.reopen();
+  for (const { note, bytes, uploaded } of imported) {
+    assert.deepEqual(other.service.readFile(note.id, uploaded.attachment.id).bytes, bytes);
+    assert.deepEqual(other.service.getNote(note.id).meta.textExtraction, note.meta.textExtraction);
+  }
+});
+
 test('validation rejects traversal, disguised MIME, active formats, empty/large files and huge pixels', () => {
   const largeImage = Buffer.from(tinyPng); largeImage.writeUInt32BE(100000, 16);
   for (const input of [

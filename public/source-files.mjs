@@ -2,6 +2,14 @@ import { el, button, field } from './ui.mjs';
 import { request, uploadAttachment, attachmentUrl } from './api.mjs';
 
 export const fileAccept = { 'png': 'image/png', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'gif': 'image/gif', 'webp': 'image/webp', 'pdf': 'application/pdf', 'doc': 'application/msword', 'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
+export function pickerFileType(file, detected) {
+  const mime = String(detected || '').toLowerCase();
+  // Some Windows installations report Office files as generic binary data.
+  // The server still validates MIME, extension, signature and size on upload.
+  return !mime || mime === 'application/octet-stream'
+    ? fileAccept[file.name.split('.').at(-1).toLowerCase()] || mime
+    : mime;
+}
 export const canProcessFile = note => !note.meta?.sourceFile || note.meta.sourceFile.format === 'docx' && Boolean(note.meta.textExtraction?.text?.trim());
 export function sourceFileNotice(note) {
   const file = note.meta?.sourceFile, extraction = note.meta?.textExtraction;
@@ -48,7 +56,7 @@ export async function createFilePicker(input, { imagesOnly = false, onChange = (
     acceptedFileTypes: acceptedTypes,
     // Folder drops are expanded by FilePond; reject their nested paths before upload.
     beforeAddFile: item => typeof item.source !== 'string' && !String(item.relativePath || '').replace(/^\//, '').includes('/'),
-    fileValidateTypeDetectType: (file, detected) => Promise.resolve(detected || fileAccept[file.name.split('.').at(-1).toLowerCase()] || ''),
+    fileValidateTypeDetectType: (file, detected) => Promise.resolve(pickerFileType(file, detected)),
     labelIdle: '拖入文件或 <span class="filepond--label-action">选择文件</span>',
     labelFileProcessing: '上传到本机', labelFileProcessingComplete: '已暂存，尚未保存资料', labelFileProcessingError: '上传失败',
     labelTapToCancel: '点击取消此项', labelTapToRetry: '点击重试', labelTapToUndo: '移除临时上传',
