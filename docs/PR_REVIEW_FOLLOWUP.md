@@ -1,5 +1,16 @@
 # PR 审阅核对与后续事项
 
+## PR #75 新审阅阻塞（2026-10-15）
+
+候选 `f2261f52b32081c35878c14b9359ddf05d0035ba` 的[四项 CI](https://github.com/wmy5555/zhixu-learning-workbench/actions/runs/38688008461)及[Android 编译/lint](https://github.com/wmy5555/zhixu-learning-workbench/actions/runs/38688008664)全部成功。代码[初审](https://github.com/wmy5555/zhixu-learning-workbench/pull/75#issuecomment-6185293678)仍发现两项 P1 与一项 P2；已有回归和构建通过不能代替这些缺陷的修复。
+
+- [P1 恢复请求绑定](https://github.com/wmy5555/zhixu-learning-workbench/pull/75#discussion_r4279489228)：仅 ID/上下文查询不能证明结果属于当前描述，需原生重算完整描述与材料摘要，旧检查点保持未知。
+- [P1 解码后凭据保护](https://github.com/wmy5555/zhixu-learning-workbench/pull/75#discussion_r4279489235)：原始文本替换挡不住 JSON 转义恢复，供应商 envelope 与模型内层 JSON 均需解码后递归遮蔽。
+- [P2 学习意图/会话一致性](https://github.com/wmy5555/zhixu-learning-workbench/pull/75#discussion_r4279489241)：已增加 JS/Java 对新增可选元数据与实际 session 的关联校验；37/37 定向回归通过，恶意备份回归先红后绿。新增两项原生方法尚未执行，不改变学习资格或晋级。
+
+两项 P1 触及既有授权/凭据重要机制，依 AGENTS 明确安全条款，已向所有者提供本地具体方案并请求批准；批准前不应用跟踪实现。两项 P1 仍未解决，P2 线程待整合后验证核对；安全初审已请求但暂无可核对公开结果，不重复请求。当前构建产物仍含 P1，不作为真实在线使用验收通过包；PR 保持 draft，不合并，阶段未完成。
+
+
 ## 2026-10-15 Android 第五阶段独立接续
 
 修改前读取 #67 与 #55 的普通评论、行内反馈、审阅总结及 #67 线程状态。#67 的正文与 emoji 标题两条 P2 已修复并解决；#55 的清空价格和恢复后账本未知两条反馈也有修复回复，代码复审覆盖 `8f303b8`。这些历史意见不覆盖当前整合、阅读/草稿和持久开始请求新增差异；两份旧安全初审仍无可独立核对的公开结果，保留未知，不重复触发旧 PR。
