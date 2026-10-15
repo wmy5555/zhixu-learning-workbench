@@ -132,7 +132,7 @@ function settingsForm(settings, readOnly, save, refresh) {
   return form;
 }
 
-export async function createUsagePanel({ load, settings, readOnly = false, save }) {
+export async function createUsagePanel({ load, settings, readOnly = false, save, loadRecovery, recoverCall }) {
   const root = el('div', { class: 'page-stack usage-dashboard' });
   const period = select('统计时间范围', [['month', '本月'], ['7d', '近 7 天'], ['30d', '近 30 天'], ['today', '今天']], 'month');
   const capability = select('调用类型', [['', '全部服务'], ...Object.entries(names)], '');
@@ -168,6 +168,11 @@ export async function createUsagePanel({ load, settings, readOnly = false, save 
         trendPanel(report), modelPanel(report), recentPanel(report),
         el('p', { class: 'fine-print usage-footnotes', text: `¹ 缓存输入已包含在输入 token 中；推理 token 已包含在输出中，不重复累加。未报告的明细保持未知。² 费用使用设置中的统一货币单位；不含供应商账单调整。${report.invalidDateCalls ? `有 ${report.invalidDateCalls} 条日期无效的记录未参与统计。` : ''}` }),
       );
+      if (loadRecovery) {
+        const recovery = await loadRecovery();
+        if (version !== revision) return;
+        if (recovery.pending?.length) body.prepend(recoveryPanel(recovery.pending, readOnly, recoverCall, refresh));
+      }
       status.textContent = `${report.from} 至 ${report.to} · ${report.timezone} · ${report.sharedUsage ? '正式与练习共用记录' : '知序本地记录'} · 已更新`;
       exportButton.disabled = false;
     } catch (error) {
@@ -179,4 +184,46 @@ export async function createUsagePanel({ load, settings, readOnly = false, save 
   for (const control of [period, capability, model]) control.addEventListener('change', () => { if (control !== model) model.value = ''; refresh(); });
   root.append(heading('用量与费用', '了解每次 AI 使用，把花费控制在自己的节奏内。', exportButton), el('div', { class: 'usage-toolbar' }, [period, capability, model, button('刷新统计', { onClick: refresh })]), status, body, settingsForm(settings, readOnly, save, refresh));
   await refresh(); return root;
+}
+
+function recoveryPanel(pending, readOnly, recoverCall, refresh) {
+  const panel = el('section', { class: 'panel', ariaLabel: '待核对的外部调用' }, [
+    heading('外部调用已暂停', '已有输入和已收到的回答保留在本机。先核对下面的记录；这些操作不会重新发送请求。'),
+  ]);
+  for (const record of pending) {
+    const status = el('p', { role: 'status', class: 'fine-print' });
+    const card = el('div', { class: 'page-stack' }, [
+      el('p', { text: `${names[record.capability] || '外部请求'} · ${record.model || '未记录模型'} · ${record.createdAt || ''}` }),
+      el('p', { text: record.hasResult ? '已收到结果，等待完成本地记账。补记后返回原来的学习任务或问答与输出继续，使用已保存的结果。' : '没有完整结果，无法判断服务是否已收费。请先核对供应商记录，原请求不会自动重发。' }), status,
+    ]);
+    if (readOnly) card.append(el('p', { text: '请返回正式库的用量与费用页面处理。' }));
+    else if (record.hasResult || record.phase === 'reserved') {
+      const action = button(record.hasResult ? '补记已收到的结果' : '解除未发送的预留', { onClick: async () => {
+        action.disabled = true;
+        try { await recoverCall(record.id, { action: 'recover' }); await refresh(); }
+        catch (error) { status.textContent = `尚未恢复：${error.message}`; action.disabled = false; }
+      } });
+      card.append(action);
+    } else {
+      const cost = el('input', { type: 'number', min: '0', step: 'any', name: 'confirmedCost', placeholder: '留空表示费用仍未知' });
+      const reason = el('textarea', { name: 'confirmationReason', required: true, maxLength: 500, rows: 2 });
+      const checked = el('input', { type: 'checkbox', name: 'checkedProvider' });
+      const submit = button('记录核对结果，不重发', { type: 'submit', disabled: true });
+      checked.addEventListener('change', () => { submit.disabled = !checked.checked; });
+      const form = el('form', { class: 'page-stack' }, [
+        field('已核对的费用', cost), field('核对说明', reason),
+        el('label', {}, [checked, ' 我已核对供应商记录；费用仍未知时继续暂停新调用，之后可在这里补填金额。']), submit,
+      ]);
+      form.addEventListener('submit', async event => {
+        event.preventDefault();
+        if (!checked.checked || !reason.value.trim() || submit.disabled) return;
+        submit.disabled = true;
+        try { await recoverCall(record.id, { action: 'confirm', cost: cost.value.trim() === '' ? null : Number(cost.value), reason: reason.value.trim() }); await refresh(); }
+        catch (error) { status.textContent = `尚未保存：${error.message}`; submit.disabled = !checked.checked; }
+      });
+      card.append(form);
+    }
+    panel.append(card);
+  }
+  return panel;
 }

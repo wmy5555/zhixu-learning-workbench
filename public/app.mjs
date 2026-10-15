@@ -1864,33 +1864,76 @@ async function actRelation(id, action) {
   catch (error) { handleError(error); }
 }
 
+const outputRequests = new Map(), activeOutputRequests = new Set();
+const outputRequestKey = context => `zhixu.outputRequest.v1:${context.practiceId || 'formal'}`;
+function pendingOutputRequest(context) {
+  const key = outputRequestKey(context);
+  if (!outputRequests.has(key)) {
+    let saved = null;
+    try {
+      saved = JSON.parse(sessionStorage.getItem(key) || 'null');
+      if (!saved || typeof saved.requestId !== 'string' || !saved.input || typeof saved.input.question !== 'string' || !Array.isArray(saved.input.scope)) saved = null;
+    } catch { /* The current page can still retain a submitted intent. */ }
+    outputRequests.set(key, saved);
+  }
+  return outputRequests.get(key);
+}
+function rememberOutputRequest(context, request) {
+  const key = outputRequestKey(context);
+  outputRequests.set(key, request);
+  try { if (request) sessionStorage.setItem(key, JSON.stringify(request)); else sessionStorage.removeItem(key); }
+  catch { if (request) toast('浏览器未能保留重试标识；请保持此页面打开，避免刷新后重复提交。', 'error'); }
+}
+
 async function renderOutput() {
+  const context = api.getContext(), pending = pendingOutputRequest(context), previous = pending?.input;
   const wrapper = el("div", { class: "page-stack" });
   const form = el("form", { class: "panel", dataset: { tour: "output-form" } });
   const question = el("textarea", { name: "question", rows: 5, required: true, placeholder: "例如：根据我已有的资料，解释 RAG 为什么不能保证答案一定正确。" });
-  const mode = selectControl([["answer", "回答问题"], ["outline", "组织提纲"], ["draft", "生成草稿"]], "answer", "mode");
-  const sourceScope = el("input", { type: "checkbox", name: "source", checked: true });
-  const knowledgeScope = el("input", { type: "checkbox", name: "knowledge", checked: true });
-  const allowCloudQuestion = el("input", { type: "checkbox", checked: false });
+  question.value = previous?.question || '';
+  const mode = selectControl([["answer", "回答问题"], ["outline", "组织提纲"], ["draft", "生成草稿"]], previous?.mode || "answer", "mode");
+  const sourceScope = el("input", { type: "checkbox", name: "source", checked: previous ? previous.scope.includes('source') : true });
+  const knowledgeScope = el("input", { type: "checkbox", name: "knowledge", checked: previous ? previous.scope.includes('knowledge') : true });
+  const allowCloudQuestion = el("input", { type: "checkbox", checked: previous?.privacy === 'cloud' });
   form.append(sectionHeading("有依据的问答与输出", "默认优先个人知识，并让你看见实际使用了哪些资料"), field("问题或输出目标", question), el("div", { class: "form-grid" }, [field("输出方式", mode), field("取材范围", el("div", { class: "segmented" }, [el("label", { class: "check-field" }, [knowledgeScope, "知识笔记"]), el("label", { class: "check-field" }, [sourceScope, "原始来源"])]))]), el("label", { class: "check-field" }, [allowCloudQuestion, el("span", { text: "允许将本次问题发给已配置的外部模型" })]), el("p", { class: "fine-print", text: "默认关闭：只在本机检索并列出已有材料。开启后，本次问题与标为允许云端的相关材料可发送给模型；仅本地材料不会外发。" }), el("div", { class: "notice info", text: "找不到、证据冲突或内容过期时，回答应明确说明。问答和草稿不会自动成为个人知识。" }), button("开始生成", { kind: "primary", type: "submit" }));
   const answerArea = el("section", { dataset: { tour: "output-result" } });
   const draftsPanel = await renderDraftsPanel();
+  const retryNotice = el('p', { class: 'notice info', dataset: { outputRetry: 'true' }, text: '上次提交尚未取得完成回执。保持输入不变后重试会继续原请求；修改输入会开始新请求，可能产生新的调用。' });
+  retryNotice.hidden = !pending;
+  form.append(retryNotice);
   if (state.lastOutput) renderAnswer(answerArea, state.lastOutput);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    const latest = api.getContext();
+    if (latest.version !== context.version || latest.practiceId !== context.practiceId) { toast('知识库已切换，请在当前页面重新提交。', 'info'); return; }
+    if (activeOutputRequests.has(outputRequestKey(context))) { toast('这次问答仍在执行，请等待后再重试。', 'info'); return; }
     const scope = [];
     if (knowledgeScope.checked) scope.push("knowledge");
     if (sourceScope.checked) scope.push("source");
     if (!scope.length) { toast("请至少选择一个取材范围", "error"); return; }
+    const input = { question: question.value, scope, mode: mode.value, privacy: allowCloudQuestion.checked ? 'cloud' : 'local' };
+    const retained = pendingOutputRequest(context);
+    const request = retained && JSON.stringify(retained.input) === JSON.stringify(input) ? retained : { requestId: crypto.randomUUID(), input };
+    rememberOutputRequest(context, request);
+    activeOutputRequests.add(outputRequestKey(context));
+    const controls = [question, mode, sourceScope, knowledgeScope, allowCloudQuestion, form.querySelector('[type="submit"]')].filter(Boolean);
+    controls.forEach(control => { control.disabled = true; });
     state.lastOutput = null;
     clear(answerArea).append(el("div", { class: "loading-panel" }, [el("span", { class: "spinner" }), el("p", { text: "正在检索并组织已有资料…" })]));
     try {
-      const result = await api.ask({ question: question.value, scope, mode: mode.value, privacy: allowCloudQuestion.checked ? "cloud" : "local" });
+      const result = await api.ask({ ...input, requestId: request.requestId });
+      rememberOutputRequest(context, null);
+      retryNotice.hidden = true;
+      refs.main.querySelectorAll('[data-output-retry]').forEach(notice => { notice.hidden = true; });
       state.lastOutput = result;
       renderAnswer(answerArea, result);
       try { await refreshDraftsPanel(); }
       catch { toast("结果已保存，但输出工作区暂时未能刷新。", "error"); }
-    } catch (error) { clear(answerArea).append(emptyState("本次生成未完成", errorMessage(error), button("重试", { onClick: () => form.requestSubmit() }))); }
+    } catch (error) { retryNotice.hidden = false; clear(answerArea).append(emptyState("本次生成未完成", errorMessage(error), el('div', { class: 'form-actions' }, [
+      button("重试原请求", { onClick: () => form.requestSubmit() }),
+      button(input.privacy === 'cloud' ? '另起新请求（可能再次计费）' : '另起新请求', { onClick: () => { rememberOutputRequest(context, null); form.requestSubmit(); } }),
+    ]))); }
+    finally { activeOutputRequests.delete(outputRequestKey(context)); controls.forEach(control => { control.disabled = false; }); }
   });
   wrapper.append(...[capabilityNotice(), form, answerArea, draftsPanel].filter(Boolean));
   clear(refs.main).append(wrapper);
@@ -1983,6 +2026,7 @@ async function renderSystem() {
     wrapper.append(await createUsagePanel({
       load: filters => api.usage(filters), settings: await api.settings(), readOnly: Boolean(api.getContext?.().practiceId),
       save: payload => api.updateUsageSettings(payload),
+      loadRecovery: () => api.callRecovery(), recoverCall: (id, payload) => api.recoverCall(id, payload),
     }));
   }
   else if (state.systemTab === "jobs") wrapper.append(await jobsPanel());
@@ -2346,7 +2390,7 @@ async function importDemo() {
 }
 
 async function confirmRestore() {
-  const ok = await confirmAction({ title: "执行恢复？", message: "应用会先生成安全备份，再按预览结果恢复知识与运行记录。", confirmText: "确认恢复", danger: true });
+  const ok = await confirmAction({ title: "执行恢复？", message: "应用会先生成安全备份，再恢复资料与记录。恢复后的外部能力默认关闭，未完成任务等待你确认；本机未结清调用仍保留。", confirmText: "确认恢复", danger: true });
   if (!ok) return;
   try {
     await api.restore({ backup: state.restoreBackup, preview: false, token: state.restoreToken });

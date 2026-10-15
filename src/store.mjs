@@ -3,6 +3,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID, createHash } from 'node:crypto';
 import YAML from 'yaml';
+import { assertBackupSize, backupObject, validBackupId, validateBackupPath, validateBackupMarkdown, validateBackupRecord, BACKUP_ITEM_MAX_BYTES, BACKUP_MAX_BYTES } from './backup-contract.mjs';
 
 export const now = () => new Date().toISOString();
 export const hash = value => createHash('sha256').update(value).digest('hex');
@@ -27,11 +28,17 @@ export function atomicWrite(file, content) {
   }
   finally { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); }
 }
+function durableWrite(file, content) {
+  atomicWrite(file, content);
+  const fd = fs.openSync(file, 'r+');
+  try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+}
 const folders = { source: '01 原始资料', knowledge: '02 知识', mistake: '03 错题修正', topic: '04 主题', report: '05 发现' };
 const reserved = new Set(['id', 'kind', 'title', 'createdAt', 'updatedAt']);
 const linkStart = '<!-- zhixu-managed-links:start -->';
 const linkEnd = '<!-- zhixu-managed-links:end -->';
 const stableJSON = value => JSON.stringify(value, (_, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
+const restorePlanDigest = manifest => hash(stableJSON(Object.fromEntries(Object.entries(manifest).filter(([key]) => key !== 'phase'))));
 function parse(raw) {
   const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
   const doc = YAML.parseDocument(match?.[1] || '{}');
@@ -68,21 +75,116 @@ export class Store {
       CREATE TABLE IF NOT EXISTS records (namespace TEXT NOT NULL,key TEXT NOT NULL,json TEXT NOT NULL,PRIMARY KEY(namespace,key));
       CREATE TABLE IF NOT EXISTS versions (id TEXT PRIMARY KEY,noteId TEXT NOT NULL,path TEXT NOT NULL,hash TEXT NOT NULL,raw TEXT NOT NULL,reason TEXT NOT NULL,createdAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS versions_note ON versions(noteId);
-      CREATE TABLE IF NOT EXISTS index_chunks (id TEXT PRIMARY KEY,noteId TEXT NOT NULL,body TEXT NOT NULL,vector TEXT,model TEXT);`);
-    this.conflicts = []; this.scan();
+      CREATE TABLE IF NOT EXISTS index_chunks (id TEXT PRIMARY KEY,noteId TEXT NOT NULL,body TEXT NOT NULL,vector TEXT,model TEXT);
+      CREATE TABLE IF NOT EXISTS restore_transactions (id TEXT PRIMARY KEY,digest TEXT NOT NULL,committed INTEGER NOT NULL DEFAULT 0);`);
+    this.conflicts = [];
+    try { this.recoverInterruptedRestore(); this.scan(); }
+    catch (error) { this.db.close(); throw error; }
+  }
+  recoverInterruptedRestore() {
+    for (const name of fs.readdirSync(this.vaultDir).filter(item => item.startsWith('.learning-restore-'))) {
+      const stageRoot = path.join(this.vaultDir, name), manifestFile = path.join(stageRoot, 'manifest.json');
+      let manifest;
+      try {
+        assertTree(stageRoot, this.vaultDir);
+        if (!/^\.learning-restore-[a-f0-9-]{36}$/.test(name) || !fs.lstatSync(stageRoot).isDirectory()) fail('恢复暂存目录名称或类型无效。');
+        assertTree(manifestFile, this.vaultDir);
+        if (fs.statSync(manifestFile).size > BACKUP_MAX_BYTES) fail('恢复阶段记录超限。');
+        manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+        if (!backupObject(manifest) || manifest.format !== 'learning-workbench-restore' || manifest.version !== 1 || manifest.id !== name.slice('.learning-restore-'.length) || !Array.isArray(manifest.incoming) || !Array.isArray(manifest.previous)) fail('恢复阶段记录格式无效。');
+        const maps = {};
+        for (const group of ['incoming','previous']) {
+          const ids = new Set(), paths = new Set(); maps[group] = new Map();
+          for (const item of manifest[group]) {
+            if (!backupObject(item) || !validBackupId(item.id) || typeof item.hash !== 'string' || !/^[a-f0-9]{64}$/.test(item.hash)) fail('恢复文件证据无效。');
+            validateBackupPath(item.path);
+            if (ids.has(item.id) || paths.has(item.path.toLowerCase())) fail('恢复文件计划存在重复身份或路径。');
+            ids.add(item.id); paths.add(item.path.toLowerCase());
+            maps[group].set(process.platform === 'win32' ? item.path.toLowerCase() : item.path, item);
+          }
+        }
+        const readEvidence = (file, expected) => {
+          assertTree(file, this.vaultDir);
+          if (!fs.existsSync(file)) return null;
+          if (!fs.lstatSync(file).isFile() || fs.statSync(file).size > BACKUP_ITEM_MAX_BYTES) fail('恢复路径已被替换或文件超限。');
+          const raw = fs.readFileSync(file);
+          if (!expected.includes(hash(raw))) fail('恢复文件存在外部修改；保留现场，未覆盖。');
+          return raw;
+        };
+        // Inspect the entire staging tree before deleting anything. Unknown files and
+        // links are evidence we cannot safely attribute to this transaction.
+        const inspect = (dir, prefix = '') => {
+          for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const rel = prefix + entry.name, file = path.join(dir, entry.name);
+            assertTree(file, this.vaultDir);
+            if (entry.isSymbolicLink()) fail('恢复暂存包含链接。');
+            if (entry.isDirectory()) {
+              if (!['incoming','previous'].includes(rel.split('/')[0])) fail('恢复暂存包含未知目录。');
+              inspect(file, rel + '/');
+            } else if (rel !== 'manifest.json') {
+              const slash = rel.indexOf('/'), group = rel.slice(0, slash), relative = rel.slice(slash + 1);
+              const item = maps[group]?.get(process.platform === 'win32' ? relative.toLowerCase() : relative);
+              if (!item) fail('恢复暂存包含未知文件。');
+              readEvidence(file, [item.hash]);
+            }
+          }
+        };
+        inspect(stageRoot);
+        const digest = restorePlanDigest(manifest);
+        const marker = this.db.prepare('SELECT digest,committed FROM restore_transactions WHERE id=?').get(manifest.id);
+        if (!marker || marker.digest !== digest || ![0,1].includes(marker.committed)) fail('恢复提交证据缺失或与文件计划不一致。');
+        const committed = marker.committed === 1;
+        const expectedRows = committed ? manifest.incoming : manifest.previous;
+        const actualRows = this.db.prepare('SELECT id,path,hash FROM notes').all().sort((a,b) => a.id.localeCompare(b.id));
+        if (stableJSON(actualRows) !== stableJSON([...expectedRows].sort((a,b) => a.id.localeCompare(b.id)))) fail('数据库与恢复计划不一致；未猜测覆盖。');
+        const actions = [];
+        const keys = new Set([...maps.previous.keys(), ...maps.incoming.keys()]);
+        for (const key of keys) {
+          const old = maps.previous.get(key), incoming = maps.incoming.get(key), item = old || incoming;
+          const target = path.join(this.vaultDir, ...item.path.split('/'));
+          const raw = readEvidence(target, [old?.hash,incoming?.hash].filter(Boolean));
+          if (committed) {
+            if (incoming && (!raw || hash(raw) !== incoming.hash) || !incoming && raw) fail('已提交恢复的新文件不完整或被修改。');
+          } else if (old) {
+            const previous = readEvidence(path.join(stageRoot, 'previous', ...old.path.split('/')), [old.hash]);
+            if (raw && hash(raw) === old.hash) continue;
+            if (!previous) fail('恢复前原文件缺失，无法证明安全回滚。');
+            actions.push({ target, raw: previous, expected: raw ? hash(raw) : null });
+          } else if (raw) actions.push({ target, raw: null, expected: hash(raw) });
+        }
+        for (const action of actions) {
+          const current = readEvidence(action.target, action.expected ? [action.expected] : []);
+          if (action.expected === null && current) fail('恢复处理时文件发生变化。');
+          if (action.expected !== null && !current) fail('恢复处理时文件被移除。');
+          if (action.raw === null) fs.unlinkSync(action.target);
+          else durableWrite(action.target, action.raw);
+        }
+        // Copies in previous remain until all replacements have completed, so a
+        // second interruption can repeat this recovery without losing its source.
+        fs.rmSync(stageRoot, { recursive: true, force: true });
+        this.db.prepare('DELETE FROM restore_transactions WHERE id=?').run(manifest.id);
+      } catch (cause) {
+        const error = new Error(`恢复中断后的证据不足或处理失败；为避免混合资料与记录，已停止启动。请保留暂存目录和安全备份：${stageRoot}`);
+        Object.assign(error, { code: 'RESTORE_RECOVERY_REQUIRED', status: 503, recoveryPath: stageRoot, manifestPath: manifestFile, safetyBackup: manifest?.safetyBackup, cause });
+        throw error;
+      }
+    }
   }
   get(namespace, key, fallback = null) {
+    this.assertAvailable();
     const row = this.db.prepare('SELECT json FROM records WHERE namespace=? AND key=?').get(namespace, key);
     return row ? JSON.parse(row.json) : fallback;
   }
   put(namespace, key, data) {
+    this.assertAvailable();
     this.db.prepare('INSERT INTO records VALUES(?,?,?) ON CONFLICT(namespace,key) DO UPDATE SET json=excluded.json').run(namespace, key, JSON.stringify(data)); return data;
   }
-  records(namespace) { return this.db.prepare('SELECT json FROM records WHERE namespace=? ORDER BY rowid DESC').all(namespace).map(r => JSON.parse(r.json)); }
-  remove(namespace, key) { this.db.prepare('DELETE FROM records WHERE namespace=? AND key=?').run(namespace, key); }
-  row(id) { return this.db.prepare('SELECT * FROM notes WHERE id=?').get(id); }
+  assertAvailable() { if (this.recoveryBlocked) throw this.recoveryBlocked; }
+  records(namespace) { this.assertAvailable(); return this.db.prepare('SELECT json FROM records WHERE namespace=? ORDER BY rowid DESC').all(namespace).map(r => JSON.parse(r.json)); }
+  remove(namespace, key) { this.assertAvailable(); this.db.prepare('DELETE FROM records WHERE namespace=? AND key=?').run(namespace, key); }
+  row(id) { this.assertAvailable(); return this.db.prepare('SELECT * FROM notes WHERE id=?').get(id); }
   read(id) { const row = this.row(id); if (!row) fail('内容不存在，可能已经删除或存在文件冲突。', 'NOT_FOUND', 404); return JSON.parse(row.json); }
-  list() { return this.db.prepare('SELECT json FROM notes ORDER BY rowid DESC').all().map(r => JSON.parse(r.json)); }
+  list() { this.assertAvailable(); return this.db.prepare('SELECT json FROM notes ORDER BY rowid DESC').all().map(r => JSON.parse(r.json)); }
   version(row, reason) {
     if (!row) return;
     this.db.prepare('INSERT INTO versions VALUES(?,?,?,?,?,?,?)').run(randomUUID(), row.id, row.path, row.hash, row.raw, reason, now());
@@ -115,7 +217,8 @@ export class Store {
     if (!existing || existing.hash !== digest) { this.index(id, `${note.title}\n${body}`); this.put('changed', id, { id, hash: digest, at: now() }); }
     return note;
   }
-  scan() {
+  scan({ dryRun = false } = {}) {
+    this.assertAvailable();
     if (!fs.existsSync(this.vaultDir) || fs.lstatSync(this.vaultDir).isSymbolicLink()) fail('Vault 根目录不存在或已被替换为链接。', 'SYMLINK', 403);
     const files = [], conflicts = [], seen = new Map(), valid = [];
     const walk = dir => {
@@ -141,9 +244,16 @@ export class Store {
     }
     const duplicates = new Set(conflicts.filter(c => c.id).map(c => c.id));
     const accepted = valid.filter(v => !duplicates.has(v.id));
+    if (dryRun) {
+      for (const entry of accepted) {
+        try { validateBackupMarkdown(entry.raw, entry.id); }
+        catch (error) { conflicts.push({ path: path.relative(this.vaultDir, entry.file).replaceAll('\\', '/'), error: error.message }); }
+      }
+      return { count: accepted.length, conflicts, paths: accepted.map(entry => path.relative(this.vaultDir, entry.file).replaceAll('\\', '/')) };
+    }
     const currentIds = new Set(accepted.map(v => v.id));
     // Remove stale paths first so external moves/swaps do not hit path uniqueness.
-    this.db.exec('BEGIN IMMEDIATE');
+    this.db.exec('SAVEPOINT vault_scan');
     try {
       for (const row of previous) {
         const current = accepted.find(v => v.id === row.id);
@@ -156,8 +266,8 @@ export class Store {
       for (const entry of accepted) this.upsert(entry.file, entry.raw, entry.id, entry.parsed);
       const blocked = new Set(previous.filter(row => conflicts.some(c => c.id === row.id || c.path === row.path || c.other === row.path)).map(row => row.id));
       this.syncMirrors(conflicts, blocked);
-      this.db.exec('COMMIT');
-    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+      this.db.exec('RELEASE vault_scan');
+    } catch (error) { this.db.exec('ROLLBACK TO vault_scan; RELEASE vault_scan'); throw error; }
     return { count: accepted.length, conflicts: this.conflicts };
   }
   syncMirrors(conflicts = this.conflicts.filter(item => item.type !== 'mirror'), blocked = new Set()) {
@@ -329,7 +439,7 @@ export class Store {
     this.db.prepare('DELETE FROM notes WHERE id=?').run(id); this.db.prepare('DELETE FROM index_chunks WHERE noteId=?').run(id);
     this.remove('changed', id); this.put('deleted', id, { id, deletedAt: now() }); this.syncMirrors(); return { deleted: true };
   }
-  history(id) { return this.db.prepare('SELECT id as versionId,noteId,path,hash,raw,reason,createdAt FROM versions WHERE noteId=? ORDER BY createdAt DESC').all(id); }
+  history(id) { this.assertAvailable(); return this.db.prepare('SELECT id as versionId,noteId,path,hash,raw,reason,createdAt FROM versions WHERE noteId=? ORDER BY createdAt DESC').all(id); }
   restoreVersion(id, versionId, expectedHash) {
     const version = this.db.prepare('SELECT * FROM versions WHERE id=? AND noteId=?').get(versionId, id);
     if (!version) fail('找不到历史版本。', 'NOT_FOUND', 404);
@@ -342,62 +452,99 @@ export class Store {
   backup() {
     this.scan();
     if (this.conflicts.length) fail('Vault 中仍有冲突或无法解析的 Markdown；为避免静默遗漏，修复后再备份。', 'BACKUP_CONFLICT', 409);
-    return { format: 'learning-workbench-backup', version: 1, ...(this.backupPurpose ? { purpose: this.backupPurpose } : {}), createdAt: now(), scope: { managedMarkdown: true, runtimeRecords: true, attachments: false, obsidianConfig: false }, notes: this.db.prepare('SELECT id,path,raw FROM notes').all(), records: this.db.prepare("SELECT * FROM records WHERE namespace NOT IN ('settings','changed','restore')").all(), versions: this.db.prepare('SELECT * FROM versions').all() };
+    const backup = { format: 'learning-workbench-backup', version: 1, ...(this.backupPurpose ? { purpose: this.backupPurpose } : {}), createdAt: now(), scope: { managedMarkdown: true, runtimeRecords: true, attachments: false, obsidianConfig: false }, notes: this.db.prepare('SELECT id,path,raw FROM notes').all(), records: this.db.prepare("SELECT * FROM records WHERE namespace NOT IN ('settings','changed','restore')").all(), versions: this.db.prepare('SELECT * FROM versions').all() };
+    this.validateBackup(backup);
+    return backup;
   }
   validateBackup(backup) {
-    if (backup?.format !== 'learning-workbench-backup' || backup.version !== 1 || !Array.isArray(backup.notes) || !Array.isArray(backup.records) || !Array.isArray(backup.versions)) fail('备份格式不正确。');
-    const validId = value => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,100}$/.test(value);
+    if (!backupObject(backup) || backup.format !== 'learning-workbench-backup' || backup.version !== 1 || !Array.isArray(backup.notes) || !Array.isArray(backup.records) || !Array.isArray(backup.versions)) fail('备份格式不正确。');
+    assertBackupSize(backup);
+    if (backup.purpose !== this.backupPurpose) fail('备份用途与当前知识库不一致。', 'BACKUP_PURPOSE_MISMATCH', 409);
+    if (backup.preferences !== undefined && !backupObject(backup.preferences)) fail('备份偏好设置必须为键值对象。');
+    if (backup.createdAt !== undefined && (typeof backup.createdAt !== 'string' || !Number.isFinite(Date.parse(backup.createdAt)))) fail('备份创建时间无效。');
+    if (backup.scope !== undefined && (!backupObject(backup.scope) || backup.scope.managedMarkdown !== true || backup.scope.runtimeRecords !== true || backup.scope.attachments !== false || backup.scope.obsidianConfig !== false)) fail('备份范围无效；此格式仅支持受管理 Markdown 和运行记录。');
+    const validId = validBackupId;
     const validatePath = value => {
-      if (typeof value !== 'string' || !value || value.length > 1_000 || value.includes('\\') || value.includes('\0') || path.isAbsolute(value)) fail('备份包含非法 Markdown 路径。');
+      validateBackupPath(value);
       const parts = value.split('/');
-      const windowsDevice = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
-      if (parts.some(part => !part || part === '.' || part === '..' || part.startsWith('.') || /[<>:"|?*]/.test(part) || /[. ]$/.test(part) || windowsDevice.test(part)) || path.extname(value).toLowerCase() !== '.md') fail('备份包含非法 Markdown 路径。');
       const target = path.resolve(this.vaultDir, ...parts);
       assertTree(target, this.vaultDir);
       return { normalized: parts.join('/'), target };
     };
     const ids = new Set(), paths = new Set();
-    let totalBytes = 0;
     for (const item of backup.notes) {
-      if (!item || typeof item !== 'object' || !validId(item.id) || typeof item.raw !== 'string' || Buffer.byteLength(item.raw) > 5_000_000) fail('备份包含非法 Markdown。');
+      if (!backupObject(item) || !validId(item.id)) fail('备份包含非法 Markdown。');
       const checkedPath = validatePath(item.path);
       const pathKey = checkedPath.normalized.toLowerCase();
       if (ids.has(item.id) || paths.has(pathKey)) fail('备份包含重复身份或路径。');
-      const { meta } = parse(item.raw);
-      if (meta.id !== undefined && meta.id !== item.id) fail('备份 Markdown 的稳定身份不一致。');
-      totalBytes += Buffer.byteLength(item.raw);
+      validateBackupMarkdown(item.raw, item.id);
       ids.add(item.id); paths.add(pathKey);
     }
-    const recordKeys = new Set();
+    const recordKeys = new Set(), billing = new Map();
     for (const r of backup.records) {
-      if (!r || typeof r !== 'object' || typeof r.namespace !== 'string' || !/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(r.namespace) || ['settings','changed','restore'].includes(r.namespace) || typeof r.key !== 'string' || !r.key || r.key.length > 500 || typeof r.json !== 'string' || Buffer.byteLength(r.json) > 5_000_000) fail('备份运行记录不正确。');
+      const value = validateBackupRecord(r);
+      if (['calls','callLedger','callResults'].includes(r.namespace)) billing.set(`${r.namespace}:${r.key}`, value);
       const recordKey = `${r.namespace}\0${r.key}`;
       if (recordKeys.has(recordKey)) fail('备份包含重复运行记录。');
-      try { JSON.parse(r.json); } catch { fail('备份运行记录不是有效 JSON。'); }
-      totalBytes += Buffer.byteLength(r.json); recordKeys.add(recordKey);
+      recordKeys.add(recordKey);
+    }
+    for (const row of backup.records.filter(item => item.namespace === 'callLedger')) {
+      const ledger = billing.get(`callLedger:${row.key}`), response = billing.get(`callResults:${row.key}`);
+      const call = billing.get(`calls:${row.key}`);
+      if (ledger.phase !== 'cancelled' && !call) fail('备份调用账本缺少对应的预算记账记录。');
+      if (['received','accounted'].includes(ledger.phase) && (!response || response.entry.capability !== ledger.capability || response.entry.model !== ledger.model)) fail('备份调用账本缺少对应的完整响应证据。');
+      if (ledger.phase === 'accounted' && call.cost !== response.entry.cost) fail('备份调用费用与已记账响应不一致。');
     }
     const versionIds = new Set();
     for (const version of backup.versions) {
       if (!version || typeof version !== 'object' || !validId(version.id) || !validId(version.noteId) || versionIds.has(version.id)) fail('备份历史版本身份无效或重复。');
       validatePath(version.path);
-      if (typeof version.raw !== 'string' || Buffer.byteLength(version.raw) > 5_000_000 || typeof version.hash !== 'string' || !/^[a-f0-9]{64}$/.test(version.hash) || hash(version.raw) !== version.hash) fail('备份历史版本内容或哈希无效。');
-      const { meta } = parse(version.raw);
-      if (meta.id !== undefined && meta.id !== version.noteId) fail('备份历史版本的笔记身份不一致。');
+      if (typeof version.raw !== 'string' || Buffer.byteLength(version.raw) > BACKUP_ITEM_MAX_BYTES || typeof version.hash !== 'string' || !/^[a-f0-9]{64}$/.test(version.hash) || hash(version.raw) !== version.hash) fail('备份历史版本内容或哈希无效。');
+      validateBackupMarkdown(version.raw, version.noteId);
       if (typeof version.reason !== 'string' || !version.reason.trim() || version.reason.length > 4_000 || typeof version.createdAt !== 'string' || version.createdAt.length > 100 || !Number.isFinite(Date.parse(version.createdAt))) fail('备份历史版本说明或时间无效。');
-      totalBytes += Buffer.byteLength(version.raw); versionIds.add(version.id);
+      versionIds.add(version.id);
     }
-    if (totalBytes > 100_000_000) fail('备份展开后超过 100 MB 限制。', 'TOO_LARGE', 413);
-    this.scan();
-    if (this.conflicts.length) fail('当前 Vault 有冲突或无法解析的 Markdown；恢复前必须先处理，避免遗漏或覆盖。', 'RESTORE_CONFLICT', 409);
+    // Exercise the same mirror reconstruction against an isolated SQLite database.
+    // No live files or records change while rejecting an inconsistent candidate.
+    const candidate = Object.create(Store.prototype);
+    candidate.db = new DatabaseSync(':memory:'); candidate.conflicts = [];
+    try {
+      candidate.db.exec('CREATE TABLE records(namespace TEXT,key TEXT,json TEXT,PRIMARY KEY(namespace,key)); CREATE TABLE notes(json TEXT);');
+      for (const row of backup.records) candidate.put(row.namespace, row.key, JSON.parse(row.json));
+      for (const item of backup.notes) {
+        const { meta, body } = parse(item.raw);
+        candidate.db.prepare('INSERT INTO notes VALUES(?)').run(JSON.stringify({ id: item.id, path: item.path, kind: meta.kind || 'knowledge', title: meta.title || path.basename(item.path, '.md'), body, meta }));
+      }
+      candidate.syncMirrors([]);
+      if (candidate.conflicts.length) fail('备份包含不一致的主题或关系镜像；请先在原知识库处理冲突。', 'RESTORE_CONFLICT', 409);
+    } finally { candidate.close(); }
+    const current = this.scan({ dryRun: true }), currentPaths = new Set(current.paths.map(value => value.toLowerCase()));
+    if (current.conflicts.length || this.conflicts.some(item => item.type === 'mirror')) fail('当前 Vault 有冲突或无法解析的 Markdown；恢复前必须先处理，避免遗漏或覆盖。', 'RESTORE_CONFLICT', 409);
+    for (const item of backup.notes) {
+      const { target } = validatePath(item.path);
+      if (fs.existsSync(target) && (!currentPaths.has(item.path.toLowerCase()) || !fs.lstatSync(target).isFile())) fail('恢复目标与未纳入当前索引的文件冲突，未覆盖。', 'RESTORE_CONFLICT', 409);
+      let parent = path.dirname(target);
+      while (parent !== this.vaultDir) {
+        if (fs.existsSync(parent) && !fs.lstatSync(parent).isDirectory()) fail('恢复目标的父路径不是目录。', 'RESTORE_CONFLICT', 409);
+        parent = path.dirname(parent);
+      }
+    }
     return { notes: backup.notes.length, records: backup.records.length, versions: backup.versions.length, replaces: this.list().length, retention: '恢复前自动备份；JSON 只覆盖本应用索引的 Markdown、运行记录和历史版本。附件、.obsidian 与其他未索引文件不会写入或删除，需另行复制整个 Vault 保存。' };
   }
-  restore(backup) {
+  restore(backup, { settings } = {}) {
+    this.assertAvailable();
+    if (fs.readdirSync(this.vaultDir).some(name => name.startsWith('.learning-restore-'))) fail('上一次恢复暂存目录尚未处理；请先核对阶段记录与安全备份。', 'RESTORE_RECOVERY_REQUIRED', 503);
     this.validateBackup(backup);
-    const safetyFile = path.join(this.dataDir, 'backups', `before-restore-${Date.now()}.json`);
-    atomicWrite(safetyFile, JSON.stringify(this.backup()));
+    if (settings !== undefined && !backupObject(settings)) fail('恢复设置必须为键值对象。');
+    if (settings !== undefined) assertBackupSize({ settings });
+    const safetyFile = path.join(this.dataDir, 'backups', `before-restore-${Date.now()}-${randomUUID()}.json`);
+    const safety = this.backup(), oldSettings = this.get('settings', 'main');
+    if (backupObject(oldSettings)) safety.preferences = oldSettings;
+    durableWrite(safetyFile, assertBackupSize(safety));
     const currentRows = this.db.prepare('SELECT * FROM notes').all();
     const currentPaths = new Set(currentRows.map(row => row.path.toLowerCase()));
-    const stageRoot = assertTree(path.join(this.vaultDir, `.learning-restore-${randomUUID()}`), this.vaultDir);
+    const restoreId = randomUUID();
+    const stageRoot = assertTree(path.join(this.vaultDir, `.learning-restore-${restoreId}`), this.vaultDir);
     const incomingRoot = path.join(stageRoot, 'incoming');
     const previousRoot = path.join(stageRoot, 'previous');
     const incoming = backup.notes.map(item => ({
@@ -406,12 +553,16 @@ export class Store {
       target: assertTree(path.resolve(this.vaultDir, ...item.path.split('/')), this.vaultDir),
     }));
     const movedCurrent = [], installedIncoming = [];
+    const manifestFile = path.join(stageRoot, 'manifest.json');
+    const manifest = { format: 'learning-workbench-restore', version: 1, id: restoreId, phase: 'staging', safetyBackup: safetyFile, createdAt: now(), incoming: incoming.map(item => ({ id: item.id, path: item.path, hash: hash(item.raw) })), previous: currentRows.map(row => ({ id: row.id, path: row.path, hash: row.hash })) };
+    const checkpoint = phase => { manifest.phase = phase; durableWrite(manifestFile, JSON.stringify(manifest)); };
     let transaction = false, committed = false, rollbackError = null, cleanupPending = null;
     try {
       fs.mkdirSync(stageRoot, { recursive: false });
+      checkpoint('staging');
       for (const item of incoming) {
         const staged = assertTree(path.join(incomingRoot, item.relativePath), stageRoot);
-        atomicWrite(staged, item.raw);
+        durableWrite(staged, item.raw);
         if (fs.readFileSync(staged, 'utf8') !== item.raw) fail('恢复暂存校验失败。', 'RESTORE_IO');
         if (fs.existsSync(item.target) && !currentPaths.has(item.path.toLowerCase())) fail('恢复目标与未纳入当前索引的文件冲突，未覆盖。', 'RESTORE_CONFLICT', 409);
       }
@@ -420,49 +571,94 @@ export class Store {
         if (!fs.existsSync(source) || hash(fs.readFileSync(source)) !== row.hash) fail('恢复前检测到外部文件变化，未开始替换。', 'RESTORE_CONFLICT', 409);
       }
 
+      checkpoint('prepared');
+      // Bind this plan in SQLite before changing a single managed file. The final
+      // flag changes in the same transaction as notes, history, records and settings.
+      this.db.prepare('INSERT INTO restore_transactions(id,digest) VALUES(?,?)').run(restoreId, restorePlanDigest(manifest));
       this.db.exec('BEGIN IMMEDIATE'); transaction = true;
+      checkpoint('replacing-files');
       for (const row of currentRows) {
         const source = assertTree(path.resolve(this.vaultDir, ...row.path.split('/')), this.vaultDir);
         const staged = assertTree(path.join(previousRoot, ...row.path.split('/')), stageRoot);
         fs.mkdirSync(path.dirname(staged), { recursive: true });
-        fs.renameSync(source, staged); movedCurrent.push({ source, staged });
+        fs.renameSync(source, staged); movedCurrent.push({ source, staged, hash: row.hash });
       }
       for (const item of incoming) {
         const staged = assertTree(path.join(incomingRoot, item.relativePath), stageRoot);
         fs.mkdirSync(path.dirname(item.target), { recursive: true });
-        fs.renameSync(staged, item.target); installedIncoming.push(item.target);
+        fs.renameSync(staged, item.target); installedIncoming.push({ target: item.target, hash: hash(item.raw) });
       }
 
-      this.db.exec("DELETE FROM notes; DELETE FROM index_chunks; DELETE FROM records WHERE namespace NOT IN ('settings','restore'); DELETE FROM versions;");
-      for (const r of backup.records) this.db.prepare('INSERT INTO records VALUES(?,?,?)').run(r.namespace, r.key, r.json);
+      checkpoint('files-installed');
+      const localBillingIds = new Set(this.db.prepare("SELECT key FROM records WHERE namespace IN ('calls','callLedger','callResults')").all().map(row => row.key));
+      const localLedger = this.records('callLedger').filter(row => row.phase !== 'cancelled');
+      const logicalKeys = new Set(localLedger.map(row => row.key).filter(key => typeof key === 'string' && key));
+      const contextKeys = new Set(localLedger.map(row => row.contextKey).filter(key => typeof key === 'string' && key));
+      const gradeJobs = new Set([...this.records('jobs'), ...backup.records.filter(row => row.namespace === 'jobs').map(row => JSON.parse(row.json))].filter(job => job.type === 'grade').map(job => job.id));
+      const singleRequest = row => row.singleRequest === true || typeof row.turnId === 'string' && !!row.turnId || gradeJobs.has(row.jobId);
+      const protectedContexts = new Set(localLedger.filter(row => singleRequest(row) || row.phase === 'resolved_unknown').map(row => row.contextKey).filter(key => typeof key === 'string' && key));
+      // A different machine can assign a different attempt ID to the same logical
+      // operation. Preserve all three local evidence records as one unit; grading
+      // also keeps its original round when the request fingerprint has changed.
+      const foreignCollisionIds = new Set(backup.records.filter(row => row.namespace === 'callLedger').map(row => JSON.parse(row.json))
+        .filter(row => row.key && logicalKeys.has(row.key) || row.contextKey && (protectedContexts.has(row.contextKey) || singleRequest(row) && contextKeys.has(row.contextKey))).map(row => row.id));
+      this.db.exec("DELETE FROM notes; DELETE FROM index_chunks; DELETE FROM records WHERE namespace NOT IN ('settings','restore','calls','callLedger','callResults'); DELETE FROM versions;");
+      for (const r of backup.records) {
+        if (['calls','callLedger','callResults'].includes(r.namespace) && (localBillingIds.has(r.key) || foreignCollisionIds.has(r.key))) continue;
+        this.db.prepare('INSERT INTO records VALUES(?,?,?) ON CONFLICT(namespace,key) DO NOTHING').run(r.namespace, r.key, r.json);
+      }
       for (const v of backup.versions) this.db.prepare('INSERT INTO versions VALUES(?,?,?,?,?,?,?)').run(v.id, v.noteId, v.path, v.hash, v.raw, v.reason, v.createdAt);
       for (const item of incoming) this.upsert(item.target, item.raw, item.id, parse(item.raw));
       this.syncMirrors([]);
+      if (this.conflicts.length) fail('恢复资料包含无法重建的主题或关系镜像。', 'RESTORE_CONFLICT', 409);
+      if (settings !== undefined) this.put('settings', 'main', settings);
+      this.db.prepare('UPDATE restore_transactions SET committed=1 WHERE id=? AND digest=?').run(restoreId, restorePlanDigest(manifest));
       this.db.exec('COMMIT'); transaction = false; committed = true;
+      checkpoint('database-committed');
     } catch (error) {
+      // A committed SQLite transaction cannot be undone by deleting its Markdown.
+      if (committed) {
+        cleanupPending = stageRoot;
+        return { restored: true, safetyBackup: safetyFile, stagingCleanupPending: cleanupPending };
+      }
       if (transaction) {
         try { this.db.exec('ROLLBACK'); } catch (rollback) { rollbackError = rollback; }
         transaction = false;
       }
-      for (const target of installedIncoming.reverse()) {
-        try { if (fs.existsSync(target)) fs.unlinkSync(target); } catch (rollback) { rollbackError ||= rollback; }
+      for (const item of installedIncoming.reverse()) {
+        try {
+          assertTree(item.target, this.vaultDir);
+          if (fs.existsSync(item.target)) {
+            if (!fs.lstatSync(item.target).isFile() || hash(fs.readFileSync(item.target)) !== item.hash) fail('回滚目标已有外部修改；保留现场，未覆盖。', 'RESTORE_CONFLICT', 409);
+            fs.unlinkSync(item.target);
+          }
+        } catch (rollback) { rollbackError ||= rollback; }
       }
       for (const item of movedCurrent.reverse()) {
         try {
           fs.mkdirSync(path.dirname(item.source), { recursive: true });
-          if (fs.existsSync(item.source)) fs.unlinkSync(item.source);
-          if (fs.existsSync(item.staged)) fs.renameSync(item.staged, item.source);
+          assertTree(item.source, this.vaultDir); assertTree(item.staged, this.vaultDir);
+          if (fs.existsSync(item.source)) {
+            if (!fs.lstatSync(item.source).isFile() || hash(fs.readFileSync(item.source)) !== item.hash) fail('回滚原路径已有外部修改；保留现场，未覆盖。', 'RESTORE_CONFLICT', 409);
+          } else {
+            if (!fs.existsSync(item.staged) || hash(fs.readFileSync(item.staged)) !== item.hash) fail('回滚原件缺失或被修改。', 'RESTORE_CONFLICT', 409);
+            fs.renameSync(item.staged, item.source);
+          }
         } catch (rollback) { rollbackError ||= rollback; }
       }
       if (rollbackError) {
         const failed = new Error(`恢复失败且自动回滚未完整完成；请使用安全备份或暂存目录恢复。安全备份：${safetyFile}；暂存目录：${stageRoot}`);
         Object.assign(failed, { code: 'RESTORE_ROLLBACK_FAILED', status: 500, cause: error, rollbackError, safetyBackup: safetyFile, recoveryPath: stageRoot });
+        this.recoveryBlocked = failed;
         throw failed;
       }
       throw error;
     } finally {
       if (!rollbackError && fs.existsSync(stageRoot)) {
-        try { fs.rmSync(stageRoot, { recursive: true, force: true }); }
+        try {
+          fs.rmSync(stageRoot, { recursive: true, force: true });
+          this.db.prepare('DELETE FROM restore_transactions WHERE id=?').run(restoreId);
+        }
         catch { if (committed) cleanupPending = stageRoot; }
       }
     }
