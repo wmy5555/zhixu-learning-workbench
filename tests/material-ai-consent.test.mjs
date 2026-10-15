@@ -180,3 +180,106 @@ for (const action of ['decompose', 'task-retry']) test(`resuming legacy research
   assert.deepEqual(sent, action === 'task-retry' ? ['generate', 'research'] : ['generate']);
   assert.equal(s.store.get('jobs', job.id).dedupKey, `process:${source.id}:${source.hash}${action === 'task-retry' ? ':research' : ''}`);
 });
+
+function scopedAI(t, onGenerate = () => {}) {
+  const sent = []; let packageId;
+  const h = harness(t, {
+    async generate(request) {
+      sent.push({ capability: 'generate', ...request });
+      await onGenerate(request, sent.length, h.service);
+      return { text: JSON.stringify({ queries: ['SCOPE_QUERY'], relations: [], packages: [{ title: '合成学习包', problem: '范围', noteIds: [packageId], prerequisites: [], minutes: 5 }] }) };
+    },
+    async embed(request) { sent.push({ capability: 'embed', ...request }); return { vectors: request.texts.map(() => [1, 0]) }; },
+  });
+  h.service.updateSettings({ ai: { enabled: true } });
+  const knowledge = (title, body) => h.service.store.create({ kind: 'knowledge', title, body, meta: { stage: 'learning', topic: title } });
+  const primary = knowledge('SCOPE_QUERY 主知识', 'CAPTURED_PRIMARY'); packageId = primary.id;
+  const other = knowledge('SCOPE_QUERY 比较材料', 'CAPTURED_OTHER');
+  const enqueue = type => type === 'relate' ? h.service.requestRelations(primary.id, { useAI: true }) : h.service.queue(type, { useAI: true }, `scope:${type}`);
+  return { h, primary, other, knowledge, enqueue, sent };
+}
+
+for (const type of ['relate', 'discover', 'topics']) for (const restart of [false, true]) test(`${type} external work keeps enqueue-time materials after changes (restart=${restart})`, async t => {
+  const { h, primary, other, knowledge, enqueue, sent } = scopedAI(t);
+  const changed = knowledge('SCOPE_QUERY 待修改', 'OLD_CHANGED_VERSION');
+  const removed = knowledge('SCOPE_QUERY 待删除', 'REMOVED_AFTER_QUEUE');
+  const job = enqueue(type);
+  h.service.editNote(changed.id, { expectedHash: changed.hash, body: 'EDITED_AFTER_QUEUE' });
+  knowledge('SCOPE_QUERY 后来新增', 'ADDED_AFTER_QUEUE');
+  h.service.store.delete(removed.id, removed.hash);
+  const s = restart ? await h.reopen() : h.service;
+  await s.runJobs();
+  assert.equal(s.store.get('jobs', job.id).state, 'done');
+  const prompts = JSON.stringify(sent);
+  assert.ok(prompts.includes(primary.body));
+  assert.ok(prompts.includes(other.body));
+  for (const body of ['OLD_CHANGED_VERSION', 'EDITED_AFTER_QUEUE', 'ADDED_AFTER_QUEUE', 'REMOVED_AFTER_QUEUE']) assert.equal(prompts.includes(body), false, `${type} must not send ${body}`);
+});
+
+for (const change of ['edit', 'delete']) test(`AI relation rejects a primary note changed before execution (${change})`, async t => {
+  const { h, primary, enqueue, sent } = scopedAI(t);
+  const job = enqueue('relate');
+  if (change === 'edit') h.service.editNote(primary.id, { expectedHash: primary.hash, body: 'PRIMARY_EDITED_AFTER_QUEUE' });
+  else h.service.store.delete(primary.id, primary.hash);
+  await h.service.runJobs();
+  assert.equal(sent.length, 0);
+  assert.equal(h.service.store.get('jobs', job.id).code, 'SOURCE_CHANGED');
+});
+
+for (const type of ['relate', 'discover', 'topics']) test(`retained ${type} AI work without scope waits; explicit retry captures current versions`, async t => {
+  const { h, primary, knowledge, enqueue, sent } = scopedAI(t);
+  const job = enqueue(type); delete job.payload.snapshots; h.service.store.put('jobs', job.id, job);
+  const s = await h.reopen();
+  assert.equal(s.store.get('jobs', job.id).state, 'waiting');
+  assert.equal(s.store.get('jobs', job.id).code, 'OUTBOUND_INTENT_REQUIRED');
+  await s.runJobs(); assert.equal(sent.length, 0);
+  const edited = s.editNote(primary.id, { expectedHash: primary.hash, body: 'PRIMARY_EXPLICIT_RETRY_VERSION' });
+  const added = knowledge('SCOPE_QUERY 明确重试新增', 'ADDED_BY_EXPLICIT_RETRY');
+  const retry = s.jobAction(job.id, { action: 'retry' });
+  assert.equal(retry.payload.snapshots.find(n => n.noteId === primary.id).hash, edited.hash);
+  assert.ok(retry.payload.snapshots.some(n => n.noteId === added.id));
+  await s.runJobs();
+  assert.equal(s.store.get('jobs', job.id).state, 'done');
+  assert.ok(JSON.stringify(sent).includes(edited.body));
+  assert.ok(JSON.stringify(sent).includes(added.body));
+});
+
+test('AI relation rechecks candidate scope after query generation and semantic lookup', async t => {
+  let changed;
+  const { h, primary, other, knowledge, enqueue, sent } = scopedAI(t, (_request, count, s) => {
+    if (count === 1) {
+      s.editNote(changed.id, { expectedHash: changed.hash, body: 'EDITED_DURING_QUERY' });
+      knowledge('SCOPE_QUERY 在检索时新增', 'ADDED_DURING_QUERY');
+    }
+  });
+  changed = knowledge('SCOPE_QUERY 检索前存在', 'BEFORE_QUERY_VERSION');
+  h.service.updateSettings({ embedding: { enabled: true, model: 'synthetic-relation-scope' } });
+  const job = enqueue('relate'); await h.service.runJobs();
+  assert.equal(h.service.store.get('jobs', job.id).state, 'done');
+  assert.ok(sent.some(r => r.capability === 'embed'), 'exercise query embedding');
+  assert.ok(sent.filter(r => r.capability === 'generate').length >= 2, 'exercise second model request');
+  const prompts = JSON.stringify(sent);
+  assert.ok(prompts.includes(primary.body)); assert.ok(prompts.includes(other.body));
+  for (const body of ['EDITED_DURING_QUERY', 'ADDED_DURING_QUERY', 'BEFORE_QUERY_VERSION']) assert.equal(prompts.includes(body), false);
+});
+
+test('AI discovery passes its original scope to nested relation lookups', async t => {
+  const { h, knowledge, enqueue, sent } = scopedAI(t, (_request, count) => {
+    if (count === 1) knowledge('SCOPE_QUERY 在发现后新增', 'ADDED_DURING_DISCOVERY');
+  });
+  const job = enqueue('discover'); await h.service.runJobs();
+  assert.equal(h.service.store.get('jobs', job.id).state, 'done');
+  assert.ok(sent.length >= 3, 'exercise nested relation requests');
+  assert.equal(JSON.stringify(sent).includes('ADDED_DURING_DISCOVERY'), false);
+});
+
+test('non-boolean AI flags cannot bypass relation snapshots through a retained local job', async t => {
+  const { h, primary, sent } = scopedAI(t);
+  for (const useAI of ['true', 1]) {
+    h.service.queue('relate', { noteId: primary.id, useAI }, `non-boolean:${useAI}`);
+  }
+  const s = await h.reopen();
+  await s.runJobs(); await s.runJobs();
+  assert.equal(sent.length, 0);
+  assert.ok(s.store.records('jobs').every(job => job.state === 'done'));
+});

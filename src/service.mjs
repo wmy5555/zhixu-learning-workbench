@@ -140,15 +140,21 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     return issues;
   };
   const eligible = n => usable(n, learningNow()) && !materialLimitations(n).length;
-  function indexSnapshots() {
+  const needsMaterialScope = (type, payload) => type === 'index' || type === 'topics' || ['relate','discover'].includes(type) && payload?.useAI === true;
+  const validMaterialSnapshots = snapshots => Array.isArray(snapshots) && snapshots.every(n => typeof n?.noteId === 'string' && n.noteId && typeof n.hash === 'string' && n.hash);
+  function materialSnapshots(type) {
     store.scan();
-    return store.list().map(note => ({ noteId: note.id, hash: note.hash }));
+    return store.list().filter(note => type === 'index' || note.kind === 'knowledge').map(note => ({ noteId: note.id, hash: note.hash }));
+  }
+  function materialScope(job) {
+    if (!validMaterialSnapshots(job.payload.snapshots)) fail('任务缺少点击时的资料版本；请主动重试以使用当前资料。', 'OUTBOUND_INTENT_REQUIRED');
+    return new Map(job.payload.snapshots.map(n => [n.noteId, n.hash]));
   }
   function queue(type, payload, dedupKey) {
     if (pausing || stopped) fail('当前任务正在暂停，请稍后继续。', 'BUSY', 409);
     const existing = store.records('jobs').find(j => j.dedupKey === dedupKey && ['queued','running','waiting'].includes(j.state));
     if (existing && dedupKey) return existing;
-    if (type === 'index') payload = { ...payload, snapshots: indexSnapshots() };
+    if (needsMaterialScope(type, payload)) payload = { ...payload, snapshots: materialSnapshots(type) };
     return putJob({ id: randomUUID(), type, outboundIntentVersion: 1, state: 'queued', payload, dedupKey, progress: 0, error: '', createdAt: now(), attempts: 0 });
   }
   function updateSettings(input) {
@@ -880,17 +886,24 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     return queue('relate',{noteId:id,useAI:useAI===true},`relate:${id}:${note.hash}:${useAI===true}`);
   }
   async function relate(job, signal) {
+    const scope=job.payload.useAI===true ? materialScope(job) : null;
+    const inScope=n=>!scope||scope.get(n.id)===n.hash;
+    if(scope) {
+      store.scan();
+      if(!store.row(job.payload.noteId))fail('探索前知识已删除，请重新探索。','SOURCE_CHANGED');
+    }
     const note=job.snapshot || getNote(job.payload.noteId);
-    if(!eligible(note)) { if(job.payload.useAI)fail('这条知识仍有待研究内容，请先处理依据。','RESEARCH_INCOMPLETE'); return; }
+    if(!inScope(note))fail('探索前知识已有变化，请重新探索。','SOURCE_CHANGED');
+    if(!eligible(note)) { if(job.payload.useAI===true)fail('这条知识仍有待研究内容，请先处理依据。','RESEARCH_INCOMPLETE'); return; }
     const res=await search(`${note.title} ${note.meta.topic || ''}`,{mode:'keyword',limit:7,scan:false});
     const bridges=store.list().filter(n=>n.id!==note.id&&eligible(n)&&n.meta.topic!==note.meta.topic)
       .sort((a,b)=>hash(`${note.id}:${a.id}`).localeCompare(hash(`${note.id}:${b.id}`))).slice(0,3);
-    let candidates=[...new Map([...res.results.filter(n=>n.id!==note.id&&eligible(n)).slice(0,4),...bridges].map(n=>[n.id,n])).values()];
+    let candidates=[...new Map([...res.results.filter(n=>n.id!==note.id&&eligible(n)).slice(0,4),...bridges].filter(inScope).map(n=>[n.id,n])).values()];
     for(const n of candidates) {
       const id=hash([note.id,n.id].sort().join(':')), old=store.get('relations',id);
       if(!old||old.state==='candidate')store.put('relations',id,{id,fromId:note.id,toId:n.id,fromHash:note.hash,toHash:n.hash,type:'similarity',state:'candidate',explanation:'本地召回的比较材料，尚不能视为机制相同。',use:'可比较术语与适用条件。',boundary:'文字相似或同属关注领域不能证明因果或迁移关系。',evidence:[note.id,n.id],createdAt:now()});
     }
-    if(!job.payload.useAI)return;
+    if(job.payload.useAI!==true)return;
     if(privacyFor(note)!=='cloud')fail('资料或引用不可用，请先核对。','PRIVACY_LOCAL');
     if(!settings().ai.enabled)fail('AI 未启用；本地候选已保留。','AI_DISABLED');
     const assertCurrent = notes => {
@@ -898,6 +911,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
       for(const before of notes) {
         if(!store.row(before.id))fail('探索时知识已删除，请重新探索。','SOURCE_CHANGED');
         const current=store.read(before.id);
+        if(!inScope(current))fail('探索时知识不再匹配点击时的版本，请重新探索。','SOURCE_CHANGED');
         if(privacyFor(current)!=='cloud')fail('探索时资料或引用已变化，已停止后续请求。','PRIVACY_LOCAL');
         if(current.hash!==before.hash)fail('探索时知识已有变化，请重新探索。','SOURCE_CHANGED');
       }
@@ -912,7 +926,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
       const result=await search(outboundText(query).slice(0,120),{mode:settings().embedding.enabled?'hybrid':'keyword',privacy:'cloud',scope:['knowledge'],limit:6});
       retrieved.push(...result.results);
     }
-    candidates=[...new Map([...retrieved,...candidates].filter(n=>n.id!==note.id&&privacyFor(n)==='cloud'&&eligible(n)).map(n=>[n.id,n])).values()].slice(0,10);
+    candidates=[...new Map([...retrieved,...candidates].filter(n=>n.id!==note.id&&inScope(n)&&privacyFor(n)==='cloud'&&eligible(n)).map(n=>[n.id,n])).values()].slice(0,10);
     if(!candidates.length)return;
     assertCurrent([note,...candidates]);
     const parsed=parseJSON((await ai.generate({system:promptText('serviceSystem'),privacy:'cloud',signal,json:true,prompt:promptText('relate',{current,candidates:JSON.stringify(candidates.map(n=>({id:n.id,title:outboundTitle(n),body:outboundText(n.body).slice(0,3000)})))})})).text);
@@ -927,19 +941,20 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     }
   }
   async function discover(job, signal) {
+    const scope=job.payload.useAI===true ? materialScope(job) : null;
     store.scan(); const notes=store.list().filter(n=>n.kind==='knowledge'&&n.meta.stage!=='retired');
     const relations=store.records('relations').filter(r=>r.state==='accepted'), linked=new Set(relations.flatMap(r=>[r.fromId,r.toId]));
     const isolated=notes.filter(n=>!linked.has(n.id)), unused=notes.filter(n=>!store.records('uses').some(u=>u.noteId===n.id));
     let body=`# 知识结构检查\n\n检查时间：${now()}\n知识条目：${notes.length}；已确认关系：${relations.length}。\n\n## 孤立节点\n${isolated.slice(0,30).map(n=>`- ${n.title}（${n.id}）`).join('\n') || '无'}\n\n## 尚无实际输出使用记录\n${unused.slice(0,30).map(n=>`- ${n.title}`).join('\n') || '无'}\n\n以上只是导航线索，不以曝光次数判断价值。`;
     const changed=new Set(store.records('changed').map(n=>n.id));
     let discoveryIssue=null;
-    const selected=[...notes.filter(n=>changed.has(n.id)),...isolated,...notes].filter((n,i,a)=>privacyFor(n)==='cloud'&&a.findIndex(v=>v.id===n.id)===i).slice(0,16);
+    const selected=[...notes.filter(n=>changed.has(n.id)),...isolated,...notes].filter((n,i,a)=>(!scope||scope.get(n.id)===n.hash)&&privacyFor(n)==='cloud'&&a.findIndex(v=>v.id===n.id)===i).slice(0,16);
     if(job.payload.useAI===true&&settings().ai.enabled&&selected.length){try {const answer=await ai.generate({system:promptText('serviceSystem'),privacy:'cloud',signal,prompt:promptText('discover',{notes:JSON.stringify(selected.map(n=>({id:n.id,title:outboundTitle(n),topic:n.meta.topic,summary:outboundText(n.body).slice(0,900)})))})});body+=`\n\n## AI 发现建议（待审阅）\n${answer.text}`;}catch(error){discoveryIssue=error;body+=`\n\n## AI 探索未完成\n${error.message}`;}}else body+='\n\n## 探索限制\n当前为本地结构检查；没有选择付费 AI 探索或没有可用的摘要，尚未生成跨领域语义发现。';
     const cursor=store.get('schedule','discoveryCursor',{offset:0}).offset, available=notes.filter(eligible);
     const batch=[...available.slice(cursor),...available.slice(0,cursor)].slice(0,16);
     for(const n of batch)await relate({payload:{noteId:n.id,useAI:false},snapshot:n},signal);
     store.put('schedule','discoveryCursor',{offset:available.length?(cursor+batch.length)%available.length:0});
-    if(job.payload.useAI===true&&!discoveryIssue)for(const n of selected.filter(eligible).slice(0,2)){try{await relate({payload:{noteId:n.id,useAI:true}},signal);}catch(error){discoveryIssue=error;body+=`\n\n## 关联细查未完成\n${error.message}`;break;}}
+    if(job.payload.useAI===true&&!discoveryIssue)for(const n of selected.filter(eligible).slice(0,2)){try{await relate({payload:{noteId:n.id,useAI:true,snapshots:job.payload.snapshots}},signal);}catch(error){discoveryIssue=error;body+=`\n\n## 关联细查未完成\n${error.message}`;break;}}
     body+=`\n\n本次本地比较 ${batch.length} 条；AI 细查最多2条。每次轮换覆盖，不能视为全库穷尽。`;
     const actions=recommendations().suggestions;
     body+='\n\n## 可处理的建议\n'+(actions.map(a=>`- ${a.title}：${a.reason}`).join('\n') || '暂无有记录依据的阶段调整建议。');
@@ -949,7 +964,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   }
   async function rebuildIndex(job, signal) {
     const snapshots = job.payload.snapshots;
-    if (!Array.isArray(snapshots) || snapshots.some(n => typeof n?.noteId !== 'string' || !n.noteId || typeof n.hash !== 'string' || !n.hash)) fail('索引任务缺少点击时的资料版本；请主动重试以使用当前资料。', 'OUTBOUND_INTENT_REQUIRED');
+    if (!validMaterialSnapshots(snapshots)) fail('索引任务缺少点击时的资料版本；请主动重试以使用当前资料。', 'OUTBOUND_INTENT_REQUIRED');
     const ids=snapshots.map(n=>n.noteId);
     for(let i=0;i<ids.length;i++) {
       store.scan(); if(!store.row(ids[i]))continue;
@@ -974,7 +989,8 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     }
   }
   async function suggestTopics(job, signal) {
-    const notes=store.list().filter(n=>eligible(n)&&privacyFor(n)==='cloud'&&n.meta.stage!=='retired').slice(0,24);
+    const scope=materialScope(job); store.scan();
+    const notes=store.list().filter(n=>scope.get(n.id)===n.hash&&eligible(n)&&privacyFor(n)==='cloud'&&n.meta.stage!=='retired').slice(0,24);
     if(!notes.length)fail('没有可交给外部模型的当前知识材料；你仍可手工建立主题。','PRIVACY_LOCAL');
     const parsed=parseJSON((await ai.generate({system:promptText('serviceSystem'),privacy:'cloud',signal,json:true,prompt:promptText('topics',{focusTopics:settings().focusTopics.join('、') || '由材料自然组织',notes:JSON.stringify(notes.map(n=>({id:n.id,title:outboundTitle(n),topic:n.meta.topic,body:outboundText(n.body).slice(0,1200),prerequisites:n.meta.prerequisites})))}) })).text);
     if(!Array.isArray(parsed.packages)||!parsed.packages.length)fail('模型没有给出学习包。','MODEL_FORMAT');
@@ -996,7 +1012,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     catch(error){if(store.get('jobs',job.id)?.state!=='cancelled')putJob({...job,state:['OUTBOUND_INTENT_REQUIRED','PRIVACY_LOCAL','DISABLED','NOT_CONFIGURED','BUDGET_EXCEEDED','SOURCE_BUDGET','BUDGET_UNKNOWN','RESEARCH_INCOMPLETE','AI_DISABLED','MISSING_KEY','CAPABILITY_DISABLED','MISSING_CREDENTIALS','CALL_RECOVERY_REQUIRED','CALL_ACCOUNTING_FAILED','CALL_RESULT_SAVE_FAILED','CALL_PERSISTENCE_FAILED','CALL_RESULT_MISSING'].includes(error.code)?'waiting':'failed',error:String(error.message).slice(0,800),code:error.code||'TASK_FAILED'});}
     finally{processing=false;controller=null;currentJob=null;}
   }
-  function jobAction(id,{action}){if(pausing||stopped)fail('任务正在暂停，请稍后继续。','BUSY',409);const job=store.get('jobs',id);if(!job)fail('任务不存在。','NOT_FOUND',404);if(action==='cancel'){if(currentJob===id)controller?.abort();return putJob({...job,state:'cancelled',error:'用户取消；已保存的输入和回答保留。'});}if(action==='retry'){if(job.type==='structure'&&!['running','done'].includes(job.state)){const source=getNote(job.payload.noteId);job.payload.basis=structureBasis(source,sourceChildren(source.id));job.dedupKey=`structure:${source.id}:${hash(JSON.stringify(job.payload.basis))}`;const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}if(['running','done'].includes(job.state))fail('该任务当前不可重试。');if(job.type==='title'){const source=getNote(job.payload.noteId);if(!needsTitle(source))fail('标题已经填写，保留当前标题。','TITLE_ALREADY_SET');job.payload={noteId:source.id,hash:source.hash};job.dedupKey=`title:${source.id}:${source.hash}`;const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}if(job.type==='process'){const source=getNote(job.payload.noteId);if(source.hash!==job.payload.hash){job.payload={noteId:source.id,hash:source.hash,research:job.payload.research===true,...(needsTitle(source)?{titleRequested:true}:{})};job.dedupKey=`process:${source.id}:${source.hash}${job.payload.research ? ':research' : ''}`;job.progress=0;}const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}if(job.type==='index')job.payload={...job.payload,snapshots:indexSnapshots()};return putJob({...job,outboundIntentVersion:1,state:'queued',error:'',code:null});}fail('任务操作无效。');}
+  function jobAction(id,{action}){if(pausing||stopped)fail('任务正在暂停，请稍后继续。','BUSY',409);const job=store.get('jobs',id);if(!job)fail('任务不存在。','NOT_FOUND',404);if(action==='cancel'){if(currentJob===id)controller?.abort();return putJob({...job,state:'cancelled',error:'用户取消；已保存的输入和回答保留。'});}if(action==='retry'){if(job.type==='structure'&&!['running','done'].includes(job.state)){const source=getNote(job.payload.noteId);job.payload.basis=structureBasis(source,sourceChildren(source.id));job.dedupKey=`structure:${source.id}:${hash(JSON.stringify(job.payload.basis))}`;const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}if(['running','done'].includes(job.state))fail('该任务当前不可重试。');if(job.type==='title'){const source=getNote(job.payload.noteId);if(!needsTitle(source))fail('标题已经填写，保留当前标题。','TITLE_ALREADY_SET');job.payload={noteId:source.id,hash:source.hash};job.dedupKey=`title:${source.id}:${source.hash}`;const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}if(job.type==='process'){const source=getNote(job.payload.noteId);if(source.hash!==job.payload.hash){job.payload={noteId:source.id,hash:source.hash,research:job.payload.research===true,...(needsTitle(source)?{titleRequested:true}:{})};job.dedupKey=`process:${source.id}:${source.hash}${job.payload.research ? ':research' : ''}`;job.progress=0;}const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}if(needsMaterialScope(job.type,job.payload))job.payload={...job.payload,snapshots:materialSnapshots(job.type)};return putJob({...job,outboundIntentVersion:1,state:'queued',error:'',code:null});}fail('任务操作无效。');}
   function pauseJobs() {
     if (pausePromise) return pausePromise;
     pausing = true;
@@ -1072,7 +1088,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   const localJob = job => ['discover','relate'].includes(job.type) && job.payload?.useAI !== true;
   function recoverJobs({ restored = false } = {}) {
     for (const job of store.records('jobs')) {
-      const legacyOutbound = !localJob(job) && job.outboundIntentVersion !== 1;
+      const legacyOutbound = !localJob(job) && (job.outboundIntentVersion !== 1 || needsMaterialScope(job.type,job.payload) && !validMaterialSnapshots(job.payload.snapshots));
       if (job.state === 'running' || job.state === 'queued' && (restored || practice || legacyOutbound)) {
         putJob({ ...job, state: 'waiting', ...(legacyOutbound ? { code: 'OUTBOUND_INTENT_REQUIRED' } : {}), error: legacyOutbound
           ? '旧任务不会因升级自动外发；需要继续时，请主动运行 AI 操作或重试任务。'
