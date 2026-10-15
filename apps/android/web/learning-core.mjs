@@ -195,8 +195,19 @@ export function createLearning(dependencies) {
     const prefix = `## ${heading}\n`, text = note.body.slice(note.body.lastIndexOf(prefix) + prefix.length);
     return note.body.includes(prefix) ? text.split(/\n## |\n### |\n---/)[0].trim() : '';
   }
-  function startStudy({ noteId, planId, topicId, mistakeId } = {}) {
+  function startStudy({ noteId, planId, topicId, mistakeId, requestId } = {}) {
     const store = storage();
+    // Optional for older clients; retries of one explicit start reuse its saved session.
+    const startIntent = { noteId: noteId || null, planId: planId || null, topicId: topicId || null, mistakeId: mistakeId || null };
+    if (requestId !== undefined) {
+      if (typeof requestId !== 'string' || !requestId.trim() || requestId.length > 128) fail('开始学习的防重标识无效。');
+      const existing = store.records('sessions').find(s => s.startRequestId === requestId);
+      if (existing) {
+        // Native persistence orders object keys canonically, so compare parameter values.
+        if (Object.keys(startIntent).some(key => existing.startIntent?.[key] !== startIntent[key])) fail('这次开始请求已用于其他学习内容。', 'START_REQUEST_CONFLICT', 409);
+        return session(existing.id);
+      }
+    }
     const plan = planId ? store.get('plans', planId) : null;
     mistakeId ||= plan?.mistakeId; topicId ||= plan?.topicId;
     let mistake;
@@ -226,7 +237,7 @@ export function createLearning(dependencies) {
     const question = mistake ? mistakeContext.nextQuestion || `请针对上次的误解「${mistakeContext.omission || mistake.title}」重新解释，并说明修正依据和适用边界。` : dependencies.getPracticeQuestion?.(note) || goals[depth].question(note.title);
     const id = randomUUID();
     const privacy = privacyFor(note) === 'cloud' && (!mistake || privacyFor(mistake) === 'cloud') ? 'cloud' : 'local';
-    store.put('sessions', id, { id, noteId, planId, status: 'reading', question, material: note.body, sourceHash: note.hash, depth, goal, privacy, turns: [], createdAt: now(), hintCount: 0, ...practiceTags(mistake, note), ...(topic ? { topicId, topicIndex: textList(topic.meta.noteIds).indexOf(noteId) } : {}), ...(mistake ? { mistakeId, mistakeContext } : {}) });
+    store.put('sessions', id, { id, noteId, planId, ...(requestId ? { startRequestId: requestId, startIntent } : {}), status: 'reading', question, material: note.body, sourceHash: note.hash, depth, goal, privacy, turns: [], createdAt: now(), hintCount: 0, ...practiceTags(mistake, note), ...(topic ? { topicId, topicIndex: textList(topic.meta.noteIds).indexOf(noteId) } : {}), ...(mistake ? { mistakeId, mistakeContext } : {}) });
     return session(id);
   }
   function answerStudy(id, { answer, hintUsed = false, requestId }) {

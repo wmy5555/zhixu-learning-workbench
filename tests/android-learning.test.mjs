@@ -18,6 +18,77 @@ function app({ notes = [note()], records = {}, sources = [], practice = false, s
 }
 const errorCode = code => error => error.code === code;
 
+test('start requests reuse one saved session after canonical reopen and completion while new intents start again', () => {
+  const service = app(), input = { noteId: id(1), requestId: 'start-once' };
+  const first = service.learning.startStudy(input);
+  assert.equal(service.learning.startStudy(input).id, first.id);
+  assert.equal(service.sessions().length, 1);
+  const saved = JSON.parse(JSON.stringify(service.state));
+  saved.records.sessions[first.id].startIntent = { mistakeId: null, noteId: id(1), planId: null, topicId: null };
+  const reopened = createAndroidLearning({ state: saved, clock });
+  assert.equal(reopened.learning.startStudy(input).id, first.id, 'native canonical object order must not change the start intent');
+  reopened.learning.answerStudy(first.id, { answer: '保存自己的合成回答', requestId: 'start-answer' });
+  reopened.learning.finishStudy(first.id);
+  assert.equal(reopened.learning.startStudy(input).id, first.id, 'a completed start is still the same saved intent');
+  assert.equal(reopened.sessions().length, 1);
+  assert.notEqual(reopened.learning.startStudy({ ...input, requestId: 'explicit-new-start' }).id, first.id);
+  assert.notEqual(reopened.learning.startStudy({ noteId: id(1) }).id, reopened.learning.startStudy({ noteId: id(1) }).id, 'legacy callers may explicitly start another session');
+  assert.equal(reopened.sessions().length, 4);
+  assert.equal(reopened.state.records.jobs, undefined);
+});
+
+test('start request parameter conflicts and invalid request identifiers write no extra session', () => {
+  const service = app({ notes: [note(), note(2)] }), input = { noteId: id(1), requestId: 'bound-start' };
+  service.learning.startStudy(input);
+  const before = service.state;
+  for (const changed of [{ noteId: id(2) }, { planId: 'another-plan' }, { topicId: id(90) }, { mistakeId: id(80) }]) {
+    assert.throws(() => service.learning.startStudy({ ...input, ...changed }), error => error.code === 'START_REQUEST_CONFLICT' && error.status === 409);
+  }
+  for (const requestId of ['', ' ', 3, {}, 'a'.repeat(129), 'bad\0start']) assert.throws(() => service.learning.startStudy({ noteId: id(1), requestId }));
+  assert.deepEqual(service.state, before);
+});
+
+test('new start requests retain material and topic gates and formal and practice intents stay isolated', () => {
+  const blocked = app({ notes: [note(1, { researchLimitations: ['尚待核验'] })] });
+  assert.throws(() => blocked.learning.startStudy({ noteId: id(1), requestId: 'gated-start' }), errorCode('RESEARCH_REQUIRED'));
+  assert.equal(blocked.sessions().length, 0);
+  const service = app({ notes: [note(), note(2)] });
+  const topic = service.learning.createTopic({ title: '合成顺序', noteIds: [id(1), id(2)] });
+  assert.throws(() => service.learning.startStudy({ noteId: id(2), topicId: topic.id, requestId: 'topic-start' }), errorCode('TOPIC_STEP_UNAVAILABLE'));
+  assert.equal(service.sessions().length, 0);
+  const first = service.learning.startStudy({ noteId: id(1), topicId: topic.id, requestId: 'topic-start' });
+  assert.equal(first.topicId, topic.id, 'rejected attempts must not reserve the request identifier');
+  const practice = app({ practice: true, notes: [note(1, { practice: true, demo: true, presetCase: 'isolated-start' })] });
+  const exercise = practice.learning.startStudy({ noteId: id(1), requestId: 'topic-start' });
+  assert.notEqual(exercise.id, first.id);
+  assert.equal(exercise.practice, true);
+  assert.equal(service.sessions().length, 1);
+  assert.equal(practice.sessions().length, 1);
+  assert.equal(first.practice, undefined);
+});
+
+test('persisted start intent metadata is optional for legacy sessions but paired, bounded and unique when present', () => {
+  const service = app(), started = service.learning.startStudy({ noteId: id(1), requestId: 'schema-start' }), saved = service.state;
+  const mutations = [
+    record => { delete record.startIntent; }, record => { delete record.startRequestId; },
+    record => { record.startRequestId = 'x'.repeat(129); }, record => { record.startRequestId = null; },
+    record => { delete record.startIntent.planId; }, record => { record.startIntent.planId = 5; },
+    record => { record.startIntent.extra = true; },
+  ];
+  for (const mutate of mutations) {
+    const invalid = structuredClone(saved); mutate(invalid.records.sessions[started.id]);
+    assert.throws(() => validateLearningState(invalid));
+  }
+  const duplicate = structuredClone(saved), otherId = 'another-session';
+  duplicate.records.sessions[otherId] = { ...duplicate.records.sessions[started.id], id: otherId };
+  assert.throws(() => validateLearningState(duplicate), /防重标识重复/);
+  const mismatched = structuredClone(saved); mismatched.records.sessions[started.id].id = otherId;
+  assert.throws(() => validateLearningState(mismatched), /会话身份不一致/);
+  const legacy = structuredClone(saved); delete legacy.records.sessions[started.id].startRequestId; delete legacy.records.sessions[started.id].startIntent;
+  assert.deepEqual(validateLearningState(legacy), legacy);
+  assert.deepEqual(validateLearningState(saved), saved);
+});
+
 test('offline answers survive reconstruction, remain unassessed and never create feedback jobs', async () => {
   const service = app(), session = service.learning.startStudy({ noteId: id(1) });
   const answered = service.learning.answerStudy(session.id, { answer: '我的合成回答', requestId: 'answer-one' });

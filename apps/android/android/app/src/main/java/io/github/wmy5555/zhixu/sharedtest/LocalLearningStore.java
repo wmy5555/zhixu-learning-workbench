@@ -559,6 +559,7 @@ public final class LocalLearningStore {
             JSONObject runtime = new JSONObject().put("records", records).put("settings", settings).put("guide", guide);
             validateClientJson(runtime, 0, new int[] { 0 });
             int count = 0;
+            Set<String> startRequests = new HashSet<>();
             for (Iterator<String> keys = records.keys(); keys.hasNext();) {
                 String namespace = keys.next();
                 if (!Arrays.asList("sessions", "plans", "reviews", "studyEvidence", "topics", "jobs", "relations", "research", "proposals", "drafts", "uses").contains(namespace)) throw invalid("学习记录包含不受支持的分类。");
@@ -568,7 +569,10 @@ public final class LocalLearningStore {
                 for (Iterator<String> ids = entries.keys(); ids.hasNext();) {
                     String id = ids.next(); clientText(id, 256, false);
                     JSONObject record = object(entries, id);
-                    if ("sessions".equals(namespace)) validateSession(record);
+                    if ("sessions".equals(namespace)) {
+                        validateSession(record);
+                        if (record.has("startRequestId") && (!id.equals(record.opt("id")) || !startRequests.add(record.getString("startRequestId")))) throw invalid("开始学习的防重标识重复或会话身份不一致。");
+                    }
                     else if ("studyEvidence".equals(namespace)) validateOfflineEvidence(record);
                     else if ("jobs".equals(namespace)) { if (!id.equals(record.optString("id"))) throw invalid("联网任务标识不一致。"); validateOnlineJob(record); }
                     else if (Arrays.asList("research", "proposals", "drafts", "uses").contains(namespace)) { if (!id.equals(record.optString("id"))) throw invalid("联网记录标识不一致。"); validateOnlineRecord(namespace, record); }
@@ -588,6 +592,15 @@ public final class LocalLearningStore {
         clientText(record.opt("id"), 256, false);
         clientText(record.opt("noteId"), 256, false);
         clientText(record.opt("sourceHash"), 256, false);
+        if (record.has("startRequestId") || record.has("startIntent")) {
+            clientText(record.opt("startRequestId"), 128, false);
+            JSONObject intent = object(record, "startIntent");
+            allowedFields(intent, "noteId", "planId", "topicId", "mistakeId");
+            for (String field : Arrays.asList("noteId", "planId", "topicId", "mistakeId")) {
+                if (!intent.has(field)) throw invalid("开始学习参数不完整。");
+                if (!intent.isNull(field)) clientText(intent.opt(field), 256, false);
+            }
+        }
         boolean online = "online".equals(record.opt("assessmentMode"));
         if (record.has("assessmentMode") && !online) throw invalid("学习评估模式不受支持。");
         requiredChoice(record, "status", online ? new String[] {"reading", "unassessed", "awaiting_feedback", "feedback", "completed"} : new String[] {"reading", "unassessed", "completed"});

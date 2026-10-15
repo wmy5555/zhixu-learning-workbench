@@ -31,12 +31,23 @@ export function validateLearningState(state) {
   jsonObject(state.records, '学习记录');
   if (Object.keys(state.records).some(key => !namespaces.includes(key))) fail('学习记录类型无效。');
   let count = 0;
+  const startRequests = new Set();
   for (const [namespace, records] of Object.entries(state.records)) {
     jsonObject(records, '学习记录');
     for (const [key, record] of Object.entries(records)) {
       idText(key); jsonObject(record, '记录'); jsonValue(record); count++;
       if (namespace === 'sessions') {
         idText(record.id); idText(record.noteId); text(record.sourceHash, '学习材料版本', 256);
+        if (Object.hasOwn(record, 'startRequestId') || Object.hasOwn(record, 'startIntent')) {
+          text(record.startRequestId, '开始学习的防重标识', learningLimits.requestId);
+          inputObject(record.startIntent, ['noteId', 'planId', 'topicId', 'mistakeId'], '开始学习参数');
+          for (const field of ['noteId', 'planId', 'topicId', 'mistakeId']) {
+            if (!Object.hasOwn(record.startIntent, field)) fail('开始学习参数不完整。');
+            if (record.startIntent[field] !== null) idText(record.startIntent[field]);
+          }
+          if (record.id !== key || startRequests.has(record.startRequestId)) fail('开始学习的防重标识重复或会话身份不一致。');
+          startRequests.add(record.startRequestId);
+        }
         const online = record.assessmentMode === 'online';
         if (record.assessmentMode !== undefined && !online) fail('学习评估模式无效。');
         if (!(online ? ['reading', 'unassessed', 'awaiting_feedback', 'feedback', 'completed'] : ['reading', 'unassessed', 'completed']).includes(record.status) || !Array.isArray(record.turns) || record.turns.length > 500) fail('学习会话格式无效。');
@@ -242,7 +253,7 @@ export function createAndroidLearning({ state = createEmptyLearningState(), sour
   const idOperation = (fn, fields = []) => operation(fn, (id, input = {}) => { idText(id); inputObject(input, fields); });
   const learning = {
     today: operation(core.today), topics: operation(core.topics), session: idOperation(core.session),
-    startStudy: operation(core.startStudy, (input = {}) => { inputObject(input, ['noteId', 'planId', 'topicId', 'mistakeId']); for (const value of Object.values(input)) idText(value); }),
+    startStudy: operation(core.startStudy, (input = {}) => { inputObject(input, ['noteId', 'planId', 'topicId', 'mistakeId', 'requestId']); for (const [key, value] of Object.entries(input)) key === 'requestId' ? text(value, '开始学习的防重标识', learningLimits.requestId) : idText(value); }),
     answerStudy: operation(core.answerStudy, (id, input) => { idText(id); inputObject(input, ['answer', 'hintUsed', 'requestId']); text(input.answer, '回答', learningLimits.bodyBytes); text(input.requestId, '提交标识', learningLimits.requestId); if (input.hintUsed !== undefined && typeof input.hintUsed !== 'boolean') fail('提示使用情况应为开关值。'); }),
     hintStudy: idOperation(core.hintStudy), finishStudy: idOperation(withMode(core.finishStudy)),
     confirmStudy: idOperation(withMode(core.confirmStudy), ['body']),

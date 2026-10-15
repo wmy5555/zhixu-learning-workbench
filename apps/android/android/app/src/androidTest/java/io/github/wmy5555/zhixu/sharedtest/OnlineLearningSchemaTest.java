@@ -19,6 +19,43 @@ public final class OnlineLearningSchemaTest extends AndroidTestCase {
         .put("payload", new JSONObject().put("noteId", UUID.randomUUID().toString()).put("hash", "synthetic-hash").put("research", false).put("reuseExtracted", false)).put("requests", new JSONObject()); }
     interface Action { void run() throws Exception; }
     private void invalid(Action action) throws Exception { try { action.run(); fail("Expected schema rejection"); } catch (LocalSourceStore.StoreException e) { assertEquals("VALIDATION", e.code); } }
+    private JSONObject readingSession() throws Exception { return new JSONObject().put("id", "session").put("noteId", "knowledge").put("sourceHash", "synthetic-hash").put("status", "reading").put("material", "合成学习材料").put("hintCount", 0).put("turns", new JSONArray()); }
+    private JSONObject startIntent() throws Exception { return new JSONObject().put("noteId", "knowledge").put("planId", JSONObject.NULL).put("topicId", JSONObject.NULL).put("mistakeId", JSONObject.NULL); }
+    public void testSessionStartIntentSurvivesReopenAndBackupWithoutChangingLegacyRecords() throws Exception {
+        JSONObject state = state(), session = readingSession().put("startRequestId", "synthetic-start").put("startIntent", startIntent());
+        state.getJSONObject("records").put("sessions", new JSONObject().put("session", session));
+        JSONObject saved = store.commit("empty", state), reopened = new LocalLearningStore(root, "formal").load();
+        assertEquals(saved.toString(), reopened.toString());
+        LocalLearningStore target = new LocalLearningStore(new File(root, "synthetic-restored"), "formal");
+        JSONObject preview = target.previewRestore(store.backup());
+        JSONObject restored = target.restoreBackup(preview.getString("token"));
+        JSONObject restoredSession = restored.getJSONObject("state").getJSONObject("records").getJSONObject("sessions").getJSONObject("session");
+        assertEquals("synthetic-start", restoredSession.getString("startRequestId"));
+        assertEquals("knowledge", restoredSession.getJSONObject("startIntent").getString("noteId"));
+        for (String field : new String[] {"planId", "topicId", "mistakeId"}) assertTrue(restoredSession.getJSONObject("startIntent").isNull(field));
+        session.remove("startRequestId"); session.remove("startIntent");
+        JSONObject legacy = store.commit(saved.getString("revision"), state);
+        assertFalse(legacy.getJSONObject("state").getJSONObject("records").getJSONObject("sessions").getJSONObject("session").has("startRequestId"));
+    }
+    public void testMalformedDuplicateAndMismatchedStartIntentsRejectBeforePersistence() throws Exception {
+        for (int variant = 0; variant < 9; variant++) {
+            JSONObject state = state(), session = readingSession().put("startRequestId", "synthetic-start").put("startIntent", startIntent());
+            JSONObject sessions = new JSONObject().put("session", session); state.getJSONObject("records").put("sessions", sessions);
+            switch (variant) {
+                case 0: session.remove("startIntent"); break;
+                case 1: session.remove("startRequestId"); break;
+                case 2: session.put("startRequestId", JSONObject.NULL); break;
+                case 3: session.put("startRequestId", new String(new char[129]).replace('\0', 'x')); break;
+                case 4: session.getJSONObject("startIntent").remove("planId"); break;
+                case 5: session.getJSONObject("startIntent").put("planId", 5); break;
+                case 6: session.getJSONObject("startIntent").put("extra", true); break;
+                case 7: sessions.put("other", new JSONObject(session.toString()).put("id", "other")); break;
+                case 8: session.put("id", "other"); break;
+            }
+            invalid(() -> store.commit("empty", state));
+            assertEquals("empty", store.load().getString("revision"));
+        }
+    }
     public void testOnlineJobsReopenAndBackupButNeverCredentialsOrAuthorization() throws Exception {
         JSONObject state = state(), job = job("formal"); job.getJSONObject("requests").put("extract", new JSONObject().put("requestId", UUID.randomUUID().toString()).put("state", "unknown").put("capability", "model")); state.getJSONObject("records").put("jobs", new JSONObject().put(job.getString("id"), job));
         JSONObject saved = store.commit("empty", state); assertEquals(saved.toString(), new LocalLearningStore(root, "formal").load().toString());
