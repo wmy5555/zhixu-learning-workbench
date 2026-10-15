@@ -1,6 +1,10 @@
 import { z } from 'zod';
 import { fail, hash, now } from './store.mjs';
-import { syncSchema, structuredSchema, validateSync, captureIncremental, literalBlock } from './chatgpt-sync.mjs';
+import { syncSchema, structuredSchema, validateSync, captureIncremental, checkSource, checkStructuredCandidates, verifySyncReceipt, literalBlock } from './chatgpt-sync.mjs';
+import { receiveHistorySnapshot, verifiedHistoryCapture } from './chatgpt-history-snapshot.mjs';
+import { readCapturePersisted, assertCaptureRecord, captureVerification, historicalVerification } from './chatgpt-integrity.mjs';
+import { chatgptBuild, chatgptProtocol, chatgptLimits, chatgptToolNames } from './chatgpt-build.mjs';
+import { createHistoryBatchStore } from './chatgpt-history-batch-store.mjs';
 
 const text = max => z.string().max(max);
 const captureId = requestHash => `chatgpt_${requestHash}`;
@@ -15,6 +19,17 @@ export const conversationSchema = z.object({
   sync: syncSchema.optional(),
   structured: structuredSchema.optional(),
 }).strict();
+export const historyCaptureSchema = z.object({
+  requestId: z.string().trim().min(8).max(128),
+  historySnapshotRef: z.string().regex(/^zhixu-history-v1:[a-f0-9]{64}$/),
+  summary: z.string().trim().min(1).max(30000),
+  baseRevision: z.number().int().min(1).optional(),
+  structured: structuredSchema.optional(),
+}).strict();
+export const historyBatchCaptureSchema = historyCaptureSchema.omit({ baseRevision: true }).strict();
+export const captureUndoSchema = z.object({ requestId: z.string().trim().min(8).max(128),
+  noteId: z.string().regex(/^[A-Za-z0-9_-]{1,100}$/), syncRevision: z.number().int().min(1).nullable().default(null) }).strict();
+export const captureRestoreSchema = z.object({ undoId: z.string().uuid() }).strict();
 
 export function parseConversation(input) {
   const parsed = conversationSchema.safeParse(input);
@@ -35,11 +50,14 @@ export function parseConversation(input) {
   return value;
 }
 
-function renderConversation(value) {
+function renderConversation(value, { legacy = false } = {}) {
   const scope = value.coverage === 'selected_excerpt' ? '用户选定片段' : value.coverage === 'visible_history' ? '调用方分页读取的当前可见历史分支' : 'ChatGPT 当前可见上下文';
+  const sourceNotice = legacy
+    ? '只保存本次实际收到的消息；不保证覆盖完整历史、附件或其他会话。原文由 ChatGPT 传入，知序未独立核对网页记录。'
+    : '只保存本次实际收到的消息；知序本身未独立核对网页记录。手动传入的原文没有读取器核对证据；经本机历史读取器传输的原文仅由该读取器在发送前核对当前可见分支。两种方式均不保证覆盖完整历史、隐藏分支、附件或其他会话。';
   return [
     '## 收集范围', scope,
-    '只保存本次实际收到的消息；不保证覆盖完整历史、附件或其他会话。原文由 ChatGPT 传入，知序未独立核对网页记录。',
+    sourceNotice,
     value.sync ? `累计保留 ${value.messages.length} 条已收到消息；本次${value.sync.complete ? '声明已读到当前可见分支末尾' : '范围不完整，保留此前收到的消息，不推断缺失部分'}。` : '',
     value.limitations ? `补充限制：\n\n${literalBlock(value.limitations)}` : '',
     '## 整理摘要（ChatGPT 生成，未经独立核验）', literalBlock(value.summary),
@@ -49,8 +67,87 @@ function renderConversation(value) {
   ].filter(Boolean).join('\n\n');
 }
 
+export const renderLegacyConversation = value => renderConversation(value, { legacy: true });
+const acceptedSourceRenderers = [renderLegacyConversation];
+const historyInputDigest = input => hash(JSON.stringify([input.summary, input.structured ?? null, input.baseRevision ?? null]));
+const historyBinding = input => ({ referenceHash: hash(input.historySnapshotRef), inputDigest: historyInputDigest(input) });
+const sameHistoryBinding = (saved, requested) => saved?.referenceHash === requested.referenceHash && saved?.inputDigest === requested.inputDigest;
+function findCompletedHistoryRetry(store, input) {
+  const requestHash = hash(input.requestId), binding = historyBinding(input);
+  store.scan();
+  const prior = store.get('chatgptCaptures', requestHash);
+  if (!prior) return null;
+  if (!sameHistoryBinding(prior.historyHandoff, binding)) fail('同一历史导入请求编号已绑定到其他读取引用或整理内容。', 'CHATGPT_REQUEST_CONFLICT', 409);
+  const receipt = prior.receipt;
+  if (!/^[a-f0-9]{64}$/.test(prior.payloadHash || '') || !receipt || receipt.noteId !== prior.noteId ||
+    receipt.kind !== 'source' || receipt.layer !== 1 || !Number.isSafeInteger(receipt.syncRevision) || receipt.syncRevision < 1 ||
+    !Array.isArray(receipt.importedNoteIds) || receipt.importedItems !== receipt.importedNoteIds.length) {
+    fail('历史导入的持久回执无法核对；须在知序检查。', 'CHATGPT_CAPTURE_UNVERIFIABLE', 409);
+  }
+  if (!store.row(prior.noteId)) fail('已保存原资料已删除或存在冲突，不会自动重建。', 'CHATGPT_CAPTURE_UNAVAILABLE', 409);
+  const sessions = store.records('chatgptSyncSessions').filter(row => prior.sessionKey ? row.key === prior.sessionKey : row.requestHash === requestHash);
+  if (sessions.length !== 1) fail('历史导入回执无法唯一核对；须在知序检查。', 'CHATGPT_CAPTURE_UNVERIFIABLE', 409);
+  const session = sessions[0];
+  const note = store.read(prior.noteId);
+  if (receipt.syncRevision > session.revision) fail('历史导入回执版本无法核对；须在知序检查。', 'CHATGPT_CAPTURE_UNVERIFIABLE', 409);
+  const finalizingCurrentRequest = session.pending && session.requestHash === requestHash;
+  if (finalizingCurrentRequest && (session.payloadHash !== prior.payloadHash || session.revision !== receipt.syncRevision ||
+    !sameHistoryBinding(session.historyHandoff, binding))) {
+    fail('历史导入回执与待恢复会话状态不一致；须在知序检查。', 'CHATGPT_CAPTURE_UNVERIFIABLE', 409);
+  }
+  // A durable completed receipt describes its own revision, not the latest payload.
+  // Still protect the current source; a different pending request is never finalized here.
+  if (session.pending && !finalizingCurrentRequest && note.hash === session.previousHash) {
+    if (receipt.syncRevision >= session.revision) fail('历史导入回执与待恢复版本冲突。', 'CHATGPT_CAPTURE_UNVERIFIABLE', 409);
+  } else {
+    checkSource(note, session, renderConversation, acceptedSourceRenderers);
+    if (!session.pending || finalizingCurrentRequest) checkStructuredCandidates(store, session);
+  }
+  const verification = verifySyncReceipt(store, receipt, session, renderConversation, acceptedSourceRenderers);
+  if (finalizingCurrentRequest) {
+    store.put('chatgptSyncSessions', session.key, { ...session, pending: false, noteHash: note.hash, receipt });
+  }
+  return { ...receipt, verification, status: 'already_saved', duplicate: true };
+}
+
+function verifyLegacyCapture(store, saved, value, { requireExact = false } = {}) {
+  const note = readCapturePersisted(store, saved.noteId), marker = note.meta.chatgptCapture;
+  const expectedMarker = ['version', 'noteId', 'requestHash', 'payloadHash', 'savedAt', 'messageCount', 'coverage'];
+  const matches = note.kind === 'source' && note.title === value.title && note.meta.privacy === 'local' &&
+    note.meta.stage === 'reference' && note.meta.platform === 'ChatGPT' && note.meta.url === value.conversationUrl &&
+    expectedMarker.every(key => marker?.[key] === saved[key]) &&
+    [renderConversation, ...acceptedSourceRenderers].some(render => note.body === render(value));
+  if (!matches && requireExact) fail('新保存的原资料与收到的会话不一致，尚未通过完整性核验。', 'CHATGPT_PERSISTENCE_MISMATCH', 409);
+  return matches ? captureVerification(value, note) : historicalVerification({ ...saved, syncRevision: null });
+}
+
+function findPendingHistoryRetry(store, input) {
+  const requestHash = hash(input.requestId), binding = historyBinding(input);
+  store.scan();
+  const sessions = store.records('chatgptSyncSessions').filter(row => row.requestHash === requestHash);
+  if (!sessions.length) return null;
+  if (sessions.length !== 1) fail('历史导入待恢复记录无法唯一核对；须在知序检查。', 'CHATGPT_CAPTURE_UNVERIFIABLE', 409);
+  const state = sessions[0];
+  if (!state.pending) fail('历史导入回执缺失或状态不完整；不会重建。', 'CHATGPT_CAPTURE_UNVERIFIABLE', 409);
+  if (!sameHistoryBinding(state.historyHandoff, binding)) fail('同一历史导入请求编号已绑定到其他读取引用或整理内容。', 'CHATGPT_REQUEST_CONFLICT', 409);
+  if (state.requestHash !== requestHash || !/^[a-f0-9]{64}$/.test(state.payloadHash || '') || !state.snapshot) {
+    fail('历史导入待恢复记录无法核对；不会重建。', 'CHATGPT_CAPTURE_UNVERIFIABLE', 409);
+  }
+  const value = parseConversation(state.snapshot);
+  const expectedKey = hash(JSON.stringify([value.sync?.conversationId, value.sync?.branchId]));
+  const snapshotInputDigest = historyInputDigest({ summary: value.summary, structured: value.structured, baseRevision: value.sync?.baseRevision });
+  if (value.requestId !== input.requestId || state.key !== expectedKey || snapshotInputDigest !== binding.inputDigest ||
+    value.summary !== input.summary || JSON.stringify(value.structured ?? null) !== JSON.stringify(input.structured ?? null) ||
+    value.sync?.baseRevision !== input.baseRevision || value.coverage !== 'visible_history' || value.sync?.complete !== true ||
+    !value.sync.readerEvidence || value.sync.mode !== 'snapshot' ||
+    state.historyHandoff?.referenceHash !== binding.referenceHash || state.historyHandoff?.inputDigest !== binding.inputDigest) {
+    fail('历史导入重试与原待恢复请求不一致；不会覆盖或重复保存。', 'CHATGPT_REQUEST_CONFLICT', 409);
+  }
+  return { state, value, binding };
+}
+
 // This recipient-specific permission is deliberately separate from provider privacy.
-export function createChatgptBridge({ getStore, settings, search, getNote, related }) {
+export function createChatgptBridge({ getStore, settings, search, getNote, related, undo, receiveSnapshot = receiveHistorySnapshot }) {
   const enabled = () => {
     if (settings().mcp.chatgptEnabled !== true) fail('请在知序「系统 → 能力设置」启用 ChatGPT 接入。', 'CHATGPT_DISABLED', 403);
   };
@@ -58,20 +155,28 @@ export function createChatgptBridge({ getStore, settings, search, getNote, relat
     enabled();
     if (settings().mcp.chatgptAllowRead !== true) fail('尚未允许 ChatGPT 读取知识库；会话收集仍可使用。', 'CHATGPT_READ_DISABLED', 403);
   };
+  const batches = createHistoryBatchStore({ getStore, enabled });
+  const rejectBatchRequest = (store, input) => {
+    if (store.get('chatgptHistoryBatches', hash(input.requestId))) fail('请求编号已用于独立分批导入，不能改用另一保存路径。', 'CHATGPT_REQUEST_CONFLICT', 409);
+  };
   const receipt = (saved, duplicate) => ({
     status: duplicate ? 'already_saved' : 'saved', duplicate, noteId: saved.noteId,
     layer: 1, kind: 'source', savedAt: saved.savedAt, messageCount: saved.messageCount,
-    coverage: saved.coverage, location: '知序 → 知识库 → 原始资料',
+    coverage: saved.coverage, verification: saved.verification, location: '知序 → 知识库 → 原始资料',
   });
   return {
     status() {
       enabled();
-      return { ready: true, canCapture: true, canSync: true, structuredSchemaVersion: 1, canRead: settings().mcp.chatgptAllowRead === true, maxCharacters: 500000, maxMessages: 200 };
+      return { ready: true, canCapture: true, canSync: true, canHistorySnapshot: true, canHistoryBatch: true,
+        canPreviewCaptureUndo: Boolean(undo), undoRequiresLocalConfirmation: true, structuredSchemaVersion: 1,
+        saveVerificationVersion: 1, build: chatgptBuild, protocol: chatgptProtocol, toolNames: chatgptToolNames,
+        limits: chatgptLimits, canRead: settings().mcp.chatgptAllowRead === true, maxCharacters: 500000, maxMessages: 200 };
     },
     capture(input) {
       enabled();
       const value = parseConversation(input), store = getStore();
-      if (value.sync) return captureIncremental(store, value, renderConversation);
+      rejectBatchRequest(store, value);
+      if (value.sync) return captureIncremental(store, value, renderConversation, { acceptedRenderers: acceptedSourceRenderers });
       const requestHash = hash(value.requestId);
       const { requestId: _requestId, ...content } = value;
       const payloadHash = hash(JSON.stringify(content));
@@ -80,7 +185,7 @@ export function createChatgptBridge({ getStore, settings, search, getNote, relat
       if (previous) {
         if (previous.payloadHash !== payloadHash) fail('同一请求编号的内容发生变化；新快照请使用新编号。', 'CHATGPT_REQUEST_CONFLICT', 409);
         if (!store.row(previous.noteId)) fail('这份已收集资料已删除或存在文件冲突，请在知序核对；不会自动重新创建。', 'CHATGPT_CAPTURE_UNAVAILABLE', 409);
-        return receipt(previous, true);
+        return receipt({ ...previous, verification: verifyLegacyCapture(store, previous, value) }, true);
       }
       const body = renderConversation(value);
       const notes = store.list();
@@ -92,16 +197,19 @@ export function createChatgptBridge({ getStore, settings, search, getNote, relat
       const existing = matches[0];
       if (existing) {
         const marker = existing.meta.chatgptCapture, savedTime = Date.parse(marker.savedAt);
+        const bodyMatchesKnownTemplate = [renderConversation, ...acceptedSourceRenderers].some(renderer => existing.body === renderer(value));
         if (marker.requestHash === requestHash && marker.payloadHash !== payloadHash) fail('同一请求编号的内容发生变化。', 'CHATGPT_REQUEST_CONFLICT', 409);
         // Verify the original identity and complete input, rather than trusting copied frontmatter.
         if (existing.kind !== 'source' || marker.version !== 2 || !/^[a-f0-9]{64}$/.test(marker.requestHash) || marker.noteId !== existing.id || existing.id !== captureId(marker.requestHash) ||
           marker.payloadHash !== payloadHash || marker.messageCount !== value.messages.length || marker.coverage !== value.coverage || !Number.isFinite(savedTime) || savedTime > Date.now() ||
-          existing.title !== value.title || existing.body !== body || existing.meta.platform !== 'ChatGPT' || existing.meta.url !== value.conversationUrl) {
+          existing.title !== value.title || !bodyMatchesKnownTemplate || existing.meta.platform !== 'ChatGPT' || existing.meta.url !== value.conversationUrl) {
           fail('会话回执已丢失，且原记录已编辑或标记无法核对；请在知序确认，不会覆盖或重复创建。', 'CHATGPT_CAPTURE_UNVERIFIABLE', 409);
         }
         const saved = { version: 2, noteId: existing.id, requestHash: marker.requestHash, payloadHash, savedAt: marker.savedAt, messageCount: marker.messageCount, coverage: marker.coverage };
-        store.put('chatgptCaptures', requestHash, saved);
-        return receipt(saved, true);
+        const completed = { ...saved, verification: verifyLegacyCapture(store, saved, value, { requireExact: true }) };
+        store.put('chatgptCaptures', requestHash, completed);
+        assertCaptureRecord(store, 'chatgptCaptures', requestHash, completed);
+        return receipt(completed, true);
       }
       const noteId = captureId(requestHash);
       const ownsPath = file => file?.split('/').at(-1)?.toLowerCase() === `${noteId}.md`;
@@ -116,8 +224,63 @@ export function createChatgptBridge({ getStore, settings, search, getNote, relat
         privacy: 'local', stage: 'reference', fingerprint: hash(body.trim()),
         ...origin, origins: [origin], chatgptCapture: saved,
       } });
-      store.put('chatgptCaptures', requestHash, { ...saved, noteId: note.id });
-      return receipt({ ...saved, noteId: note.id }, false);
+      const completed = { ...saved, noteId: note.id, verification: verifyLegacyCapture(store, saved, value, { requireExact: true }) };
+      store.put('chatgptCaptures', requestHash, completed);
+      assertCaptureRecord(store, 'chatgptCaptures', requestHash, completed);
+      return receipt(completed, false);
+    },
+    async captureHistorySnapshot(input) {
+      enabled();
+      const parsed = historyCaptureSchema.safeParse(input);
+      if (!parsed.success) fail('历史导入参数无效；请重新读取并确认摘要。', 'CHATGPT_HISTORY_INVALID');
+      const store = getStore();
+      rejectBatchRequest(store, parsed.data);
+      const saved = findCompletedHistoryRetry(store, parsed.data);
+      if (saved) return { ...saved, sourceVerification: 'local_history_reader_rechecked',
+        notice: '本机历史读取器在首次保存前核对了当前账户与可见分支正文；本次重试使用知序持久回执，未重新读取网页。隐藏分支、附件字节和模型整理仍未核验。' };
+      const binding = historyBinding(parsed.data);
+      const pending = findPendingHistoryRetry(store, parsed.data);
+      if (pending) {
+        enabled();
+        const resumed = captureIncremental(store, pending.value, renderConversation, {
+          acceptedRenderers: acceptedSourceRenderers, historyHandoff: binding,
+          resumePending: { key: pending.state.key, requestHash: pending.state.requestHash, payloadHash: pending.state.payloadHash },
+        });
+        return { ...resumed, sourceVerification: 'local_history_reader_rechecked',
+          notice: '本机历史读取器已在首次写入前核对来源；本次从知序保存的待恢复状态继续，未重新读取网页。隐藏分支、附件字节和模型整理仍未核验。' };
+      }
+      const snapshot = await receiveSnapshot(parsed.data.historySnapshotRef, {
+        requestId: parsed.data.requestId, inputDigest: binding.inputDigest,
+      });
+      enabled(); // Permission may have been revoked during the local transfer.
+      const value = parseConversation(verifiedHistoryCapture(snapshot, parsed.data));
+      const receipt = captureIncremental(store, value, renderConversation, {
+        acceptedRenderers: acceptedSourceRenderers, historyHandoff: binding,
+      });
+      return { ...receipt, sourceVerification: 'local_history_reader_rechecked',
+        notice: '本机历史读取器在传输前重新核对了当前账户与可见分支正文；隐藏分支、附件字节和模型整理仍未核验。' };
+    },
+    async captureHistoryBatch(input) {
+      enabled();
+      const parsed = historyBatchCaptureSchema.safeParse(input);
+      if (!parsed.success) fail('分批历史导入参数无效；独立快照不接受旧版本更新参数。', 'CHATGPT_HISTORY_INVALID');
+      const store = getStore(), value = parsed.data, binding = historyBinding(value);
+      const prior = await batches.findRetry(value);
+      if (prior) return prior;
+      const snapshot = await receiveSnapshot(value.historySnapshotRef, { requestId: value.requestId, inputDigest: binding.inputDigest });
+      enabled();
+      if (getStore() !== store) fail('保存位置已变化，请重新确认导入。', 'CHATGPT_REQUEST_CONFLICT', 409);
+      return batches.capture(snapshot, value, binding);
+    },
+    previewUndo(input) {
+      enabled();
+      if (!undo) fail('此服务尚未提供本机撤销确认。', 'CHATGPT_UNDO_UNAVAILABLE', 409);
+      return undo.preview(captureUndoSchema.parse(input));
+    },
+    previewRestore(input) {
+      enabled();
+      if (!undo) fail('此服务尚未提供本机恢复确认。', 'CHATGPT_UNDO_UNAVAILABLE', 409);
+      return undo.previewRestore(captureRestoreSchema.parse(input));
     },
     async search(query) {
       readable();

@@ -12,6 +12,7 @@ import { promptDefaults, renderPrompt, validatePromptOverrides, sourceExtraction
 import { createLearning } from './learning.mjs';
 import { createLifecycle } from './knowledge-lifecycle.mjs';
 import { createChatgptBridge } from './chatgpt.mjs';
+import { createChatgptUndo } from './chatgpt-undo.mjs';
 import { buildUsageReport } from './usage.mjs';
 import { structureBasis, structureRecord, structureView } from './source-structure.mjs';
 import { createSourceFiles } from './source-files.mjs';
@@ -39,7 +40,7 @@ function cosine(a, b) {
   let dot = 0, na = 0, nb = 0; for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i] ** 2; nb += b[i] ** 2; } return dot / (Math.sqrt(na * nb) || 1);
 }
 
-export function createService({ dataDir, vaultDir, aiOverride, learningClock = () => new Date(), getExternalSettings, practice = false, getPracticeQuestion } = {}) {
+export function createService({ dataDir, vaultDir, aiOverride, learningClock = () => new Date(), getExternalSettings, practice = false, getPracticeQuestion, receiveHistorySnapshot } = {}) {
   if (practice && (!dataDir || !vaultDir)) fail('练习空间必须使用独立的数据与资料目录。', 'PRACTICE_PATH_REQUIRED');
   if (typeof learningClock !== 'function' || getExternalSettings !== undefined && typeof getExternalSettings !== 'function') fail('学习时间或外部能力配置无效。');
   dataDir ||= path.resolve('.data');
@@ -1098,14 +1099,24 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     }
   }
   recoverJobs();
-  const chatgpt = createChatgptBridge({ getStore: () => store, settings, search: tracked(search), getNote, related });
+  const undoAuthority = Symbol('local CSRF confirmed capture undo');
+  const undoController = createChatgptUndo({ getStore: () => store, localAuthority: undoAuthority });
+  const requireCapture = () => { if (settings().mcp.chatgptEnabled !== true) fail('ChatGPT 接入尚未启用。', 'CHATGPT_DISABLED', 403); };
+  const chatgptUndo = {
+    list() { return { requests: settings().mcp.chatgptEnabled ? undoController.list() : [] }; },
+    preview(input) { requireCapture(); return undoController.preview(input); },
+    previewRestore(input) { requireCapture(); return undoController.previewRestore(input); },
+    confirmUndo(input) { requireCapture(); return undoController.confirmUndo(input, undoAuthority); },
+    confirmRestore(input) { requireCapture(); return undoController.confirmRestore(input, undoAuthority); },
+  };
+  const chatgpt = createChatgptBridge({ getStore: () => store, settings, search: tracked(search), getNote, related, undo: chatgptUndo, receiveSnapshot: receiveHistorySnapshot });
   sourceFiles = createSourceFiles({ store, getNote });
   const uploadFile = input => sourceFiles.receive(input);
   const revertUpload = id => sourceFiles.revert(id);
   const commitFile = tracked(input => sourceFiles.commit(input));
   const readFile = (id, assetId) => sourceFiles.read(id, assetId);
   const pendingUploads = () => sourceFiles.pending();
-  return { get store(){return store;}, get processing(){return processing;}, get hasPendingOperations(){return processing||activeOperations>0||pausing;}, chatgpt, learningNow, settings, updateSettings, getPrompts, updatePrompts, usage, usageReport, updateUsageSettings, callRecovery, recoverCall, ai, importItems, processNote, requestSourceStructure, listNotes, publicNote, publicJob, library, readPublicNote, noteEvidence, linksPreview, syncLinks, getNote, editNote, extractNote, promote, confirmNote, merge, search:tracked(search), today, planAction, startStudy, session, answerStudy, hintStudy, confirmStudy, finishStudy, mistakeAction, topics, createTopic, updateTopic, topicAction, recommendations, recommendationAction, requestRelations, relationReview, relationAction, related, ask:tracked(ask), updateDraft, propose, proposalAction, queue, runJobs, pauseJobs, jobAction, tick, demo, diagnostics, backup, restore,
+  return { get store(){return store;}, get processing(){return processing;}, get hasPendingOperations(){return processing||activeOperations>0||pausing;}, chatgpt, chatgptUndo, learningNow, settings, updateSettings, getPrompts, updatePrompts, usage, usageReport, updateUsageSettings, callRecovery, recoverCall, ai, importItems, processNote, requestSourceStructure, listNotes, publicNote, publicJob, library, readPublicNote, noteEvidence, linksPreview, syncLinks, getNote, editNote, extractNote, promote, confirmNote, merge, search:tracked(search), today, planAction, startStudy, session, answerStudy, hintStudy, confirmStudy, finishStudy, mistakeAction, topics, createTopic, updateTopic, topicAction, recommendations, recommendationAction, requestRelations, relationReview, relationAction, related, ask:tracked(ask), updateDraft, propose, proposalAction, queue, runJobs, pauseJobs, jobAction, tick, demo, diagnostics, backup, restore,
     jobStatuses,
     bootstrap(){return{settings:settings(),stats:{notes:store.list().filter(n=>!n.meta.excerptOnly).length,sources:store.list().filter(n=>n.kind==='source'&&!n.meta.excerptOnly).length,knowledge:store.list().filter(n=>n.kind==='knowledge').length,pending:store.records('jobs').filter(j=>['waiting','failed'].includes(j.state)).length},today:today(),notes:listNotes().filter(n=>!n.meta.excerptOnly).map(publicNote),jobs:store.records('jobs').map(publicJob),jobRevision,jobSnapshot:++jobSnapshot,conflicts:store.conflicts,capabilities:{offline:true,model:settings().ai.enabled,embedding:settings().embedding.enabled,search:settings().search.enabled}};},
     uploadFile, revertUpload, commitFile, readFile, pendingUploads,
