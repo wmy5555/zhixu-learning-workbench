@@ -3,6 +3,7 @@ import { decodeFile, readAttachment, writeAttachment, extractWord } from './atta
 import { fail, now, hash } from './store.mjs';
 
 export const sourceAttachments = note => [note.meta?.sourceFile, ...(note.meta?.attachments || [])].filter(Boolean);
+export const MAX_UPLOAD_RECEIPTS = 5000;
 export function createSourceFiles({ store, getNote }) {
   const receipt = id => {
     if (typeof id !== 'string' || !/^[a-f0-9-]{36}$/.test(id)) fail('上传回执无效。');
@@ -18,6 +19,8 @@ export function createSourceFiles({ store, getNote }) {
       readAttachment(store.vaultDir, previous.attachment);
       return previous;
     }
+    const count = store.db.prepare('SELECT COUNT(*) AS count FROM records WHERE namespace=?').get('attachmentUploads').count;
+    if (count >= MAX_UPLOAD_RECEIPTS) fail('本资料库的附件上传记录已达到 5000 条上限。原件、历史与回执均保留，已有上传仍可保存；请先完整备份，再使用独立资料库或联系维护者调整容量。', 'UPLOAD_HISTORY_LIMIT', 409);
     if (store.records('attachmentUploads').filter(item => item.state === 'pending').length >= 50) fail('最多暂存 50 份文件，请先保存或移除已有上传。', 'UPLOAD_LIMIT', 409);
     writeAttachment(store.vaultDir, file);
     return store.put('attachmentUploads', uploadId, { id: uploadId, state: 'pending', noteId: randomUUID(), attachment: file.descriptor, createdAt: now() });

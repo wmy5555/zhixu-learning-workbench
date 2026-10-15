@@ -4,6 +4,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
 
 export const MAX_FILE_BYTES = 10 * 1024 * 1024;
+export const MAX_ATTACHMENT_STORAGE_BYTES = 256 * 1024 * 1024;
+export const MAX_ATTACHMENT_STORAGE_FILES = 1000;
 const types = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', pdf: 'application/pdf', doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const reject = (message, code = 'ATTACHMENT_INVALID', status = 400) => { throw Object.assign(new Error(message), { code, status }); };
@@ -59,20 +61,53 @@ export function attachmentPath(root, id) {
   for (const target of [root, dir, file]) if (fs.existsSync(target) && fs.lstatSync(target).isSymbolicLink()) reject('附件路径不能是链接。', 'SYMLINK', 403);
   return file;
 }
-export function readAttachment(root, descriptor) {
+export function statAttachment(root, descriptor) {
   const file = attachmentPath(root, descriptor?.id);
   if (!fs.existsSync(file)) reject('原始附件缺失，请从包含附件的备份恢复。', 'ATTACHMENT_MISSING', 409);
   const stat = fs.statSync(file);
   if (!stat.isFile() || stat.size > MAX_FILE_BYTES || stat.size !== descriptor.size) reject('附件大小已变化。', 'ATTACHMENT_CHANGED', 409);
+  return { file, size: stat.size };
+}
+export function readAttachment(root, descriptor) {
+  const { file } = statAttachment(root, descriptor);
   const bytes = fs.readFileSync(file);
   const checked = decodeFile({ name: descriptor.name, mime: descriptor.mime, bytes });
   if (checked.descriptor.id !== descriptor.id || checked.descriptor.sha256 !== descriptor.sha256) reject('附件内容已变化。', 'ATTACHMENT_CHANGED', 409);
   return { ...checked, descriptor: { ...descriptor, ...checked.descriptor } };
 }
-export function writeAttachment(root, file) {
+export function assertAttachmentCapacity(root, descriptors, { maxBytes = MAX_ATTACHMENT_STORAGE_BYTES, maxFiles = MAX_ATTACHMENT_STORAGE_FILES } = {}) {
+  let addedBytes = 0, addedFiles = 0;
+  for (const descriptor of new Map(descriptors.map(item => [item.id, item])).values()) {
+    const target = attachmentPath(root, descriptor.id);
+    if (!Number.isSafeInteger(descriptor.size) || descriptor.size < 1 || descriptor.size > MAX_FILE_BYTES) reject('附件大小无效。');
+    if (!fs.existsSync(target)) { addedBytes += descriptor.size; addedFiles++; }
+  }
+  // Existing originals can still be read, rebound and restored when at capacity.
+  if (!addedFiles) return;
+  const dir = path.join(root, '.zhixu-attachments');
+  let bytes = 0, files = 0;
+  const check = () => {
+    if (bytes + addedBytes > maxBytes || files + addedFiles > maxFiles) reject('附件存储已达到容量上限（256 MiB 或 1000 个文件）。原件与历史均保留，新增上传或恢复已停止；请先完整备份，再使用独立资料库或联系维护者调整容量。', 'ATTACHMENT_STORAGE_LIMIT', 413);
+  };
+  check();
+  if (fs.existsSync(dir)) {
+    const directory = fs.opendirSync(dir);
+    try {
+      let entry;
+      while ((entry = directory.readSync())) {
+        const stat = fs.lstatSync(path.join(dir, entry.name));
+        if (!stat.isFile()) reject('附件目录包含链接或子目录，请先备份并核对。', 'ATTACHMENT_STORAGE_INVALID', 409);
+        // Count every retained file, including revoked/orphaned bytes and leftovers.
+        bytes += stat.size; files++; check();
+      }
+    } finally { directory.closeSync(); }
+  }
+}
+export function writeAttachment(root, file, limits) {
   const target = attachmentPath(root, file.descriptor.id);
-  fs.mkdirSync(path.dirname(target), { recursive: true });
   if (fs.existsSync(target)) { readAttachment(root, file.descriptor); return; }
+  assertAttachmentCapacity(root, [file.descriptor], limits);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
   const temporary = target + '.' + randomUUID() + '.tmp';
   try {
     fs.writeFileSync(temporary, file.bytes, { flag: 'wx', mode: 0o600 });

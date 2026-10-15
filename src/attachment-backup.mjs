@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import YAML from 'yaml';
-import { attachmentPath, decodeFile, readAttachment, writeAttachment } from './attachments.mjs';
+import { attachmentPath, decodeFile, statAttachment, readAttachment, writeAttachment, assertAttachmentCapacity } from './attachments.mjs';
 
 const invalid = message => { throw Object.assign(new Error(message), { code: 'ATTACHMENT_BACKUP', status: 400 }); };
+const MAX_BACKUP_BYTES = 49 * 1024 * 1024;
 function references(backup) {
   const descriptors = new Map();
   for (const row of [...backup.notes, ...backup.versions]) {
@@ -22,18 +23,27 @@ function references(backup) {
 export function includeAttachments(root, backup) {
   const refs = references(backup);
   if (!refs.size) return backup;
+  const envelope = { ...backup, version: 2, scope: { ...backup.scope, attachments: true }, attachments: [] };
+  let estimatedBytes = Buffer.byteLength(JSON.stringify(envelope)), index = 0;
+  // Reject before reading any attachment or allocating its base64 representation.
+  // The final exact check also covers descriptor normalization and file changes.
+  for (const descriptor of refs.values()) {
+    const { size } = statAttachment(root, descriptor);
+    estimatedBytes += (index++ ? 1 : 0) + Buffer.byteLength(JSON.stringify({ ...descriptor, base64: '' })) + 4 * Math.ceil(size / 3);
+    if (estimatedBytes > MAX_BACKUP_BYTES) invalid('包含附件的 JSON 备份预计超过 49 MiB；请另行完整复制 Vault 与运行数据。尚未读取或编码附件，没有生成不完整备份。');
+  }
   const attachments = [...refs.values()].map(descriptor => {
     const file = readAttachment(root, descriptor);
     return { ...file.descriptor, base64: file.bytes.toString('base64') };
   });
-  const result = { ...backup, version: 2, scope: { ...backup.scope, attachments: true }, attachments };
-  if (Buffer.byteLength(JSON.stringify(result)) > 49 * 1024 * 1024) invalid('包含附件的 JSON 备份超过 49 MiB；请另行完整复制 Vault 与运行数据。没有生成不完整备份。');
+  const result = { ...envelope, attachments };
+  if (Buffer.byteLength(JSON.stringify(result)) > MAX_BACKUP_BYTES) invalid('包含附件的 JSON 备份超过 49 MiB；请另行完整复制 Vault 与运行数据。没有生成不完整备份。');
   return result;
 }
 export function validateAttachments(root, backup) {
   const refs = references(backup);
   if (backup.version === 1) { if (refs.size || backup.attachments?.length) invalid('含受管理附件的备份必须使用版本 2。'); return []; }
-  if (!Array.isArray(backup.attachments) || backup.attachments.length !== refs.size || Buffer.byteLength(JSON.stringify(backup)) > 49 * 1024 * 1024) invalid('附件备份清单缺失、重复或超过容量限制。');
+  if (!Array.isArray(backup.attachments) || backup.attachments.length !== refs.size || Buffer.byteLength(JSON.stringify(backup)) > MAX_BACKUP_BYTES) invalid('附件备份清单缺失、重复或超过容量限制。');
   const files = [], seen = new Set();
   for (const item of backup.attachments) {
     const file = decodeFile(item), reference = refs.get(item.id);
@@ -43,10 +53,12 @@ export function validateAttachments(root, backup) {
     if (fs.existsSync(target)) readAttachment(root, file.descriptor);
     seen.add(item.id); files.push(file);
   }
+  assertAttachmentCapacity(root, files.map(file => file.descriptor));
   return files;
 }
 export function installAttachments(root, files) {
   // Add-only, content-addressed installation. A failed Markdown restore may leave
   // unreferenced bytes; neither existing attachments nor external files are removed.
+  assertAttachmentCapacity(root, files.map(file => file.descriptor));
   for (const file of files) writeAttachment(root, file);
 }

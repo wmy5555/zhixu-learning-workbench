@@ -7,7 +7,9 @@ import { once } from 'node:events';
 import YAML from 'yaml';
 import { createService } from '../src/service.mjs';
 import { createApp } from '../src/server.mjs';
-import { decodeFile, extractWord, MAX_FILE_BYTES, processingText } from '../src/attachments.mjs';
+import { decodeFile, extractWord, MAX_FILE_BYTES, MAX_ATTACHMENT_STORAGE_FILES, processingText, writeAttachment, readAttachment } from '../src/attachments.mjs';
+import { MAX_UPLOAD_RECEIPTS } from '../src/source-files.mjs';
+import { installAttachments } from '../src/attachment-backup.mjs';
 import { tinyPng, tinyPdf, legacyDoc, docx } from './fixtures/source-files.mjs';
 
 fs.mkdirSync(new URL('../.tmp/', import.meta.url), { recursive: true });
@@ -340,4 +342,87 @@ test('attachment reads reject same-size byte tampering and retain the saved note
   fs.writeFileSync(target, tinyPng);
   assert.deepEqual(h.service.readFile(note.id, file.attachment.id).bytes, tinyPng);
   assert.equal(h.service.backup().version, 2);
+});
+
+test('attachment storage rejects new bytes at the byte limit and retains existing originals', async t => {
+  const h = await harness(t), files = [0, 1, 2].map(index => {
+    const bytes = Buffer.from(tinyPng); bytes[bytes.length - 1] ^= index;
+    return decodeFile({ name: '容量.png', bytes });
+  });
+  const limits = { maxBytes: tinyPng.length * 2, maxFiles: 10 };
+  writeAttachment(h.options.vaultDir, files[0], limits);
+  writeAttachment(h.options.vaultDir, files[1], limits);
+  assert.throws(() => writeAttachment(h.options.vaultDir, files[2], limits), { code: 'ATTACHMENT_STORAGE_LIMIT' });
+  assert.equal(fs.readdirSync(path.join(h.options.vaultDir, '.zhixu-attachments')).length, 2);
+  // A full or externally over-capacity directory must not prevent byte reuse.
+  writeAttachment(h.options.vaultDir, files[0], { maxBytes: 1, maxFiles: 1 });
+  assert.deepEqual(readAttachment(h.options.vaultDir, files[0].descriptor).bytes, tinyPng);
+});
+
+test('attachment storage counts revoked and orphaned files and preflights restore before any writes', async t => {
+  const h = await harness(t), original = upload(h.service, '原件.png', tinyPng);
+  const { note } = await h.service.commitFile({ uploadId: original.id });
+  const directory = path.join(h.options.vaultDir, '.zhixu-attachments');
+  for (let index = 0; index < MAX_ATTACHMENT_STORAGE_FILES - 2; index++) fs.writeFileSync(path.join(directory, 'retained-' + index + '.tmp'), 'x');
+  const b = Buffer.from(tinyPng); b[b.length - 1] ^= 1;
+  const c = Buffer.from(tinyPng); c[c.length - 1] ^= 2;
+  const revoked = upload(h.service, '撤销.png', b);
+  h.service.revertUpload(revoked.id);
+  assert.equal(h.service.pendingUploads().length, 0);
+  await h.reopen();
+  assert.throws(() => upload(h.service, '不能新增.png', c), { code: 'ATTACHMENT_STORAGE_LIMIT' });
+  assert.deepEqual(h.service.readFile(note.id, original.attachment.id).bytes, tinyPng);
+  assert.ok(fs.existsSync(path.join(directory, revoked.attachment.id)));
+  const duplicate = upload(h.service, '重用原件.png', tinyPng);
+  assert.equal((await h.service.commitFile({ uploadId: duplicate.id })).note.id, note.id);
+
+  // A batch needing two new files is rejected before even the first is installed.
+  const other = await harness(t), destination = path.join(other.options.vaultDir, '.zhixu-attachments');
+  fs.mkdirSync(destination, { recursive: true });
+  for (let index = 0; index < MAX_ATTACHMENT_STORAGE_FILES - 1; index++) fs.writeFileSync(path.join(destination, 'retained-' + index + '.tmp'), 'x');
+  const files = [b, c].map(bytes => decodeFile({ name: '恢复.png', bytes }));
+  assert.throws(() => installAttachments(other.options.vaultDir, files), { code: 'ATTACHMENT_STORAGE_LIMIT' });
+  assert.ok(files.every(file => !fs.existsSync(path.join(destination, file.descriptor.id))));
+  const reuse = upload(h.service, '保留的撤销原件.png', b);
+  await h.service.commitFile({ uploadId: reuse.id });
+  assert.throws(() => other.service.restore({ backup: h.service.backup() }), { code: 'ATTACHMENT_STORAGE_LIMIT' });
+  assert.equal(other.service.store.list().length, 0);
+  assert.equal(fs.readdirSync(destination).length, MAX_ATTACHMENT_STORAGE_FILES - 1);
+});
+
+test('upload receipt total remains bounded after revocation while an existing pending upload can finish', async t => {
+  const h = await harness(t), existing = upload(h.service, '已有.png', tinyPng);
+  h.service.store.db.exec('BEGIN');
+  try {
+    for (let index = 1; index < MAX_UPLOAD_RECEIPTS; index++) h.service.store.put('attachmentUploads', randomUUID(), { state: 'reverted' });
+    h.service.store.db.exec('COMMIT');
+  } catch (error) { h.service.store.db.exec('ROLLBACK'); throw error; }
+  await h.reopen();
+  assert.throws(() => upload(h.service, '新回执.png', tinyPng), { code: 'UPLOAD_HISTORY_LIMIT' });
+  assert.equal(h.service.store.records('attachmentUploads').length, MAX_UPLOAD_RECEIPTS);
+  const { note } = await h.service.commitFile({ uploadId: existing.id });
+  assert.equal(upload(h.service, '已有.png', tinyPng, { uploadId: existing.id }).state, 'bound');
+  assert.deepEqual(h.service.readFile(note.id, existing.attachment.id).bytes, tinyPng);
+});
+
+test('oversize attachment backup is rejected from stat totals before any original is read or encoded', async t => {
+  const h = await harness(t), bytes = Buffer.alloc(8 * 1024 * 1024, 32), paths = new Set();
+  bytes.write('%PDF-1.4\n'); bytes.write('%%EOF\n', bytes.length - 6);
+  for (let index = 0; index < 5; index++) {
+    bytes[32] = index;
+    const file = upload(h.service, '合成容量.pdf', bytes);
+    await h.service.commitFile({ uploadId: file.id });
+    paths.add(path.join(h.options.vaultDir, '.zhixu-attachments', file.attachment.id));
+  }
+  const originalRead = fs.readFileSync;
+  let reads = 0;
+  const mocked = t.mock.method(fs, 'readFileSync', (target, ...args) => {
+    if (paths.has(String(target))) { reads++; throw new Error('Attachment read before capacity rejection'); }
+    return originalRead(target, ...args);
+  });
+  try {
+    assert.throws(() => h.service.backup(), { code: 'ATTACHMENT_BACKUP' });
+    assert.equal(reads, 0);
+    assert.ok([...paths].every(file => fs.statSync(file).size === bytes.length));
+  } finally { mocked.mock.restore(); }
 });
