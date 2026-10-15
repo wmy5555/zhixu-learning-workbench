@@ -47,6 +47,9 @@ export async function createFilePicker(input, { imagesOnly = false, onChange = (
   ]);
   pond.registerPlugin(type.default, size.default, preview.default);
   const ids = new WeakMap();
+  const errors = new Map();
+  const uploadStatus = el('p', { class: 'notice', role: 'status', ariaLive: 'polite', hidden: true });
+  const showErrors = () => { uploadStatus.textContent = [...errors.values()].join('；'); uploadStatus.hidden = !errors.size; };
   const acceptedTypes = [...new Set(Object.values(fileAccept).filter(mime => !imagesOnly || mime.startsWith('image/')))];
   input.accept = acceptedTypes.join(',');
   const instance = pond.create(input, {
@@ -63,15 +66,22 @@ export async function createFilePicker(input, { imagesOnly = false, onChange = (
     server: {
       process: (_name, file, _metadata, load, error, progress, abort) => {
         if (!ids.has(file)) ids.set(file, crypto.randomUUID());
-        return uploadAttachment(file, { uploadId: ids.get(file), load: (id, receipt) => { load(id); onUploaded(receipt); }, error, progress, abort });
+        errors.delete(file); showErrors();
+        return uploadAttachment(file, { uploadId: ids.get(file), load: (id, receipt) => { load(id); onUploaded(receipt); },
+          error: message => { errors.set(file, file.name + '：' + message); showErrors(); error(message); }, progress, abort });
       },
       revert: (id, load, error) => { request('/api/uploads/' + encodeURIComponent(id), { method: 'DELETE' }).then(load).catch(cause => error(cause.message)); },
       fetch: null, restore: null, load: null,
     },
-    onupdatefiles: onChange, onprocessfile: onChange, onprocessfileabort: onChange, onremovefile: (error, file) => { if (!error) onRemoved(ids.get(file.file)); onChange(); },
+    onupdatefiles: onChange, onprocessfile: onChange, onprocessfileabort: onChange, onremovefile: (error, file) => {
+      if (!error) { errors.delete(file.file); showErrors(); onRemoved(ids.get(file.file)); } onChange();
+    },
   });
+  // FilePond's generic error label hides the server's actionable quota message.
+  // Keep the message as plain text outside its HTML-based status renderer.
+  instance.element.after(uploadStatus);
   const observer = new MutationObserver(() => {
-    if (!instance.element.isConnected) { observer.disconnect(); instance.destroy(); }
+    if (!instance.element.isConnected) { observer.disconnect(); instance.destroy(); uploadStatus.remove(); }
   });
   observer.observe(document.body, { childList: true, subtree: true });
   return instance;
