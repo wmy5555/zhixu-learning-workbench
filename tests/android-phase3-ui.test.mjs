@@ -423,12 +423,12 @@ test("Android local settings save only learning preferences and paused content c
   assert.equal(findButton(fixture.app.refs.main, "恢复安排"), undefined);
 });
 
-test("Android topic page offers manual creation without AI and unsupported output stays blocked", async () => {
-  const fixture = await createAndroidBrowser({ api: { topics: async () => ({ topics: [] }) } });
+test("Android topic page keeps manual creation and output defaults to local use", async () => {
+  const fixture = await createAndroidBrowser({ api: { drafts: async () => ({ drafts: [] }), topics: async () => ({ topics: [] }) } });
   await fixture.app.navigate("topics");
   assert.ok(findButton(fixture.app.refs.main, "新建主题学习包"));
   assert.equal(findButton(fixture.app.refs.main, "AI 建议学习包"), undefined);
   await fixture.app.navigate("output");
-  assert.match(fixture.app.refs.main.textContent, /尚未迁移到手机/);
-  assert.equal(descendants(fixture.app.refs.main).some(node => node.name === "question"), false);
+  assert.match(fixture.app.refs.main.textContent, /有依据的问答与输出/);
+  assert.equal(descendants(fixture.app.refs.main).some(node => node.name === "question"), true);
 });

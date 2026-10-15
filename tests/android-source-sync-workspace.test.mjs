@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createAndroidSourceSyncWorkspace } from '../apps/android/web/android-source-sync-workspace.mjs';
 import { createAndroidTransport } from '../apps/android/web/android-transport.mjs';
+import { createEmptyLearningState } from '../apps/android/web/android-learning.mjs';
 import { createSyncState, createSyncBatch, inspectSyncSource, recordSyncChange, receiveSyncBatch } from '../apps/android/web/source-sync.mjs';
 
 const A = '11111111-1111-4111-8111-111111111111', B = '22222222-2222-4222-8222-222222222222';
@@ -99,6 +100,38 @@ test('Android sync routes reject practice, unsupported methods and extra fields 
   await transport.request('/api/android/sync/apply', { method: 'POST', body: { token: TOKEN } });
   assert.deepEqual(f.calls.find(call => call[0] === 'apply'), ['apply', { context: 'formal', token: TOKEN }]);
   assert.equal(network.mock.callCount(), 0);
+});
+
+test('online-enabled transport keeps formal sync local and preserves later online and learning routes', async t => {
+  const network = t.mock.method(globalThis, 'fetch', async () => { throw new Error('unexpected supplier HTTP'); });
+  const f = fixture(), onlineCalls = [], learningCalls = [];
+  // The original sync-only fixture adds a learning-answer field to prove it is excluded.
+  // Native source list responses do not contain that unsupported field.
+  f.plugin.list = async args => { f.calls.push(['list', args]); const { userAnswer, ...note } = f.note; return { notes: [structuredClone(note)] }; };
+  f.plugin.learningLoad = async ({ context }) => { learningCalls.push(context); return { revision: 'empty', state: createEmptyLearningState() }; };
+  const online = {
+    async settingsGet() { onlineCalls.push('settings'); return { revision: 'synthetic-settings', ai: { enabled: false, hasKey: false }, search: { enabled: false, hasKey: false }, fetch: { enabled: false } }; },
+    async usage(args) { onlineCalls.push(['usage', args]); return { calls: [], budget: { callsToday: 0, knownCostMonth: 0, unknownCostCalls: 0 } }; },
+    async authorize() { onlineCalls.push('authorize'); throw new Error('sync must not authorize a supplier'); },
+    async request() { onlineCalls.push('request'); throw new Error('sync must not request a supplier'); },
+  };
+  const transport = createAndroidTransport(f.plugin, { online, clock: () => new Date('2026-10-13T02:00:00Z') });
+  assert.equal((await transport.request('/api/android/sync')).connected, false);
+  await transport.request('/api/android/sync/preview', { method: 'POST', body: { sourceId: ID } });
+  await transport.request('/api/android/sync/stage', { method: 'POST', body: { sourceId: ID, expectedHash: f.note.hash, expectedHeads: [] } });
+  await transport.request('/api/android/sync/apply', { method: 'POST', body: { token: TOKEN } });
+  assert.equal(f.writes, 1); assert.ok(f.calls.some(([name]) => name === 'preview')); assert.ok(f.calls.some(([name]) => name === 'apply'));
+  assert.deepEqual(onlineCalls, []); assert.deepEqual(learningCalls, []);
+  const before = structuredClone(f.calls);
+  for (const [route, method, body] of [['sync', 'GET', {}], ['sync/preview', 'POST', { sourceId: ID }], ['sync/stage', 'POST', { sourceId: ID, expectedHash: f.note.hash, expectedHeads: [] }], ['sync/apply', 'POST', { token: TOKEN }]]) {
+    await assert.rejects(transport.request(`/api/practice/android-local/android/${route}`, { method, body }), { code: 'ANDROID_UNAVAILABLE' });
+  }
+  assert.deepEqual(f.calls, before); assert.deepEqual(onlineCalls, []);
+  const usage = await transport.request('/api/usage'); assert.ok(usage.budget);
+  assert.deepEqual(onlineCalls, [['usage', { context: 'formal' }]]);
+  const guide = await transport.request('/api/android/guide'); assert.equal(guide.steps[0].completed, true);
+  assert.ok(learningCalls.every(context => context === 'formal')); assert.ok(onlineCalls.includes('settings'));
+  assert.ok(!onlineCalls.includes('authorize') && !onlineCalls.includes('request')); assert.equal(network.mock.callCount(), 0);
 });
 
 test('queued Android stage freezes caller input and preserves the explicitly reviewed original version', async () => {

@@ -6,6 +6,7 @@ import android.os.Bundle;
 public class MainActivity extends BridgeActivity {
     @Override public void onCreate(Bundle savedInstanceState) {
         registerPlugin(ZhixuLocalPlugin.class);
+        registerPlugin(ZhixuOnlinePlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

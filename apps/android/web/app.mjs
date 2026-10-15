@@ -61,9 +61,39 @@ const state = {
 };
 let onboarding = null;
 function isMobilePrototype() { return api.runtime?.kind === "android-prototype"; }
+function onlineReady(name) { const value = state.bootstrap?.capabilities?.[name]; return value === true || value?.ready === true; }
+const androidJobPolls = new Set();
+function observeAndroidJob(id, onDone = null) {
+  if (!id || androidJobPolls.has(id)) return;
+  const context = api.getContext(); androidJobPolls.add(id);
+  const poll = async () => {
+    if (api.getContext().version !== context.version) { androidJobPolls.delete(id); return; }
+    try {
+      const data = await api.jobStatuses();
+      if (api.getContext().version !== context.version) { androidJobPolls.delete(id); return; }
+      const job = asArray(data.jobs).find(value => value.id === id);
+      if (!job || !["queued", "running"].includes(job.state)) {
+        androidJobPolls.delete(id);
+        if (job?.state === "done") await onDone?.(job);
+        else if (job?.code === "REQUEST_UNKNOWN" || job?.state === "unknown") toast("上次请求结果未知，可能已计费。请在任务页明确确认后再重试。", "error");
+        if (state.view === "system" && state.systemTab === "jobs") await renderSystem();
+        return;
+      }
+      if (state.view === "system" && state.systemTab === "jobs") await renderSystem();
+      window.setTimeout(poll, 1500);
+    } catch (error) { androidJobPolls.delete(id); handleError(error); }
+  };
+  window.setTimeout(poll, 1000);
+}
+async function runAndroidJob(job, onDone = null) {
+  if (isMobilePrototype() && job?.state === "queued" && !job.reused) {
+    await api.runOnlineJob(job.id || job.jobId); observeAndroidJob(job.id || job.jobId, onDone);
+  }
+  return job;
+}
 function androidPracticeActive() { return isMobilePrototype() && api.getContext?.().practiceId === "android-local"; }
 function androidResearchBlocked(note) { return isMobilePrototype() && (asArray(note.limitations).length > 0 || asArray(note.meta?.researchLimitations).length > 0 || (note.meta?.claimType === "fact" && !note.meta?.researchedAt)); }
-function mobileNotice() { return el("div", { class: "notice info" }, [el("strong", { text: androidPracticeActive() ? "手机本地练习库 · 与正式资料分开" : "手机本地学习" }), el("p", { text: "支持手动整理、学习回答、用户错题和主题。回答只保存在手机，未批改，不代表答对或掌握。事实核验、AI、问答输出与自动同步尚未接入。" }), button("本地引导与练习库", { onClick: () => navigate("system") })]); }
+function mobileNotice() { return el("div", { class: "notice info" }, [el("strong", { text: androidPracticeActive() ? "手机本地练习库 · 与正式资料分开" : "手机本地学习" }), el("p", { text: "支持手动整理、学习回答、用户错题和主题。离线回答只保存在手机，未批改；主动选择 AI 后才发送批改，AI 反馈也需你核对，不代表掌握。AI、搜索与网页读取默认关闭；只有配置可用并由你主动选择后才请求原生授权。每次发送会显示资料、目标与可能费用。" }), button("本地引导与练习库", { onClick: () => navigate("system") })]); }
 const processFeedback = createProcessFeedback({
   getContext: () => api.getContext(), readJobs: () => api.jobStatuses(), notify: toast,
   onChange: changed => {
@@ -103,7 +133,7 @@ function showLoading(message = "正在读取…") {
 function errorMessage(error) {
   if (error instanceof ApiError) {
     if (error.code === "CONFLICT") return "内容已在其他位置修改。请刷新查看冲突，当前更改没有覆盖新版本。";
-    return error.message;
+    return error.code === "REQUEST_UNKNOWN" ? `${error.message} 上次请求可能已经计费；请到任务页明确确认后再重试。` : error.message;
   }
   return error?.message || "出现未知错误";
 }
@@ -352,8 +382,8 @@ async function renderCapture() {
   const process = el("input", { name: "process", type: "checkbox" });
   const research = el("input", { name: "research", type: "checkbox", disabled: true });
   const syncResearchOption = () => {
-    if (isMobilePrototype()) { process.checked = false; process.disabled = true; }
-    research.disabled = !process.checked;
+    if (isMobilePrototype()) { process.disabled = !onlineReady("ai"); if (process.disabled) process.checked = false; }
+    research.disabled = !process.checked || (isMobilePrototype() && !onlineReady("onlineResearch"));
     if (research.disabled) research.checked = false;
   };
   process.addEventListener("change", syncResearchOption);
@@ -382,8 +412,8 @@ async function renderCapture() {
         el("input", { name: "topic", class: "span-2", placeholder: "来源主题（可选）" }),
       ])),
     ]),
-    el("label", { class: "check-field" }, [localOnly, el("span", { text: "仅本地，不发送给配置的模型或联网服务；ChatGPT 的独立读取授权另行管理" })]),
-    el("label", { class: "check-field" }, [process, el("span", { text: "保存后提交 AI 拆解任务" })]),
+    el("label", { class: "check-field" }, [localOnly, el("span", { text: isMobilePrototype() ? "原文保留仅本地标签；下方可独立授权本次 AI 发送，不修改长期隐私设置" : "仅本地，不发送给配置的模型或联网服务；ChatGPT 的独立读取授权另行管理" })]),
+    el("label", { class: "check-field" }, [process, el("span", { text: isMobilePrototype() ? "允许本次原文发给模型，保存后提交 AI 拆解（可能计费）" : "保存后提交 AI 拆解任务" })]),
     el("label", { class: "check-field" }, [research, el("span", { text: "拆解时联网检验正确性并寻找反例（可选，需同时勾选 AI 拆解）" })]),
     el("div", { class: "form-actions" }, [button("保存原始资料", { kind: "primary", type: "submit" }), button("清空", { onClick: () => sourceForm.reset() })]),
   );
@@ -399,7 +429,10 @@ async function renderCapture() {
     try {
       const submit = sourceForm.querySelector("button[type='submit']");
       submit.disabled = true;
-      const result = await api.import({ items: [item], captureMode: "text", process: process.checked, research: process.checked && research.checked });
+      syncResearchOption();
+      const wantsProcess = process.checked, wantsResearch = research.checked;
+      const result = await api.import({ items: [item], captureMode: "text", process: !isMobilePrototype() && wantsProcess, research: !isMobilePrototype() && wantsProcess && wantsResearch });
+      if (isMobilePrototype() && wantsProcess) for (const saved of asArray(result.notes)) await runAndroidJob(await api.processNote(saved.id, { research: wantsResearch }));
       sourceForm.reset();
       toast(`已保存 ${asArray(result.notes).length || 1} 条原始资料`, "success");
       await refreshBootstrap();
@@ -694,7 +727,15 @@ function renderSourceGroupDrawer(source) {
   ]);
   content.append(noteMeta(source), headActions);
 
-  if (children.length && isMobilePrototype()) content.append(...children.map((note, index) => childSection(note, source, index)));
+  if (children.length && isMobilePrototype()) {
+    const structure = asObject(source.structure), byId = new Map(children.map(note => [note.id, note.title]));
+    const analyze = button("重新分析结构", { kind: "quiet compact", dataset: { structureSubmit: source.id }, disabled: !onlineReady("ai"), onClick: () => analyzeStructure(source) });
+    content.append(el("section", { class: "panel", dataset: { tour: "source-structure" } }, [
+      sectionHeading("资料结构", structure.state === "ready" ? "已保存的 AI 结构建议；请结合原文核对" : structure.state === "stale" ? "资料已有变化，旧结构仅供阅读；重新分析需要你再次授权" : "尚无可用结构建议，现有原文和知识保留", analyze),
+      ...asArray(structure.edges).map(edge => el("p", { text: `${byId.get(edge.from) || "未知条目"} → ${byId.get(edge.to) || "未知条目"}：${edge.reason || edge.type || "关系建议"}` })),
+      el("p", { class: "structure-job-status", dataset: { sourceId: source.id }, hidden: true }),
+    ]), ...children.map((note, index) => childSection(note, source, index)));
+  }
   if (children.length && !isMobilePrototype()) {
     const key = `${api.getContext().practiceId || ''}:${source.id}`;
     if (!state.sourceMaps.has(key)) state.sourceMaps.set(key, {});
@@ -724,11 +765,6 @@ function renderSourceGroupDrawer(source) {
     ]),
   ]));
 
-  if (isMobilePrototype()) {
-    content.append(el("div", { class: "notice info", text: "可手动整理知识。含事实的内容默认保留待研究限制；手机尚不能联网核验，因此不能加入学习。只有确实属于个人观点的内容才选择观点，不能把事实改标为观点绕过核验。" }), button("手动整理为待选学", { onClick: () => manualExtract(source, source.id) }));
-    clear(refs.drawerBody).append(content);
-    return;
-  }
   content.append(el("section", { class: "panel soft group-process-actions" }, [
     sectionHeading("继续整理", "生成的拆解会继续归入这个窗口。"),
     el("div", { class: "form-actions" }, [
@@ -755,7 +791,7 @@ function updateStructureStatus(control) {
 
 function updateStructureButton(control) {
   const status = processFeedback.status(control.dataset.structureSubmit);
-  control.disabled = Boolean(status?.active);
+  control.disabled = Boolean(status?.active) || (isMobilePrototype() && !onlineReady("ai"));
   if (!control.dataset.idleLabel) control.dataset.idleLabel = control.textContent;
   control.textContent = status?.active ? '正在处理，请等待…' : control.dataset.idleLabel;
   control.title = status?.message || '仅分析现有条目的关系，保留正文';
@@ -781,11 +817,12 @@ async function runConfirmedStructure(key, title, run) {
 }
 
 async function analyzeStructure(source) {
+  if (isMobilePrototype() && !onlineReady("ai")) return;
   if (processFeedback.status(source.id)?.active) return;
   await runConfirmedStructure(`source:${source.id}`, source.title, async () => {
     if (!processFeedback.begin(source.id, 'structure')) return;
     try {
-      const job = await api.sourceStructure(source.id);
+      const job = await runAndroidJob(await api.sourceStructure(source.id));
       processFeedback.observe({ jobs: [job], notes: [source], partial: true, jobRevision: job.jobRevision, jobSnapshot: job.jobSnapshot });
       toast(['queued', 'running'].includes(job.state) ? '逻辑关系分析已排队，原文和拆解内容保留' : '该任务正在等待条件，请到「系统 → 任务」查看原因并重试', ['queued', 'running'].includes(job.state) ? 'success' : 'info');
     } finally { processFeedback.end(source.id); }
@@ -1022,6 +1059,11 @@ function processControls(note, returnToSourceId = "") {
     el("div", { class: "process-status", role: "status", ariaLive: "polite", hidden: true }),
     el("p", { class: "muted", text: "默认只拆解。生成后可手动联网核验整份资料；已有拆解会复用，人工编辑内容将生成修订建议。" }),
   ]);
+  if (isMobilePrototype()) {
+    const allow = el("input", { name: "allowAI", type: "checkbox", disabled: !onlineReady("ai") });
+    allow.addEventListener("change", () => updateProcessControls(controls));
+    controls.prepend(el("label", { class: "check-field" }, [allow, "允许本次资料发给模型（可能计费，发送前仍需原生确认）"]));
+  }
   updateProcessControls(controls);
   return controls;
 }
@@ -1029,10 +1071,12 @@ function processControls(note, returnToSourceId = "") {
 function updateProcessControls(controls) {
   const status = processFeedback.status(controls.dataset.processNoteId);
   const pending = Boolean(status?.active);
-  controls.querySelector(".process-submit").disabled = pending;
+  controls.querySelector(".process-submit").disabled = pending || (isMobilePrototype() && (!onlineReady("ai") || !controls.querySelector("[name=\"allowAI\"]").checked));
   controls.querySelector(".process-submit").textContent = pending ? (status.type === 'structure' ? '逻辑关系分析中…' : "AI 拆解处理中…") : "提交 AI 拆解";
-  controls.querySelector(".process-research").disabled = pending;
-  controls.querySelector("input").disabled = pending;
+  controls.querySelector(".process-research").disabled = pending || (isMobilePrototype() && (!onlineReady("onlineResearch") || !controls.querySelector('[name="allowAI"]').checked));
+  const research = controls.querySelector('[name="research"]');
+  research.disabled = pending || (isMobilePrototype() && (!onlineReady("onlineResearch") || !controls.querySelector('[name="allowAI"]').checked));
+  if (research.disabled) research.checked = false;
   const indicator = controls.querySelector(".process-status");
   indicator.hidden = !status;
   clear(indicator).append(...[pending ? el("span", { class: "spinner process-spinner", ariaHidden: "true" }) : null,
@@ -1040,9 +1084,10 @@ function updateProcessControls(controls) {
 }
 
 async function processNote(note, returnToSourceId = "", options = {}) {
+  if (isMobilePrototype() && (!onlineReady("ai") || options.research && !onlineReady("onlineResearch"))) { toast("所需能力尚未就绪，请先到系统设置配置。", "error"); return; }
   if (!processFeedback.begin(note.id)) return;
   try {
-    const job = await api.processNote(note.id, options);
+    const job = await runAndroidJob(await api.processNote(note.id, options));
     processFeedback.observe({ jobs: [job], notes: [note], partial: true, jobRevision: job.jobRevision, jobSnapshot: job.jobSnapshot });
     const waitingForQuota = isQuotaWaitMessage(job.error);
     toast(job.extractionSaved && job.state !== "done" ? "拆解已保存，可先阅读；剩余事实可到任务页继续核验。" : waitingForQuota || job.state === "waiting" ? "任务已保存，待条件满足后继续" : job.state === "failed" ? "任务已记录失败原因，请到「系统 → 任务」手动重试" : job.state === "cancelled" ? "已有任务已取消，请到「系统 → 任务」手动重试" : job.reused && job.state === "done" ? "这份资料已有拆解结果，可直接查看。" : job.reused ? "这份资料正在拆解，请稍候。" : (options.research ? "已提交联网核验任务" : "已提交 AI 拆解任务"), job.state === "failed" && !waitingForQuota ? "error" : "success");
@@ -1064,7 +1109,7 @@ function manualExtract(source, returnToSourceId = "") {
   const claimType = selectControl([["fact", "含需查证事实（默认）"], ["opinion", isMobilePrototype() ? "仅个人观点（非事实）" : "仅个人观点或虚构练习"]], "fact", "claimType");
   form.append(
     el("div", { class: "notice info", text: "此操作不需要 AI。新条目会自动关联这份原始资料，并标记为用户手动整理；它不会因此被宣称已经外部核验或已经掌握。" }),
-    ...(isMobilePrototype() ? [el("div", { class: "notice info", text: "手机尚不能联网核验。含事实的材料不能在核验前加入学习；请如实分类，不能用观点标签绕过事实核验。" })] : []),
+    ...(isMobilePrototype() ? [el("div", { class: "notice info", text: "含事实的材料不能在核验前加入学习；只有联网研究完成且证据符合要求后才可采用。请如实分类，不能用观点标签绕过事实核验。" })] : []),
     field("待选学知识标题", title), field("整理后的正文", body),
     el("div", { class: "form-grid" }, [field("内容性质", claimType, "含事实的内容会保留待研究限制，不默认进入学习；纯观点或虚构练习可由你主动加入学习。"), depth, field("知识主题", topic)]),
     field("保留与学习理由", reason),
@@ -1432,13 +1477,14 @@ function androidStudySession(session) {
   const turns = asArray(session.turns), completed = session.status === "completed";
   const context = api.getContext();
   const current = () => api.getContext().version === context.version;
-  const wrapper = el("div", { class: "page-stack" }, [el("div", { class: "notice info", text: completed ? "本轮已结束并保存记录，未批改。记录不表示回答正确或已经掌握。" : turns.length ? "回答已保存在手机 · 未批改。你可以继续回答，也可以结束并保存记录。" : "先阅读材料，再用自己的话回答。手机只保存原答，不生成反馈。" })]);
+  const wrapper = el("div", { class: "page-stack" }, [el("div", { class: "notice info", text: completed ? "本轮已结束并保存记录，未批改。记录不表示回答正确或已经掌握。" : turns.length ? "回答已保存在手机 · 未批改。你可以继续回答，也可以结束并保存记录。" : "先阅读材料，再用自己的话回答。默认只保存原答；可独立选择外发材料与原答请求 AI 批改。" })]);
   if (state.studyMaterialVisible && !turns.length) {
     wrapper.append(el("section", { class: "panel" }, [sectionHeading("学习材料"), el("div", { class: "prose", text: session.material || "暂无材料" })]), button("隐藏材料，开始回忆", { kind: "primary", onClick: async () => { state.studyMaterialVisible = false; await renderStudy(); } }));
     return wrapper;
   }
   const form = el("form", { class: "page-stack" });
   const answer = el("textarea", { name: "answer", rows: 7, disabled: completed, placeholder: "用自己的语言解释，并写下不确定之处。" });
+  const evaluate = el("input", { name: "evaluate", type: "checkbox", disabled: !onlineReady("ai") || completed });
   const submit = button("保存回答", { kind: "primary", type: "submit", disabled: completed });
   const finish = button("结束并保存记录", { kind: "primary", disabled: completed || !turns.length, onClick: async () => {
     finish.disabled = true;
@@ -1446,21 +1492,48 @@ function androidStudySession(session) {
     catch (error) { if (current()) handleError(error); }
     finally { if (current()) finish.disabled = completed || !turns.length; }
   } });
-  form.append(el("h2", { text: session.question || "请用自己的话解释这项知识。" }), field("你的回答", answer), el("div", { class: "form-actions" }, [submit, finish]));
+  form.append(el("h2", { text: session.question || "请用自己的话解释这项知识。" }), field("你的回答", answer), el("label", { class: "check-field" }, [evaluate, "允许本次材料与原答发给模型批改（可能计费）"]), el("div", { class: "form-actions" }, [submit, finish]));
   form.addEventListener("submit", async event => {
     event.preventDefault();
     if (completed || submit.disabled) return;
     if (!answer.value.trim()) { toast("请先写下你的理解", "error"); return; }
     submit.disabled = true; finish.disabled = true;
-    try { const result = await api.answer(session.id, { answer: answer.value.trim(), hintUsed: false, requestId: crypto.randomUUID() }); if (!current()) return; state.currentStudy = result; await renderStudy(); toast("回答已保存在手机，未批改", "success"); }
+    try { const result = await api.answer(session.id, { answer: answer.value.trim(), evaluate: evaluate.checked && onlineReady("ai"), hintUsed: false, requestId: crypto.randomUUID() }); if (!current()) return; if (result.jobId && evaluate.checked) {
+        await api.runOnlineJob(result.jobId);
+        observeAndroidJob(result.jobId, async () => { if (state.currentStudy?.id === session.id) { state.currentStudy = await api.study(session.id); if (state.view === "study") await renderStudy(); } });
+      }
+      state.currentStudy = await api.study(session.id); await renderStudy(); toast(evaluate.checked ? "原答已保存，批改任务请到系统查看" : "回答已保存在手机，未批改", "success"); }
     catch (error) { if (current()) handleError(error); }
     finally { if (current()) { submit.disabled = completed; finish.disabled = completed || !turns.length; } }
   });
   if (turns.length) form.append(el("div", { class: "form-actions" }, [button("整理并确认个人理解", { onClick: () => confirmUnderstanding(session) }), button("记录自己的遗漏或误解", { onClick: () => androidMistakeForm(session) })]));
   wrapper.append(form);
-  if (turns.length) wrapper.append(el("section", {}, [sectionHeading("学习记录", "每轮原答保留，全部未批改"), ...turns.map((turn, index) => el("article", { class: "panel" }, [el("h3", { text: `第 ${index + 1} 轮 · 未批改` }), el("div", { class: "prose", text: turn.answer || "" })]))]));
+  if (turns.length) wrapper.append(el("section", {}, [sectionHeading("学习记录", "每轮原答保留；AI 反馈需你核对，不自动确认掌握"), ...turns.map((turn, index) => androidTurnPanel(session, turn, index))]));
   if (completed) wrapper.append(button("回到学习队列", { onClick: async () => { state.studyTab = "queue"; await renderStudy(); } }));
   return wrapper;
+}
+
+function androidTurnPanel(session, turn, index) {
+  const panel = el("article", { class: "panel page-stack" }, [el("h3", { text: `第 ${index + 1} 轮 · ${turn.feedback ? "AI 反馈待你核对" : "未批改"}` }), el("div", { class: "prose", text: turn.answer || "" })]);
+  if (turn.feedback) { panel.append(renderFeedback(turn.feedback, "AI 反馈")); return panel; }
+  if (!turn.id) return panel;
+  const allow = el("input", { type: "checkbox", disabled: !onlineReady("ai") });
+  const context = api.getContext();
+  const evaluate = button("批改这轮已保存原答", { disabled: true, onClick: async () => {
+    if (!allow.checked || !onlineReady("ai") || evaluate.disabled) return;
+    evaluate.disabled = true;
+    try {
+      await runAndroidJob(await api.evaluateAnswer(session.id, turn.id), async () => {
+        if (api.getContext().version !== context.version) return;
+        state.currentStudy = await api.study(session.id); if (state.view === "study") await renderStudy();
+      });
+      toast("批改任务已保存；原答保持不变", "success");
+    } catch (error) { handleError(error); }
+    finally { allow.checked = false; evaluate.disabled = true; }
+  } });
+  allow.addEventListener("change", () => { evaluate.disabled = !allow.checked || !onlineReady("ai"); });
+  panel.append(el("label", { class: "check-field" }, [allow, "允许这轮材料与原答发给模型（可能计费）"]), evaluate);
+  return panel;
 }
 
 function androidMistakeForm(session) {
@@ -1734,12 +1807,13 @@ async function renderDiscover() {
   const wrapper = el("div", { class: "page-stack" });
   const form = el("form", { class: "panel", dataset: { tour: "discover-search" } });
   const query = el("input", { name: "q", value: state.searchFilters.q, placeholder: "输入术语、问题或不同说法", required: true });
-  const allowCloudQuery = el("input", { type: "checkbox", checked: state.searchFilters.privacy === "cloud" });
+  const allowCloudQuery = el("input", { type: "checkbox", checked: !isMobilePrototype() && state.searchFilters.privacy === "cloud", disabled: isMobilePrototype() });
   const searchMode = selectControl([["keyword", "关键词"], ["semantic", "语义"], ["hybrid", "混合"]], state.searchFilters.mode, "mode");
   searchMode.setAttribute("aria-label", "检索方式");
   const syncSearchMode = () => {
-    for (const option of searchMode.options) option.disabled = option.value !== "keyword" && !allowCloudQuery.checked;
-    if (!allowCloudQuery.checked) {
+    for (const option of searchMode.querySelectorAll("option")) option.disabled = option.value !== "keyword" && (isMobilePrototype() || !allowCloudQuery.checked);
+    if (isMobilePrototype() || !allowCloudQuery.checked) {
+      allowCloudQuery.checked = false;
       searchMode.value = "keyword";
       state.searchFilters.mode = "keyword";
       state.searchFilters.privacy = "local";
@@ -1753,12 +1827,18 @@ async function renderDiscover() {
     selectControl([["", "内容类别"], ["source", "原始资料"], ["knowledge", "知识"], ["mistake", "错题"], ["topic", "主题学习包"], ["report", "AI 整理建议"]], state.searchFilters.kind, "kind"),
     selectControl([["", "学习状态"], ["reference", "仅供查阅"], ["candidate", "待选学"], ["learning", "正在学习"], ["integrated", "已整理个人理解"], ["core", "重点知识"], ["retired", "不再使用"]], state.searchFilters.stage, "stage"),
     button("搜索", { kind: "primary", type: "submit" }),
-  ]), el("label", { class: "check-field" }, [allowCloudQuery, el("span", { text: "允许将本次查询发给已配置的外部服务" })]), el("p", { class: "fine-print", text: "默认关闭：只运行本地关键词检索。开启后，本次查询可用于语义检索；仍只有标为允许云端的材料可以外发。" }), el("details", {}, [el("summary", { text: "按来源、主题与时间进一步筛选" }), el("div", { class: "form-grid" }, [
+  ]), el("label", { class: "check-field" }, [allowCloudQuery, el("span", { text: "允许将本次查询发给已配置的外部服务" })]), el("p", { class: "fine-print", text: isMobilePrototype() ? "手机目前支持本地关键词检索；语义、混合与外部查询尚未迁移，保持禁用。AI 模型可用也不会开启这些功能。" : "默认关闭：只运行本地关键词检索。开启后，本次查询可用于语义检索；仍只有标为允许云端的材料可以外发。" }), el("details", {}, [el("summary", { text: "按来源、主题与时间进一步筛选" }), el("div", { class: "form-grid" }, [
     field("来源", selectControl([["", "全部来源"], ...sources.map((source) => [source.id, source.title || source.id])], state.searchFilters.source, "source")),
     field("知识主题", el("input", { name: "topic", value: state.searchFilters.topic, placeholder: "精确主题名称" })),
     field("起始日期", el("input", { name: "from", type: "date", value: state.searchFilters.from })),
     field("结束日期", el("input", { name: "to", type: "date", value: state.searchFilters.to })),
   ])]));
+  if (isMobilePrototype()) {
+    for (const name of ["source", "topic", "from", "to"]) {
+      const input = form.querySelector(`[name="${name}"]`); if (input) { input.disabled = true; input.title = "手机暂不支持此检索筛选"; }
+    }
+    form.append(el("p", { class: "fine-print", text: "手机支持查询词、类别和学习状态；来源、主题与日期筛选尚未接入。" }));
+  }
   const resultArea = el("section", { dataset: { tour: "discover-results" } });
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1779,8 +1859,8 @@ async function runSearch(container) {
   container.dataset.tour = "discover-results";
   clear(container).append(el("div", { class: "loading-panel" }, [el("span", { class: "spinner" }), el("p", { text: "正在检索本地索引…" })]));
   try {
-    const data = await api.search(state.searchFilters);
-    const results = asArray(data.results);
+    const data = isMobilePrototype() ? await api.notes({ q: state.searchFilters.q, kind: state.searchFilters.kind, stage: state.searchFilters.stage }) : await api.search(state.searchFilters);
+    const results = asArray(isMobilePrototype() ? data.notes || data.results || data.items : data.results);
     const diagnostics = asObject(data.diagnostics);
     clear(container).append(
       sectionHeading("检索结果", results.length ? `找到 ${results.length} 条候选，排序方式来自实际索引` : "没有找到匹配材料"),
@@ -1808,6 +1888,7 @@ function searchResultRow(result) {
 }
 
 async function renderRelationsPanel() {
+  if (isMobilePrototype()) return el("section", { class: "panel" }, [sectionHeading("关系发现", "手机尚未迁移关联检查与 AI 跨领域探索；已有资料仍可本地检索"), button("运行发现检查", { disabled: true, title: "Android 尚未接入关系发现" }), el("label", { class: "check-field" }, [el("input", { type: "checkbox", disabled: true }), "AI 跨领域探索（尚未接入）"])]);
   const data = await api.relations();
   const relations = asArray(data.relations);
   const candidates = asArray(data.candidates);
@@ -1870,8 +1951,8 @@ async function renderOutput() {
   const mode = selectControl([["answer", "回答问题"], ["outline", "组织提纲"], ["draft", "生成草稿"]], "answer", "mode");
   const sourceScope = el("input", { type: "checkbox", name: "source", checked: true });
   const knowledgeScope = el("input", { type: "checkbox", name: "knowledge", checked: true });
-  const allowCloudQuestion = el("input", { type: "checkbox", checked: false });
-  form.append(sectionHeading("有依据的问答与输出", "默认优先个人知识，并让你看见实际使用了哪些资料"), field("问题或输出目标", question), el("div", { class: "form-grid" }, [field("输出方式", mode), field("取材范围", el("div", { class: "segmented" }, [el("label", { class: "check-field" }, [knowledgeScope, "知识笔记"]), el("label", { class: "check-field" }, [sourceScope, "原始来源"])]))]), el("label", { class: "check-field" }, [allowCloudQuestion, el("span", { text: "允许将本次问题发给已配置的外部模型" })]), el("p", { class: "fine-print", text: "默认关闭：只在本机检索并列出已有材料。开启后，本次问题与标为允许云端的相关材料可发送给模型；仅本地材料不会外发。" }), el("div", { class: "notice info", text: "找不到、证据冲突或内容过期时，回答应明确说明。问答和草稿不会自动成为个人知识。" }), button("开始生成", { kind: "primary", type: "submit" }));
+  const allowCloudQuestion = el("input", { type: "checkbox", checked: false, disabled: isMobilePrototype() && !onlineReady("ai") });
+  form.append(sectionHeading("有依据的问答与输出", "默认优先个人知识，并让你看见实际使用了哪些资料"), field("问题或输出目标", question), el("div", { class: "form-grid" }, [field("输出方式", mode), field("取材范围", el("div", { class: "segmented" }, [el("label", { class: "check-field" }, [knowledgeScope, "知识笔记"]), el("label", { class: "check-field" }, [sourceScope, "原始来源"])]))]), el("label", { class: "check-field" }, [allowCloudQuestion, el("span", { text: "允许将本次问题发给已配置的外部模型" })]), el("p", { class: "fine-print", text: "默认关闭：只在本机检索并列出已有材料。开启后，本次问题与相关材料的确切范围由手机原生授权弹窗展示，确认后才发送。原文仍保持仅本地，逐次授权不改变资料隐私标签。" }), el("div", { class: "notice info", text: "找不到、证据冲突或内容过期时，回答应明确说明。问答和草稿不会自动成为个人知识。" }), button("开始生成", { kind: "primary", type: "submit" }));
   const answerArea = el("section", { dataset: { tour: "output-result" } });
   if (state.lastOutput) renderAnswer(answerArea, state.lastOutput);
   form.addEventListener("submit", async (event) => {
@@ -1883,10 +1964,17 @@ async function renderOutput() {
     state.lastOutput = null;
     clear(answerArea).append(el("div", { class: "loading-panel" }, [el("span", { class: "spinner" }), el("p", { text: "正在检索并组织已有资料…" })]));
     try {
-      const result = await api.ask({ question: question.value, scope, mode: mode.value, privacy: allowCloudQuestion.checked ? "cloud" : "local" });
+      let result = await api.ask({ question: question.value, scope, mode: mode.value, privacy: allowCloudQuestion.checked && (!isMobilePrototype() || onlineReady("ai")) ? "cloud" : "local" });
+      if (isMobilePrototype() && result.queued) {
+        await api.runOnlineJob(result.jobId || result.id);
+        observeAndroidJob(result.jobId || result.id, async job => { state.lastOutput = job.result; if (state.view === "output") await renderOutput(); });
+        const jobs = await api.jobs(); const job = asArray(jobs.jobs || jobs).find(value => value.id === (result.jobId || result.id));
+        if (job?.state === "done") result = job.result;
+        else { clear(answerArea).append(emptyState("输出任务已保存", "请到系统 → 任务查看结果；未知状态不会自动重试。", button("查看任务", { onClick: () => { state.systemTab = "jobs"; navigate("system"); } }))); return; }
+      }
       state.lastOutput = result;
       renderAnswer(answerArea, result);
-    } catch (error) { clear(answerArea).append(emptyState("本次生成未完成", errorMessage(error), button("重试", { onClick: () => form.requestSubmit() }))); }
+    } catch (error) { clear(answerArea).append(emptyState("本次生成未完成", errorMessage(error), button("查看任务与失败原因", { onClick: () => { state.systemTab = "jobs"; navigate("system"); } }))); }
   });
   const draftsPanel = await renderDraftsPanel();
   wrapper.append(...[capabilityNotice(), form, answerArea, draftsPanel].filter(Boolean));
@@ -1963,9 +2051,21 @@ let androidSystemRender = 0;
 async function renderSystem() {
   const wrapper = el("div", { class: "page-stack" });
   if (isMobilePrototype()) {
-    const generation = ++androidSystemRender, context = api.getContext(), view = state.view;
+    const generation = ++androidSystemRender, context = api.getContext(), view = state.view, tab = state.systemTab;
     const current = () => generation === androidSystemRender && state.view === view
+      && state.systemTab === tab
       && api.getContext().version === context.version && api.getContext().practiceId === context.practiceId;
+    wrapper.append(el("div", { class: "tabs" }, [systemTabButton("settings", "能力设置"), systemTabButton("usage", "用量与费用"), systemTabButton("jobs", "任务"), systemTabButton("proposals", "研究候选"), systemTabButton("data", "本地资料")]));
+    if (tab === "jobs") {
+      const jobs = await jobsPanel(); if (!current()) return; wrapper.append(jobs);
+    } else if (tab === "proposals") {
+      const proposals = await proposalsPanel(); if (!current()) return; wrapper.append(proposals);
+    } else if (tab === "usage") {
+      const usage = await api.usage(); if (!current()) return;
+      wrapper.append(el("section", { class: "panel" }, [sectionHeading("实际用量与费用", "仅记录已请求的调用；未知结果可能已计费，费用未知不等于免费"), el("p", { text: `今日请求：${usage.budget?.callsToday ?? usage.totals?.calls ?? 0} 次；本月已知费用：${usage.budget?.knownCostMonth ?? usage.totals?.knownCost ?? "未知"} 美元。` }), el("p", { text: `费用未知：${usage.budget?.unknownCostCalls ?? usage.totals?.unknownCostCalls ?? 0} 次；未知结果请先核对供应商账单。` }), ...asArray(usage.calls || usage.records).map(call => el("article", { class: "panel soft" }, [el("p", { text: `${formatDate(call.createdAt || call.at, true)} · ${call.capability || call.kind || "外部请求"} · ${call.state || call.status || "已记录"}` }), el("p", { text: call.cost == null ? "费用未知" : `费用 ${call.cost} 美元` }), call.requestId ? el("p", { text: `请求编号：${call.requestId}` }) : null]))]));
+    } else if (tab === "settings") {
+      const onlineSettings = await androidOnlineSettingsPanel(); if (!current()) return; wrapper.append(onlineSettings);
+    }
     const guide = await androidLocalGuidePanel(); if (!current()) return; wrapper.append(guide);
     if (!androidPracticeActive()) {
       const syncPanel = await createAndroidSyncPanel({ api, isCurrent: current,
@@ -1997,6 +2097,55 @@ async function renderSystem() {
   else if (state.systemTab === "conflicts") wrapper.append(conflictsPanel());
   else wrapper.append(await settingsPanel());
   clear(refs.main).append(wrapper);
+}
+
+async function androidOnlineSettingsPanel() {
+  const settings = await (api.mainSettings ? api.mainSettings() : api.settings ? api.settings() : Promise.resolve(state.bootstrap?.settings || {}));
+  const form = el("form", { class: "panel page-stack" });
+  form.append(sectionHeading("AI 与联网能力", "默认关闭。密钥只写入手机加密存储，不可读回；保存不会发送资料。"));
+  form.append(el("p", { text: `AI ${onlineReady("ai") ? "可用" : "未就绪（需开启、地址、模型和密钥）"}；搜索 ${onlineReady("search") ? "可用" : "未就绪"}；网页读取 ${onlineReady("fetch") ? "可用" : "未开启"}。研究需要三项同时可用。` }));
+  if (androidPracticeActive()) { form.append(el("p", { text: "练习库共用正式能力配置。请返回正式库设置密钥；每次调用仍只授权当前库的确切材料。" })); return form; }
+  const controls = {}, keys = [];
+  for (const capability of ["ai", "search", "fetch"]) {
+    const config = settings[capability] || {};
+    const enabled = el("input", { type: "checkbox", checked: config.enabled === true });
+    controls[capability] = { enabled, fields: {} };
+    form.append(el("label", { class: "check-field" }, [enabled, `启用${({ ai: "外部 AI 模型", search: "外部搜索", fetch: "网页读取" })[capability]}`]));
+    if (capability === "fetch") continue;
+    const names = capability === "ai" ? [["baseUrl", "模型服务地址"], ["model", "模型名称"], ["dailyCallLimit", "每日调用上限"], ["monthlyBudget", "每月费用上限（美元）"], ["sourceCallLimit", "每份资料调用上限"], ["inputPrice", "输入价格（美元/百万 token）"], ["outputPrice", "输出价格（美元/百万 token）"], ["cachedInputPrice", "缓存输入价格（美元/百万 token）"]] : [["baseUrl", "搜索服务地址（原生支持的供应商）"], ["requestPrice", "每次搜索价格（美元）"]];
+    for (const [name, label] of names) {
+      const numeric = !["baseUrl", "model"].includes(name);
+      const input = el("input", { name: `${capability}_${name}`, type: numeric ? "number" : "text", min: numeric ? 0 : undefined, step: numeric ? "any" : undefined, value: config[name] ?? "", placeholder: name === "baseUrl" && capability === "ai" ? "https://api.deepseek.com" : name === "model" ? "deepseek-flash" : numeric ? "未知，请按供应商价格填写" : "" });
+      controls[capability].fields[name] = input;
+      form.append(field(label, input));
+    }
+    const key = el("input", { type: "password", name: `${capability}_credential`, autocomplete: "new-password", value: "", placeholder: config.hasKey ? "密钥已保存；留空保持" : "尚未保存密钥" });
+    const remove = el("input", { type: "checkbox", name: `${capability}_clearKey` });
+    remove.addEventListener("change", () => { key.disabled = remove.checked; if (remove.checked) key.value = ""; });
+    controls[capability].key = key; controls[capability].remove = remove; keys.push(key);
+    form.append(field("写入新的密钥", key, "不会显示原密钥。空白保持；勾选下项才能清除。"), el("label", { class: "check-field" }, [remove, "明确清除已保存密钥"]));
+  }
+  form.append(el("a", { href: "https://api-docs.deepseek.com/quick_start/pricing/", target: "_blank", rel: "noopener noreferrer", text: "核对 DeepSeek 官方价格" }));
+  const save = button("保存能力配置", { kind: "primary", type: "submit" }); form.append(save);
+  form.addEventListener("submit", async event => {
+    event.preventDefault(); if (save.disabled) return; save.disabled = true;
+    const payload = { expectedRevision: settings.revision, credentials: {}, clearCredentials: {}, fetch: { enabled: controls.fetch.enabled.checked } };
+    for (const capability of ["ai", "search"]) {
+      const row = controls[capability]; payload[capability] = { enabled: row.enabled.checked };
+      for (const [name, input] of Object.entries(row.fields)) {
+        if (["baseUrl", "model"].includes(name)) payload[capability][name] = input.value.trim();
+        else if (input.value === "" && ((capability === "ai" && ["monthlyBudget", "inputPrice", "outputPrice", "cachedInputPrice"].includes(name)) || (capability === "search" && name === "requestPrice"))) payload[capability][name] = null;
+        else if (input.value !== "") payload[capability][name] = Number(input.value);
+      }
+      const credentialName = capability === "ai" ? "model" : "search";
+      if (!row.remove.checked && row.key.value) payload.credentials[credentialName] = row.key.value;
+      if (row.remove.checked) payload.clearCredentials[credentialName] = true;
+    }
+    try { await api.updateMainSettings(payload); await refreshBootstrap(); toast("能力配置已保存；密钥输入已清空", "success"); await renderSystem(); }
+    catch (error) { handleError(error); }
+    finally { keys.forEach(key => { key.value = ""; }); save.disabled = false; delete payload.credentials; }
+  });
+  return form;
 }
 
 let androidSwitchPending = false;
@@ -2055,7 +2204,7 @@ async function switchAndroidLibrary(practiceId) {
 
 async function androidLocalGuidePanel() {
   const panel = el("section", { class: "panel" }, [sectionHeading("手机本地引导", androidPracticeActive() ? "当前为独立练习库，正式资料不会被修改" : "可直接操作正式资料，也可进入独立练习库")]);
-  panel.append(el("p", { text: "先保存原文，再手动整理，回答后结束并保存记录。练习库只准备一份明确标记的合成个人学习反思原文；知识、回答和完成记录都要由你实际操作产生。" }), el("p", { text: "整理内容时默认选择含事实；只有确实属于个人观点的反思才选择观点。事实不能通过改标为观点绕过核验，手机尚不能核验事实。" }));
+  panel.append(el("p", { text: "先保存原文，再手动整理，回答后结束并保存记录。练习库只准备一份明确标记的合成个人学习反思原文；知识、回答和完成记录都要由你实际操作产生。" }), el("p", { text: "整理内容时默认选择含事实；只有确实属于个人观点的反思才选择观点。事实不能通过改标为观点绕过核验，联网研究未完成的事实仍不可加入学习。" }));
   try {
     const guide = await api.androidGuide();
     panel.append(el("ol", { class: "step-list" }, asArray(guide.steps).map(step => el("li", { class: step.completed ? "step is-done" : "step" }, [el("strong", { text: step.label }), badge(step.completed ? "已实际完成" : "待操作", step.completed ? "good" : "neutral")]))));
@@ -2347,7 +2496,7 @@ const jobTableState = { type: "", status: "", size: "10", page: 1 };
 async function jobsPanel() {
   const data = await api.jobs();
   const jobs = asArray(data.jobs).sort((a,b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")));
-  const names = {process:"资料加工",structure:"逻辑关系分析",relate:"知识关联",discover:"知识发现",grade:"学习反馈",index:"更新索引",topics:"主题学习包整理"};
+  const names = {ask:"问答与输出",process:"资料加工",structure:"逻辑关系分析",relate:"知识关联",discover:"知识发现",grade:"学习反馈",index:"更新索引",topics:"主题学习包整理"};
   const panel = el("section", {class:"panel call-history", dataset: { tour: "system-jobs" }});
   const type = selectControl([["","全部类型"],...Object.entries(names)], jobTableState.type, "jobType");
   type.setAttribute("aria-label", "筛选任务类型");
@@ -2378,11 +2527,12 @@ async function jobsPanel() {
             el('p', { class: 'job-error-help', text: `可以这样处理：${explanation.next}` }),
             job.type === 'structure' ? el('p', { class: 'job-error-help', text: '本次失败不会删除原文、拆解条目或覆盖已保存的结构建议。' }) : null,
             el('details', { class: 'job-technical' }, [el('summary', { text: '技术信息（供排查）' }),
-              el('pre', { text: `错误代码：${job.code || '未提供'}\n原始信息：${job.error || '未提供'}` })]),
+              el('pre', { text: `错误代码：${job.code || '未提供'}\n原始信息：${job.error || '未提供'}\n请求编号：${job.requestId || job.detail?.requestId || '未提供'}` })]),
           ]));
       }
       const actions = el("div",{class:"item-actions"});
-      if (["failed","cancelled","waiting"].includes(job.state)) actions.append(button(job.type === "process" && job.extractionSaved ? "继续核验" : "重试",{kind:"primary compact",onClick:()=>actJob(job.id,"retry",job)}));
+      if (job.state === "done" && job.result?.answer) actions.append(button("查看输出", { kind: "primary compact", onClick: () => { state.lastOutput = job.result; navigate("output"); } }));
+      if (["queued","failed","cancelled","waiting","unknown"].includes(job.state)) actions.append(button((job.state === "unknown" || job.code === "REQUEST_UNKNOWN") ? "重新请求（可能重复计费）" : job.state === "queued" ? "开始任务" : job.type === "process" && job.extractionSaved ? "继续核验" : "重试",{kind:"primary compact",onClick:()=>actJob(job.id,"retry",job)}));
       if (["queued","running","waiting"].includes(job.state)) actions.append(button("取消",{kind:"quiet compact",onClick:()=>actJob(job.id,"cancel")}));
       body.append(el("tr",{},[
         el("td",{text:formatDate(job.updatedAt || job.createdAt,true)}),
@@ -2412,7 +2562,14 @@ async function actJob(id, action, job) {
     if (source.kind !== 'source' || !source.title) throw new Error('无法确认这项任务对应的原文，请在知识库核对资料后重新分析。');
     return source.title;
   }, () => actJob(id, action));
-  try { await api.jobAction(id, { action }); toast(action === "retry" ? "已重新排队" : "任务已取消", "success"); await refreshBootstrap(); await renderSystem(); }
+  let confirmUnknown = false;
+  if (action === "retry" && (job?.state === "unknown" || job?.code === "REQUEST_UNKNOWN")) {
+    confirmUnknown = await confirmAction({ title: "上次请求结果未知", message: "供应商可能已经处理并计费。重新请求可能产生第二笔费用；应用不会自动重试。", confirmText: "确认重新请求，接受可能重复费用" });
+    if (!confirmUnknown) return;
+  }
+  try { await api.jobAction(id, { action, ...(confirmUnknown ? { confirmUnknown: true } : {}) });
+    if (isMobilePrototype() && action === "retry") observeAndroidJob(id);
+    toast(action === "retry" ? "已重新排队" : "任务已取消", "success"); await refreshBootstrap(); await renderSystem(); }
   catch (error) { handleError(error); }
 }
 
@@ -2547,18 +2704,25 @@ async function proposalsPanel() {
   const data = await api.proposals();
   const proposals = asArray(data.proposals);
   return el("section", { dataset: { tour: "system-proposals" } }, [
-    sectionHeading("MCP 写入提案", "外部客户端只能提交草稿；接受时仍会核对原内容哈希"),
+    sectionHeading(isMobilePrototype() ? "研究修订候选" : "MCP 写入提案", isMobilePrototype() ? "研究结果只作为建议；先核对当前原文，接受时仍检查是否有新修改" : "外部客户端只能提交草稿；接受时仍会核对原内容哈希"),
     proposals.length ? el("div", { class: "list" }, proposals.map((proposal) => el("article", { class: "list-item" }, [
       el("div", { class: "item-symbol", text: "提" }),
       el("div", { class: "item-copy" }, [el("h3", { text: proposal.title || proposal.type || "未命名提案" }), el("p", { text: truncate(proposal.body || proposal.reason, 180) }), el("div", { class: "item-meta" }, [badge(labels.state(proposal.state || "pending"), stateTone(proposal.state || "pending")), badge(formatDate(proposal.createdAt, true))])]),
       (proposal.state || "pending") === "pending" ? el("div", { class: "item-actions" }, [button("审阅差异", { kind: "primary compact", onClick: () => openProposal(proposal) }), button("拒绝", { kind: "text compact", onClick: () => actProposal(proposal.id, "reject") })]) : null,
-    ]))) : emptyState("没有待确认提案", "默认只读 MCP 不会产生提案；启用写入提案后，外部修改仍需在此确认。"),
+    ]))) : emptyState("没有待确认提案", isMobilePrototype() ? "新研究若涉及人工编辑过的内容，会保留为待确认修订；不会静默覆盖。" : "默认只读 MCP 不会产生提案；启用写入提案后，外部修改仍需在此确认。"),
   ]);
 }
 
-function openProposal(proposal) {
-  openDrawer(proposal.title || "写入提案", "MCP 待确认", el("div", { class: "page-stack" }, [
-    el("div", { class: "notice", text: "这里显示外部客户端建议的修改。接受前会检查目标文件是否已经变化。" }),
+async function openProposal(proposal) {
+  if (isMobilePrototype()) {
+    try {
+      const current = await api.note(proposal.noteId);
+      if (current.hash !== proposal.expectedHash) throw new Error("当前知识已有修改，无法直接接受旧研究建议。请核对新内容后重新研究。");
+      proposal = { ...proposal, title: proposal.title || current.title, before: current.body };
+    } catch (error) { handleError(error); return; }
+  }
+  openDrawer(proposal.title || "写入提案", isMobilePrototype() ? "研究修订待确认" : "MCP 待确认", el("div", { class: "page-stack" }, [
+    el("div", { class: "notice", text: isMobilePrototype() ? "这里显示真实研究形成的修订建议。左侧为刚读取的当前内容；接受前再次检查版本，不自动覆盖你的编辑。" : "这里显示外部客户端建议的修改。接受前会检查目标文件是否已经变化。" }),
     el("div", { class: "two-column" }, [
       el("section", { class: "panel soft" }, [el("p", { class: "eyebrow", text: "修改前" }), el("h3", { text: "当前内容" }), el("div", { class: "prose", text: proposal.before || "未返回修改前内容；请勿在无法核对时接受。" })]),
       el("section", { class: "panel soft" }, [el("p", { class: "eyebrow", text: "修改后" }), el("h3", { text: "外部建议稿" }), el("div", { class: "prose", text: proposal.body || proposal.proposedBody || "未提供建议正文" })]),
@@ -2592,10 +2756,6 @@ function conflictsPanel() {
 }
 
 async function renderCurrent() {
-  if (isMobilePrototype() && !["today", "capture", "library", "study", "mistakes", "topics", "system"].includes(state.view)) {
-    clear(refs.main).append(emptyState("这项功能尚未迁移到手机", "手机支持本地整理与学习；AI、问答输出和联网核验尚未接入。", button("打开知识库", { onClick: () => navigate("library") })));
-    return;
-  }
   const renderers = { today: renderToday, capture: renderCapture, library: renderLibrary, study: renderStudy, mistakes: async () => clear(refs.main).append(await mistakesPanel()), topics: renderTopics, discover: renderDiscover, output: renderOutput, system: renderSystem };
   await (renderers[state.view] || renderSystem)();
   onboarding?.rendered();
@@ -2741,7 +2901,7 @@ async function init() {
   if (isMobilePrototype()) {
     document.documentElement.classList.add("android-prototype");
     refs.nav.querySelectorAll("[data-view]").forEach(item => {
-      item.disabled = !["today", "capture", "library", "study", "mistakes", "topics", "system"].includes(item.dataset.view);
+      item.disabled = false;
       if (item.disabled) item.title = "后续版本接入";
     });
     if (!refs.nav.querySelector('[data-view="mistakes"]')) refs.nav.append(el("button", { class: "nav-item", dataset: { view: "mistakes" }, text: "用户错题记录" }));
@@ -2772,7 +2932,7 @@ async function init() {
     }
     await refreshBootstrap();
     await renderCurrent();
-    if (!isMobilePrototype()) processFeedback.start();
+    processFeedback.start();
   } catch (error) {
     renderFailure(error, init);
   }

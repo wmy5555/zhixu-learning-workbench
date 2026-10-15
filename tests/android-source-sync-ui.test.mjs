@@ -99,6 +99,21 @@ test('system render generation prevents a late result from replacing another pag
   assert.ok(!fixture.app.refs.main.textContent.includes('原文同步预览'));
 });
 
+test('pending sync panel cannot mount after a system tab or library-context change', async () => {
+  for (const change of ['tab', 'context']) {
+    const pending = deferred(); let version = 0, practiceId = '';
+    const fixture = await createAndroidBrowser({ api: { getContext: () => ({ version, practiceId }),
+      androidGuide: async () => ({ steps: [] }), settings: async () => ({}), androidSync: async () => pending.promise } });
+    fixture.app.state.view = 'system'; fixture.app.state.systemTab = 'data';
+    const rendering = fixture.app.renderSystem(); await flush();
+    if (change === 'tab') fixture.app.state.systemTab = 'usage';
+    else { version++; practiceId = 'android-local'; }
+    fixture.app.refs.main.textContent = `new-${change}-content`;
+    pending.resolve({ context: 'formal', connected: false, sources: [{ sourceId, title: '不应挂载的旧正式同步面板' }] });
+    await rendering; assert.equal(fixture.app.refs.main.textContent, `new-${change}-content`);
+  }
+});
+
 test('a slower previous system render cannot replace the newer system list', async () => {
   const pending = deferred(); let loads = 0;
   const fixture = await createAndroidBrowser({ api: { androidGuide: async () => ({ steps: [] }), settings: async () => ({}),
