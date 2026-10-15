@@ -89,6 +89,9 @@ test('submitted ask intent and prepared state round-trip without accepting malfo
   const malformed = structuredClone(backup), row = malformed.records.find(r => r.key === prepared.id);
   const value = JSON.parse(row.json); value.prepared.references[0].cloud = 'yes'; row.json = JSON.stringify(value);
   assert.throws(() => h.store.validateBackup(malformed), /问答准备状态/);
+  const invalidIdentity = structuredClone(backup), initialRow = invalidIdentity.records.find(r => r.key === initial.id);
+  initialRow.json = JSON.stringify({ ...initial, callId: '../foreign-call' });
+  assert.throws(() => h.store.validateBackup(invalidIdentity), /问答完成调用身份/);
 });
 
 test('inconsistent relationship mirrors and file collisions fail during preview without scanning current edits', t => {

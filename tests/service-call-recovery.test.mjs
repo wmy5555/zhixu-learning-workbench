@@ -18,6 +18,7 @@ function harness(t, transport = async () => response()) {
   let service, ai, attempts = 0;
   const options = { dataDir: path.join(root, 'data'), vaultDir: path.join(root, 'vault'), aiOverride: {
     generate: (...args) => ai.generate(...args),
+    embed: (...args) => ai.embed(...args),
     withCallContext: (...args) => ai.withCallContext(...args),
   } };
   function open() {
@@ -86,6 +87,111 @@ function askFixture(t, transport) {
   note = h.service.store.create({ kind: 'knowledge', title: '合成问答规则', body: '合成问答规则只供回归测试。', meta: { stage: 'integrated', privacy: 'cloud' } });
   return { h, note, input: { question: '合成问答规则', privacy: 'cloud', requestId: 'synthetic-ask-intent' } };
 }
+
+function restoreBackup(service, backup) {
+  const preview = service.restore({ backup });
+  return service.restore({ backup, preview: false, token: preview.token });
+}
+
+test('restored completed ask cannot bypass a local unfinished call or substitute another machine response', async t => {
+  const { h, note, input } = askFixture(t);
+  const restore = failWrite(h.service, (ns, data) => ns === 'calls' && data.phase === 'accounted');
+  await assert.rejects(h.service.ask(input), { code: 'CALL_ACCOUNTING_FAILED' }); restore();
+  const localCall = h.service.callRecovery().pending[0], backup = h.service.backup();
+  const operationRow = backup.records.find(row => row.namespace === 'askRequests');
+  const operation = JSON.parse(operationRow.json), foreignId = 'foreign-completed-call';
+  const resultRow = backup.records.find(row => row.namespace === 'callResults' && row.key === localCall.id);
+  const result = JSON.parse(resultRow.json), body = `异机合成回答 [${note.id}]`;
+  const responseBody = JSON.parse(result.response.body);
+  responseBody.choices[0].message.content = JSON.stringify({ answer: body, citationIds: [note.id] });
+  for (const row of backup.records.filter(row => ['calls','callLedger','callResults'].includes(row.namespace) && row.key === localCall.id)) {
+    const value = JSON.parse(row.json); value.id = foreignId;
+    if (row.namespace === 'callResults') value.response.body = JSON.stringify(responseBody);
+    else { value.phase = 'accounted'; if (row.namespace === 'calls') value.cost = result.entry.cost; }
+    row.key = foreignId; row.json = JSON.stringify(value);
+  }
+  const { prepared, ...completed } = operation;
+  operationRow.json = JSON.stringify({ ...completed, completed: true, generated: true, callId: foreignId });
+  backup.records.push({ namespace: 'drafts', key: operation.draftId, json: JSON.stringify({ id: operation.draftId, question: input.question, mode: 'answer', body, citations: prepared.citations, limitations: prepared.limitations, usedIds: [], createdAt: operation.createdAt }) });
+  assert.equal(restoreBackup(h.service, backup).restored, true);
+  await h.reopen();
+  assert.equal(h.service.store.get('callLedger', localCall.id).phase, 'received');
+  assert.equal(h.service.store.get('callLedger', foreignId), null);
+  await assert.rejects(h.service.ask(input), { code: 'CALL_RECOVERY_REQUIRED' });
+  h.service.recoverCall(localCall.id, { action: 'recover' });
+  await assert.rejects(h.service.ask(input), { code: 'CALL_RECOVERY_REQUIRED' });
+  assert.equal(h.attempts, 1);
+  assert.equal(h.service.store.records('drafts').length, 1, 'explicitly restored data remains available for manual inspection');
+});
+
+test('older pending ask backup resumes from local accounted response and completed backup preserves manual draft edits', async t => {
+  const { h, input } = askFixture(t);
+  const restore = failWrite(h.service, (ns, data) => ns === 'calls' && data.phase === 'accounted');
+  await assert.rejects(h.service.ask(input), { code: 'CALL_ACCOUNTING_FAILED' }); restore();
+  const pendingBackup = h.service.backup(), callId = h.service.callRecovery().pending[0].id;
+  h.service.recoverCall(callId, { action: 'recover' });
+  const first = await h.service.ask(input);
+  assert.equal(h.service.store.get('askRequests', input.requestId).callId, callId);
+  restoreBackup(h.service, pendingBackup);
+  await h.reopen();
+  assert.equal(h.service.settings().ai.enabled, false);
+  assert.equal(h.service.store.get('callLedger', callId).phase, 'accounted');
+  await assert.rejects(h.service.ask(input), { code: 'CAPABILITY_DISABLED' });
+  h.service.updateSettings({ ai: { enabled: true } });
+  assert.deepEqual(await h.service.ask(input), first);
+  h.service.updateDraft(first.draftId, { body: '合成人工修订，不是新的模型回答。' });
+  const completedBackup = h.service.backup();
+  restoreBackup(h.service, completedBackup);
+  await h.reopen();
+  assert.equal(h.service.settings().ai.enabled, false);
+  assert.equal((await h.service.ask(input)).answer, '合成人工修订，不是新的模型回答。');
+  assert.equal(h.attempts, 1);
+  assert.equal(h.service.store.records('drafts').length, 1);
+});
+
+test('legacy completed ask without call identity stays readable as a draft but cannot claim an inferred replay', async t => {
+  const { h, input } = askFixture(t), first = await h.service.ask(input);
+  const backup = h.service.backup(), operationRow = backup.records.find(row => row.namespace === 'askRequests');
+  const operation = JSON.parse(operationRow.json); delete operation.callId; operationRow.json = JSON.stringify(operation);
+  restoreBackup(h.service, backup);
+  await h.reopen();
+  await assert.rejects(h.service.ask(input), { code: 'CALL_RECOVERY_REQUIRED' });
+  assert.equal(h.service.store.get('drafts', first.draftId).body, first.answer);
+  assert.equal(h.attempts, 1);
+  // A historical backup may also have lost all billing rows. Their absence is
+  // not evidence that its generated draft belongs to a known paid operation.
+  const fresh = harness(t);
+  const withoutBilling = { ...backup, records: backup.records.filter(row => !['calls','callLedger','callResults'].includes(row.namespace)) };
+  restoreBackup(fresh.service, withoutBilling);
+  await assert.rejects(fresh.service.ask(input), { code: 'CALL_RECOVERY_REQUIRED' });
+  assert.equal(fresh.service.store.get('drafts', first.draftId).body, first.answer);
+  assert.equal(fresh.attempts, 0);
+});
+
+test('ask query embedding receipt survives restore and recovery before one model generation', async t => {
+  const { h, note, input } = askFixture(t, (note, url) => new Response(JSON.stringify(String(url).endsWith('/embeddings')
+    ? { data: [{ index: 0, embedding: [1,0] }], usage: { prompt_tokens: 10, total_tokens: 10 } }
+    : { choices: [{ message: { content: JSON.stringify({ answer: `合成回答 [${note.id}]`, citationIds: [note.id] }) } }], usage: { prompt_tokens: 100, completion_tokens: 20 } })));
+  h.service.updateSettings({ embedding: { enabled: true, baseUrl: 'https://8.8.8.8/v1', model: 'synthetic-embedding', inputPrice: 1 } });
+  const restore = failWrite(h.service, (ns, data) => ns === 'calls' && data.phase === 'accounted' && data.capability === 'embedding');
+  await assert.rejects(h.service.ask(input), { code: 'CALL_RECOVERY_REQUIRED' }); restore();
+  const pending = h.service.callRecovery().pending[0];
+  assert.equal(pending.capability, 'embedding');
+  assert.equal(h.attempts, 1);
+  const backup = h.service.backup();
+  restoreBackup(h.service, backup);
+  await h.reopen();
+  assert.equal(h.service.settings().embedding.enabled, false);
+  assert.equal(h.service.settings().ai.enabled, false);
+  h.service.recoverCall(pending.id, { action: 'recover' });
+  h.service.updateSettings({ ai: { enabled: true }, embedding: { enabled: true } });
+  const completed = await h.service.ask(input);
+  assert.match(completed.answer, new RegExp(note.id));
+  assert.deepEqual(await h.service.ask(input), completed);
+  assert.equal(h.attempts, 2, 'one embedding and one model request, with no repeated embedding charge');
+  assert.deepEqual(h.service.store.records('calls').map(call => call.capability).sort(), ['embedding','model']);
+  assert.equal(h.service.store.records('drafts').length, 1);
+});
 
 for (const namespace of ['drafts', 'askRequests']) test(`ask atomically rolls back ${namespace} completion failure and replays after reopen`, async t => {
   const { h, input } = askFixture(t);

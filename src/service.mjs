@@ -572,7 +572,13 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   const askBasis = (input, prepared) => hash(JSON.stringify([input, prepared.references]));
   const askContext = (id, step, input, operation, basisHash) => ai.withCallContext
     ? ai.withCallContext({ key: `ask:${id}:${step}`, jobId: `ask:${id}`, turnId: `${hash(JSON.stringify(input))}${basisHash ? `:${basisHash}` : ''}`, singleRequest: true }, operation) : operation();
-  function askResult(request) {
+  function askResult(request, { fresh = false } = {}) {
+    const calls = store.records('callLedger').filter(call => call.jobId === `ask:${request.id}` && call.phase !== 'cancelled');
+    if (calls.some(call => call.phase !== 'accounted')) fail('原请求仍有未决调用，请先完成本地记账或核对；备份中的完成状态不会替代本机证据。', 'CALL_RECOVERY_REQUIRED', 409);
+    const modelCalls = calls.filter(call => call.capability === 'model');
+    // A freshly returned test override may have no transport ledger. A restored
+    // completed record never inherits that trust from missing evidence.
+    if (request.generated && (!fresh || modelCalls.length || request.callId) && (modelCalls.length !== 1 || modelCalls[0].id !== request.callId || store.get('callResults', request.callId)?.entry?.ok !== true)) fail('此完成记录与本机调用证据不一致。请核对恢复前安全备份和输出草稿；不会将其他调用的草稿当作原请求结果，也不会重新发送。', 'CALL_RECOVERY_REQUIRED', 409);
     const draft = store.get('drafts', request.draftId);
     if (!draft) fail('原请求的草稿已不存在；不会重新调用模型。', 'ASK_RESULT_MISSING', 409);
     return { requestId: request.id, answer: draft.body, citations: draft.citations, limitations: draft.limitations, draftId: draft.id, generated: request.generated };
@@ -611,11 +617,13 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
       if (request.basisHash !== askBasis(input, request.prepared)) fail('原请求准备状态不一致；不会应用旧回答或再次发送。', 'ASK_REQUEST_CONFLICT', 409);
       const { citations, limitations, references } = request.prepared;
       let { answer, generated } = request.prepared;
+      let callId;
       checkAskMaterials(request.prepared);
       if (generated) {
         const cloud = references.filter(n => n.cloud).map(n => store.read(n.id));
         const prompt = promptText('ask',{question,mode,outputType:mode === 'answer' ? '回答' : mode === 'outline' ? '包含观点、证据、案例、反方、限制、未知的提纲' : '可编辑草稿',materials:JSON.stringify(cloud.map(n=>({id:n.id,kind:n.kind,stage:n.meta.stage,title:n.title,body:n.body.slice(0,6000),sources:n.meta.sources,evidence:n.meta.evidence,personalUnderstanding:n.meta.personalUnderstanding})))});
-        const result = parseJSON((await askContext(requestId, 'answer', input, () => ai.generate({ system: promptText('serviceSystem'), prompt, privacy: 'cloud', json: true }), request.basisHash)).text);
+        const response = await askContext(requestId, 'answer', input, () => ai.generate({ system: promptText('serviceSystem'), prompt, privacy: 'cloud', json: true }), request.basisHash);
+        const result = parseJSON(response.text); callId = response.callId;
         const allowed = new Set(references.filter(n => n.cloud).map(n => n.id));
         if (!Array.isArray(result.citationIds) || !result.citationIds.length || result.citationIds.some(id => !allowed.has(id)) || typeof result.answer !== 'string') fail('回答引用不符合实际检索材料；已拒绝保存。', 'INVALID_CITATION', 422);
         const inline = [...result.answer.matchAll(/\[([^\]\n]+)\]/g)].map(m=>m[1]);
@@ -627,10 +635,10 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
       store.db.exec('BEGIN IMMEDIATE');
       try {
         store.put('drafts', request.draftId, { id: request.draftId, mode, question, body: answer, citations, limitations, usedIds: [], createdAt: now() });
-        request = store.put('askRequests', requestId, { id: requestId, input, draftId: request.draftId, createdAt: request.createdAt, basisHash: request.basisHash, completed: true, generated });
+        request = store.put('askRequests', requestId, { id: requestId, input, draftId: request.draftId, createdAt: request.createdAt, basisHash: request.basisHash, completed: true, generated, ...(callId ? { callId } : {}) });
         store.db.exec('COMMIT');
       } catch (error) { store.db.exec('ROLLBACK'); throw error; }
-      return askResult(request);
+      return askResult(request, { fresh: true });
     } finally { activeAsks.delete(requestId); }
   }
   async function prepareAsk(requestId, input) {
