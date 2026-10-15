@@ -408,7 +408,7 @@ test('upload receipt total remains bounded after revocation while an existing pe
 test('oversize attachment backup is rejected from stat totals before any original is read or encoded', async t => {
   const h = await harness(t), bytes = Buffer.alloc(8 * 1024 * 1024, 32), paths = new Set();
   bytes.write('%PDF-1.4\n'); bytes.write('%%EOF\n', bytes.length - 6);
-  for (let index = 0; index < 5; index++) {
+  for (let index = 0; index < 8; index++) {
     bytes[32] = index;
     const file = upload(h.service, '合成容量.pdf', bytes);
     await h.service.commitFile({ uploadId: file.id });

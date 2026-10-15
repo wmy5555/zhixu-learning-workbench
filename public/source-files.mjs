@@ -1,5 +1,6 @@
 import { el, button, field } from './ui.mjs';
 import { request, uploadAttachment, attachmentUrl } from './api.mjs';
+import { MAX_FILE_BYTES } from './source-file-limits.mjs';
 
 export const fileAccept = { 'png': 'image/png', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'gif': 'image/gif', 'webp': 'image/webp', 'pdf': 'application/pdf', 'doc': 'application/msword', 'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
 export function pickerFileType(file, detected) {
@@ -53,7 +54,8 @@ export async function createFilePicker(input, { imagesOnly = false, onChange = (
   const acceptedTypes = [...new Set(Object.values(fileAccept).filter(mime => !imagesOnly || mime.startsWith('image/')))];
   input.accept = acceptedTypes.join(',');
   const instance = pond.create(input, {
-    allowMultiple: true, maxFiles: 20, maxParallelUploads: 2, maxFileSize: 10 * 1024 * 1024, instantUpload: true,
+    allowMultiple: true, maxFiles: 20, maxParallelUploads: 2, maxFileSize: MAX_FILE_BYTES, instantUpload: true,
+    labelMaxFileSizeExceeded: '文件超过 50 MB', labelMaxFileSize: '每份最多 50 MB（50,000,000 字节）',
     allowPaste: false, allowDrop: true, dropOnPage: false, dropOnElement: true, allowDirectoriesOnly: false,
     allowImagePreview: true, imagePreviewMaxFileSize: '2MB', imagePreviewMaxHeight: 160,
     acceptedFileTypes: acceptedTypes,
@@ -136,7 +138,7 @@ export function createFileImportPanel({ onSaved, onError }) {
   const sync = () => { if (picker) save.disabled = saving || !picker.getFiles().some(item => item.serverId); };
   const panel = el('section', { class: 'panel' }, [
     el('h2', { text: '图片、PDF 和 Word' }),
-    el('p', { text: '每份最多 10 MiB。先上传到本机，再明确保存为第一层资料。默认仅本地；DOCX转换后请先核对文字，再到资料详情主动提交AI。图片/PDF不OCR、不拆解，DOC仅保留原件。' }),
+    el('p', { text: '每份最多 50 MB（50,000,000 字节）。先上传到本机，再明确保存为第一层资料。默认仅本地；DOCX转换后请先核对文字，再到资料详情主动提交AI。图片/PDF不OCR、不拆解，DOC仅保留原件。' }),
     field('选择附件', input), save, status,
   ]);
   const recovery = el('div', { class: 'page-stack' });

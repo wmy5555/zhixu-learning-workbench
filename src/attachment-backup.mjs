@@ -3,7 +3,9 @@ import YAML from 'yaml';
 import { attachmentPath, decodeFile, statAttachment, readAttachment, writeAttachment, assertAttachmentCapacity } from './attachments.mjs';
 
 const invalid = message => { throw Object.assign(new Error(message), { code: 'ATTACHMENT_BACKUP', status: 400 }); };
-const MAX_BACKUP_BYTES = 49 * 1024 * 1024;
+// A 50 MB original needs 66,666,668 base64 bytes, plus JSON and note metadata.
+export const MAX_BACKUP_BYTES = 80_000_000;
+export const MAX_RESTORE_REQUEST_BYTES = MAX_BACKUP_BYTES + 1024;
 function references(backup) {
   const descriptors = new Map();
   for (const row of [...backup.notes, ...backup.versions]) {
@@ -30,14 +32,14 @@ export function includeAttachments(root, backup) {
   for (const descriptor of refs.values()) {
     const { size } = statAttachment(root, descriptor);
     estimatedBytes += (index++ ? 1 : 0) + Buffer.byteLength(JSON.stringify({ ...descriptor, base64: '' })) + 4 * Math.ceil(size / 3);
-    if (estimatedBytes > MAX_BACKUP_BYTES) invalid('包含附件的 JSON 备份预计超过 49 MiB；请另行完整复制 Vault 与运行数据。尚未读取或编码附件，没有生成不完整备份。');
+    if (estimatedBytes > MAX_BACKUP_BYTES) invalid('包含附件的 JSON 备份预计超过 80 MB（80,000,000 字节）；请另行完整复制 Vault 与运行数据。尚未读取或编码附件，没有生成不完整备份。');
   }
   const attachments = [...refs.values()].map(descriptor => {
     const file = readAttachment(root, descriptor);
     return { ...file.descriptor, base64: file.bytes.toString('base64') };
   });
   const result = { ...envelope, attachments };
-  if (Buffer.byteLength(JSON.stringify(result)) > MAX_BACKUP_BYTES) invalid('包含附件的 JSON 备份超过 49 MiB；请另行完整复制 Vault 与运行数据。没有生成不完整备份。');
+  if (Buffer.byteLength(JSON.stringify(result)) > MAX_BACKUP_BYTES) invalid('包含附件的 JSON 备份超过 80 MB（80,000,000 字节）；请另行完整复制 Vault 与运行数据。没有生成不完整备份。');
   return result;
 }
 export function validateAttachments(root, backup) {

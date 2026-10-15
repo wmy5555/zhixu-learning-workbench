@@ -2,8 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
+import { MAX_FILE_BYTES } from '../public/source-file-limits.mjs';
 
-export const MAX_FILE_BYTES = 10 * 1024 * 1024;
+export { MAX_FILE_BYTES };
 export const MAX_ATTACHMENT_STORAGE_BYTES = 256 * 1024 * 1024;
 export const MAX_ATTACHMENT_STORAGE_FILES = 1000;
 const types = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', pdf: 'application/pdf', doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
@@ -15,9 +16,10 @@ export function decodeFile(input) {
   const ext = name.split('.').at(-1).toLowerCase(), mime = types[ext];
   if (!mime) reject('支持 PNG/JPEG/GIF/WebP、PDF、DOC 和 DOCX；不接受 HTML、SVG 或宏文档扩展名。');
   if (input.mime && input.mime !== 'application/octet-stream' && input.mime.toLowerCase() !== mime) reject('文件类型与扩展名不一致。');
-  if (!Buffer.isBuffer(input.bytes) && (typeof input.base64 !== 'string' || !input.base64.length || input.base64.length > Math.ceil(MAX_FILE_BYTES / 3) * 4 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(input.base64))) reject('文件为空、编码无效或超过 10 MiB。');
+  // Avoid a repeated-group regexp: large valid base64 can exhaust its stack.
+  if (!Buffer.isBuffer(input.bytes) && (typeof input.base64 !== 'string' || !input.base64.length || input.base64.length > Math.ceil(MAX_FILE_BYTES / 3) * 4 || input.base64.length % 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(input.base64))) reject('文件为空、编码无效或超过 50 MB（50,000,000 字节）。');
   const bytes = input.bytes || Buffer.from(input.base64, 'base64');
-  if (!bytes.length || bytes.length > MAX_FILE_BYTES) reject('每个文件最多 10 MiB。', 'TOO_LARGE', 413);
+  if (!bytes.length || bytes.length > MAX_FILE_BYTES) reject('每个文件最多 50 MB（50,000,000 字节）。', 'TOO_LARGE', 413);
   const hex = bytes.subarray(0, 12).toString('hex'), ascii = bytes.subarray(0, 12).toString('ascii');
   const valid = ext === 'png' ? hex.startsWith('89504e470d0a1a0a') && bytes.length >= 24
     : ['jpg','jpeg'].includes(ext) ? hex.startsWith('ffd8ff')

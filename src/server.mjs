@@ -7,6 +7,7 @@ import { createService } from './service.mjs';
 import { atomicWrite, fail, now } from './store.mjs';
 import { createOnboarding } from './onboarding.mjs';
 import { MAX_FILE_BYTES } from './attachments.mjs';
+import { MAX_RESTORE_REQUEST_BYTES } from './attachment-backup.mjs';
 
 const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
 const vendorAssets = Object.fromEntries([
@@ -25,7 +26,7 @@ async function readJSON(req, maxBytes = 50 * 1024 * 1024) {
 }
 async function readBinary(req) {
   let size = 0; const chunks = [];
-  for await (const chunk of req) { size += chunk.length; if (size > MAX_FILE_BYTES) fail('每个文件最多 10 MiB。', 'TOO_LARGE', 413); chunks.push(chunk); }
+  for await (const chunk of req) { size += chunk.length; if (size > MAX_FILE_BYTES) fail('每个文件最多 50 MB（50,000,000 字节）。', 'TOO_LARGE', 413); chunks.push(chunk); }
   return Buffer.concat(chunks);
 }
 export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR || '.data'), vaultDir = process.env.LEARNING_VAULT_DIR ? path.resolve(process.env.LEARNING_VAULT_DIR) : undefined, scheduler = true, service: supplied } = {}) {
@@ -104,7 +105,8 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
       if(!session||Date.now()-session.at>86400000)fail('会话已过期，请刷新页面。','SESSION_REQUIRED',401);
       if(!['GET','HEAD'].includes(method)&&!safeEqual(req.headers['x-csrf-token']||'',session.csrf))fail('请求缺少有效的操作凭据，请刷新页面。','CSRF_DENIED',403);
       const binaryUpload = /\/uploads$/.test(url.pathname) && method === 'POST';
-      const body=['POST','PUT','DELETE'].includes(method) && !binaryUpload ?await readJSON(req):{};
+      const restoreRequest = parts.length === 2 && parts[1] === 'restore' || parts.length === 4 && parts[1] === 'practice' && parts[3] === 'restore';
+      const body=['POST','PUT','DELETE'].includes(method) && !binaryUpload ?await readJSON(req, restoreRequest ? MAX_RESTORE_REQUEST_BYTES : undefined):{};
       if (parts[1] === 'onboarding') {
         let result;
         if (parts[2] === 'state' && method === 'GET') result = onboarding.state();

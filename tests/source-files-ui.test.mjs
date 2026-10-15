@@ -3,6 +3,7 @@ import test from 'node:test';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { fileAccept, pickerFileType } from '../public/source-files.mjs';
+import { MAX_FILE_BYTES } from '../public/source-file-limits.mjs';
 
 test('file picker accepts supported extensions when the OS reports no specific MIME', () => {
   for (const [extension, expected] of Object.entries(fileAccept)) {
@@ -25,7 +26,7 @@ test('picker shows server rejection as plain text and preserves other queue erro
   const uploads = [], failures = [];
   const instance = { element: { isConnected: true, after(node) { status = node; } } };
   const vendor = { default: {}, registerPlugin() {}, create(_input, value) { options = value; return instance; } };
-  const context = vm.createContext({ vendor, document: { body: {} }, MutationObserver: class { observe() {} },
+  const context = vm.createContext({ vendor, MAX_FILE_BYTES, document: { body: {} }, MutationObserver: class { observe() {} },
     crypto: { randomUUID: () => 'test-upload-id' },
     el(_tag, value) { return { ...value, textContent: '', set innerHTML(_value) { assert.fail('upload errors must be text'); } }; },
     uploadAttachment(file, callbacks) { uploads.push({ file, ...callbacks }); return { abort() {} }; },
@@ -35,6 +36,8 @@ test('picker shows server rejection as plain text and preserves other queue erro
     .replace(/import\('\/vendor\/[^']+'\)/g, 'Promise.resolve(vendor)');
   const createPicker = vm.runInContext(source + '\ncreateFilePicker;', context);
   await createPicker({});
+  assert.equal(options.maxFileSize, 50_000_000);
+  assert.match(options.labelMaxFileSize, /50 MB/);
   const first = { name: '<img src=x onerror=alert(1)>.png' }, second = { name: '另一份.pdf' };
   const process = file => options.server.process('', file, {}, () => {}, message => failures.push(message), () => {}, () => {});
   process(first); uploads.at(-1).error('附件存储已达到容量上限（256 MiB 或 1000 个文件）。');
