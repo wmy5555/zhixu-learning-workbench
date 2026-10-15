@@ -78,7 +78,7 @@ export async function createAndroidBrowser({ api = {}, confirmations = [] } = {}
     documentElement: new Element("html"), body: new Element("body"), activeElement: null,
     createElement: tag => new Element(tag), createTextNode: text => { const node = new Element("text"); node.textContent = text; return node; },
     querySelector(selector) { if (!roots.has(selector)) roots.set(selector, new Element()); return roots.get(selector); },
-    addEventListener() {},
+    events: {}, addEventListener(name, handler) { this.events[name] = handler; },
   };
   const local = new Map();
   const window = {
