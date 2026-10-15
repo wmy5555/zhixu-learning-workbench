@@ -500,6 +500,7 @@ async function renderCapture() {
       syncResearchOption();
       const wantsProcess = process.checked, wantsResearch = research.checked;
       const result = await api.import({ items: [item], captureMode: "text", process: !isMobilePrototype() && wantsProcess, research: !isMobilePrototype() && wantsProcess && wantsResearch });
+      if (api.getContext().version !== context.version || api.getContext().practiceId !== context.practiceId) return;
       if (isMobilePrototype() && wantsProcess) for (const saved of asArray(result.notes)) await runAndroidJob(await api.processNote(saved.id, { research: wantsResearch }));
       if (api.getContext().version !== context.version || api.getContext().practiceId !== context.practiceId || unsavedInputForm() !== sourceForm) return;
       if (JSON.stringify(serializeForm(sourceForm)) === draft) { sourceForm.reset(); sourceForm.markSaved(); }
@@ -1485,7 +1486,8 @@ async function studyQueuePanel() {
   ]);
 }
 
-function continueStudy(session) {
+async function continueStudy(session) {
+  if (!await confirmUnsavedInputDiscard()) return;
   recordTourEvent("study-resume");
   state.currentStudy = session;
   state.studyMaterialVisible = !asArray(session.turns).length && session.status === "reading";
@@ -1495,6 +1497,8 @@ function continueStudy(session) {
 
 async function studySessionPanel() {
   let session = state.currentStudy;
+  const context = api.getContext(), requestedId = session?.id;
+  const current = () => api.getContext().version === context.version && api.getContext().practiceId === context.practiceId && state.currentStudy?.id === requestedId;
   if (session?.id) {
     try { session = await api.study(session.id); state.currentStudy = session; }
     catch (error) { if (error.status !== 404) throw error; state.currentStudy = null; if (isMobilePrototype()) session = null; }
@@ -1651,11 +1655,11 @@ function androidStudySession(session) {
     const submitted = answer.value;
     try { const result = await api.answer(session.id, { ...intent, requestId: answerIntent.requestId }); if (!current()) return;
       answerIntent = null;
-      if (answer.value === submitted) { answer.value = ""; evaluate.checked = false; form.markSaved(); } if (result.jobId && evaluate.checked) {
+      if (answer.value === submitted) { answer.value = ""; evaluate.checked = false; form.markSaved(); } if (result.jobId && intent.evaluate) {
         await api.runOnlineJob(result.jobId);
-        observeAndroidJob(result.jobId, async () => { if (state.currentStudy?.id === session.id) { state.currentStudy = await api.study(session.id); if (state.view === "study") await renderStudy(); } });
+        observeAndroidJob(result.jobId, async () => { if (state.currentStudy?.id === session.id) { const latest = await api.study(session.id); if (!current()) return; state.currentStudy = latest; if (state.view === "study") await renderStudy(); } });
       }
-      state.currentStudy = await api.study(session.id); if (!current()) return; await renderStudy(); toast(intent.evaluate ? "原答已保存，批改任务请到系统查看" : "回答已保存在手机，未批改", "success"); }
+      const latest = await api.study(session.id); if (!current()) return; state.currentStudy = latest; await renderStudy(); toast(intent.evaluate ? "原答已保存，批改任务请到系统查看" : "回答已保存在手机，未批改", "success"); }
     catch (error) { if (current()) handleError(error); }
     finally { if (current()) { submit.disabled = completed; finish.disabled = completed || !turns.length; } }
   });
@@ -2097,7 +2101,9 @@ async function actRelation(id, action) {
   catch (error) { handleError(error); }
 }
 
+let outputRenderSequence = 0;
 async function renderOutput() {
+  const context = api.getContext(), view = state.view, generation = ++outputRenderSequence;
   const wrapper = el("div", { class: "page-stack" });
   const form = el("form", { class: "panel", dataset: { tour: "output-form" } });
   const question = el("textarea", { name: "question", rows: 5, required: true, placeholder: "例如：根据我已有的资料，解释 RAG 为什么不能保证答案一定正确。" });
@@ -2107,29 +2113,38 @@ async function renderOutput() {
   const allowCloudQuestion = el("input", { type: "checkbox", checked: false, disabled: isMobilePrototype() && !onlineReady("ai") });
   form.append(sectionHeading("有依据的问答与输出", "默认优先个人知识，并让你看见实际使用了哪些资料"), field("问题或输出目标", question), el("div", { class: "form-grid" }, [field("输出方式", mode), field("取材范围", el("div", { class: "segmented" }, [el("label", { class: "check-field" }, [knowledgeScope, "知识笔记"]), el("label", { class: "check-field" }, [sourceScope, "原始来源"])]))]), el("label", { class: "check-field" }, [allowCloudQuestion, el("span", { text: "允许将本次问题发给已配置的外部模型" })]), el("p", { class: "fine-print", text: "默认关闭：只在本机检索并列出已有材料。开启后，本次问题与相关材料的确切范围由手机原生授权弹窗展示，确认后才发送。原文仍保持仅本地，逐次授权不改变资料隐私标签。" }), el("div", { class: "notice info", text: "找不到、证据冲突或内容过期时，回答应明确说明。问答和草稿不会自动成为个人知识。" }), button("开始生成", { kind: "primary", type: "submit" }));
   const answerArea = el("section", { dataset: { tour: "output-result" } });
+  const current = () => generation === outputRenderSequence && state.view === view && api.getContext().version === context.version && api.getContext().practiceId === context.practiceId && refs.main.querySelector('[data-tour="output-form"]') === form;
+  const submit = form.querySelector("button[type='submit']");
   if (state.lastOutput) renderAnswer(answerArea, state.lastOutput);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (submit.disabled) return;
     const scope = [];
     if (knowledgeScope.checked) scope.push("knowledge");
     if (sourceScope.checked) scope.push("source");
     if (!scope.length) { toast("请至少选择一个取材范围", "error"); return; }
+    submit.disabled = true;
     state.lastOutput = null;
     clear(answerArea).append(el("div", { class: "loading-panel" }, [el("span", { class: "spinner" }), el("p", { text: "正在检索并组织已有资料…" })]));
     try {
       let result = await api.ask({ question: question.value, scope, mode: mode.value, privacy: allowCloudQuestion.checked && (!isMobilePrototype() || onlineReady("ai")) ? "cloud" : "local" });
+      if (!current()) return;
       if (isMobilePrototype() && result.queued) {
         await api.runOnlineJob(result.jobId || result.id);
-        observeAndroidJob(result.jobId || result.id, async job => { state.lastOutput = job.result; if (state.view === "output") await renderOutput(); });
+        observeAndroidJob(result.jobId || result.id, async job => { if (!current()) return; state.lastOutput = job.result; renderAnswer(answerArea, job.result); await refreshDraftsPanel(); });
         const jobs = await api.jobs(); const job = asArray(jobs.jobs || jobs).find(value => value.id === (result.jobId || result.id));
         if (job?.state === "done") result = job.result;
         else { clear(answerArea).append(emptyState("输出任务已保存", "请到系统 → 任务查看结果；未知状态不会自动重试。", button("查看任务", { onClick: () => { state.systemTab = "jobs"; navigate("system"); } }))); return; }
       }
+      if (!current()) return;
       state.lastOutput = result;
       renderAnswer(answerArea, result);
-    } catch (error) { clear(answerArea).append(emptyState("本次生成未完成", errorMessage(error), button("查看任务与失败原因", { onClick: () => { state.systemTab = "jobs"; navigate("system"); } }))); }
+      await refreshDraftsPanel();
+    } catch (error) { if (!current()) return; clear(answerArea).append(emptyState("本次生成未完成", errorMessage(error), button("查看任务与失败原因", { onClick: () => { state.systemTab = "jobs"; navigate("system"); } }))); }
+    finally { submit.disabled = false; }
   });
   const draftsPanel = await renderDraftsPanel();
+  if (generation !== outputRenderSequence || state.view !== view || api.getContext().version !== context.version || api.getContext().practiceId !== context.practiceId) return;
   wrapper.append(...[capabilityNotice(), form, answerArea, draftsPanel].filter(Boolean));
   clear(refs.main).append(wrapper);
 }
@@ -2137,9 +2152,10 @@ async function renderOutput() {
 function renderAnswer(container, result) {
   container.dataset.tour = "output-result";
   const citations = asArray(result.citations);
-  const limitations = asArray(result.limitations);
+  const limitations = [...asArray(result.limitations)];
+  if (result.generated !== true && !limitations.includes("未进行 AI 生成。")) limitations.push("未进行 AI 生成。");
   clear(container).append(el("section", { class: "panel" }, [
-    sectionHeading("生成结果", result.draftId ? "已保存到输出工作区，可继续编辑" : "本次结果尚未成为个人知识"),
+    sectionHeading(result.generated === true ? "AI 生成结果" : "本地检索结果（未进行 AI 生成）", result.draftId ? "已保存到输出工作区，可继续编辑" : "本次结果尚未成为个人知识"),
     el("div", { class: "prose", text: result.answer || "没有生成可用内容" }),
     limitations.length ? el("div", { class: "notice", text: `限制：${limitations.join("；")}` }) : null,
     citations.length ? el("div", {}, [sectionHeading("实际引用", "关键主张应能回到笔记与底层来源"), el("div", { class: "list" }, citations.map((citation) => el("div", { class: "citation" }, [el("strong", { text: citation.title || citation.noteId || citation.id || "引用材料" }), citation.excerpt ? el("p", { text: citation.excerpt }) : null, citation.locator ? el("p", { text: `定位：${citation.locator}` }) : null, citation.noteId || citation.id ? button("打开材料", { kind: "text", onClick: () => openNote(citation.noteId || citation.id) }) : null, evidenceDetails(citation.noteId || citation.id, asArray(citation.sources))])))]) : el("div", { class: "notice danger", text: "本次结果没有返回可追溯引用，请不要把它视为有据回答。" }),
@@ -2158,6 +2174,14 @@ async function renderDraftsPanel() {
       el("div", { class: "card-foot" }, [el("span", { text: `${asArray(draft.usedIds).length} 条已采用知识` }), button("编辑", { kind: "text", onClick: () => openDraft(draft) })]),
     ]))) : emptyState("还没有输出草稿", "提出一个问题或写作目标后，结果会保留在这里继续编辑。"),
   ]);
+}
+
+async function refreshDraftsPanel() {
+  const panel = refs.main.querySelector('[data-tour="output-drafts"]'), context = api.getContext();
+  if (!panel || state.view !== "output") return;
+  const next = await renderDraftsPanel(), latest = api.getContext();
+  if (latest.version !== context.version || latest.practiceId !== context.practiceId || refs.main.querySelector('[data-tour="output-drafts"]') !== panel) return;
+  panel.replaceChildren(...next.children);
 }
 
 function openDraft(draft) {
@@ -2180,7 +2204,7 @@ function openDraft(draft) {
       state.lastOutput = null;
       toast("草稿已保存", "success");
       closeDrawer();
-      await renderOutput();
+      await refreshDraftsPanel();
     } catch (error) { handleError(error); }
   });
   openDrawer(draft.title || "编辑输出", "输出工作区", form);
