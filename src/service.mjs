@@ -16,6 +16,7 @@ import { buildUsageReport } from './usage.mjs';
 import { structureBasis, structureRecord, structureView } from './source-structure.mjs';
 import { createSourceFiles } from './source-files.mjs';
 import { assertTextSource, processingText } from './attachments.mjs';
+import { outboundText, outboundTitle } from './outbound-text.mjs';
 
 export const defaults = {
   dailyMinutes: 25, timezone: 'Asia/Shanghai', scheduleTime: '08:00', focusTopics: [], pausedIds: [],
@@ -280,7 +281,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     const source = getNote(job.payload.noteId);
     if (source.hash !== job.payload.hash) fail('资料已修改，请重试当前版本。', 'SOURCE_CHANGED');
     if (!needsTitle(source)) fail('标题已经填写，保留当前标题。', 'TITLE_ALREADY_SET');
-    const result = parseJSON((await ai.generate({ system: promptText('serviceSystem'), privacy: privacyFor(source), signal, json: true, prompt: promptText('sourceTitle', { source: source.body }) })).text);
+    const result = parseJSON((await ai.generate({ system: promptText('serviceSystem'), privacy: privacyFor(source), signal, json: true, prompt: promptText('sourceTitle', { source: processingText(source) }) })).text);
     const saved = saveSourceTitle(source, result?.sourceTitle, signal);
     job.payload.resultHash = saved.hash;
     putJob(job);
@@ -356,7 +357,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     };
     assertCurrent();
     const result = await ai.generate({ system: promptText('serviceSystem'), privacy: 'cloud', signal, json: true,
-      prompt: promptText('sourceStructure', { source: processingText(source), notes: JSON.stringify(notes.map(n => ({ id: n.id, title: n.title, body: n.body }))) }) });
+      prompt: promptText('sourceStructure', { source: processingText(source), notes: JSON.stringify(notes.map(n => ({ id: n.id, title: outboundTitle(n), body: outboundText(n.body) }))) }) });
     if (signal.aborted) fail('任务已取消。', 'CANCELLED');
     assertCurrent();
     const record = structureRecord(source, notes, parseJSON(result.text).structure);
@@ -653,7 +654,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
       checkAskMaterials(request.prepared);
       if (generated) {
         const cloud = references.filter(n => n.cloud).map(n => store.read(n.id));
-        const prompt = promptText('ask',{question,mode,outputType:mode === 'answer' ? '回答' : mode === 'outline' ? '包含观点、证据、案例、反方、限制、未知的提纲' : '可编辑草稿',materials:JSON.stringify(cloud.map(n=>({id:n.id,kind:n.kind,stage:n.meta.stage,title:n.title,body:n.body.slice(0,6000),sources:n.meta.sources,evidence:n.meta.evidence,personalUnderstanding:n.meta.personalUnderstanding})))});
+        const prompt = promptText('ask',{question,mode,outputType:mode === 'answer' ? '回答' : mode === 'outline' ? '包含观点、证据、案例、反方、限制、未知的提纲' : '可编辑草稿',materials:JSON.stringify(cloud.map(n=>({id:n.id,kind:n.kind,stage:n.meta.stage,title:outboundTitle(n),body:outboundText(n.body).slice(0,6000),sources:n.meta.sources,evidence:n.meta.evidence,personalUnderstanding:n.meta.personalUnderstanding})))});
         const response = await askContext(requestId, 'answer', input, () => ai.generate({ system: promptText('serviceSystem'), prompt, privacy: 'cloud', json: true }), request.basisHash);
         const result = parseJSON(response.text); callId = response.callId;
         const allowed = new Set(references.filter(n => n.cloud).map(n => n.id));
@@ -857,7 +858,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     try {
       if (pending.length && ai.researchBatch) {
         const delivered = new Set();
-        const batch = await ai.researchBatch({ claims: pending, topic: source.title, privacy: privacyFor(source), signal, prompts: settings().prompts, hints,
+        const batch = await ai.researchBatch({ claims: pending, topic: outboundTitle(source), privacy: privacyFor(source), signal, prompts: settings().prompts, hints,
           checkCurrent: assertCurrent, onBatch: async results => { await checkpoint(results); results.forEach(r => delivered.add(r.claim)); } });
         await checkpoint(batch.results.filter(result => !delivered.has(result.claim)));
         runtimeIssues.push(...(batch.issues || []));
@@ -902,19 +903,19 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
       }
     };
     assertCurrent([note]);
-    const current=JSON.stringify({id:note.id,title:note.title,body:note.body.slice(0,4500)});
+    const current=JSON.stringify({id:note.id,title:outboundTitle(note),body:outboundText(note.body).slice(0,4500)});
     const expanded=parseJSON((await ai.generate({system:promptText('serviceSystem'),privacy:'cloud',signal,json:true,prompt:promptText('relationQueries',{current})})).text);
     if(!Array.isArray(expanded.queries)||expanded.queries.some(q=>typeof q!=='string'))fail('关联检索短语格式无效，本地候选已保留。','MODEL_FORMAT');
     const retrieved=[];
     for(const query of expanded.queries.slice(0,2)) {
       assertCurrent([note]);
-      const result=await search(query.slice(0,120),{mode:settings().embedding.enabled?'hybrid':'keyword',privacy:'cloud',scope:['knowledge'],limit:6});
+      const result=await search(outboundText(query).slice(0,120),{mode:settings().embedding.enabled?'hybrid':'keyword',privacy:'cloud',scope:['knowledge'],limit:6});
       retrieved.push(...result.results);
     }
     candidates=[...new Map([...retrieved,...candidates].filter(n=>n.id!==note.id&&privacyFor(n)==='cloud'&&eligible(n)).map(n=>[n.id,n])).values()].slice(0,10);
     if(!candidates.length)return;
     assertCurrent([note,...candidates]);
-    const parsed=parseJSON((await ai.generate({system:promptText('serviceSystem'),privacy:'cloud',signal,json:true,prompt:promptText('relate',{current,candidates:JSON.stringify(candidates.map(n=>({id:n.id,title:n.title,body:n.body.slice(0,3000)})))})})).text);
+    const parsed=parseJSON((await ai.generate({system:promptText('serviceSystem'),privacy:'cloud',signal,json:true,prompt:promptText('relate',{current,candidates:JSON.stringify(candidates.map(n=>({id:n.id,title:outboundTitle(n),body:outboundText(n.body).slice(0,3000)})))})})).text);
     if(!Array.isArray(parsed.relations))fail('关联结果格式无效，本地候选已保留。','MODEL_FORMAT');
     if(getNote(note.id).hash!==note.hash)fail('探索时知识已有变化，请重新探索。','SOURCE_CHANGED');
     for(const r of parsed.relations.slice(0,2)) {
@@ -933,7 +934,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     const changed=new Set(store.records('changed').map(n=>n.id));
     let discoveryIssue=null;
     const selected=[...notes.filter(n=>changed.has(n.id)),...isolated,...notes].filter((n,i,a)=>privacyFor(n)==='cloud'&&a.findIndex(v=>v.id===n.id)===i).slice(0,16);
-    if(job.payload.useAI===true&&settings().ai.enabled&&selected.length){try {const answer=await ai.generate({system:promptText('serviceSystem'),privacy:'cloud',signal,prompt:promptText('discover',{notes:JSON.stringify(selected.map(n=>({id:n.id,title:n.title,topic:n.meta.topic,summary:n.body.slice(0,900)})))})});body+=`\n\n## AI 发现建议（待审阅）\n${answer.text}`;}catch(error){discoveryIssue=error;body+=`\n\n## AI 探索未完成\n${error.message}`;}}else body+='\n\n## 探索限制\n当前为本地结构检查；没有选择付费 AI 探索或没有可用的摘要，尚未生成跨领域语义发现。';
+    if(job.payload.useAI===true&&settings().ai.enabled&&selected.length){try {const answer=await ai.generate({system:promptText('serviceSystem'),privacy:'cloud',signal,prompt:promptText('discover',{notes:JSON.stringify(selected.map(n=>({id:n.id,title:outboundTitle(n),topic:n.meta.topic,summary:outboundText(n.body).slice(0,900)})))})});body+=`\n\n## AI 发现建议（待审阅）\n${answer.text}`;}catch(error){discoveryIssue=error;body+=`\n\n## AI 探索未完成\n${error.message}`;}}else body+='\n\n## 探索限制\n当前为本地结构检查；没有选择付费 AI 探索或没有可用的摘要，尚未生成跨领域语义发现。';
     const cursor=store.get('schedule','discoveryCursor',{offset:0}).offset, available=notes.filter(eligible);
     const batch=[...available.slice(cursor),...available.slice(0,cursor)].slice(0,16);
     for(const n of batch)await relate({payload:{noteId:n.id,useAI:false},snapshot:n},signal);
@@ -957,7 +958,10 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
       if(n.hash===snapshots[i].hash&&settings().embedding.enabled&&privacyFor(n)==='cloud'&&['knowledge','source','topic'].includes(n.kind)&&n.meta.stage!=='retired'&&!n.meta.supersededBy) {
         const chunks=store.missingEmbeddings({model,noteIds:[n.id]});
         if(chunks.length) {
-          const vectors=(await ai.embed({texts:chunks.map(c=>c.body),privacy:'cloud',signal})).vectors;
+          // Mask the whole source before slicing overlapping chunks. Keep local
+          // chunk text/IDs intact while no partial image reference can escape.
+          const outgoing=outboundTitle(n,{preserveOffsets:true})+'\n'+outboundText(n.body,{preserveOffsets:true});
+          const vectors=(await ai.embed({texts:chunks.map(c=>{const start=Number(c.id.slice(n.id.length+1));return outgoing.slice(start,start+c.body.length);}),privacy:'cloud',signal})).vectors;
           if(vectors.length!==chunks.length || vectors.some(v=>!Array.isArray(v)||!v.length||v.some(x=>!Number.isFinite(x))))fail('向量结果与检索片段不一致。');
           store.scan();
           // The material or its references may change while the external request is running.
@@ -972,7 +976,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   async function suggestTopics(job, signal) {
     const notes=store.list().filter(n=>eligible(n)&&privacyFor(n)==='cloud'&&n.meta.stage!=='retired').slice(0,24);
     if(!notes.length)fail('没有可交给外部模型的当前知识材料；你仍可手工建立主题。','PRIVACY_LOCAL');
-    const parsed=parseJSON((await ai.generate({system:promptText('serviceSystem'),privacy:'cloud',signal,json:true,prompt:promptText('topics',{focusTopics:settings().focusTopics.join('、') || '由材料自然组织',notes:JSON.stringify(notes.map(n=>({id:n.id,title:n.title,topic:n.meta.topic,body:n.body.slice(0,1200),prerequisites:n.meta.prerequisites})))}) })).text);
+    const parsed=parseJSON((await ai.generate({system:promptText('serviceSystem'),privacy:'cloud',signal,json:true,prompt:promptText('topics',{focusTopics:settings().focusTopics.join('、') || '由材料自然组织',notes:JSON.stringify(notes.map(n=>({id:n.id,title:outboundTitle(n),topic:n.meta.topic,body:outboundText(n.body).slice(0,1200),prerequisites:n.meta.prerequisites})))}) })).text);
     if(!Array.isArray(parsed.packages)||!parsed.packages.length)fail('模型没有给出学习包。','MODEL_FORMAT');
     for(const p of parsed.packages)if(!Array.isArray(p.noteIds)||p.noteIds.some(id=>!notes.some(n=>n.id===id)))fail('学习包包含不存在的材料。','INVALID_CITATION');
     const body=`# 学习包建议（待你调整确认）\n\n${parsed.packages.map(p=>`## ${p.title}\n\n问题：${p.problem}\n\n顺序：\n${p.noteIds.map((id,i)=>`${i+1}. ${store.read(id).title}（${id}）`).join('\n')}\n\n前置缺口：${(p.prerequisites||[]).join('；')||'未指出'}\n\n预计 ${p.minutes} 分钟`).join('\n\n')}\n\n可在主题页选择这些知识，合并、拆分、调整顺序后确认。此报告没有将任何知识标为已掌握。`;

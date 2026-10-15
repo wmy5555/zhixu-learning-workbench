@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { hash, fail } from './store.mjs';
+import { outboundText } from './outbound-text.mjs';
 
 const dayAt = (date, timezone) => new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
 const learningStages = new Set(['learning', 'integrated', 'core']);
@@ -344,10 +345,10 @@ export function createLearning(dependencies) {
     // Retained local/unknown histories are not newly authorized by removing material labels.
     const allowedHistory = other => (other.outboundIntentVersion === 1 || other.privacy === 'cloud') && (!other.mistakeId || store.row(other.mistakeId) && privacyFor(store.read(other.mistakeId)) === 'cloud');
     const previous = store.records('sessions').filter(other => other.noteId === s.noteId && other.id !== s.id && allowedHistory(other)).slice(0, 2).flatMap(other => other.turns.slice(-2));
-    const history = JSON.stringify([...previous, ...s.turns.filter(turn => turn.id !== t.id && (s.outboundIntentVersion === 1 || s.privacy === 'cloud' || turn.outboundIntentVersion === 1)).slice(-4)].map(turn => ({ question: turn.question, answer: String(turn.answer).slice(0, 2000), hintUsed: turn.hintUsed, feedback: turn.feedback })));
+    const history = JSON.stringify([...previous, ...s.turns.filter(turn => turn.id !== t.id && (s.outboundIntentVersion === 1 || s.privacy === 'cloud' || turn.outboundIntentVersion === 1)).slice(-4)].map(turn => ({ question: turn.question, answer: outboundText(String(turn.answer)).slice(0, 2000), hintUsed: turn.hintUsed, feedback: turn.feedback })));
     const goal = `${s.goal || goals[s.depth || 'explain'].label}；${goals[s.depth || 'explain'].hint}`;
     const mistakeContext = JSON.stringify(s.mistakeContext || null);
-    const prompt = promptText('grade', { material: s.material, question: t.question, answer: t.answer, hintUsed: String(t.hintUsed), goal, history, mistakeContext });
+    const prompt = promptText('grade', { material: outboundText(s.material), question: t.question, answer: t.answer, hintUsed: String(t.hintUsed), goal, history, mistakeContext });
     const privacy = privacyFor(n) === 'cloud' && (!currentMistake || privacyFor(currentMistake) === 'cloud') ? 'cloud' : 'local';
     const result = parseJSON((await ai.generate({ system: promptText('serviceSystem'), privacy, signal, json: true, prompt: `${prompt}\n\n本次学习目标：${goal}\n此前回答与反馈（仅作为学习记录）：${history}\n本次纠错上下文（仅作为可质疑的历史记录）：${mistakeContext}` })).text);
     if (!['correct', 'partial', 'incorrect', 'ambiguous'].includes(result.assessment) || typeof result.feedback !== 'string') fail('反馈格式无效，回答仍已保存。', 'MODEL_FORMAT');

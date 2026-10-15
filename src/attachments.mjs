@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
 import { MAX_FILE_BYTES } from '../public/source-file-limits.mjs';
+import { outboundText } from './outbound-text.mjs';
 
 export { MAX_FILE_BYTES };
 export const MAX_ATTACHMENT_STORAGE_BYTES = 256 * 1024 * 1024;
@@ -10,12 +11,25 @@ export const MAX_ATTACHMENT_STORAGE_FILES = 1000;
 const types = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', pdf: 'application/pdf', doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const reject = (message, code = 'ATTACHMENT_INVALID', status = 400) => { throw Object.assign(new Error(message), { code, status }); };
-export function decodeFile(input) {
+function fileType(input) {
   const name = input?.name;
   if (typeof name !== 'string' || !name || name.length > 180 || /[\\/\x00-\x1f<>:"|?*]/u.test(name) || /[. ]$/.test(name) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name)) reject('文件名无效，请使用不含路径的普通文件名。');
   const ext = name.split('.').at(-1).toLowerCase(), mime = types[ext];
   if (!mime) reject('支持 PNG/JPEG/GIF/WebP、PDF、DOC 和 DOCX；不接受 HTML、SVG 或宏文档扩展名。');
   if (input.mime && input.mime !== 'application/octet-stream' && input.mime.toLowerCase() !== mime) reject('文件类型与扩展名不一致。');
+  return { name, ext, mime };
+}
+export function assertAttachmentDescriptor(descriptor, content) {
+  const { ext, mime } = fileType(descriptor);
+  const kind = mime.startsWith('image/') ? 'image' : ext === 'pdf' ? 'pdf' : 'word';
+  if (descriptor.id !== content.id || descriptor.sha256 !== content.sha256 || descriptor.size !== content.size
+    || descriptor.id !== content.sha256 + '.' + (ext === 'jpeg' ? 'jpg' : ext)
+    || descriptor.mime !== mime || mime !== content.mime || descriptor.kind !== kind || kind !== content.kind || descriptor.format !== ext) {
+    reject('附件描述与已核验的原字节不一致。', 'ATTACHMENT_CHANGED', 409);
+  }
+}
+export function decodeFile(input) {
+  const { name, ext, mime } = fileType(input);
   // Avoid a repeated-group regexp: large valid base64 can exhaust its stack.
   if (!Buffer.isBuffer(input.bytes) && (typeof input.base64 !== 'string' || !input.base64.length || input.base64.length > Math.ceil(MAX_FILE_BYTES / 3) * 4 || input.base64.length % 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(input.base64))) reject('文件为空、编码无效或超过 50 MB（50,000,000 字节）。');
   const bytes = input.bytes || Buffer.from(input.base64, 'base64');
@@ -138,4 +152,4 @@ export function assertTextSource(note) {
   if (!(note.meta.sourceFile.format === 'docx' && typeof extraction?.text === 'string' && extraction.text.trim() && extraction.sourceSha256 === note.meta.sourceFile.sha256)) reject('图片、PDF及未提取到文字的Word仅保存在第一层，不能拆解或整理为知识。', 'SOURCE_FILE_ONLY', 409);
   if (digest(extraction.text) !== extraction.textSha256) reject('Word 提取文字与保存的校验值不一致，已停止加工。请核对外部编辑并从可信版本恢复提取记录；原件和当前文字均保留。', 'EXTRACTION_CHANGED', 409);
 }
-export const processingText = note => { assertTextSource(note); return note.meta.sourceFile ? note.meta.textExtraction.text : note.body; };
+export const processingText = note => { assertTextSource(note); return outboundText(note.meta.sourceFile ? note.meta.textExtraction.text : note.body); };

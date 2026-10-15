@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import YAML from 'yaml';
 import { BACKUP_MAX_BYTES, BACKUP_REQUEST_MAX_BYTES } from './backup-contract.mjs';
-import { attachmentPath, decodeFile, statAttachment, readAttachment, writeAttachment, assertAttachmentCapacity } from './attachments.mjs';
+import { attachmentPath, decodeFile, statAttachment, readAttachment, writeAttachment, assertAttachmentCapacity, assertAttachmentDescriptor } from './attachments.mjs';
 
 const invalid = message => { throw Object.assign(new Error(message), { code: 'ATTACHMENT_BACKUP', status: 400 }); };
 // Attachments, billing evidence, history and preferences share the complete JSON budget.
@@ -17,8 +17,8 @@ function references(backup) {
       if (meta.kind !== 'source') invalid('非文本附件只能属于第一层原始资料。');
       attachmentPath('.', item.id);
       const prior = descriptors.get(item.id);
-      if (prior && (prior.sha256 !== item.sha256 || prior.size !== item.size || prior.mime !== item.mime)) invalid('附件身份定义冲突。');
-      descriptors.set(item.id, item);
+      if (prior && (prior[0].sha256 !== item.sha256 || prior[0].size !== item.size || prior[0].mime !== item.mime)) invalid('附件身份定义冲突。');
+      if (prior) prior.push(item); else descriptors.set(item.id, [item]);
     }
   }
   return descriptors;
@@ -30,13 +30,14 @@ export function includeAttachments(root, backup) {
   let estimatedBytes = Buffer.byteLength(JSON.stringify(envelope)), index = 0;
   // Reject before reading any attachment or allocating its base64 representation.
   // The final exact check also covers descriptor normalization and file changes.
-  for (const descriptor of refs.values()) {
+  for (const [descriptor] of refs.values()) {
     const { size } = statAttachment(root, descriptor);
     estimatedBytes += (index++ ? 1 : 0) + Buffer.byteLength(JSON.stringify({ ...descriptor, base64: '' })) + 4 * Math.ceil(size / 3);
     if (estimatedBytes > MAX_BACKUP_BYTES) invalid('包含附件的 JSON 备份预计超过 100 MB（100,000,000 字节）；请另行完整复制 Vault 与运行数据。尚未读取或编码附件，没有生成不完整备份。');
   }
-  const attachments = [...refs.values()].map(descriptor => {
-    const file = readAttachment(root, descriptor);
+  const attachments = [...refs.values()].map(descriptors => {
+    const file = readAttachment(root, descriptors[0]);
+    for (const descriptor of descriptors) checkDescriptor(descriptor, file.descriptor);
     return { ...file.descriptor, base64: file.bytes.toString('base64') };
   });
   const result = { ...envelope, attachments };
@@ -49,15 +50,21 @@ export function validateAttachments(root, backup) {
   if (!Array.isArray(backup.attachments) || backup.attachments.length !== refs.size || Buffer.byteLength(JSON.stringify(backup)) > MAX_BACKUP_BYTES) invalid('附件备份清单缺失、重复或超过容量限制。');
   const files = [], seen = new Set();
   for (const item of backup.attachments) {
-    const file = decodeFile(item), reference = refs.get(item.id);
-    if (!reference || seen.has(item.id) || file.descriptor.id !== item.id || reference.sha256 !== file.descriptor.sha256 || reference.mime !== file.descriptor.mime || reference.size !== file.bytes.length) invalid('附件哈希、格式、身份或引用不匹配。');
-    // Names may differ between references to identical bytes; validate all via the reader on use.
+    const file = decodeFile(item), descriptors = refs.get(item.id);
+    if (!descriptors || seen.has(item.id)) invalid('附件哈希、格式、身份或引用不匹配。');
+    checkDescriptor(item, file.descriptor);
+    // Decode and hash once per content ID, then check every current/history alias.
+    for (const descriptor of descriptors) checkDescriptor(descriptor, file.descriptor);
     const target = attachmentPath(root, item.id);
     if (fs.existsSync(target)) readAttachment(root, file.descriptor);
     seen.add(item.id); files.push(file);
   }
   assertAttachmentCapacity(root, files.map(file => file.descriptor));
   return files;
+}
+function checkDescriptor(descriptor, content) {
+  try { assertAttachmentDescriptor(descriptor, content); }
+  catch { invalid('附件引用的名称、格式、类型、身份或大小与原字节不匹配。'); }
 }
 export function installAttachments(root, files) {
   // Add-only, content-addressed installation. A failed Markdown restore may leave

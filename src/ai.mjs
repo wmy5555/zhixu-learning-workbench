@@ -6,6 +6,7 @@ import { BlockList, isIP } from 'node:net';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { renderPrompt, validatePromptOverrides } from './prompts.mjs';
 import { readTokenUsage, tokenCost, tokenCount } from './token-usage.mjs';
+import { outboundText } from './outbound-text.mjs';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const PAGE_TIMEOUT_MS = 20_000;
@@ -679,6 +680,8 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
 
   async function generate({ system = '', prompt, privacy, signal, json } = {}) {
     assertCloud(privacy);
+    prompt = outboundText(prompt);
+    system = outboundText(String(system));
     if (typeof prompt !== 'string' || !prompt.trim()) throw fail('INVALID_INPUT', 'prompt 不能为空。');
     const { allSettings, config, secret } = await requireCapability('model');
     if (!config.baseUrl || !config.model) throw fail('INVALID_CONFIG', '模型服务地址或模型名称未配置。');
@@ -729,6 +732,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
 
   async function embed({ texts, privacy, signal } = {}) {
     assertCloud(privacy);
+    if (Array.isArray(texts)) texts = texts.map(text => outboundText(text));
     if (!Array.isArray(texts) || !texts.length || texts.some((text) => typeof text !== 'string' || !text.length)) {
       throw fail('INVALID_INPUT', 'texts 必须是非空字符串数组。');
     }
@@ -760,6 +764,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
 
   async function search({ query, privacy, signal } = {}) {
     assertCloud(privacy);
+    query = outboundText(query);
     if (typeof query !== 'string' || !query.trim()) throw fail('INVALID_INPUT', 'query 不能为空。');
     const { allSettings, config, secret } = await requireCapability('search');
     const baseUrl = config.baseUrl || 'https://api.tavily.com';
@@ -836,8 +841,8 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     if (typeof claim !== 'string' || !claim.trim()) throw fail('INVALID_INPUT', 'claim 不能为空。');
     const promptOverrides = validatePromptOverrides(prompts ?? (await settings()).prompts);
     const directions = [
-      { direction: 'support', query: renderPrompt('researchSearchSupport', { context: claim.trim() }, promptOverrides).slice(0, 350) },
-      { direction: 'oppose', query: renderPrompt('researchSearchOppose', { context: claim.trim() }, promptOverrides).slice(0, 350) },
+      { direction: 'support', query: outboundText(renderPrompt('researchSearchSupport', { context: claim.trim() }, promptOverrides)).slice(0, 350) },
+      { direction: 'oppose', query: outboundText(renderPrompt('researchSearchOppose', { context: claim.trim() }, promptOverrides)).slice(0, 350) },
     ];
     const notes = [];
     const found = [];
@@ -1015,7 +1020,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
         () => researchBatch({ claims: normalizedClaims, topic, privacy, signal, prompts: promptOverrides }));
     }
     const subject = String(topic ?? '').trim();
-    const compact = (value, limit) => String(value).replace(/\s+/g, ' ').trim().slice(0, limit);
+    const compact = (value, limit) => outboundText(String(value)).replace(/\s+/g, ' ').trim().slice(0, limit);
     // Earlier extraction, redirects, and retries already count against this source budget.
     const budget = sourceBudget.getStore(), remaining = Math.max(0, budget.limit - budget.used);
     const pageLimit = Math.min(4, Math.max(0, remaining - 3));
