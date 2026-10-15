@@ -400,6 +400,8 @@ async function renderCapture() {
   const sourceForm = el("form", { class: "panel capture-form", dataset: { tour: "capture-form" } });
   const title = el("input", { name: "title", placeholder: "可留空，根据原文生成便于检索的标题" });
   const body = el("textarea", { name: "body", placeholder: "粘贴原文。系统会保留这份原始快照，不用摘要替代。", required: true, rows: 12 });
+  const bodyEditor = !isMobilePrototype() ? createMarkdownEditor(body) : null;
+  let fileDrafts = [], fileLoadVersion = 0, filesLoading = false, importing = false, saving = false;
   const process = el("input", { name: "process", type: "checkbox" });
   const research = el("input", { name: "research", type: "checkbox", disabled: true });
   const syncResearchOption = () => {
@@ -409,7 +411,7 @@ async function renderCapture() {
   };
   process.addEventListener("change", syncResearchOption);
   // reset 事件在浏览器恢复默认值之前触发，等恢复完成后再同步依赖。
-  sourceForm.addEventListener("reset", () => queueMicrotask(syncResearchOption));
+  sourceForm.addEventListener("reset", () => queueMicrotask(() => { bodyEditor?.setValue(body.defaultValue || ""); syncResearchOption(); }));
   const localOnly = el("input", { name: "localOnly", type: "checkbox" });
   if (isMobilePrototype()) {
     localOnly.checked = localOnly.defaultChecked = true;
@@ -419,7 +421,8 @@ async function renderCapture() {
   }
   const titleField = field("标题（可选）", title, "留空会先保存原文，再用资料拆解的模型生成标题；无需勾选 AI 拆解。仅本地或模型未配置时暂用原文片段，可手动填写；生成可能产生调用费用。");
   titleField.classList.add("span-2");
-  const bodyField = field("原文", body, "网页或模型输出中的指令不会获得程序权限。");
+  const bodyField = bodyEditor ? el("div", { class: "field" }, [el("span", { class: "field-label", text: "原文" }), bodyEditor,
+    el("small", { class: "field-hint", text: "网页或模型输出中的指令不会获得程序权限。" })]) : field("原文", body, "网页或模型输出中的指令不会获得程序权限。");
   bodyField.classList.add("span-2");
   const sourceField = field("来源信息", el("div", { class: "form-grid capture-source-grid" }, [
     el("input", { name: "platform", placeholder: "平台，例如：网页 / 抖音 / AI 对话" }),
@@ -441,48 +444,62 @@ async function renderCapture() {
     el("label", { class: "check-field" }, [research, el("span", { text: "拆解时联网检验正确性并寻找反例（可选，需同时勾选 AI 拆解）" })]),
     el("div", { class: "form-actions" }, [button("保存原始资料", { kind: "primary", type: "submit" }), button("清空", { onClick: () => sourceForm.reset() })]),
   );
-  const draftValues = () => JSON.stringify({ ...serializeForm(sourceForm), localOnly: localOnly.checked, process: process.checked, research: research.checked });
+  const captureValues = () => ({ ...serializeForm(sourceForm), body: bodyEditor?.getValue() ?? body.value, localOnly: localOnly.checked, process: process.checked, research: research.checked });
+  const importItems = () => fileDrafts.map(({ item, title, editor }) => ({ ...item, title: title.value, body: editor.getValue() }));
+  const draftValues = () => JSON.stringify({ capture: captureValues(), files: importItems(), filesLoading });
   protectUnsavedInput(sourceForm, draftValues, "收集内容");
   sourceForm.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const data = serializeForm(sourceForm);
+    if (saving) return;
+    const data = captureValues();
+    const submitted = JSON.stringify(data);
     const item = {
       title: data.title, body: data.body, platform: data.platform, author: data.author,
       url: data.url, date: data.date, locator: data.locator, privacy: isMobilePrototype() || localOnly.checked ? "local" : "cloud",
     };
     try {
       const submit = sourceForm.querySelector("button[type='submit']");
-      submit.disabled = true;
+      saving = true; submit.disabled = true;
       const result = await api.import({ items: [item], captureMode: "text", process: process.checked, research: process.checked && research.checked });
-      sourceForm.reset();
+      if (JSON.stringify(captureValues()) === submitted) sourceForm.reset();
       toast(`已保存 ${asArray(result.notes).length || 1} 条原始资料${!String(item.title || "").trim() ? "，标题待生成；暂用原文片段，可在系统任务查看进度" : ""}`, "success");
       await refreshBootstrap();
     } catch (error) { handleError(error); }
-    finally { sourceForm.querySelector("button[type='submit']").disabled = false; }
+    finally { saving = false; sourceForm.querySelector("button[type='submit']").disabled = false; }
   });
 
   const fileInput = el("input", { type: "file", accept: ".txt,.md,text/plain,text/markdown", multiple: true });
   const fileList = el("div", { class: "list" });
   const batchPanel = el("section", { class: "panel", dataset: { tour: "capture-batch" } }, [
-    sectionHeading("批量导入", "支持 UTF-8 文本和 Markdown，每个文件保留为一份原始资料"),
+    sectionHeading("批量导入", "支持 UTF-8 文本和 Markdown，预览并编辑后再保存为原始资料"),
     field("选择文件", fileInput, "文件内容先在浏览器读取，再通过本地会话保存。"),
     fileList,
-    el("div", { class: "form-actions" }, [button("导入所选文件", { kind: "primary", disabled: true })]),
+    el("div", { class: "form-actions" }, [button("导入所选文件", { kind: "primary", disabled: true }), button("清空导入预览", { onClick: () => resetFileDrafts() })]),
   ]);
   const importButton = batchPanel.querySelector(".primary-button");
   if (isMobilePrototype()) {
     fileInput.disabled = true;
     batchPanel.append(el("p", { class: "muted", text: "样机暂不支持文件导入，请先粘贴文本。" }));
   }
-  fileInput.addEventListener("change", () => {
-    clear(fileList);
-    asArray([...fileInput.files]).forEach((file) => fileList.append(el("div", { class: "list-item no-icon" }, [el("div", { class: "item-copy" }, [el("h3", { text: file.name }), el("p", { text: `${Math.ceil(file.size / 1024)} KB` })])] )));
-    importButton.disabled = !fileInput.files.length;
-  });
-  importButton.addEventListener("click", async () => {
+  const syncImportButton = () => { importButton.disabled = filesLoading || importing || !fileDrafts.length; };
+  function resetFileDrafts() {
+    if (importing) return;
+    fileLoadVersion++; filesLoading = false;
+    fileDrafts.forEach(({ editor }) => editor.destroy()); fileDrafts = [];
+    fileInput.value = ""; clear(fileList); syncImportButton();
+  }
+  fileInput.addEventListener("change", async () => {
+    const files = [...fileInput.files], request = ++fileLoadVersion;
+    if (importing) return;
+    if (!files.length) { filesLoading = false; syncImportButton(); return; }
+    if (fileDrafts.length && !await confirmAction({ title: "替换导入预览？", message: "已有文件预览尚未保存，替换会放弃其中的修改。取消可保留当前预览。", confirmText: "替换预览", danger: true })) {
+      if (request === fileLoadVersion) { fileInput.value = ""; filesLoading = false; syncImportButton(); }
+      return;
+    }
+    if (request !== fileLoadVersion || refs.main.querySelector('[data-tour="capture-form"]') !== sourceForm) return;
+    filesLoading = true; syncImportButton();
     try {
-      importButton.disabled = true;
-      const items = await Promise.all([...fileInput.files].map(async (file) => {
+      const items = await Promise.all(files.map(async (file) => {
         if (file.size > 2 * 1024 * 1024) throw new Error(`${file.name} 过大；每份原文最多 500000 个字符。`);
         let text;
         try {
@@ -491,13 +508,34 @@ async function renderCapture() {
         catch { throw new Error(`${file.name} 不是有效的 UTF-8 文件。`); }
         return parseSourceFile({ name: file.name, text });
       }));
+      if (request !== fileLoadVersion || refs.main.querySelector('[data-tour="capture-form"]') !== sourceForm) return;
+      fileDrafts.forEach(({ editor }) => editor.destroy()); clear(fileList);
+      fileDrafts = items.map((item, index) => {
+        const title = el("input", { value: item.title, required: true, ariaLabel: `导入标题 ${index + 1}` });
+        const textarea = el("textarea", { rows: 10 });
+        const editor = createMarkdownEditor(textarea, { value: item.body });
+        fileList.append(el("details", { class: "panel soft markdown-import-preview", open: true }, [
+          el("summary", { text: `预览并编辑：${files[index].name}` }), field("标题", title), editor,
+        ]));
+        editor.mount(refs.main);
+        return { item, title, editor };
+      });
+    } catch (error) { if (request === fileLoadVersion) handleError(error); }
+    finally { if (request === fileLoadVersion) { filesLoading = false; syncImportButton(); } }
+  });
+  importButton.addEventListener("click", async () => {
+    if (importing || filesLoading || !fileDrafts.length) return;
+    try {
+      importing = true; fileInput.disabled = true; syncImportButton();
+      const items = importItems();
       const result = await api.import({ items, captureMode: "files", process: false });
       toast(`已导入 ${asArray(result.notes).length || items.length} 个文件`, "success");
-      fileInput.value = "";
-      clear(fileList);
+      // A successful request must not erase edits made while it was in flight.
+      importing = false;
+      if (JSON.stringify(importItems()) === JSON.stringify(items)) resetFileDrafts();
       await refreshBootstrap();
     } catch (error) { handleError(error); }
-    finally { importButton.disabled = !fileInput.files.length; }
+    finally { importing = false; fileInput.disabled = isMobilePrototype(); syncImportButton(); }
   });
 
   const flowPanel = el("section", { class: "panel soft" }, [
@@ -510,6 +548,7 @@ async function renderCapture() {
     ]),
   ]);
   clear(refs.main).append(el("div", { class: "page-stack" }, [capabilityNotice(), el("div", { class: "split-layout capture-layout" }, [sourceForm, el("div", { class: "page-stack" }, [batchPanel, flowPanel])])]));
+  bodyEditor?.mount(refs.main);
 }
 
 function step(title, copy, done) {
@@ -2606,7 +2645,7 @@ async function fillTutorialSample(sample, step) {
   const edits = Object.entries(sample).map(([key, value]) => ({ key: aliases[key] || key, value })).filter(item => allowed.has(item.key)).map(item => ({ ...item, control: root.querySelector(`[name="${item.key}"]`) })).filter(item => item.control && !item.control.disabled);
   if (!edits.length) { toast("请先打开这一项对应的输入表单，再填入示例。", "error"); return; }
   if (edits.some(item => item.control.value && item.control.value !== String(item.value)) && !await confirmAction({ title: "用示例填入当前表单？", message: "当前输入尚未提交，填入后可以继续修改。", confirmText: "填入示例" })) return;
-  edits.forEach(({ control, value }) => { control.value = String(value); control.dispatchEvent(new Event("input", { bubbles: true })); control.dispatchEvent(new Event("change", { bubbles: true })); });
+  edits.forEach(({ control, value }) => { if (control.markdownEditor) control.markdownEditor.setValue(value); else control.value = String(value); control.dispatchEvent(new Event("input", { bubbles: true })); control.dispatchEvent(new Event("change", { bubbles: true })); });
   if (step.id === "capture-save") { const local = root.querySelector('[name="localOnly"]'); if (local) local.checked = true; }
   toast("示例已填入；请检查后亲自保存或提交。", "success");
 }

@@ -564,7 +564,7 @@ test('capture form uses the full available column and source metadata stays read
   const body = control(form, 'body');
   const platform = control(form, 'platform');
   assert.ok(form.parentNode.classList.contains('capture-layout'));
-  assert.ok(body.parentNode.classList.contains('span-2'));
+  assert.ok((body.markdownEditor?.parentNode || body.parentNode).classList.contains('span-2'));
   assert.ok(form.classList.contains('capture-form'));
   assert.ok(platform.parentNode.parentNode.classList.contains('span-2'));
   assert.ok(platform.parentNode.classList.contains('capture-source-grid'));
@@ -1098,11 +1098,100 @@ test('capture research requires AI processing and clears on deselection, clear, 
   assert.equal(writes[1].research, false);
   const fileInput = descendants(app.refs.main).find(node => node.type === 'file');
   fileInput.files = [{ name: '合成伴读.txt', size: 20, arrayBuffer: async () => new TextEncoder().encode('仅测试单文件导入的入口标识。').buffer }];
-  fileInput.events.change();
+  await fileInput.events.change();
   await click(findButton(app.refs.main, '导入所选文件'));
   assert.equal(writes[2].captureMode, 'files');
   assert.equal(writes[2].items.length, 1);
   assert.equal(writes[2].process, false);
+});
+
+const markdownFile = (name, text) => ({ name, size: new TextEncoder().encode(text).length, arrayBuffer: async () => new TextEncoder().encode(text).buffer });
+
+test('capture reads the live Markdown draft for submit and unload; clear and save reset that draft', async () => {
+  const writes = [];
+  const app = browser({ import: async payload => { writes.push(plain(payload)); return { notes: [{}] }; }, bootstrap: async () => ({}) });
+  await app.renderCapture();
+  const form = app.refs.main.querySelector('[data-tour="capture-form"]'), body = control(form, 'body');
+  const editor = body.markdownEditor;
+  assert.ok(editor); assert.equal(unloadRequested(app), false);
+  editor.setValue('# 草稿\r\n\r\n**保留**\r\n');
+  assert.equal(unloadRequested(app), true);
+  click(findButton(form, '清空')); await Promise.resolve();
+  assert.equal(editor.getValue(), ''); assert.equal(unloadRequested(app), false);
+  editor.setValue('# 新意图\r\n\r\n- 正文\r\n');
+  await form.events.submit({ preventDefault() {} }); await Promise.resolve();
+  assert.equal(writes[0].items[0].body, '# 新意图\r\n\r\n- 正文\r\n');
+  assert.equal(editor.getValue(), ''); assert.equal(unloadRequested(app), false);
+  // Rich input can be ahead of Vditor's delayed textarea synchronization.
+  editor.getValue = () => '**最新可视化输入**';
+  assert.equal(body.value, ''); assert.equal(unloadRequested(app), true);
+  await form.events.submit({ preventDefault() {} });
+  assert.equal(writes[1].items[0].body, '**最新可视化输入**');
+});
+
+test('text and Markdown import previews preserve bytes and metadata; edits and failed saves remain protected', async () => {
+  const writes = []; let fail = true;
+  const app = browser({ import: async payload => { writes.push(plain(payload)); if (fail) throw new Error('合成保存失败'); return { notes: [{}, {}] }; }, bootstrap: async () => ({}) });
+  await app.renderCapture();
+  const input = descendants(app.refs.main).find(node => node.type === 'file');
+  const original = '# 导入\r\n\r\n|甲|乙|\r\n|---|---|\r\n|1|2|\r\n\r\n```js\r\nconst x = 1;\r\n```\r\n';
+  input.files = [markdownFile('保真.md', original), markdownFile('第二份.txt', '无末尾换行')];
+  await input.events.change();
+  const previews = app.refs.main.querySelectorAll('.markdown-import-preview');
+  assert.equal(previews.length, 2); assert.equal(writes.length, 0, 'preview does not save');
+  const editors = previews.map(preview => preview.querySelector('textarea').markdownEditor);
+  assert.equal(editors[0].getValue(), original); assert.equal(editors[1].getValue(), '无末尾换行');
+  previews[1].querySelector('input').value = '编辑标题';
+  editors[1].getValue = () => '# 可视化已编辑\n\n**保留格式**\n';
+  assert.equal(unloadRequested(app), true);
+  await click(findButton(app.refs.main, '导入所选文件'));
+  assert.equal(app.refs.main.querySelectorAll('.markdown-import-preview').length, 2);
+  assert.equal(findButton(app.refs.main, '导入所选文件').disabled, false);
+  fail = false;
+  await click(findButton(app.refs.main, '导入所选文件'));
+  assert.equal(writes[1].items[0].body, original);
+  assert.equal(writes[1].items[0].locator, '保真.md'); assert.equal(writes[1].items[0].privacy, 'local');
+  assert.equal(writes[1].items[1].title, '编辑标题'); assert.match(writes[1].items[1].body, /\*\*保留格式\*\*/);
+  assert.equal(writes[1].captureMode, 'files'); assert.equal(writes[1].process, false);
+  assert.equal(app.refs.main.querySelectorAll('.markdown-import-preview').length, 0);
+  assert.equal(unloadRequested(app), false);
+});
+
+test('late file reads cannot resurrect cleared or superseded previews and invalid files never save', async () => {
+  let release; const writes = [];
+  const app = browser({ import: async payload => { writes.push(payload); return {}; } });
+  await app.renderCapture();
+  const input = descendants(app.refs.main).find(node => node.type === 'file');
+  input.files = [{ name: '慢文件.md', size: 4, arrayBuffer: () => new Promise(resolve => { release = resolve; }) }];
+  const pending = input.events.change();
+  assert.equal(unloadRequested(app), true); assert.equal(findButton(app.refs.main, '导入所选文件').disabled, true);
+  click(findButton(app.refs.main, '清空导入预览'));
+  release(new TextEncoder().encode('迟到').buffer); await pending;
+  assert.equal(app.refs.main.querySelectorAll('.markdown-import-preview').length, 0);
+  assert.equal(unloadRequested(app), false);
+  let first;
+  input.files = [{ name: '旧文件.md', size: 4, arrayBuffer: () => new Promise(resolve => { first = resolve; }) }];
+  const older = input.events.change();
+  input.files = [markdownFile('新文件.md', '# 新内容\r\n')]; await input.events.change();
+  first(new TextEncoder().encode('旧内容').buffer); await older;
+  assert.match(app.refs.main.querySelector('.markdown-import-preview').textContent, /新文件/);
+  click(findButton(app.refs.main, '清空导入预览'));
+  input.files = [{ name: '无效.md', size: 2, arrayBuffer: async () => Uint8Array.of(0xff).buffer }];
+  await input.events.change(); await click(findButton(app.refs.main, '导入所选文件'));
+  assert.equal(writes.length, 0); assert.equal(findButton(app.refs.main, '导入所选文件').disabled, true);
+});
+
+test('new capture edits during a save are retained and duplicate submission is ignored', async () => {
+  let release; const writes = [];
+  const app = browser({ import: payload => { writes.push(plain(payload)); return new Promise(resolve => { release = resolve; }); }, bootstrap: async () => ({}) });
+  await app.renderCapture();
+  const form = app.refs.main.querySelector('[data-tour="capture-form"]'), editor = control(form, 'body').markdownEditor;
+  editor.setValue('已提交的正文');
+  const pending = form.events.submit({ preventDefault() {} });
+  await form.events.submit({ preventDefault() {} }); assert.equal(writes.length, 1);
+  editor.setValue('保存期间继续填写的新正文');
+  release({ notes: [{}] }); await pending;
+  assert.equal(editor.getValue(), '保存期间继续填写的新正文'); assert.equal(unloadRequested(app), true);
 });
 
 test('evidence expands on demand, retains roles and locators, and rejects executable URLs', async () => {

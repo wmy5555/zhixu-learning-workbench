@@ -4,13 +4,20 @@ const VENDOR = '/vendor/vditor';
 let assets;
 
 export function loadMarkdownEditor() {
-  if (!assets) assets = new Promise((resolve, reject) => {
+  if (!assets) {
     const css = el('link', { rel: 'stylesheet', href: `${VENDOR}/dist/index.css` });
-    const script = el('script', { src: `${VENDOR}/dist/index.min.js` });
-    script.addEventListener('load', () => resolve(window.Vditor));
-    script.addEventListener('error', () => { assets = null; css.remove(); script.remove(); reject(new Error('可视化编辑器加载失败，可继续编辑源码。')); });
-    document.head.append(css, script);
-  });
+    // Vditor's automatic icon loader uses sync XHR + inline script, which our
+    // CSP correctly refuses. Load the unchanged local sprite as an external
+    // script and disable only that automatic loader via its public icon option.
+    const scripts = ['dist/index.min.js', 'dist/js/icons/ant.js'].map(path => el('script', { src: `${VENDOR}/${path}` }));
+    assets = Promise.all(scripts.map(script => new Promise((resolve, reject) => {
+      script.addEventListener('load', resolve);
+      script.addEventListener('error', () => reject(new Error('可视化编辑器加载失败，可继续编辑源码。')));
+    }))).then(() => window.Vditor).catch(error => {
+      assets = null; css.remove(); scripts.forEach(script => script.remove()); throw error;
+    });
+    document.head.append(css, ...scripts);
+  }
   return assets;
 }
 
@@ -89,6 +96,7 @@ export function guardEditorImages(lute, { assetResolver, origin }) {
  */
 export function createMarkdownEditor(textarea, { value = textarea.value, loadEditor = loadMarkdownEditor, assetResolver, uploadImage, onChange = () => {} } = {}) {
   const draft = createMarkdownDraft(value);
+  textarea.value = draft.source;
   const host = el('div', { class: 'source-rich-editor', hidden: true });
   const status = el('p', { class: 'field-hint', role: 'status', ariaLive: 'polite', text: '源码和可视化编辑同一份 Markdown。切换模式不会保存或改写原文。' });
   let editor, mode = 'source', generation = 0, disposed = false, observer, initializing = false, editorDestroyed = false;
@@ -131,7 +139,7 @@ export function createMarkdownEditor(textarea, { value = textarea.value, loadEdi
           editor = new Vditor(host, {
             cdn: VENDOR, mode: 'wysiwyg', lang: 'zh_CN', value: '', height: 440,
             theme: document.documentElement?.dataset.theme === 'dark' ? 'dark' : 'classic',
-            cache: { enable: false }, icon: 'ant',
+            cache: { enable: false }, icon: '',
             hint: { emoji: {}, emojiPath: `${VENDOR}/dist/images/emoji`, parse: false },
             link: { isOpen: false }, image: { isPreview: false },
             toolbar: ['headings', 'bold', 'italic', 'strike', '|', 'list', 'ordered-list', 'check', '|', 'quote', 'code', 'inline-code', 'link', 'table', '|', 'undo', 'redo'],
@@ -228,6 +236,15 @@ export function createMarkdownEditor(textarea, { value = textarea.value, loadEdi
 
   root.sync = sync;
   root.getValue = getValue;
+  // Programmatic replacements (form reset, tutorial samples, import previews)
+  // must invalidate pending loads and replace the same draft as keyboard edits.
+  root.setValue = value => {
+    generation++;
+    draft.setSource(String(value ?? '')); textarea.value = draft.source;
+    mode = 'source'; updateMode();
+    status.textContent = '正在编辑 Markdown 源码；切换模式不会保存，已有输入会保留在当前草稿。';
+  };
+  textarea.markdownEditor = root;
   root.switchMode = switchMode;
   root.getMode = () => mode;
   root.mount = container => {

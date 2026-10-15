@@ -5,7 +5,7 @@ import vm from 'node:vm';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { createMarkdownEditor, richFallbackReason, controlledAssetUrl, guardEditorImages } from '../public/markdown-editor.mjs';
+import { createMarkdownEditor, loadMarkdownEditor, richFallbackReason, controlledAssetUrl, guardEditorImages } from '../public/markdown-editor.mjs';
 
 const context = { console, setTimeout, clearTimeout, TextEncoder, TextDecoder };
 context.global = context; context.globalThis = context; context.window = context;
@@ -27,6 +27,7 @@ class Element {
   setAttribute(name, value) { this.attributes[name] = value; }
   getAttribute(name) { return this.attributes[name]; }
   focus() {}
+  remove() { if (this.parentNode) this.parentNode.children = this.parentNode.children.filter(child => child !== this); }
 }
 function fixture(value, options = {}) {
   globalThis.Node = Element;
@@ -78,6 +79,28 @@ test('both modes edit the same draft and immediate read sees rich edits without 
   f.root.destroy();
 });
 
+test('programmatic initial values, resets and sample replacements share one exact draft and cancel late loads', async () => {
+  const initial = fixture('', { value: '# 文件预览\r\n\r\n原文\r\n' });
+  assert.equal(initial.root.getValue(), '# 文件预览\r\n\r\n原文\r\n');
+  initial.root.destroy();
+  const f = fixture('# 首份\r\n\r\n- 原文\r\n');
+  await f.root.switchMode('rich'); f.editor.insertValue('\n\n**修改**');
+  f.root.setValue('');
+  assert.equal(f.root.getMode(), 'source'); assert.equal(f.root.getValue(), '');
+  await f.root.switchMode('rich'); assert.equal(f.root.getValue(), '');
+  f.root.setValue('# 新样例\r\n\r\n保留末尾\r\n');
+  await f.root.switchMode('rich');
+  assert.equal(f.root.getValue(), '# 新样例\r\n\r\n保留末尾\r\n');
+  assert.doesNotMatch(f.editor.getValue(), /首份|修改/);
+  assert.equal(f.textarea.markdownEditor, f.root);
+  let resolve;
+  const late = fixture('旧草稿', { loadEditor: () => new Promise(done => { resolve = done; }) });
+  const loading = late.root.switchMode('rich');
+  late.root.setValue('新草稿\r\n'); resolve(class {}); await loading;
+  assert.equal(late.root.getMode(), 'source'); assert.equal(late.root.getValue(), '新草稿\r\n');
+  f.root.destroy(); late.root.destroy();
+});
+
 test('unsupported extensions and inline formulas explicitly stay in source with exact bytes', async () => {
   for (const source of ['[[知识双链]]\r\n', '![[image.png]]', '<details><summary>正文</summary>保留</details>', '<!-- 原文标记 -->\n正文', '$x^2$\n', '---\ntitle: 元数据\n---\n正文', ':::custom\n保留\n:::']) {
     const f = fixture(source); await f.root.switchMode('rich');
@@ -125,7 +148,27 @@ test('HTML clipboard is sanitized before Markdown insertion, and unsupported bin
   f.host.events.paste({ preventDefault() {}, stopImmediatePropagation() {}, clipboardData: { files: [{ type: 'image/png', name: 'local.png' }] } });
   assert.equal(f.root.getValue(), before); assert.match(f.status.textContent, /尚未接入/);
   assert.equal(f.editor.config.cache.enable, false); assert.equal(f.editor.config.preview.markdown.sanitize, true);
+  assert.equal(f.editor.config.icon, '', 'the upstream inline icon loader stays disabled under CSP');
   f.root.destroy();
+});
+
+test('editor waits for external local icon sprite and runtime; failed loading is retryable without inline code', async () => {
+  const head = new Element('head');
+  globalThis.document = { head, createElement: tag => new Element(tag) };
+  globalThis.window = { Vditor: class {} };
+  const failed = loadMarkdownEditor();
+  const rejection = assert.rejects(failed, /加载失败/);
+  const failedScripts = head.children.filter(node => node.tagName === 'script');
+  assert.equal(failedScripts.length, 2);
+  failedScripts[1].events.error(); await rejection;
+  assert.equal(head.children.length, 0);
+  let ready = false;
+  const loaded = loadMarkdownEditor().then(value => { ready = true; return value; });
+  const scripts = head.children.filter(node => node.tagName === 'script');
+  assert.deepEqual(scripts.map(node => node.attributes.src), ['/vendor/vditor/dist/index.min.js', '/vendor/vditor/dist/js/icons/ant.js']);
+  scripts[0].events.load(); await Promise.resolve(); assert.equal(ready, false);
+  scripts[1].events.load(); assert.equal(await loaded, window.Vditor);
+  assert.ok(scripts.every(node => !node.text && !node.innerHTML));
 });
 
 test('late load/cancel and loading failures preserve the current draft', async () => {

@@ -1,5 +1,24 @@
 # 测试结果与当前边界
 
+## Markdown 编辑入口补齐（2026-10-15）
+
+在 PR #74 原候选 `b63e435` 的干净独立工作树继续开发，复用 Vditor、图像占位、保真草稿和 Windows vendor `-text` 修复，未接入附件 PR #73。本轮补快速收集正文和原有 `.txt/.md` 导入前预览，并修复像素检查发现的空白工具栏：固定上游构造器用同步 XHR 后插入内联图标脚本，受到现有 CSP 拒绝；改为预载同一本地图标脚本，公开 `icon: ''` 选项关闭自动加载，vendor/manifest/CSP 不改。
+
+实际定向回归 `node --test tests/markdown-editor.test.mjs tests/ui-alignment.test.mjs`：最终 222/222，通过日志 `.tmp/editor-dual-focused-final.log`。新增检查覆盖显式初值及 CRLF、源码/可视化重置、迟到加载取消、实时草稿提交/导航保护、导入来源和标题/正文、失败保留与重试、迟到读取及清空、保存期间新输入、重复提交，以及外链图标加载等待/失败重试和禁用内联自动加载。
+
+首轮沙箱内完整检查因 Windows DPAPI 无法使用用户上下文失败，已停止，不记为通过。正常用户上下文首个候选完整 `pnpm verify` 753/753、276 个跟踪文件与 20 条合成检索通过，日志 `.tmp/editor-dual-verify-windows.log`；随后发现图标缺陷，修复后重新执行最终完整检查：754/754、0 失败/跳过/取消，276 个文件检查及 20 条合成检索通过，日志 `.tmp/editor-dual-verify-final.log`。没有改变加密逻辑或使用真实凭据。
+
+独立随机合成库、动态回环端口及专属临时 Chrome 配置的真实点击证据：
+
+| 入口 | 实际操作与读回 |
+|---|---|
+| 原始资料编辑 | 知识库→查看整组→编辑原始资料，反复切换两模式并保存；独立 API 读回与原始 232 字节正文完全相等，包括 CRLF。随后源码键盘追加并保存，读回保留标题、表格和围栏代码。无编辑证据 `.tmp/editor-source-untouched-readback.json`，后续读回 `.tmp/editor-readback.json`。 |
+| 快速收集 | 输入含标题、粗体、列表、表格、代码和远图引用的合成 Markdown，切换可视化后键盘增加并点击保存；API 读回实际修改与表格/代码保留，表单回到空白源码，无临时图片地址。 |
+| 导入预览 | 真实选取临时 `.md/.txt` 文件，在保存前逐份展开并切换可视化；首份保留 CRLF，第二份保留无末尾换行。修改第二份标题和可视化正文后导入，API 读回包含实际修改。另用独立正文反复切换后不编辑导入，244 字节读回与文件完全相等；导航取消保留预览，保存后预览清空。 |
+| 图标及网络 | 最终本地外链图标加载后存在 53 个 symbol，编辑器销毁后重新打开仍为 53 个；未生成内联图标脚本，原 CSP 保留。可视化中的远图 HTTP src 为 0，资源记录中的对应远图请求为 0。像素证据 `.tmp/editor-import-rich-final.png`；`.tmp/editor-source-rich.png` 为修复前图标缺陷截图，不能作为最终图标通过证据。 |
+
+Windows 浏览器自动化的直接中文/OneDrive 文件路径注入曾出现读取失败或超时；最终文件点击证据使用复制到随机 ASCII 临时目录的合成文件，不推断该工具现象的产品成因，中文/OneDrive 目录的原生文件选择留给用户验收。没有验证真实个人资料、供应商、付费 AI、附件格式、移动端或正式 4318 部署；没有把自动回归当作用户验收完成。合并和部署仍等待统筹及用户确认。
+
 ## 原始资料 Markdown 双模式编辑（2026-10-15）
 
 首个PR CI候选 `80f80b7`：Linux Quality通过（747项中743通过、4项Windows专属启动测试按平台跳过）；Windows Quality为746通过、1失败，具体是本轮vendor严格哈希断言，不能与本地atomic-write失败混为一谈。已确认 `dist/index.css` 的原始LF SHA-256为 `2a3d87ec37964ef04a47269bc6cb34f5bf16bda83d02d60b059cf8c6c94562d0`，仅转CRLF就精确得到CI实际 `ff55b05c23d356a9df518323a2df165ccdbde56c7d7376048795d4344a497208`。新增仅限 `public/vendor/vditor/** -text` 的Git属性，保持上游字节；不改资源、manifest、哈希断言或全局Git配置。现有vendor测试补充真实 `core.autocrlf=true checkout-index` 导出到随机临时目录并逐字核对，修复后定向11/11通过，日志 `.tmp/editor-windows-checkout-fix.log`；产品代码与浏览器输入未改变，不重复无关验收。后续 `c1dd8f7` 的CI38607277293四项成功：Windows747/747、0失败/跳过/取消，Linux743通过、4项Windows专属测试跳过、0失败/取消；两平台仓库276项与20条合成检索通过，Secrets/Dependencies成功。
