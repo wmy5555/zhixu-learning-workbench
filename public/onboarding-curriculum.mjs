@@ -36,11 +36,11 @@ export const chapters = [
     step('setup-storage', '认识两处保存位置', '打开诊断，查看练习的 Vault 和数据目录。Markdown 保存内容，数据库保存可重建索引与运行记录；后面只在此练习 Vault 体验外部编辑。', '避免把练习文件操作到正式资料。', '你能辨认当前练习 Vault 路径。', 'system', 'system-diagnostics', { tab: 'diagnostics' }),
   ] },
   { id: 'capture', title: '2. 收集示例资料', steps: [
-    action('capture-save', '粘贴并保存第一份资料', '点击“填入示例”，查看标题、原文、平台、作者和位置；保持“仅本地”，点击保存。', '先保留原始材料，后续加工也能追溯出处。', '出现“小岚的读书分享”及保存结果，原文保持完整。', 'capture', 'capture-form', 'import', { sample: readingExample, needs: ['ai'] }),
+    action('capture-save', '粘贴并保存第一份资料', '点击“填入示例”，查看标题、原文、平台、作者和位置；不要勾选 AI 拆解，点击保存。', '先保留原始材料，后续加工也能追溯出处。', '出现“小岚的读书分享”及保存结果，原文保持完整。', 'capture', 'capture-form', 'import', { sample: readingExample, needs: ['ai'] }),
     step('capture-source', '打开刚刚保存的原文', '点击框选的“查看原始资料全文”展开原文，再展开“原始资料信息”，看看作者、链接和位置。', '之后阅读拆解结果时，也可以从这里回到原文。', '能读到完整练习文本和来源信息。', 'library', 'note-original', { noteRole: 'capturedSource' }),
-    action('capture-permission', '只为示例允许外发', '编辑刚保存的示例，把隐私改为“允许云端”，保存。稍后学习示例知识时，也要为其原文和知识分别亲自允许外发。', 'AI 需要你的外发授权，本地保存不会自动授权。', '这份示例显示允许外发，正式资料不受影响。', 'library', 'note-editor', 'privacy-cloud', { noteRole: 'capturedSource' }),
+    step('capture-permission', '了解 AI 拆解会发送什么', '保存只留在本机；主动点击 AI 拆解时，会把所需原文发送给已配置的服务，可能计费，无需再设置资料外发分类。', '一次主动操作只用于完成该功能，不授权后台任意上传。', '你能区分本地保存和主动 AI 拆解。', 'library', 'note-detail', { noteRole: 'capturedSource' }),
     step('capture-download', '下载两份练习文件', '下载下方的“读书卡片.md”和“查找线索.txt”，保存在容易找到的位置。下一步会一起导入它们。', '批量导入适合一次收集多份材料。', '本机得到 .md 和 .txt 两个示例文件。', 'capture', 'capture-batch', { downloads: [{ title: '读书卡片.md', href: '/tutorial-examples/reading-card.md' }, { title: '查找线索.txt', href: '/tutorial-examples/finding-clues.txt' }] }),
-    action('capture-batch', '一次导入两个文件', '在“批量导入”同时选择刚下载的 .md 和 .txt 文件，保持本地权限后导入。', '批量保存也应逐条保留来源。', '两份文件各自出现在收集结果中。', 'capture', 'capture-batch', 'import-batch'),
+    action('capture-batch', '一次导入两个文件', '在“批量导入”同时选择刚下载的 .md 和 .txt 文件，不勾选 AI 拆解后导入。', '批量保存也应逐条保留来源。', '两份文件各自出现在收集结果中。', 'capture', 'capture-batch', 'import-batch'),
   ] },
   { id: 'process', title: '3. 拆解与核验', steps: [
     action('process-ai', '用 AI 拆解原文', '对“小岚的读书分享”点击“AI 拆解”，等待结果。处理进度可以在“系统 → 任务”中查看。', '观察原文如何变成可选择的知识条目。', '原文下方出现拆解出的候选知识；失败时可到任务页查看原因。', 'library', 'note-process', 'process-done', { noteRole: 'capturedSource', needs: ['ai'] }),
@@ -68,8 +68,8 @@ export const chapters = [
     action('library-suggestions', '查看知识使用建议', '打开知识使用建议，阅读一条建议的触发原因和依据；暂不接受需要后续学习证据的建议。', '建议来自行为记录，最后由你判断。', '看见理由和可采取的操作；后面会再次回访。', 'library', 'library-recommendations', 'recommendations-open'),
   ] },
   { id: 'study', title: '5. 完成一次学习', steps: [
-    action('study-source-permission', '允许示例原文参与批改', '打开“练习原文 · 小岚的读书工作台”，隐私选择“允许云端”并保存。', '批改会用到知识及其原文，两处权限需要分别设置。', '原文显示允许云端处理；下一步设置知识的权限。', 'library', 'note-editor', 'privacy-cloud', { noteRole: 'source' }),
-    action('study-permission', '允许解释示例用于真实批改', '打开“能够解释”示例的编辑页，选允许外发并保存。只授权这条虚构示例。', '学习问题和回答需要与材料一起交给模型。', '这条示例允许外发，后续批改可正常请求。', 'library', 'note-editor', 'privacy-cloud', { noteRole: 'explain' }),
+    step('study-source-permission', '核对学习知识的原文', '打开当前知识关联的原文，核对出处与内容；无需给原文另设外发分类。', '批改围绕你主动选择的学习知识开展。', '你能回到本场景的原文核对依据。', 'library', 'note-detail', { noteRole: 'source' }),
+    step('study-permission', '了解提交回答后的 AI 批改', '查看已选知识；主动提交回答后，AI 使用该知识、本次问题、回答及可用的学习上下文给出反馈，可能计费。', '原始回答和 AI 建议分开保存。', '准备好自己的回答，再主动提交。', 'library', 'note-detail', { noteRole: 'explain' }),
     action('study-plan', '生成今日清单', '回到今日，点击“生成今日清单”或“重新安排”，找到刚加入学习的解释知识。若没有出现，按“未安排的原因”检查学习状态、核验、暂停与预算，再生成清单。', '清单按学习目标、到期时间和预算安排。', '选中的解释知识出现在今日待学项中，显示预计分钟和安排理由。', 'today', 'today-generate', 'today-generate', { noteRole: 'explain' }),
     step('study-reason', '阅读为什么这样安排', '查看每项的理由、预计时间、超出预算的余量和被前置知识阻塞的提示。', '今日清单不是固定打卡列表。', '能说明一项是新学、到期复习还是错题练习。', 'today', 'today-plan'),
     action('study-defer', '把应用示例延期一天', '在“能够迁移应用”安排上点击延期，按钮会顺延一天。若清单没有该示例，可先在“知识管理进阶”中完成“把应用目标加入学习”，再刷新今日安排。', '忙碌时可主动调整安排。', '该项显示延期，不再占用当前待学时间。', 'today', 'today-plan', 'plan-defer', { noteRole: 'apply' }),
@@ -94,7 +94,7 @@ export const chapters = [
   ] },
   { id: 'mistakes', title: '7. 处理错题', steps: [
     preset('mistake-open', '阅读预设错题的原回答', '加载错题案例，打开“只保存结论就够了”的错题，依次查看原问题、当时回答、遗漏和修正依据。', '错误回答保留为记录，不作为正确知识引用。', '错题全文醒目标注预设，并显示具体遗漏。', 'study', 'study-mistakes', 'mistake-open', 'mistakes', { tab: 'mistakes', noteRole: 'mistake' }),
-    preset('mistake-study', '开始一次专项练习', '在该错题点击针对练习，阅读针对遗漏提出的问题。若继续提交答案，先为此虚构案例允许外发，并自行作答。', '纠错练习针对具体误解。', '学习会话显示这条错题的上下文。', 'study', 'study-mistakes', 'mistake-study', 'mistakes', { tab: 'mistakes', noteRole: 'mistake' }),
+    preset('mistake-study', '开始一次专项练习', '在该错题点击针对练习，阅读针对遗漏提出的问题。若继续提交答案，核对本次批改会使用的知识与错题上下文，并自行作答。', '纠错练习针对具体误解。', '学习会话显示这条错题的上下文。', 'study', 'study-mistakes', 'mistake-study', 'mistakes', { tab: 'mistakes', noteRole: 'mistake' }),
     preset('mistake-dispute', '对判定提出质疑', '回到案例错题，点击质疑并填写“我需要重新核对这条判定的依据”。', 'AI 的结论可以被质疑。', '错题变为已质疑，争议不会当作独立成功记录。', 'study', 'study-mistakes', 'mistake-dispute', 'mistakes', { tab: 'mistakes', noteRole: 'mistake' }),
     preset('mistake-reopen', '重新打开错题', '在刚质疑的错题上点击重新打开。', '处理状态可以修正，记录仍保留。', '错题恢复未解决状态。', 'study', 'study-mistakes', 'mistake-reopen', 'mistakes', { tab: 'mistakes', noteRole: 'mistake' }),
     preset('mistake-resolve', '标记已经纠正', '阅读案例中的修正依据，点击“已纠正”，看看错题的处理状态如何变化。', '纠正后仍可查看原回答和修正依据，方便回顾。', '错题标为已纠正。', 'study', 'study-mistakes', 'mistake-resolve', 'mistakes', { tab: 'mistakes', noteRole: 'mistake' }),
@@ -109,14 +109,14 @@ export const chapters = [
     action('topic-split', '把成员拆分成小主题', '点击“复制或拆分为新学习包”，从新表单移除一部分成员，以“小岚的出处核对”另存。', '过大的学习包可以分次处理。', '生成包含所选成员的新主题。', 'topics', 'topic-detail', 'topic-split', { noteRole: 'createdTopic', action: 'open-topic' }),
     action('topic-pause', '暂停这个主题', '关闭详情，在主题列表的对应卡片点击暂停。', '整包暂缓可减少当前学习负担。', '主题显示已暂停。', 'topics', 'topics-list', 'topic-pause', { noteRole: 'createdTopic' }),
     action('topic-resume', '恢复主题学习', '在列表的同一主题卡片点击恢复。', '暂停后保留成员和已有进度。', '主题恢复活动状态，已有记录仍在。', 'topics', 'topics-list', 'topic-resume', { noteRole: 'createdTopic' }),
-    action('topic-ai', '请求真实 AI 主题建议', '点击 AI 学习包建议，确认只有已允许外发的示例会参与，等待任务完成。', 'AI 可以建议分组，仍需你审阅。', '出现真实的学习包建议报告。', 'topics', 'topics-list', 'topics-done', { needs: ['ai'] }),
+    action('topic-ai', '请求真实 AI 主题建议', '点击 AI 学习包建议，了解所需示例材料会发送给已配置的服务，等待任务完成。', 'AI 可以建议分组，仍需你审阅。', '出现真实的学习包建议报告。', 'topics', 'topics-list', 'topics-done', { needs: ['ai'] }),
     action('topic-adopt', '手动采用一个主题建议', '到检索与发现查看“AI 学习包建议”报告，核对成员、前置缺口和顺序，再回主题页点击“新建主题学习包”，按你认可的建议选择成员并保存。', 'AI 报告不会自动成为你的学习计划。', '选中的建议成为可编辑的主题。', 'topics', 'topics-list', 'topic-adopt'),
   ] },
   { id: 'discover', title: '9. 检索与发现联系', steps: [
     action('search-keyword', '用关键词找材料', '搜索“出处”，再试类型、主题、来源、日期和阶段筛选，打开一条结果。', '范围越清楚，结果越容易核对。', '结果带匹配片段，可以回到原文。', 'discover', 'discover-search', 'search-keyword', { sample: { query: '出处' } }),
     action('search-empty', '看懂空结果与检索诊断', '输入“zzzxqv_nothing_742993”搜索，查看空结果和诊断，再清空筛选。这个特殊词没有出现在任何示例资料中。', '没有找到不等于知识被删除。', '空结果明确显示，没有编造答案。', 'discover', 'discover-results', 'search-empty', { sample: { query: 'zzzxqv_nothing_742993' } }),
     external('search-embedding', '配置可选语义服务', '在能力设置点击“前往正式 API 配置”，填写向量服务地址、模型和密钥，启用并保存后点击“测试嵌入”。暂不配置就保持待配置，关键词检索仍能用。', '语义检索需要独立服务，不能把关键词回退当作语义成功。', '真实连接成功，或清楚显示待配置。', 'system', 'settings-capabilities', { ...settings, needs: ['embedding'] }),
-    action('search-index', '为允许外发的示例补建向量', '在诊断中点击更新检索索引，等待任务结束，查看待补数量；仅本地资料不会外发。', '有向量的材料才能参与对应语义比较。', '任务完成，诊断反映实际生成的向量和剩余待补内容。', 'system', 'system-index', 'index-done', { tab: 'diagnostics', needs: ['embedding'] }),
+    action('search-index', '主动补建示例的语义索引', '在诊断中点击更新检索索引，等待任务结束，查看待补数量；此操作会发送所需资料片段给嵌入服务，可能计费；保存资料不会自动补建向量。', '有向量的材料才能参与对应语义比较。', '任务完成，诊断反映实际生成的向量和剩余待补内容。', 'system', 'system-index', 'index-done', { tab: 'diagnostics', needs: ['embedding'] }),
     action('search-semantic', '体验语义检索', '先清空上次筛选条件，勾选允许本次查询外发，再选择语义模式，输入“如何回到支持观点的原文”搜索，检查结果来源和诊断。', '用含义相近的问题查找材料。', '诊断确认实际执行语义检索；回退时本项仍待配置。', 'discover', 'discover-search', 'search-semantic', { needs: ['embedding'], sample: { query: '如何回到支持观点的原文' } }),
     action('search-hybrid', '比较混合检索', '对相同问题选择混合检索，查看结果中的关键词与语义标记。', '比较两种信号如何共同找材料。', '诊断确认实际使用混合模式及可用语义结果。', 'discover', 'discover-search', 'search-hybrid', { needs: ['embedding'] }),
     action('relation-local', '查看本地关联候选', '打开解释示例的联系区域，点击本地寻找联系；查看候选，但先不要把相似误认为支持。', '相似只是线索，需要明确关系和边界。', '显示本地候选或明确的暂无候选结果。', 'library', 'note-relations', 'relations-local', { noteRole: 'explain' }),
@@ -180,7 +180,7 @@ const coreRoute = [
 ];
 // Navigation opens the correct surface; focusTarget frames the precise control within it.
 const focusTargets = {
-  'capture-permission': 'note-privacy', 'study-source-permission': 'note-privacy', 'study-permission': 'note-privacy',
+  'capture-permission': 'note-detail', 'study-source-permission': 'note-detail', 'study-permission': 'note-detail',
   'process-validity': 'note-validity', 'library-edit': 'note-body', 'study-hide': 'study-hide', 'study-feedback': 'study-feedback',
   'output-edit': 'draft-body', 'output-use': 'draft-use', 'output-unuse': 'draft-use', 'output-capture': 'draft-capture',
   'review-clock-day': 'onboarding-clock-day', 'review-clock-due': 'onboarding-clock-due',
@@ -230,8 +230,8 @@ export function getCurriculum(materialId) {
     'library-filter': { instruction: `搜索“${keyword}”，切换类型、阶段和分组，找到本场景原文与真实拆解条目。` },
     'library-edit': { instruction: '编辑已选知识，补充你自己的观察并保存；保留 AI 整理与个人补充的身份。' },
     'library-explain': { instruction: `从这份原文的候选知识中选一条，练习目标：${material.goals[2][1]}。打开编辑页，将“学习目标”设为“讲清原理”并保存，再点击“加入学习”并填写理由。若条目显示“待核验”，先完成联网加工并查看依据，再加入学习。`, why: '接下来的学习和复习会围绕你选中的这条知识展开。', expected: '选中的知识进入正在学习，可以从详情开始练习。' },
-    'study-source-permission': { instruction: '核对本场景原文的外发权限。之前已允许时无需重复授权；仅本地时由你决定是否允许。', expected: '选中知识关联的真实原文允许外发，未授权的其他资料保持本地。' },
-    'study-permission': { instruction: '打开刚选中的解释知识，把隐私改为“允许云端”并保存；核对底层原文也已授权。' },
+    'study-source-permission': { instruction: '核对选中知识关联的原文与出处；无需修改外发分类。', expected: '能回到本场景原文核对依据。' },
+    'study-permission': { instruction: '核对刚选中的解释知识；主动提交回答时，AI 会使用知识、问题、回答及可用学习上下文批改，无需分别修改原文和知识的外发分类。' },
     'study-start': { instruction: `对已选的解释知识点击开始学习。主线问题：${material.recall}` },
     'study-answer': { instruction: `阅读学习会话中的题目，在回答框用自己的话作答：${material.recall} 写好后点击提交，等待反馈。` },
     'study-followup': { instruction: `回答实际 AI 反馈中的追问，保留你自己的表达。可继续思考：${material.followup} 若上轮已结束，重新开始同一知识的练习。` },
@@ -248,15 +248,15 @@ export function getCurriculum(materialId) {
     'output-edit': { instruction: '打开主线刚生成的草稿，按本场景的用途改写，核对引用、假设与限制后保存。' },
     'output-use': { instruction: '用草稿检查或完善本次练习方案，再勾选这次用到的知识并保存。之后可以在知识详情查看采用记录。' },
     'capture-download': { instruction: '下载本场景的“伴读原文.md”和“应用练习.txt”。原文保留署名与许可，练习问题单独存放，不含参考答案。', downloads: [{ title: '伴读原文.md', material: materialId, companion: true }, { title: '应用练习.txt', material: materialId, exercise: true }] },
-    'capture-batch': { instruction: '批量导入刚下载的伴读原文与练习问题文件，保持仅本地，再核对每份来源。主线仍使用之前选中的原文。' },
+    'capture-batch': { instruction: '批量导入刚下载的伴读原文与练习问题文件，不勾选 AI 拆解，再核对每份来源。主线仍使用之前选中的原文。' },
     'relation-local': { instruction: `对解释知识本地寻找联系。${material.companion?.proposal || '可以另存一份相关原文，核对哪些内容构成补充、条件或对照；相似不等于支持。'}` },
-    'relation-ai': { instruction: `仅为参与比较的原文与知识亲自允许外发，再请求 AI 细查联系。${material.companion?.proposal || '核对双方摘录、关系类型与适用边界。'} 返回结果只是待审阅建议。` },
+    'relation-ai': { instruction: `主动请求 AI 细查联系时，会发送参与比较的知识及必要上下文，可能计费。${material.companion?.proposal || '核对双方摘录、关系类型与适用边界。'} 返回结果只是待审阅建议。` },
   };
   if (materialId === 'custom') {
-    overrides['capture-save'].instruction = '点击“填入示例”，检查之前粘贴的原文和出处。需要时继续修改，保持“仅本地”，亲自保存。';
+    overrides['capture-save'].instruction = '点击“填入示例”，检查之前粘贴的原文和出处。需要时继续修改，不勾选 AI 拆解，亲自保存。';
     overrides['capture-source'].expected = '能读到自己粘贴的完整原文、所填出处和单独的个人心得。';
     overrides['capture-download'] = { instruction: '准备自己的一份补充材料 .md 和一份应用问题 .txt；不含密码或不愿外发的敏感信息。', downloads: [] };
-    overrides['capture-batch'].instruction = '批量导入自己准备的两份练习文件，保持仅本地；主线仍使用之前保存的原文。';
+    overrides['capture-batch'].instruction = '批量导入自己准备的两份练习文件，不勾选 AI 拆解；主线仍使用之前保存的原文。';
     overrides['search-keyword'] = { instruction: material.retrieval, sample: null };
     overrides['library-filter'].instruction = '用自己原文中的核心术语检索，再切换类型、阶段和分组，找到实际原文与拆解条目。';
   }

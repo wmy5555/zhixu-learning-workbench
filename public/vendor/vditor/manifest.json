@@ -1,0 +1,41 @@
+{
+  "package": "vditor",
+  "version": "4.0.0",
+  "registry": "https://registry.npmjs.org/vditor/4.0.0",
+  "integrity": "sha512-JUeSmmNNxXaq4j29F6OZ/vLgyM/Wt/SpSK4o/gyrc02uTsS+iTeC0ofajxbW29WSJ4LFMec4nrywVul51PrLvg==",
+  "luteVersion": "1.7.6",
+  "files": [
+    {
+      "path": "dist/index.min.js",
+      "sha256": "a642fe1ba55fa831ded442f5613a655cdd0c4d761c28b4e230194115755862dd"
+    },
+    {
+      "path": "dist/index.css",
+      "sha256": "2a3d87ec37964ef04a47269bc6cb34f5bf16bda83d02d60b059cf8c6c94562d0"
+    },
+    {
+      "path": "dist/js/lute/lute.min.js",
+      "sha256": "53b61b051a3dfd9ee5a5010c873233679e139d8e62c49da08b4c2f2c195587cb"
+    },
+    {
+      "path": "dist/js/i18n/zh_CN.js",
+      "sha256": "6a0c07e6c40f934715b0bebcea20bdbbf20c34ba70ab9ea8d22336a1c47ab09c"
+    },
+    {
+      "path": "dist/js/icons/ant.js",
+      "sha256": "a91e14e09dcd7b99f49b7b8dcc6301fed6774d62547fcf4e971757aa3a802c33"
+    },
+    {
+      "path": "dist/css/content-theme/light.css",
+      "sha256": "47b6bee34f640b358100f3d1ce60992c986633485aa31d510b29c0997497c923"
+    },
+    {
+      "path": "dist/css/content-theme/dark.css",
+      "sha256": "ac2f7fa0d23dd3a939260b0ba58c162c03755efd8a1860a883cf01c7b4434d58"
+    },
+    {
+      "path": "LICENSE",
+      "sha256": "c50d6e1944c4c1558ef12a5cfa4f0a4e8c927a56908c1a587c9d60400eef66fe"
+    }
+  ]
+}

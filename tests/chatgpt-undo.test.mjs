@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { createService } from '../src/service.mjs';
 import { createChatgptUndo } from '../src/chatgpt-undo.mjs';
 import { hash } from '../src/store.mjs';
+import { tinyPng } from './fixtures/source-files.mjs';
 
 const tempRoot = path.resolve(import.meta.dirname, '../.tmp');
 fs.mkdirSync(tempRoot, { recursive: true });
@@ -29,6 +30,36 @@ function fixture(t) {
 }
 const selector = (value, receipt) => ({ requestId: value.requestId, noteId: receipt.noteId, syncRevision: receipt.syncRevision ?? null });
 const ownedNotes = store => store.list().map(note => [note.id, note.hash]).toSorted((a, b) => a[0].localeCompare(b[0]));
+
+for (const state of ['preview', 'undone']) test(`v2 restore preserves ${state} capture receipts and journals without restoring MCP grants`, async t => {
+  const source = fixture(t), target = fixture(t), value = input();
+  source.service.updateSettings({ mcp: { enabled: true, allowProposals: true, chatgptEnabled: true, chatgptAllowRead: true } });
+  const upload = source.service.uploadFile({ name: '合成备份插图.png', bytes: tinyPng, mime: '', uploadId: randomUUID() });
+  const { note: attachmentNote } = await source.service.commitFile({ uploadId: upload.id });
+  const receipt = source.service.chatgpt.capture(value), original = source.store.row(receipt.noteId).raw;
+  const preview = source.service.chatgptUndo.preview(selector(value, receipt));
+  if (state === 'undone') assert.equal(source.service.chatgptUndo.confirmUndo({ previewId: preview.previewId }).status, 'undone');
+  const backup = source.service.backup();
+  assert.equal(backup.version, 2); assert.equal(backup.attachments.length, 1);
+  const historyNamespaces = ['chatgptCaptures', 'chatgptSyncSessions', 'chatgptUndo', 'fileRecovery', 'deleted'];
+  const journals = backup.records.filter(row => historyNamespaces.includes(row.namespace));
+  for (const namespace of historyNamespaces.slice(0, state === 'undone' ? 5 : 3)) assert.ok(journals.some(row => row.namespace === namespace));
+  const restore = target.service.restore({ backup });
+  assert.equal(target.service.restore({ backup, preview: false, token: restore.token }).restored, true);
+  assert.deepEqual(target.service.settings().mcp, { enabled: false, allowProposals: false, chatgptEnabled: false, chatgptAllowRead: false, hasKey: false });
+  assert.deepEqual(target.service.chatgptUndo.list(), { requests: [] });
+  assert.throws(() => target.service.chatgpt.capture(value), { code: 'CHATGPT_DISABLED' });
+  assert.throws(() => target.service.chatgptUndo.confirmUndo({ previewId: preview.previewId }), { code: 'CHATGPT_DISABLED' });
+  for (const row of journals) assert.deepEqual(target.store.get(row.namespace, row.key), JSON.parse(row.json));
+  assert.deepEqual(target.service.readFile(attachmentNote.id, upload.attachment.id).bytes, tinyPng);
+  target.service.updateSettings({ mcp: { chatgptEnabled: true } });
+  assert.equal(target.service.settings().mcp.chatgptAllowRead, false);
+  if (state === 'preview') assert.equal(target.service.chatgptUndo.confirmUndo({ previewId: preview.previewId }).status, 'undone');
+  const recovery = target.service.chatgptUndo.previewRestore({ undoId: preview.undoId });
+  assert.equal(target.service.chatgptUndo.confirmRestore({ previewId: recovery.previewId }).status, 'restored');
+  assert.equal(target.store.readPersisted(receipt.noteId, { includeRaw: true }).raw, original);
+  assert.deepEqual(target.service.readFile(attachmentNote.id, upload.attachment.id).bytes, tinyPng);
+});
 
 test('preview cannot grant deletion through a JSON confirmation flag or impersonated authority', t => {
   const f = fixture(t), value = input(), saved = f.service.chatgpt.capture(value), before = ownedNotes(f.store);

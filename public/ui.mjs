@@ -108,7 +108,8 @@ export function describeJobError(job = {}) {
   const service = job.type === 'structure' ? 'AI 服务' : '外部服务';
   const result = (title, reason, next) => ({ title, reason, next });
   if (code === 'CANCELLED' || job.state === 'cancelled') return result('任务已取消', '本次任务已停止。', '需要继续时可手动重试；涉及外部服务的重试可能产生费用。');
-  if (['PRIVACY_LOCAL'].includes(code)) return result('资料尚未允许外发', '任务已暂停，资料的外发设置不允许这次分析。', '如需使用 AI，请先核对原文及条目的外发设置，再决定是否重试。');
+  if (code === 'OUTBOUND_INTENT_REQUIRED') return result('旧任务等待主动重试', '升级后旧任务不会自动增加外发。', '需要继续时，在任务页主动重试。');
+  if (code === 'PRIVACY_LOCAL') return result('资料或操作不可用于外发', '本次操作未启用 AI，或资料与引用已变化。', '请核对当前资料和操作后再重试。');
   if (/今日外部(?:调用|请求)次数已达到上限|daily.*limit.*exceeded/i.test(raw)) return result('今日外部请求次数已用完', '任务已保存，当前不能继续调用外部服务。', '等待每日额度恢复后，再点击“重试”。');
   if (['BUDGET_EXCEEDED', 'SOURCE_BUDGET', 'BUDGET_UNKNOWN'].includes(code)) return result('调用预算暂不允许继续', code === 'BUDGET_UNKNOWN' ? '费用尚无法确定，预算保护已暂停调用。' : '已达到任务或本月的调用预算。', '到“系统 → 用量与费用”核对预算、单价和用量，再决定是否重试。');
   if (['DISABLED', 'AI_DISABLED', 'CAPABILITY_DISABLED', 'NOT_CONFIGURED', 'MISSING_KEY', 'MISSING_CREDENTIALS', 'INVALID_CONFIG'].includes(code)) return result('所需能力尚未准备好', '外部能力未启用，或地址、模型、凭据配置不完整。', '到“系统 → 能力设置”检查相关能力，并完成连接测试后重试。');

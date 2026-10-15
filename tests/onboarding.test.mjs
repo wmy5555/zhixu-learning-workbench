@@ -288,12 +288,12 @@ test('explicitly ending an invalid unfinished practice preserves answers and unl
   assert.equal(h.manager.state().progress['study-finish'].status, 'pending');
 });
 
-test('sample permissions and depth steps are proved for their own role, not another note', async t => {
+test('retired permission steps are reading guidance and depth still requires its own role', async t => {
   const h = harness(t), s = h.manager.start(); await h.ready();
   const p = h.manager.currentService, source = p.getNote(s.roles.source);
   const result = p.editNote(source.id, { expectedHash: source.hash, meta: { privacy: 'cloud' } });
   h.manager.observe(s.practiceId, { resource: 'notes', itemId: source.id, method: 'PUT', body: { meta: { privacy: 'cloud' } }, query: {}, result });
-  assert.equal(h.manager.state().progress['study-source-permission'].status, 'done');
+  assert.notEqual(h.manager.state().progress['study-source-permission'].status, 'done');
   assert.notEqual(h.manager.state().progress['study-permission'].status, 'done');
   const aware = p.getNote(s.roles.aware);
   const edited = p.editNote(aware.id, { expectedHash: aware.hash, meta: { depth: 'aware' } });
@@ -302,6 +302,24 @@ test('sample permissions and depth steps are proved for their own role, not anot
   const promoted = p.promote(aware.id, { stage: 'reference', depth: 'aware', reason: '虚构练习只需知道存在' });
   h.manager.observe(s.practiceId, { resource: 'notes', itemId: aware.id, action: 'promote', method: 'POST', body: { stage: 'reference', depth: 'aware' }, query: {}, result: promoted });
   assert.equal(h.manager.state().progress['library-aware'].status, 'done');
+});
+
+test('retired permission reading steps retain role-scoped evidence from old practice records', async t => {
+  const h = harness(t), started = h.manager.start();
+  await h.manager.close();
+  const file = path.join(h.dataDir, 'onboarding', 'state.json');
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  saved.practice.events['privacy-cloud'] = [{ at: new Date().toISOString(), noteId: started.roles.source, entities: [started.roles.source] }];
+  fs.writeFileSync(file, JSON.stringify(saved));
+  const reopened = await h.reopen(), progress = reopened.state().progress;
+  assert.equal(progress['study-source-permission'].status, 'demonstrated');
+  assert.equal(progress['study-permission'].status, 'pending');
+  for (const id of ['capture-permission', 'study-source-permission', 'study-permission']) {
+    const step = flatSteps.find(step => step.id === id);
+    assert.equal(step.kind, 'read');
+    assert.equal(step.check, undefined);
+    assert.notEqual(step.focusTarget, 'note-privacy');
+  }
 });
 
 test('unchanged edits preserve source versions while stale saves and real edits retain their restrictions', async t => {

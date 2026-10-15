@@ -21,6 +21,7 @@ const checkAliases = {
   'evidence-open': 'evidence',
 };
 const clientEvents = new Set(['study-hide', 'study-resume', 'jobs-filter', 'job-open', 'calls-open', 'appearance-theme', 'appearance-accent', 'search-filter', 'library-filter', 'topic-open', 'conflicts-open', 'topic-copy', 'topic-split', 'topic-study', 'prompts-reset', 'mistake-open', 'recommendations-open', 'history-open']);
+const retiredPermissionSteps = new Set(['capture-permission', 'study-source-permission', 'study-permission']);
 
 // Progress and connection receipts live outside backups; object mappings accompany practice files.
 export function createOnboarding({ dataDir, mainService, serviceFactory = createService }) {
@@ -197,7 +198,7 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
       let status = 'pending';
       const events = matchingEvents(checkAliases[step.check] || step.check, step);
       if (check(step.check, f, step) && (!step.caseId || p?.cases?.[step.caseId])) status = step.kind === 'case' || step.caseId || events.length && events.every(e => e.presetCase) ? 'demonstrated' : 'done';
-      else if (p?.acknowledged?.[step.id]) status = 'demonstrated';
+      else if (p?.acknowledged?.[step.id] || retiredPermissionSteps.has(step.id) && matchingEvents('privacy-cloud', step).length) status = 'demonstrated';
       else if (step.needs?.some(cap => !ready(cap))) status = 'needs_setup';
       result[step.id] = { status };
       if (step.id === 'study-plan' && status === 'pending') result[step.id].reason = '请让选中的解释知识实际出现在今日待学项中；清单为空或缺少这条知识时，按今日页“未安排的原因”处理后重新生成。';
@@ -395,7 +396,6 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
       if (method === 'GET' && itemId && !action) event('note-open');
       if (method === 'PUT') {
         event('note-edit');
-        if (result?.meta?.privacy === 'cloud') event('privacy-cloud');
         if (body.meta?.researchIntervalDays) event('research-interval');
         if (body.meta?.depth) event(`depth-${body.meta.depth}`);
       }

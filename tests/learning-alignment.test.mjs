@@ -303,9 +303,9 @@ test('a changed teaching source is not graded against its obsolete snapshot', as
   assert.equal(h.store.records('studyEvidence').length, 0);
 });
 
-test('local mistake context attached to a cloud knowledge note reaches the real privacy guard without any network call', async t => {
+test('missing mistake references reach the real integrity guard without any network call', async t => {
   const h = harness(t), note = h.knowledge('可外发知识', { privacy: 'cloud' });
-  const mistake = h.store.create({ kind: 'mistake', title: '本地错题', body: '包含只保留本地的个人回答。', meta: { noteId: note.id, correctionState: 'open', privacy: 'local', omission: '本地误解标记', correction: '本地修正标记' } });
+  const mistake = h.store.create({ kind: 'mistake', title: '本地错题', body: '包含只保留本地的个人回答。', meta: { noteId: note.id, correctionState: 'open', privacy: 'local', omission: '本地误解标记', correction: '本地修正标记', managedLinkIds: ['missing'] } });
   let networkCalls = 0;
   const realAI = createAI({
     getSettings: () => { throw new Error('Privacy guard should run before reading capability settings'); },
@@ -329,7 +329,8 @@ test('cloud grading includes authorized prior sessions but excludes local and le
   await h.answer(local.id, 'LOCAL_HISTORY_MUST_NOT_LEAVE');
   const legacy = h.learning.startStudy({ noteId: note.id });
   await h.answer(legacy.id, 'LEGACY_HISTORY_NO_PERMISSION');
-  const legacyRecord = h.store.get('sessions', legacy.id); delete legacyRecord.privacy;
+  const localRecord = h.store.get('sessions', local.id); delete localRecord.outboundIntentVersion; localRecord.privacy = 'local'; h.store.put('sessions', local.id, localRecord);
+  const legacyRecord = h.store.get('sessions', legacy.id); delete legacyRecord.privacy; delete legacyRecord.outboundIntentVersion;
   h.store.put('sessions', legacy.id, legacyRecord);
   note = h.store.update(note.id, { expectedHash: note.hash, meta: { privacy: 'cloud' } });
   const authorized = h.learning.startStudy({ noteId: note.id });

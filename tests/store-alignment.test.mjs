@@ -202,13 +202,13 @@ test('a topic link preview follows the authoritative note order and removing rel
   assert.deepEqual(h.store.pendingManagedLinks(), []);
 });
 
-test('links to local targets tighten source privacy, including when the rendered block has not changed', t => {
+test('managed links keep conservative rollback metadata without exposing a privacy classification', t => {
   const h = harness(t), left = note(h.store, '允许外发', '获准外发的正文', { privacy: 'cloud' }), right = note(h.store, '仅本地标题');
   accept(h.store, left, right);
   const preview = h.store.managedLinksPreview(left.id);
-  assert.equal(preview.privacyChanged, true);
+  assert.equal(preview.privacyChanged, undefined);
   assert.equal(preview.meta.privacy, 'local');
-  assert.match(preview.privacyNotice, /仅本地/);
+  assert.equal(preview.privacyNotice, undefined);
   const saved = h.store.syncManagedLinks(left.id, { expectedHash: preview.expectedHash });
   assert.equal(saved.meta.privacy, 'local');
   const managedBody = saved.body;
@@ -216,11 +216,11 @@ test('links to local targets tighten source privacy, including when the rendered
   const sameBlock = h.store.managedLinksPreview(left.id);
   assert.equal(sameBlock.body, managedBody);
   assert.equal(sameBlock.changed, true);
-  assert.equal(sameBlock.privacyChanged, true);
+  assert.equal(sameBlock.privacyChanged, undefined);
   assert.equal(h.store.syncManagedLinks(left.id, { expectedHash: sameBlock.expectedHash }).meta.privacy, 'local');
 });
 
-test('outbound privacy reads a linked target changed to local even before any index scan or link refresh', t => {
+test('legacy metadata changes do not classify active requests or silently rewrite linked content', t => {
   const h = harness(t), left = note(h.store, '来源', '来源正文', { privacy: 'cloud' }), right = note(h.store, '目标标题', '目标正文', { privacy: 'cloud' });
   accept(h.store, left, right);
   const preview = h.store.managedLinksPreview(left.id);
@@ -231,8 +231,8 @@ test('outbound privacy reads a linked target changed to local even before any in
   externalEdit(h, right.id, meta => { meta.privacy = 'local'; });
   assert.equal(h.store.read(right.id).meta.privacy, 'cloud', 'The target index intentionally remains stale');
   h.store.scan = () => { throw new Error('The privacy guard must not recursively scan or write'); };
-  assert.equal(h.store.outboundPrivacy(saved), 'local');
-  assert.equal(h.store.outboundPrivacy(saved.id), 'local');
+  assert.equal(h.store.outboundPrivacy(saved), 'cloud');
+  assert.equal(h.store.outboundPrivacy(saved.id), 'cloud');
   assert.equal(fs.readFileSync(leftFile, 'utf8'), before);
   assert.equal(h.store.read(saved.id).meta.privacy, 'cloud', 'The guard must not silently change source metadata');
 });
@@ -245,6 +245,9 @@ test('outbound privacy follows accepted relation and topic dependencies recursiv
   const topic = h.store.create({ kind: 'topic', title: '云端主题', body: '主题正文', meta: { privacy: 'cloud', noteIds: [first.id] } });
   assert.equal(h.store.outboundPrivacy(topic.id), 'cloud');
   externalEdit(h, third.id, meta => { meta.privacy = 'local'; });
+  assert.equal(h.store.outboundPrivacy(first.id), 'cloud');
+  assert.equal(h.store.outboundPrivacy(topic.id), 'cloud');
+  fs.unlinkSync(path.join(h.vaultDir, third.path));
   assert.equal(h.store.outboundPrivacy(first.id), 'local');
   assert.equal(h.store.outboundPrivacy(topic.id), 'local');
 });

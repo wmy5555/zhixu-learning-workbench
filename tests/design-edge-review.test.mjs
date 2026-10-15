@@ -21,7 +21,7 @@ function knowledge(service, title, meta = {}, body = '用于受控审阅的合�
   return service.store.create({ kind: 'knowledge', title, body, meta: { stage: 'candidate', privacy: 'cloud', depth: 'explain', ...meta } });
 }
 
-test('index batches recheck later notes after an earlier external request before sending newly local content', async t => {
+test('index batches do not send later revisions that were not present when the user requested indexing', async t => {
   const sent = [];
   let later;
   const s = harness(t, { embed: async ({ texts }) => {
@@ -51,17 +51,19 @@ test('index batches do not replace a later edited note with the batch opening sn
   knowledge(s, '先等待向量返回的内容');
   s.queue('index', {}, 'body-between-notes');
   await s.runJobs();
+  assert.equal(sent.length, 1, 'a changed version waits for another explicit indexing action');
+  s.queue('index', {}, 'current-revision'); await s.runJobs();
   assert.equal(sent[1][0].includes('EDITED_WHILE_EARLIER_NOTE_WAS_EMBEDDING'), true);
   assert.equal(s.store.db.prepare('SELECT body FROM index_chunks WHERE noteId=?').get(later.id).body.includes('EDITED_WHILE_EARLIER_NOTE_WAS_EMBEDDING'), true);
 });
 
-test('relation exploration stops before a second model request after permission is revoked during query generation', async t => {
+test('relation exploration stops before a second model request when material changes during query generation', async t => {
   const prompts = [];
   let subject;
   const s = harness(t, { generate: async ({ prompt }) => {
     prompts.push(prompt);
     if (prompts.length === 1) {
-      s.store.update(subject.id, { expectedHash: s.getNote(subject.id).hash, meta: { privacy: 'local' } });
+      s.store.update(subject.id, { expectedHash: s.getNote(subject.id).hash, body: '用户在请求期间修订了正文。' });
       return { text: JSON.stringify({ queries: [] }) };
     }
     return { text: JSON.stringify({ relations: [] }) };
@@ -71,7 +73,7 @@ test('relation exploration stops before a second model request after permission 
   knowledge(s, '可比较知识', { topic: '领域乙' });
   const job = s.requestRelations(subject.id, { useAI: true });
   await s.runJobs();
-  assert.equal(prompts.length, 1, 'revoked material must not be included in a subsequent model call');
+  assert.equal(prompts.length, 1, 'changed material must not be included in a subsequent model call');
   assert.notEqual(s.store.get('jobs', job.id).state, 'done');
 });
 
@@ -85,7 +87,7 @@ test('core suggestions count actual-use days in the same local timezone as study
   assert.equal(s.recommendations().suggestions.some(item => item.noteId === note.id && item.targetStage === 'core'), false);
 });
 
-test('a managed link to a newly local target cannot carry its copied title into a cloud exploration before link synchronization', async t => {
+test('a managed link to a deleted target cannot carry its copied title into an active exploration', async t => {
   const prompts = [];
   const s = harness(t, { generate: async ({ prompt }) => { prompts.push(prompt); return { text: JSON.stringify(prompts.length === 1 ? { queries: [] } : { relations: [] }) }; } });
   s.updateSettings({ ai: { enabled: true } });
@@ -97,10 +99,10 @@ test('a managed link to a newly local target cannot carry its copied title into 
   from = s.getNote(from.id);
   assert.equal(from.meta.privacy, 'cloud');
   assert.equal(from.body.includes('COPIED_LINK_TITLE_NOW_LOCAL'), true);
-  s.store.update(to.id, { expectedHash: s.getNote(to.id).hash, meta: { privacy: 'local' } });
-  assert.equal(s.linksPreview(from.id).privacyChanged, true);
+  s.store.delete(to.id, s.getNote(to.id).hash);
+  assert.equal(s.store.outboundPrivacy(from), 'local');
   const job = s.requestRelations(from.id, { useAI: true });
   await s.runJobs();
-  assert.equal(prompts.length, 0, 'a pending privacy downgrade must block sending the existing managed-link title');
+  assert.equal(prompts.length, 0, 'a missing linked target must block sending the existing managed-link title');
   assert.notEqual(s.store.get('jobs', job.id).state, 'done');
 });

@@ -184,7 +184,7 @@ export function createOnboarding(adapter) {
     working = true; errorText = ""; checkErrorStepId = ""; render();
     try { await action(); }
     catch (error) { errorText = error.message || "本次操作未完成，请稍后重试。"; compact = false; }
-    finally { working = false; render(); if (flash && !errorText) { locate(true); flashHighlight(); } }
+    finally { adapter.contextChangeFinished?.(); working = false; render(); if (flash && !errorText) { locate(true); flashHighlight(); } }
   }
   async function refreshProof() {
     if (!current?.practiceId || refreshing || disposed) return;
@@ -209,10 +209,12 @@ export function createOnboarding(adapter) {
   async function switchContext(id, destination) {
     if (current?.busy) throw new Error("练习任务仍在处理，请先等待完成或到任务页取消，再切换知识库。");
     if (await adapter.beforeContextChange?.() === false) return false;
-    api.setContext(id);
-    await adapter.contextChanged?.();
-    if (destination) await adapter.navigate(destination, current);
-    return true;
+    try {
+      api.setContext(id);
+      await adapter.contextChanged?.();
+      if (destination) await adapter.navigate(destination, current);
+      return true;
+    } finally { adapter.contextChangeFinished?.(); }
   }
   async function goTo(target = step()) {
     const chapter = stepChapter(target);
@@ -367,7 +369,7 @@ export function createOnboarding(adapter) {
     if (material) content.prepend(el("p", { class: "fine-print", text: `练习材料：${material.id === 'custom' ? current.customSample?.title || '自行粘贴' : material.label.slice(2)}` }));
     const mainKnowledge = current?.learningCandidates?.find(note => note.id === current.roles?.explain);
     if (active.id === "study-plan" && ["candidate", "reference", "retired"].includes(mainKnowledge?.stage)) content.append(el("div", { class: "notice" }, [
-      el("p", { text: "选中的解释知识还未加入学习。选择主线和允许云端之后，还需要打开知识详情，点击“加入学习”并填写理由，才能安排今日清单。" }),
+      el("p", { text: "选中的解释知识还未加入学习。选好主线之后，还需要打开知识详情，点击“加入学习”并填写理由，才能安排今日清单。" }),
       button("回到加入学习这一步", { kind: "text compact", disabled: working, onClick: () => run(() => goTo(flatSteps.find(item => item.id === "library-explain"))) }),
     ]));
     if (material && /^library-(aware|find|explain|apply)$/.test(active.id)) {

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash, randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdir, readFile, mkdtemp, rm } from 'node:fs/promises';
 import http from 'node:http';
@@ -125,6 +126,27 @@ async function webSession(app) {
   };
 }
 
+test('ask identity stays within session/CSRF and library boundaries and prevents duplicate drafts', async t => {
+  const app = await startApp(t), session = await webSession(app);
+  const input = { requestId: 'synthetic-http-ask', question: '合成问题', privacy: 'local' };
+  const post = (body, headers = session.headers, endpoint = '/api/ask') => request(app.baseUrl, endpoint, { method: 'POST', headers, body });
+  assert.equal((await post(input, {})).status, 401);
+  assert.equal((await post(input, { Cookie: session.cookie })).status, 403);
+  const first = await post(input), retry = await post(input);
+  assert.equal(first.status, 200);
+  assert.deepEqual(retry.body, first.body);
+  assert.equal(app.service.store.records('drafts').length, 1);
+  assert.equal((await post({ ...input, question: '其他问题' })).body.code, 'ASK_REQUEST_CONFLICT');
+  assert.equal((await post({ ...input, requestId: '../bad' })).status, 400);
+  const practice = await request(app.baseUrl, '/api/onboarding/start', { method: 'POST', headers: session.headers, body: {} });
+  app.service.updateSettings({ ai: { enabled: true } });
+  app.onboarding.tested('model'); // Synthetic readiness only; both asks remain local.
+  const separate = await post(input, session.headers, `/api/practice/${practice.body.practiceId}/ask`);
+  assert.equal(separate.status, 200);
+  assert.notEqual(separate.body.draftId, first.body.draftId);
+  assert.equal(app.service.store.records('drafts').length, 1);
+});
+
 test('Today reflects an explicitly promoted candidate and generate POST returns its current plan', async t => {
   const app = await startApp(t), session = await webSession(app);
   const note = app.service.store.create({ kind: 'knowledge', title: '合成今日候选', body: '合成个人观点', meta: { stage: 'candidate', depth: 'explain', privacy: 'local', epistemicType: 'personal_view' } });
@@ -172,7 +194,7 @@ test('process status polling requires a session, omits task bodies and changes r
   app.service.restore({ backup, preview: false, token: preview.token });
   const restored = app.service.jobStatuses();
   assert.notEqual(restored.jobRevision, first.body.jobRevision);
-  assert.equal(restored.jobs.find(value => value.id === job.id).state, 'queued');
+  assert.equal(restored.jobs.find(value => value.id === job.id).state, 'waiting');
   const practice = await request(app.baseUrl, '/api/onboarding/start', { method: 'POST', headers: session.headers, body: {} });
   const practiceStatus = await request(app.baseUrl, `/api/practice/${practice.body.practiceId}/jobs?view=status`, { headers: session.headers });
   assert.equal(practiceStatus.status, 200);
@@ -402,9 +424,81 @@ test('API keys are write-only, absent from settings and backups, and encrypted o
   assert.equal(JSON.stringify(backup.body).includes(fakeKey), false);
   assert.equal(JSON.stringify(backup.body).includes('apiKey'), false);
 
-  const secretFile = await readFile(path.join(app.dataDir, 'secrets.enc.json'), 'utf8');
-  assert.equal(secretFile.includes(fakeKey), false);
-  assert.match(secretFile, /"type":"(?:dpapi|aes)"/);
+  const encrypted = app.service.store.db.prepare('SELECT json FROM encrypted_credentials WHERE capability=?').get('model').json;
+  assert.equal(encrypted.includes(fakeKey), false);
+  assert.ok(['dpapi','aes'].includes(JSON.parse(encrypted).type));
+  assert.equal(backup.body.records.some(record => record.namespace === 'encrypted_credentials'), false);
+});
+
+test('call recovery routes require session and CSRF, share reads and reject practice mutations', async t => {
+  const app = await startApp(t), id = 'synthetic-interrupted-reservation', at = new Date().toISOString();
+  app.service.store.put('callLedger', id, { id, phase: 'reserved', capability: 'model', createdAt: at, updatedAt: at });
+  app.service.store.put('calls', id, { id, phase: 'reserved', capability: 'model', createdAt: at, cost: null, ok: null });
+  const endpoint = `/api/call-recovery/${id}`, body = { action: 'recover' };
+  assert.equal((await request(app.baseUrl, '/api/call-recovery')).status, 401);
+  assert.equal((await request(app.baseUrl, endpoint, { method: 'POST', body })).status, 401);
+  const session = await webSession(app);
+  for (const headers of [{ Cookie: session.cookie }, { Cookie: session.cookie, 'X-CSRF-Token': 'wrong-token' }]) {
+    const rejected = await request(app.baseUrl, endpoint, { method: 'POST', headers, body });
+    assert.equal(rejected.status, 403); assert.equal(rejected.body.code, 'CSRF_DENIED');
+    assert.equal(app.service.store.get('callLedger', id).phase, 'reserved');
+  }
+  const pending = await request(app.baseUrl, '/api/call-recovery', { headers: session.headers });
+  assert.equal(pending.status, 200); assert.equal(pending.body.pending[0].id, id);
+  const practice = await request(app.baseUrl, '/api/onboarding/start', { method: 'POST', headers: session.headers, body: {} });
+  assert.equal(practice.status, 200);
+  app.service.updateSettings({ ai: { enabled: true } }); app.onboarding.tested('model'); // Synthetic readiness only.
+  const prefix = `/api/practice/${practice.body.practiceId}`;
+  const shared = await request(app.baseUrl, `${prefix}/call-recovery`, { headers: session.headers });
+  assert.equal(shared.status, 200); assert.equal(shared.body.pending[0].id, id);
+  const blocked = await request(app.baseUrl, `${prefix}/call-recovery/${id}`, { method: 'POST', headers: session.headers, body });
+  assert.equal(blocked.status, 409); assert.equal(blocked.body.code, 'PRACTICE_SETTINGS_LOCKED');
+  assert.equal(app.service.store.get('callLedger', id).phase, 'reserved');
+  const recovered = await request(app.baseUrl, endpoint, { method: 'POST', headers: session.headers, body });
+  assert.equal(recovered.status, 200); assert.equal(recovered.body.pending.length, 0);
+  assert.equal(app.service.store.get('callLedger', id).phase, 'cancelled');
+  assert.equal(app.service.store.records('calls').length, 0);
+});
+
+test('HTTP rejects invalid restore preferences without replacing Markdown or local credentials', async t => {
+  const app = await startApp(t), session = await webSession(app), key = randomBytes(32).toString('hex');
+  const configured = await request(app.baseUrl, '/api/settings', { method: 'PUT', headers: session.headers, body: { ai: { apiKey: key } } });
+  assert.equal(configured.status, 200);
+  const note = app.service.store.create({ kind: 'source', title: 'HTTP 保留资料', body: 'Synthetic text that must survive invalid preferences', meta: { privacy: 'local' } });
+  const beforeSettings = app.service.settings(), beforeCredentials = app.service.store.db.prepare('SELECT * FROM encrypted_credentials ORDER BY capability').all();
+  const beforeRaw = await readFile(path.join(app.vaultDir, note.path), 'utf8');
+  const backup = app.service.backup(), preview = await request(app.baseUrl, '/api/restore', { method: 'POST', headers: session.headers, body: { backup, preview: true } });
+  assert.equal(preview.status, 200);
+  const invalid = { ...backup, preferences: { ...backup.preferences, dailyMinutes: 45, ai: { ...backup.preferences.ai, enabled: 'false' } } };
+  for (const previewMode of [true, false]) {
+    const response = await request(app.baseUrl, '/api/restore', { method: 'POST', headers: session.headers, body: { backup: invalid, preview: previewMode, token: preview.body.token } });
+    assert.equal(response.status, 400); assert.equal(response.body.code, 'INVALID');
+    assert.equal(await readFile(path.join(app.vaultDir, note.path), 'utf8'), beforeRaw);
+    assert.deepEqual(app.service.settings(), beforeSettings);
+    assert.deepEqual(app.service.store.db.prepare('SELECT * FROM encrypted_credentials ORDER BY capability').all(), beforeCredentials);
+    assert.equal(response.text.includes(key), false);
+  }
+});
+
+test('a valid backup larger than 50 MiB restores through HTTP below the 100 MB contract', async t => {
+  const app = await startApp(t), session = await webSession(app);
+  const backup = app.service.backup(), id = 'synthetic-large-http-note', notePath = `01 原始资料/${id}.md`;
+  const raw = `---\nid: ${id}\nkind: source\ntitle: Synthetic large history\nprivacy: local\n---\nCurrent synthetic body`;
+  backup.notes = [{ id, path: notePath, raw }];
+  const versionRaw = `---\nid: ${id}\nkind: source\ntitle: Synthetic history\nprivacy: local\n---\n${'synthetic-history-'.repeat(258000)}`;
+  assert.ok(Buffer.byteLength(versionRaw) < 5_000_000);
+  const versionHash = createHash('sha256').update(versionRaw).digest('hex');
+  backup.versions = Array.from({ length: 13 }, (_, index) => ({ id: `synthetic-history-${index}`, noteId: id, path: notePath, raw: versionRaw, hash: versionHash, reason: 'Synthetic HTTP boundary regression', createdAt: new Date().toISOString() }));
+  const backupBytes = Buffer.byteLength(JSON.stringify(backup));
+  assert.ok(backupBytes > 50 * 1024 * 1024); assert.ok(backupBytes < 100_000_000);
+  const preview = await request(app.baseUrl, '/api/restore', { method: 'POST', headers: session.headers, body: { backup, preview: true } });
+  assert.equal(preview.status, 200); assert.equal(preview.body.versions, 13);
+  const restored = await request(app.baseUrl, '/api/restore', { method: 'POST', headers: session.headers, body: { backup, preview: false, token: preview.body.token } });
+  assert.equal(restored.status, 200); assert.equal(restored.body.restored, true);
+  assert.equal(app.service.store.read(id).body, 'Current synthetic body');
+  assert.equal(await readFile(path.join(app.vaultDir, notePath), 'utf8'), raw);
+  assert.equal(app.service.store.db.prepare('SELECT COUNT(*) count FROM versions').get().count, 13);
+  assert.equal(app.service.store.db.prepare('SELECT hash FROM versions WHERE id=?').get('synthetic-history-12').hash, versionHash);
 });
 
 test('official SDK stdio client searches and reads through the real HTTP service while writes stay disabled', async t => {
@@ -482,7 +576,7 @@ test('prompt settings API requires CSRF and persists edited templates', async t 
 });
 
 
-test('HTTP blank-title capture preserves text with no model config and exposes title waiting in safe status', async t => {
+test('HTTP blank-title capture stays local without creating a title task', async t => {
   const app = await startApp(t), session = await webSession(app);
   const body = '合成标题验收原文，不可通过任务轮询暴露。';
   const captured = await request(app.baseUrl, '/api/import', { method: 'POST', headers: session.headers, body: { items: [{ title: '   ', body, privacy: 'local' }], process: false } });
@@ -490,19 +584,38 @@ test('HTTP blank-title capture preserves text with no model config and exposes t
   const [source] = captured.body.notes, [job] = captured.body.jobs;
   assert.equal(source.body, body);
   assert.equal(source.meta.titlePending, true);
-  assert.equal(job.type, 'title');
+  assert.equal(job, undefined);
   assert.equal(app.service.listNotes({ kind: 'knowledge' }).length, 0);
   await app.service.runJobs();
   const detail = await request(app.baseUrl, '/api/notes/' + source.id, { headers: session.headers });
   assert.equal(detail.body.body, body);
-  assert.equal(detail.body.titleGeneration.state, 'waiting');
-  assert.equal(detail.body.titleGeneration.code, 'PRIVACY_LOCAL');
+  assert.equal(detail.body.titleGeneration.state, 'idle');
+  assert.equal(detail.body.titleGeneration.code, null);
   const status = await request(app.baseUrl, '/api/jobs?view=status', { headers: session.headers });
-  assert.equal(status.body.jobs.find(item => item.id === job.id).type, 'title');
+  assert.equal(status.body.jobs.length, 0);
   assert.doesNotMatch(status.text, /"body"|"prompt"|"payload"/);
   assert.equal(app.service.store.records('calls').length, 0);
 });
 
+
+for (const action of ['update', 'rebuild']) test(`HTTP index ${action} captures current identities and hashes at the explicit POST`, async t => {
+  const app = await startApp(t), session = await webSession(app);
+  const source = app.service.store.create({ kind: 'source', title: '合成点击时资料', body: '合成原文。' });
+  const result = await request(app.baseUrl, `/api/index/${action}`, { method: 'POST', headers: session.headers, body: { snapshots: [{ noteId: 'forged', hash: 'forged' }] } });
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.body.payload.snapshots, [{ noteId: source.id, hash: source.hash }]);
+});
+
+for (const type of ['relate', 'discover', 'topics']) test(`HTTP ${type} AI enqueue captures server-side knowledge versions`, async t => {
+  const app = await startApp(t), session = await webSession(app);
+  app.service.store.create({ kind: 'source', title: '合成第一层资料', body: '不作为知识比较材料发送。' });
+  const note = app.service.store.create({ kind: 'knowledge', title: '合成点击时知识', body: '合成知识原文。', meta: { stage: 'learning' } });
+  const endpoint = type === 'relate' ? `/api/notes/${note.id}/relate` : type === 'topics' ? '/api/topics/suggest' : '/api/discover';
+  const result = await request(app.baseUrl, endpoint, { method: 'POST', headers: session.headers, body: { useAI: true, snapshots: [{ noteId: 'forged', hash: 'forged' }] } });
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.body.payload.snapshots, [{ noteId: note.id, hash: note.hash }]);
+  assert.equal(app.service.store.records('calls').length, 0, 'the POST only queues the explicit operation');
+});
 
 test('concurrent start POSTs with one intent return one persisted session and a new intent starts again', async t => {
   const app = await startApp(t), session = await webSession(app);

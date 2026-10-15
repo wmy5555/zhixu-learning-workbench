@@ -144,20 +144,20 @@ test('failed reanalysis preserves the previously saved structure and edited note
   }
 });
 
-test('local-only children block external analysis and permission revocation during the call discards the result', async t => {
+test('legacy labels do not block explicit analysis and a changed child discards the result', async t => {
   const { service: local, calls } = setup(t);
   const data = material(local);
   local.editNote(data.notes[0].id, { expectedHash: data.notes[0].hash, meta: { privacy: 'local' } });
   const denied = local.requestSourceStructure(data.source.id);
   while (local.store.records('jobs').some(j => j.state === 'queued')) await local.runJobs();
-  assert.equal(calls.length, 0); assert.equal(local.store.get('jobs', denied.id).code, 'PRIVACY_LOCAL');
+  assert.equal(calls.length, 1); assert.equal(local.store.get('jobs', denied.id).code, 'MODEL_FORMAT');
   let finish, notes;
   const { service: s } = setup(t, () => new Promise(resolve => { finish = () => resolve({ text: JSON.stringify({ structure: forNotes(notes) }) }); }));
   const m = material(s); notes = m.notes;
   const job = s.requestSourceStructure(m.source.id), running = s.runJobs();
-  s.editNote(notes[0].id, { expectedHash: notes[0].hash, meta: { privacy: 'local' } });
+  s.editNote(notes[0].id, { expectedHash: notes[0].hash, body: '用户修订过的合成知识正文。' });
   finish(); await running;
-  assert.equal(s.store.get('jobs', job.id).code, 'PRIVACY_LOCAL');
+  assert.equal(s.store.get('jobs', job.id).code, 'SOURCE_CHANGED');
   assert.equal(s.store.get('sourceStructures', m.source.id), null);
 });
 

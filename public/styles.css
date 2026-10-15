@@ -516,6 +516,7 @@ input[type="color"] { height: 44px; padding: 5px 8px; cursor: pointer; }
 /* Shared reading view: stored Markdown and textarea values stay untouched. */
 .source-group-drawer { grid-template-columns: minmax(0, 1fr); }
 .source-group-drawer > .original-material { min-width: 0; max-width: 100%; }
+.source-group-drawer > .original-material > .original-body { max-height: none; overflow: visible; }
 .markdown-reader { min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; line-height: 1.75; }
 .markdown-reader > :first-child { margin-top: 0; }
 .markdown-reader > :last-child { margin-bottom: 0; }
@@ -528,12 +529,14 @@ input[type="color"] { height: 44px; padding: 5px 8px; cursor: pointer; }
 .markdown-reader blockquote { margin: .8em 0; padding: .2em 1em; border-inline-start: 3px solid var(--accent); background: var(--accent-soft); }
 .markdown-reader a { text-decoration: underline; text-underline-offset: 3px; }
 .markdown-reader code { font-family: Consolas, monospace; font-size: .92em; }
-.markdown-code { min-width: 0; max-width: 100%; margin: .8em 0; padding: 14px; overflow: auto; white-space: pre; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); }
-.markdown-code code { white-space: pre; overflow-wrap: normal; }
+.markdown-code { min-width: 0; max-width: 100%; margin: .8em 0; padding: 14px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); }
+.markdown-code code { white-space: pre-wrap; overflow-wrap: anywhere; }
 .markdown-table-scroll { min-width: 0; max-width: 100%; overflow: auto; margin: .8em 0; }
 .markdown-table-scroll table { width: max-content; min-width: 100%; border-collapse: collapse; }
 .markdown-table-scroll th, .markdown-table-scroll td { border: 1px solid var(--line); padding: 7px 10px; max-width: 36rem; }
 .markdown-table-scroll th { background: var(--panel); }
+.original-body .markdown-table-scroll table { width: 100%; table-layout: fixed; }
+.original-body .markdown-table-scroll th, .original-body .markdown-table-scroll td { overflow-wrap: anywhere; white-space: normal; }
 .markdown-align-left { text-align: left; }
 .markdown-align-center { text-align: center; }
 .markdown-align-right { text-align: right; }
@@ -546,8 +549,26 @@ input[type="color"] { height: 44px; padding: 5px 8px; cursor: pointer; }
 .library-fold-toggle { white-space: normal; }
 .library-content-section .section-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .history-metadata { max-width: 100%; overflow: auto; }
+.markdown-editor, .source-rich-editor { min-width: 0; }
+.markdown-editor textarea { width: 100%; font-family: ui-monospace, Consolas, monospace; }
+.markdown-editor [hidden] { display: none !important; }
+.markdown-mode-switch { gap: 8px; margin-bottom: 10px; }
+.markdown-mode-switch [aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+/* Toolbar tooltips extend above the editor; keep them outside its rounded frame. */
+.source-rich-editor.vditor { border-color: var(--line); border-radius: 10px; overflow: visible; }
+.source-rich-editor .vditor-toolbar { padding: 8px; flex-wrap: wrap; border-radius: 10px 10px 0 0; }
+.source-rich-editor .vditor-wysiwyg { min-height: 360px; }
+.source-rich-editor .vditor-reset { padding: 18px !important; font-size: 16px; color: var(--ink); }
+.source-rich-editor .vditor-reset img { max-width: 100%; }
+.source-rich-editor img[src*="#zhixu-image-"] { width: 160px; height: 64px; border: 1px dashed var(--line); border-radius: 6px; background: var(--panel-soft); object-fit: contain; }
+.source-rich-editor.vditor { --panel-background-color: var(--panel); --textarea-background-color: var(--panel); --textarea-text-color: var(--ink); --border-color: var(--line); --toolbar-background-color: var(--panel-soft); --toolbar-icon-color: var(--muted); }
 @media (max-width: 600px) {
   .library-content-section > .section-heading { flex-wrap: wrap; }
   .markdown-code { padding: 10px; }
   .markdown-table-scroll th, .markdown-table-scroll td { padding: 6px 8px; }
 }
+.source-image { display: block; max-width: 100%; max-height: 70vh; width: auto; height: auto; object-fit: contain; margin: 12px 0; }
+.attachment-card { padding: 12px 0; overflow-wrap: anywhere; }
+.attachment-card a { display: inline-block; margin-right: 16px; }
+.source-attachments { min-width: 0; }
+.extracted-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 60vh; overflow: auto; }

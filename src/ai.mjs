@@ -6,6 +6,7 @@ import { BlockList, isIP } from 'node:net';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { renderPrompt, validatePromptOverrides } from './prompts.mjs';
 import { readTokenUsage, tokenCost, tokenCount } from './token-usage.mjs';
+import { outboundText } from './outbound-text.mjs';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const PAGE_TIMEOUT_MS = 20_000;
@@ -45,7 +46,7 @@ function fail(code, message, cause) {
 
 function assertCloud(privacy) {
   if (privacy !== 'cloud') {
-    throw fail('PRIVACY_LOCAL', '该内容标记为仅本地，禁止发送到外部服务。');
+    throw fail('PRIVACY_LOCAL', '本次操作未启用外部服务，或资料引用不可用。');
   }
 }
 
@@ -312,6 +313,7 @@ function mustPropagateResearchError(error) {
   return [
     'CANCELLED', 'PRIVACY_LOCAL', 'BUDGET_EXCEEDED', 'BUDGET_UNKNOWN',
     'SOURCE_BUDGET', 'CAPABILITY_DISABLED', 'MISSING_CREDENTIALS', 'INVALID_CONFIG',
+    'CALL_RECOVERY_REQUIRED', 'CALL_ACCOUNTING_FAILED', 'CALL_RESULT_SAVE_FAILED', 'CALL_PERSISTENCE_FAILED',
   ].includes(error?.code);
 }
 
@@ -435,9 +437,10 @@ function passagesOverlap(a, b) {
 
 /**
  * Creates the external AI capability adapter used by the local knowledge service.
- * All outward methods require privacy === "cloud".
+ * All outward methods require the internal operation gate privacy === "cloud".
+ * This gate does not represent a persisted material classification.
  */
-export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchImpl } = {}) {
+export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchImpl, callLedger } = {}) {
   if (![getSettings, getSecret, recordCall, getUsage].every((fn) => typeof fn === 'function')) {
     throw fail('INVALID_CONFIG', 'createAI 缺少必需的配置、密钥、用量或记录函数。');
   }
@@ -447,8 +450,17 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
   const pageCache = makeCache(128);
   const embeddingCache = makeCache(64);
   const sourceBudget = new AsyncLocalStorage();
+  const callContext = new AsyncLocalStorage();
   let budgetTail = Promise.resolve();
   let reservedCalls = 0;
+  let accountingBlocked = false;
+
+  function withCallContext(context, fn) {
+    if (!context || typeof context.key !== 'string' || !context.key.trim() || context.key.length > 2000 || typeof fn !== 'function') throw fail('INVALID_INPUT', '调用上下文需要稳定 key 和任务函数。');
+    if (context.singleRequest !== undefined && typeof context.singleRequest !== 'boolean') throw fail('INVALID_INPUT', 'singleRequest 必须为开关值。');
+    for (const field of ['jobId', 'turnId']) if (context[field] !== undefined && (typeof context[field] !== 'string' || context[field].length > 300)) throw fail('INVALID_INPUT', '调用上下文身份无效。');
+    return callContext.run({ key: context.key, jobId: context.jobId, turnId: context.turnId, singleRequest: context.singleRequest === true, occurrences: new Map() }, fn);
+  }
 
   async function withBudget({ limit, sourceId } = {}, fn) {
     if (!Number.isInteger(limit) || limit < 0) throw fail('INVALID_INPUT', '任务外部请求上限必须是非负整数。');
@@ -482,19 +494,24 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     const allSettings = await settings();
     const config = capabilityConfig(allSettings, capability);
     if (config.enabled !== true) throw fail('CAPABILITY_DISABLED', `${capability} 能力尚未启用。`);
-    const secret = needsSecret ? await getSecret(capability) : null;
+    const secret = needsSecret ? await getSecret(capability, config) : null;
     if (needsSecret && (!secret || typeof secret !== 'string')) {
       throw fail('MISSING_CREDENTIALS', `${capability} 未配置凭据。`);
     }
     return { allSettings, config, secret };
   }
 
-  async function reserveBudget(allSettings) {
+  async function reserveBudget(allSettings, metadata) {
     let unlock;
     const previous = budgetTail;
     budgetTail = new Promise((resolve) => { unlock = resolve; });
     await previous;
     try {
+      if (accountingBlocked) throw fail('CALL_RECOVERY_REQUIRED', '上次调用结果未知或记账失败，请处理后再继续；不会自动重发。');
+      if (callLedger) {
+        const row = callLedger.reserve(metadata, allSettings);
+        return { row, release: () => callLedger.finish(row.id) };
+      }
       const usage = (await getUsage()) ?? {};
       const dailyLimit = safeNumber(allSettings.ai?.dailyCallLimit);
       const callsToday = safeNumber(usage.callsToday) ?? 0;
@@ -509,12 +526,12 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
       }
       reservedCalls += 1;
       let released = false;
-      return () => {
+      return { release: () => {
         if (!released) {
           released = true;
           reservedCalls -= 1;
         }
-      };
+      } };
     } finally {
       unlock();
     }
@@ -529,13 +546,25 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
         cost: safeNumber(entry.cost),
         error: entry.error ? sanitizeError(entry.error, secrets) : undefined,
       });
-    } catch {
-      // A diagnostics sink must not replace the actual provider outcome.
+    } catch (error) {
+      accountingBlocked = true;
+      throw fail('CALL_ACCOUNTING_FAILED', '已取得调用结果，但费用记录保存失败；请恢复记账，不要重新发送。', error);
     }
   }
 
   async function networkAttempt({ capability, model = null, allSettings, url, method = 'GET', headers = {}, body, signal, timeoutMs, maxBytes, secrets = [], allowRedirect = false, accounting }) {
     if (signal?.aborted) throw fail('CANCELLED', '请求已取消。');
+    const context = callContext.getStore();
+    const fingerprint = context ? hashKey([capability, model, method, url.href ?? String(url), body ?? '']) : null;
+    const occurrence = context ? context.occurrences.get(fingerprint) ?? 0 : 0;
+    if (context) context.occurrences.set(fingerprint, occurrence + 1);
+    const key = context ? hashKey([context.key, context.jobId, context.turnId, fingerprint, occurrence]) : undefined;
+    const contextKey = context ? hashKey([context.key, context.jobId, context.turnId]) : undefined;
+    const replay = key && callLedger?.replay(key, { contextKey, singleRequest: context.singleRequest });
+    if (replay) {
+      if (replay.entry.ok === false) throw Object.assign(fail('PROVIDER_ERROR', replay.entry.error || '已有调用返回失败；没有重新发送。'), { callId: replay.callId });
+      return { ...replay.response, body: Buffer.from(replay.response.body), headers: normalizeResponseHeaders(replay.response.headers), callId: replay.callId, accountingEntry: replay.entry, recovered: true };
+    }
     const { signal: combinedSignal, timeoutSignal } = composeSignal(signal, timeoutMs);
     let target;
     try {
@@ -546,17 +575,21 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
       throw error;
     }
     if (combinedSignal.aborted) throw classifyAbort(combinedSignal.reason, signal, timeoutSignal);
-    const releaseBudget = await reserveBudget(allSettings);
+    const sourceId = sourceBudget.getStore()?.sourceId;
+    const reservation = await reserveBudget(allSettings, { capability, model, sourceId, key, contextKey, singleRequest: context?.singleRequest, jobId: context?.jobId, turnId: context?.turnId,
+      reservedCost: capability === 'fetch' ? 0 : capability === 'search' ? safeNumber(allSettings.search?.requestPrice) : null });
+    const callId = reservation.row?.id;
     let started = Date.now();
     let sent = false;
     let response;
     let operationError;
     let measured = { inputTokens: null, outputTokens: null, cost: capability === 'fetch' ? 0 : null };
-    const sourceId = sourceBudget.getStore()?.sourceId;
+    let received = false;
     try {
       response = await withPermit(combinedSignal, async () => {
         consumeSourceBudget(capability);
         try {
+          if (callLedger) callLedger.dispatch(callId);
           sent = true;
           started = Date.now();
           return fetchImpl
@@ -572,34 +605,56 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
       if ((response.status < 200 || response.status >= 300) && !(allowRedirect && [301, 302, 303, 307, 308].includes(response.status))) {
         const error = fail('PROVIDER_ERROR', providerMessage(response, secrets));
         error.status = response.status;
-        throw error;
+        operationError = error;
       }
       if (typeof accounting === 'function' && response.status >= 200 && response.status < 300) {
         try { measured = { ...measured, ...accounting(response) }; } catch { /* invalid data is handled by the response parser */ }
       }
-      return response;
+      const entry = { capability, model, ...measured, durationMs: Date.now() - started, ok: !operationError,
+        error: operationError ? sanitizeError(operationError, secrets) : undefined, ...(sourceId ? { sourceId } : {}) };
+      if (callLedger) {
+        // The bounded response is committed before accounting. Only response headers
+        // needed by parsing/redirects are retained; request credentials never enter records.
+        const scrub = value => {
+          let text = String(value ?? '');
+          for (const secret of secrets) if (secret) text = text.split(secret).join('[REDACTED]');
+          return text.replace(/(authorization\s*[:=]\s*(?:bearer\s+)?)[^\s"<>]+/gi, '$1[REDACTED]');
+        };
+        const savedBody = scrub(response.body.toString('utf8'));
+        try {
+          callLedger.received(callId, { status: response.status, body: savedBody, headers: {
+            'content-type': scrub(response.headers.get('content-type')), location: scrub(response.headers.get('location')),
+          } }, entry);
+          received = true;
+        } catch (error) {
+          throw Object.assign(fail('CALL_RESULT_SAVE_FAILED', '外部响应已取得，但本地保存失败。请核对调用记录，不要重新发送。', error), { callId });
+        }
+        try { callLedger.accounted(callId); }
+        catch (error) { throw Object.assign(fail('CALL_ACCOUNTING_FAILED', '响应已保存，但费用记账失败。请先恢复记账，再取回已有结果；不会重新发送。', error), { callId }); }
+      } else await safeRecord(entry, secrets);
+      if (operationError) throw operationError;
+      return { ...response, callId, accountingEntry: entry };
     } catch (error) {
       operationError = error?.code ? error : fail('PROVIDER_ERROR', sanitizeError(error, secrets), error);
+      if (callId) operationError.callId = callId;
+      if (callLedger && sent && !response && !received) {
+        try { callLedger.unknown(callId, { ...measured, durationMs: Date.now() - started, error: sanitizeError(operationError, secrets) }); }
+        catch (saveError) { throw Object.assign(fail('CALL_PERSISTENCE_FAILED', '调用结果未知且状态保存失败，请先处理调用记录；不会自动重发。', saveError), { callId }); }
+      } else if (!callLedger && sent && !response) {
+        accountingBlocked = true;
+        await safeRecord({ capability, model, ...measured, durationMs: Date.now() - started, ok: false, error: operationError, ...(sourceId ? { sourceId } : {}) }, secrets);
+      }
       throw operationError;
     } finally {
-      if (sent) {
-        await safeRecord({
-          capability,
-          model,
-          ...measured,
-          durationMs: Date.now() - started,
-          ok: !operationError,
-          error: operationError,
-          ...(sourceId ? { sourceId } : {}),
-        }, secrets);
-      }
-      releaseBudget();
+      try { if (callLedger && !sent) callLedger.cancel(callId); }
+      finally { reservation.release(); }
     }
   }
 
   async function requestWithRetry(options) {
     let lastError;
-    const retries = clampInteger(options.retries, MAX_RETRIES, 0, MAX_RETRIES);
+    // Durable calls are never implicitly repeated, including search/embedding POSTs.
+    const retries = callLedger || options.capability !== 'fetch' ? 0 : clampInteger(options.retries, MAX_RETRIES, 0, MAX_RETRIES);
     for (let attempt = 0; attempt <= retries; attempt += 1) {
       try {
         return await networkAttempt(options);
@@ -618,13 +673,15 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     try {
       data = JSON.parse(response.body.toString('utf8'));
     } catch (error) {
-      throw fail('INVALID_RESPONSE', '外部服务返回了无效 JSON。', error);
+      throw Object.assign(fail('INVALID_RESPONSE', '外部服务返回了无效 JSON。', error), { callId: response.callId });
     }
     return { data, response };
   }
 
   async function generate({ system = '', prompt, privacy, signal, json } = {}) {
     assertCloud(privacy);
+    prompt = outboundText(prompt);
+    if (system) system = outboundText(String(system));
     if (typeof prompt !== 'string' || !prompt.trim()) throw fail('INVALID_INPUT', 'prompt 不能为空。');
     const { allSettings, config, secret } = await requireCapability('model');
     if (!config.baseUrl || !config.model) throw fail('INVALID_CONFIG', '模型服务地址或模型名称未配置。');
@@ -668,13 +725,14 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
       ...readTokenUsage(result.data?.usage),
       durationMs: Date.now() - started,
     };
-    usage.cost = tokenCost(usage, config);
+    usage.cost = result.response.accountingEntry ? result.response.accountingEntry.cost : tokenCost(usage, config);
     // The transport and returned usage share one calculation; never append a second call.
-    return { text, usage };
+    return { text, usage, callId: result.response.callId, recovered: result.response.recovered === true };
   }
 
   async function embed({ texts, privacy, signal } = {}) {
     assertCloud(privacy);
+    if (Array.isArray(texts)) texts = texts.map(text => outboundText(text));
     if (!Array.isArray(texts) || !texts.length || texts.some((text) => typeof text !== 'string' || !text.length)) {
       throw fail('INVALID_INPUT', 'texts 必须是非空字符串数组。');
     }
@@ -706,6 +764,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
 
   async function search({ query, privacy, signal } = {}) {
     assertCloud(privacy);
+    query = outboundText(query);
     if (typeof query !== 'string' || !query.trim()) throw fail('INVALID_INPUT', 'query 不能为空。');
     const { allSettings, config, secret } = await requireCapability('search');
     const baseUrl = config.baseUrl || 'https://api.tavily.com';
@@ -782,8 +841,8 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     if (typeof claim !== 'string' || !claim.trim()) throw fail('INVALID_INPUT', 'claim 不能为空。');
     const promptOverrides = validatePromptOverrides(prompts ?? (await settings()).prompts);
     const directions = [
-      { direction: 'support', query: renderPrompt('researchSearchSupport', { context: claim.trim() }, promptOverrides).slice(0, 350) },
-      { direction: 'oppose', query: renderPrompt('researchSearchOppose', { context: claim.trim() }, promptOverrides).slice(0, 350) },
+      { direction: 'support', query: outboundText(renderPrompt('researchSearchSupport', { context: claim.trim() }, promptOverrides)).slice(0, 350) },
+      { direction: 'oppose', query: outboundText(renderPrompt('researchSearchOppose', { context: claim.trim() }, promptOverrides)).slice(0, 350) },
     ];
     const notes = [];
     const found = [];
@@ -961,7 +1020,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
         () => researchBatch({ claims: normalizedClaims, topic, privacy, signal, prompts: promptOverrides }));
     }
     const subject = String(topic ?? '').trim();
-    const compact = (value, limit) => String(value).replace(/\s+/g, ' ').trim().slice(0, limit);
+    const compact = (value, limit) => outboundText(String(value)).replace(/\s+/g, ' ').trim().slice(0, limit);
     // Earlier extraction, redirects, and retries already count against this source budget.
     const budget = sourceBudget.getStore(), remaining = Math.max(0, budget.limit - budget.used);
     const pageLimit = Math.min(4, Math.max(0, remaining - 3));
@@ -1209,5 +1268,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     throw fail('INVALID_CAPABILITY', '未知的外部能力。');
   }
 
-  return { generate, embed, search, readPage, research, researchBatch, withBudget, test };
+  return { generate, embed, search, readPage, research, researchBatch, withBudget, withCallContext, test,
+    ...(typeof callLedger?.evidence === 'function' ? { getCallEvidence: jobId => callLedger.evidence(jobId) } : {}),
+  };
 }

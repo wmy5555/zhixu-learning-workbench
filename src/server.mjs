@@ -6,14 +6,28 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createService } from './service.mjs';
 import { atomicWrite, fail, now } from './store.mjs';
 import { createOnboarding } from './onboarding.mjs';
+import { BACKUP_REQUEST_MAX_BYTES } from './backup-contract.mjs';
+import { MAX_FILE_BYTES } from './attachments.mjs';
 
 const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
+const vendorAssets = Object.fromEntries([
+  ['filepond', 'filepond.esm.js'], ['filepond', 'filepond.min.css'],
+  ['filepond-plugin-file-validate-type', 'filepond-plugin-file-validate-type.esm.js'],
+  ['filepond-plugin-file-validate-size', 'filepond-plugin-file-validate-size.esm.js'],
+  ['filepond-plugin-image-preview', 'filepond-plugin-image-preview.esm.js'],
+  ['filepond-plugin-image-preview', 'filepond-plugin-image-preview.min.css'],
+].map(([pkg, name]) => ['vendor/' + name, fileURLToPath(new URL('../node_modules/' + pkg + '/dist/' + name, import.meta.url))]));
 const safeEqual = (a, b) => typeof a === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 async function readJSON(req, maxBytes = 50 * 1024 * 1024) {
   let size = 0; const chunks = [];
   for await (const chunk of req) { size += chunk.length; if (size > maxBytes) fail('请求超过大小限制，请拆分导入。', 'TOO_LARGE', 413); chunks.push(chunk); }
   if (!size) return {};
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { fail('请求不是有效的 JSON。'); }
+}
+async function readBinary(req) {
+  let size = 0; const chunks = [];
+  for await (const chunk of req) { size += chunk.length; if (size > MAX_FILE_BYTES) fail('每个文件最多 50 MB（50,000,000 字节）。', 'TOO_LARGE', 413); chunks.push(chunk); }
+  return Buffer.concat(chunks);
 }
 export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR || '.data'), vaultDir = process.env.LEARNING_VAULT_DIR ? path.resolve(process.env.LEARNING_VAULT_DIR) : undefined, scheduler = true, service: supplied } = {}) {
   const service = supplied || createService({ dataDir, vaultDir });
@@ -39,11 +53,11 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
         if(method!=='GET'&&method!=='HEAD')fail('不支持的方法。','METHOD',405);
         let rel=url.pathname==='/'?'index.html':decodeURIComponent(url.pathname.slice(1));
         if (rel.includes('..') || rel.includes('\\') || rel.includes('\0')) fail('路径无效。','PATH_ESCAPE',403);
-        const file=path.join(publicDir,rel); if(!fs.existsSync(file)||!fs.statSync(file).isFile())fail('页面不存在。','NOT_FOUND',404);
+        const file=vendorAssets[rel] || path.join(publicDir,rel); if(!fs.existsSync(file)||!fs.statSync(file).isFile())fail('页面不存在。','NOT_FOUND',404);
         const types={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.js':'text/javascript; charset=utf-8','.svg':'image/svg+xml','.txt':'text/plain; charset=utf-8','.md':'text/plain; charset=utf-8'};
         // Only the read-only guide may be embedded by our own help dialog.
         const frameAncestors = file === path.join(publicDir, 'guide.html') ? "'self'" : "'none'";
-        res.writeHead(200,{'Content-Type':types[path.extname(file)]||'application/octet-stream','Cache-Control':'no-cache','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Content-Security-Policy':`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors ${frameAncestors}; form-action 'self'`}); if(method==='HEAD')res.end();else fs.createReadStream(file).pipe(res);return;
+        res.writeHead(200,{'Content-Type':types[path.extname(file)]||'application/octet-stream','Cache-Control':'no-cache','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Content-Security-Policy':`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors ${frameAncestors}; form-action 'self'`}); if(method==='HEAD')res.end();else fs.createReadStream(file).pipe(res);return;
       }
       if (parts[1]==='session'&&method==='GET') {
         const existingId = (req.headers.cookie || '').split(';').map(x=>x.trim()).find(x=>x.startsWith('learning_session='))?.slice(17);
@@ -94,7 +108,9 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
       const cookie=(req.headers.cookie || '').split(';').map(x=>x.trim()).find(x=>x.startsWith('learning_session='))?.slice(17),session=sessions.get(cookie);
       if(!session||Date.now()-session.at>86400000)fail('会话已过期，请刷新页面。','SESSION_REQUIRED',401);
       if(!['GET','HEAD'].includes(method)&&!safeEqual(req.headers['x-csrf-token']||'',session.csrf))fail('请求缺少有效的操作凭据，请刷新页面。','CSRF_DENIED',403);
-      const body=['POST','PUT','DELETE'].includes(method)?await readJSON(req):{};
+      const binaryUpload = /\/uploads$/.test(url.pathname) && method === 'POST';
+      const restoreRequest = parts.length === 2 && parts[1] === 'restore' || parts.length === 4 && parts[1] === 'practice' && parts[3] === 'restore';
+      const body=['POST','PUT','DELETE'].includes(method) && !binaryUpload ?await readJSON(req, restoreRequest ? BACKUP_REQUEST_MAX_BYTES : undefined):{};
       if (parts[1] === 'capture-undo') {
         let result;
         if (parts.length === 2 && method === 'GET') result = mainService.chatgptUndo.list();
@@ -130,7 +146,17 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
       try {
       const service = lease?.service || mainService;
       let result;
-      if(resource==='bootstrap'&&method==='GET'){result=service.bootstrap();if(practiceId)result.conflicts.push(...service.store.records('onboardingConflicts'));}
+      if(resource==='uploads'&&!id&&method==='POST') result=service.uploadFile({ name: query.name, mime: req.headers['content-type'] || '', uploadId: query.uploadId, bytes: await readBinary(req) });
+      else if(resource==='uploads'&&!id&&method==='GET') result={uploads:service.pendingUploads()};
+      else if(resource==='uploads'&&id&&method==='DELETE') result=service.revertUpload(id);
+      else if(resource==='file-import'&&method==='POST') result=await service.commitFile(body);
+      else if(resource==='notes'&&action==='attachments'&&method==='GET') {
+        const file=service.readFile(id, query.asset);
+        const inline=query.download!=='1' && ['image','pdf'].includes(file.descriptor.kind);
+        res.writeHead(200, { 'Content-Type': file.descriptor.mime, 'Content-Length': file.bytes.length, 'Cache-Control':'no-store', 'X-Content-Type-Options':'nosniff', 'Referrer-Policy':'no-referrer', 'Content-Security-Policy':"sandbox; default-src 'none'; frame-ancestors 'self'", 'Content-Disposition': `${inline?'inline':'attachment'}; filename="attachment.${file.descriptor.id.split('.').at(-1)}"; filename*=UTF-8''${encodeURIComponent(file.descriptor.name)}` });
+        res.end(file.bytes); return;
+      }
+      else if(resource==='bootstrap'&&method==='GET'){result=service.bootstrap();if(practiceId)result.conflicts.push(...service.store.records('onboardingConflicts'));}
       else if(resource==='library'&&method==='GET')result=service.library(query);
       else if(resource==='notes'&&!id&&method==='GET')result={notes:service.listNotes(query).filter(n=>!n.meta.excerptOnly).map(service.publicNote)};
       else if(resource==='notes'&&id==='merge'&&method==='POST')result=service.merge(body);
@@ -182,6 +208,11 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
       else if(resource==='settings'&&id==='test'&&method==='POST')result=(await onboarding.test(body.capability)).testResult;
       else if(resource==='usage'&&!id&&method==='GET'){result=mainService.usageReport(query);result.sharedUsage=Boolean(practiceId);}
       else if(resource==='usage'&&id==='settings'&&method==='PUT')result=service.updateUsageSettings(body);
+      else if(resource==='call-recovery'&&!id&&method==='GET')result=mainService.callRecovery();
+      else if(resource==='call-recovery'&&id&&method==='POST'){
+        if(practiceId)fail('请返回正式库的用量与费用页面核对调用记录。','PRACTICE_SETTINGS_LOCKED',409);
+        result=mainService.recoverCall(id,body);
+      }
       else if(resource==='diagnostics'&&method==='GET'){result=service.diagnostics();if(practiceId){result.usage=mainService.usage();result.calls=mainService.store.records('calls').slice(0,100);result.sharedUsage=true;result.usageNotice='请求上限与日常使用共用。下方调用记录来自共用 AI 服务，包含正式与练习请求；仅在此查看，不写入练习备份。';}}
       else if(resource==='index'&&id==='rebuild'&&method==='POST')result=service.queue('index',{},'index:manual');
       else if(resource==='index'&&id==='update'&&method==='POST')result=service.queue('index',{incremental:true},'index:manual');
