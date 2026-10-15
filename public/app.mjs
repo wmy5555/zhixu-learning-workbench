@@ -106,10 +106,11 @@ function sourceBodyPreview(value, length = 420) {
   return text.length > length ? `${text.slice(0, length)}\n…` : text;
 }
 
+function conversationReading(note) { return Boolean(note?.meta?.chatgptCapture || note?.meta?.chatgptSync); }
 function sourceReadingBody(value, className = '', emptyText = '暂无原文', note = null) {
   const images = [note?.meta?.sourceFile, ...(note?.meta?.attachments || [])].filter(file => file?.kind === 'image');
   return renderMarkdown(value, { className: `prose ${className}`.trim(), emptyText,
-    conversation: Boolean(note?.meta?.chatgptCapture || note?.meta?.chatgptSync), imageResolver: target => {
+    conversation: conversationReading(note), imageResolver: target => {
     const file = images.find(item => target === '../.zhixu-attachments/' + item.id);
     return file ? attachmentUrl(note.id, file.id) : '';
   } });
@@ -122,7 +123,7 @@ function historyReadingBody(note, version) {
   const body = version.body ?? (frontmatter ? raw.slice(frontmatter[0].length) : raw);
   return el('div', { class: 'history-reading-body' }, [
     frontmatter ? el('pre', { class: 'mono-block history-metadata', text: frontmatter[0] }) : null,
-    sourceReadingBody(body, '', '此版本没有可显示的正文快照'),
+    renderMarkdown(body, { className: 'prose', emptyText: '此版本没有可显示的正文快照', conversation: conversationReading(note) }),
   ]);
 }
 let onboarding = null;
@@ -1062,7 +1063,7 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
   const body = el("textarea", { name: "body", textContent: note.body || "", rows: 18, required: true });
   const imageUploads = [];
   const imageControls = note.kind === "source" && !isMobilePrototype() ? imageInsertControls(body, imageUploads, { getNote: () => note }) : null;
-  const bodyEditor = imageControls ? createMarkdownEditor(body, { value: note.body || "", ...imageControls.editorOptions }) : null;
+  const bodyEditor = !isMobilePrototype() ? createMarkdownEditor(body, { value: note.body || "", ...imageControls?.editorOptions }) : null;
   const editorValues = () => { const values = serializeForm(form); if (bodyEditor) values.body = bodyEditor.getValue(); if (imageControls) values.attachmentUploadIds = [...imageUploads]; return values; };
   const sourceFields = note.kind === "source" ? el("section", { class: "panel soft" }, [
     sectionHeading("来源信息", "补充或修正当前来源，不会改写最初收集快照"),
