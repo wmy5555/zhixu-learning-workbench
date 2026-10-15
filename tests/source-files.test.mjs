@@ -21,6 +21,19 @@ async function harness(t) {
 }
 const upload = (service, name, bytes, extra = {}) => service.uploadFile({ name, bytes, mime: '', uploadId: randomUUID(), ...extra });
 
+async function attachmentHttpHarness(t) {
+  const temporaryRoot = path.resolve(import.meta.dirname, '..', '.tmp');
+  const root = fs.mkdtempSync(path.join(temporaryRoot, 'source-files-http-'));
+  assert.equal(path.dirname(root), temporaryRoot);
+  const app = createApp({ dataDir: path.join(root, 'data'), vaultDir: path.join(root, 'vault'), scheduler: false });
+  app.server.listen(0, '127.0.0.1'); await once(app.server, 'listening');
+  t.after(async () => { await app.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const base = 'http://127.0.0.1:' + app.server.address().port;
+  const session = await fetch(base + '/api/session');
+  const headers = { Cookie: session.headers.get('set-cookie').split(';')[0], 'X-CSRF-Token': (await session.json()).csrf };
+  return { ...app, base, headers };
+}
+
 test('binary sources persist exactly, deduplicate by bytes regardless of name, and survive reload', async t => {
   const h = await harness(t), a = upload(h.service, '合成.png', tinyPng);
   const first = await h.service.commitFile({ uploadId: a.id });
@@ -253,4 +266,78 @@ test('HTTP upload and preview enforce session, CSRF, isolation, and safe respons
   assert.deepEqual(Buffer.from(await preview.arrayBuffer()), tinyPng);
   assert.equal((await fetch(base + '/vendor/filepond.esm.js')).status, 200);
   assert.equal((await fetch(base + '/vendor/package.json')).status, 404);
+});
+
+test('attachment HTTP boundaries reject foreign origins, unbound reads and unrelated-note downloads', async t => {
+  const h = await attachmentHttpHarness(t);
+  const endpoint = '/api/uploads?name=' + encodeURIComponent('公开原件.pdf') + '&uploadId=' + randomUUID();
+  const denied = await fetch(h.base + endpoint, { method: 'POST', body: tinyPdf, headers: { ...h.headers, Origin: 'https://attacker.invalid', 'Content-Type': 'application/pdf' } });
+  assert.equal(denied.status, 403);
+  assert.equal((await denied.json()).code, 'ORIGIN_DENIED');
+  assert.equal(h.service.pendingUploads().length, 0);
+
+  const response = await fetch(h.base + endpoint, { method: 'POST', body: tinyPdf, headers: { ...h.headers, 'Content-Type': 'application/pdf' } });
+  assert.equal(response.status, 200);
+  const receipt = await response.json();
+  const route = id => h.base + '/api/notes/' + id + '/attachments?asset=' + receipt.attachment.id + '&download=1';
+  assert.equal((await fetch(route(receipt.noteId), { headers: h.headers })).status, 404);
+  const { note } = await h.service.commitFile({ uploadId: receipt.id });
+  const unrelated = h.service.importItems({ items: [{ title: '另一份合成资料', body: '没有绑定附件。' }] }).notes[0];
+  assert.equal((await fetch(route(unrelated.id), { headers: h.headers })).status, 404);
+  assert.equal((await fetch(route(note.id))).status, 401);
+  assert.equal((await fetch(route(note.id), { headers: { ...h.headers, Origin: 'https://attacker.invalid' } })).status, 403);
+  const download = await fetch(route(note.id), { headers: h.headers });
+  assert.equal(download.status, 200);
+  assert.equal(download.headers.get('content-type'), 'application/pdf');
+  assert.equal(download.headers.get('content-length'), String(tinyPdf.length));
+  assert.equal(download.headers.get('cache-control'), 'no-store');
+  assert.match(download.headers.get('content-disposition'), /^attachment;/);
+  assert.ok(download.headers.get('content-disposition').includes(encodeURIComponent('公开原件.pdf')));
+  assert.match(download.headers.get('content-security-policy'), /sandbox/);
+  assert.deepEqual(Buffer.from(await download.arrayBuffer()), tinyPdf);
+  assert.equal(h.service.store.records('jobs').length, 0);
+});
+
+test('attachment HTTP boundaries isolate practice receipts, pending lists and bound originals', async t => {
+  const h = await attachmentHttpHarness(t), practice = h.onboarding.start();
+  const prefix = '/api/practice/' + practice.practiceId;
+  const lease = h.onboarding.acquire(practice.practiceId, { resource: 'uploads', method: 'GET' });
+  try {
+    const mainFile = upload(h.service, '正式合成.png', tinyPng);
+    const practiceFile = upload(lease.service, '练习合成.pdf', tinyPdf);
+    const mainPending = await (await fetch(h.base + '/api/uploads', { headers: h.headers })).json();
+    const practicePending = await (await fetch(h.base + prefix + '/uploads', { headers: h.headers })).json();
+    assert.deepEqual(mainPending.uploads.map(file => file.id), [mainFile.id]);
+    assert.deepEqual(practicePending.uploads.map(file => file.id), [practiceFile.id]);
+    await assert.rejects(h.service.commitFile({ uploadId: practiceFile.id }), { code: 'UPLOAD_MISSING' });
+    await assert.rejects(lease.service.commitFile({ uploadId: mainFile.id }), { code: 'UPLOAD_MISSING' });
+    const main = await h.service.commitFile({ uploadId: mainFile.id });
+    const training = await lease.service.commitFile({ uploadId: practiceFile.id });
+    const route = (scope, note, file) => h.base + scope + '/notes/' + note.id + '/attachments?asset=' + file.attachment.id + '&download=1';
+    assert.equal((await fetch(route('/api', training.note, practiceFile), { headers: h.headers })).status, 404);
+    assert.equal((await fetch(route(prefix, main.note, mainFile), { headers: h.headers })).status, 404);
+    const ownPractice = await fetch(route(prefix, training.note, practiceFile), { headers: h.headers });
+    assert.equal(ownPractice.status, 200);
+    assert.deepEqual(Buffer.from(await ownPractice.arrayBuffer()), tinyPdf);
+    const blockedWrite = await fetch(h.base + prefix + '/uploads?name=blocked.png&uploadId=' + randomUUID(), { method: 'POST', body: tinyPng, headers: { ...h.headers, 'Content-Type': 'image/png' } });
+    assert.equal(blockedWrite.status, 409);
+    assert.equal((await blockedWrite.json()).code, 'MODEL_TEST_REQUIRED');
+    assert.equal(h.service.store.records('jobs').length, 0);
+    assert.equal(lease.service.store.records('jobs').length, 0);
+  } finally { lease.release(); }
+});
+
+test('attachment reads reject same-size byte tampering and retain the saved note', async t => {
+  const h = await harness(t), file = upload(h.service, '完整性.png', tinyPng);
+  const { note } = await h.service.commitFile({ uploadId: file.id });
+  const target = path.join(h.options.vaultDir, '.zhixu-attachments', file.attachment.id);
+  const changed = Buffer.from(tinyPng); changed[changed.length - 1] ^= 1;
+  fs.writeFileSync(target, changed);
+  assert.throws(() => h.service.readFile(note.id, file.attachment.id), { code: 'ATTACHMENT_CHANGED' });
+  assert.throws(() => h.service.backup(), { code: 'ATTACHMENT_CHANGED' });
+  assert.equal(h.service.getNote(note.id).hash, note.hash);
+  assert.deepEqual(fs.readFileSync(target), changed);
+  fs.writeFileSync(target, tinyPng);
+  assert.deepEqual(h.service.readFile(note.id, file.attachment.id).bytes, tinyPng);
+  assert.equal(h.service.backup().version, 2);
 });
