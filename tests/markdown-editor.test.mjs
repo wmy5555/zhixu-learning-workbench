@@ -37,11 +37,11 @@ function fixture(value, options = {}) {
   let editor;
   class Vditor {
     constructor(host, config) {
-      this.vditor = { lute: engine() }; this.config = config; editor = this;
+      this.vditor = { lute: engine() }; this.config = config; this.values = []; editor = this;
       this.setValue(''); queueMicrotask(config.after);
     }
     getValue() { return this.markdown; }
-    setValue(value) { this.markdown = this.vditor.lute.VditorDOM2Md(this.vditor.lute.Md2VditorDOM(value)); }
+    setValue(value) { this.values.push(value); this.markdown = this.vditor.lute.VditorDOM2Md(this.vditor.lute.Md2VditorDOM(value)); }
     insertValue(value) { this.setValue(this.markdown + value); }
     focus() {}
     destroy() { this.destroyed = true; }
@@ -127,6 +127,63 @@ test('Markdown editing and preview conversion sanitize executable payloads while
   assert.ok(code.includes('&lt;img')); assert.doesNotMatch(code, /<img\b/);
   // Upstream permits iframes in its sanitizer; the adapter refuses raw HTML.
   assert.match(richFallbackReason('<iframe src="https://example.invalid"></iframe>', lute), /保留源码/);
+});
+
+test('parser-recognized HTML cannot hide inside invalid fences or cross-paragraph code spans', async () => {
+  const form = '<form style="position:fixed;inset:0"><input name="synthetic-probe"></form>';
+  const iframe = '<iframe src="/synthetic-frame" style="position:fixed;inset:0"></iframe>';
+  const sources = [
+    '```bad`\r\n' + form + '\r\n```\r\n',
+    '```bad`\n' + iframe + '\n```',
+    '\\`' + form + '\\`',
+    '`unclosed\n\n' + form + '\n`',
+  ];
+  for (const source of sources) {
+    const lute = engine();
+    assert.match(lute.RenderJSON(source), /NodeHTMLBlock|NodeInlineHTML/, 'the real parser recognizes HTML outside literal code');
+    if (source.startsWith('```bad`')) assert.match(lute.Md2VditorDOM(source), /<(?:form|iframe)\b/, 'the reported pseudo-fence exposes live HTML without the gate');
+    assert.match(richFallbackReason(source, lute), /保留源码/);
+    const f = fixture(source);
+    await f.root.switchMode('rich');
+    assert.equal(f.root.getMode(), 'source'); assert.equal(f.root.getValue(), source);
+    assert.deepEqual(f.editor.values, [''], 'unsafe source never reaches Vditor.setValue');
+    assert.match(f.status.textContent, /保留源码/);
+    f.root.destroy();
+  }
+  const f = fixture('安全正文'); await f.root.switchMode('rich');
+  const before = f.editor.getValue();
+  f.host.events.paste({ preventDefault() {}, stopImmediatePropagation() {}, clipboardData: { files: [], getData: type => type === 'text/plain' ? sources[0] : '' } });
+  assert.equal(f.root.getMode(), 'source'); assert.ok(f.root.getValue().endsWith(sources[0]));
+  assert.equal(f.editor.getValue(), before);
+  assert.match(f.status.textContent, /追加到源码末尾/);
+  f.root.destroy();
+});
+
+test('valid code fences and exact code spans keep HTML literal and preserve source bytes', async () => {
+  const html = '<form style="position:fixed;inset:0"><iframe src="/synthetic-frame"></iframe></form>';
+  for (const source of [
+    '```html\r\n' + html + '\r\n```\r\n',
+    '  ~~~html\n' + html + '\n  ~~~~\n',
+    '````html\n```\n' + html + '\n````',
+    '```html\n' + html + '\n```not-a-close\n',
+    '    ' + html + '\n',
+    '正文 ``' + html + '`内容`` 结尾',
+  ]) {
+    const lute = engine();
+    assert.doesNotMatch(lute.Md2VditorDOM(source), /<(?:form|iframe)\b/);
+    assert.equal(richFallbackReason(source, lute), '');
+    const f = fixture(source); await f.root.switchMode('rich');
+    assert.equal(f.root.getMode(), 'rich'); assert.equal(f.root.getValue(), source);
+    await f.root.switchMode('source'); assert.equal(f.root.getValue(), source);
+    f.root.destroy();
+  }
+});
+
+test('unavailable or invalid parser structure fails closed before HTML conversion', () => {
+  for (const render of [undefined, () => { throw new Error('synthetic failure'); }, () => '{', () => '{}', () => '{"Type":"NodeDocument","Children":[null]}']) {
+    const lute = { RenderJSON: render, Md2VditorDOM() { assert.fail('must not convert an unchecked document'); } };
+    assert.match(richFallbackReason('<form>合成</form>', lute), /已保留源码编辑/);
+  }
 });
 
 test('HTML clipboard embeds switch to literal source instead of entering the rich DOM', async () => {

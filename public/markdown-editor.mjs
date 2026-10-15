@@ -35,11 +35,28 @@ export function createMarkdownDraft(value) {
 }
 
 export function richFallbackReason(markdown, lute) {
-  // These constructs need their original spelling/metadata rather than an HTML approximation.
-  const outsideCode = markdown.replace(/^(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\1[^\n]*$/gm, '').replace(/`+[^`]*`+/g, '');
-  if (/^---\r?\n|!?\[\[[\s\S]*?\]\]|<!--[\s\S]*?-->|<\/?[A-Za-z][^>]*>|^\s*:::/m.test(outsideCode)) {
-    return '正文含 HTML、双链或扩展标记，已保留源码编辑，避免格式或内容丢失。';
+  // Use the same pinned parser as the editor: regexes can mistake invalid
+  // fences or escaped/mismatched backticks for code and hide live HTML.
+  const unsupported = '正文含 HTML、双链或扩展标记，已保留源码编辑，避免格式或内容丢失。';
+  const text = [];
+  try {
+    const tree = JSON.parse(lute.RenderJSON(markdown));
+    if (tree?.Type !== 'NodeDocument') throw new Error('Missing Markdown document');
+    const nodes = [tree];
+    while (nodes.length) {
+      const node = nodes.pop();
+      if (typeof node?.Type !== 'string' || (node.Children !== undefined && !Array.isArray(node.Children))) throw new Error('Invalid Markdown node');
+      if (node.Type === 'NodeCodeBlock' || node.Type === 'NodeCodeSpan') continue;
+      if (['NodeHTMLBlock', 'NodeInlineHTML', 'NodeYamlFrontMatter'].includes(node.Type)) return unsupported;
+      if (typeof node.Data === 'string') text.push(node.Data);
+      nodes.push(...(node.Children || []));
+    }
+  } catch {
+    return '无法确认正文的 Markdown 结构，已保留源码编辑，避免不可信内容进入可视化页面。';
   }
+  // Preserve unsupported syntax outside parser-recognized literal code.
+  const outsideCode = text.join('\n');
+  if (/!?\[\[[\s\S]*?\]\]|^\s*:::/m.test(outsideCode)) return unsupported;
   if (/(?<![\\$])\$(?!\$)[^\n$]+(?<!\\)\$(?!\$)/.test(outsideCode)) return '正文含行内公式，已保留源码编辑。本轮不加载额外公式渲染器，公式原文完整保留。';
   const roundTrip = lute.VditorDOM2Md(lute.Md2VditorDOM(markdown));
   if (lute.Md2HTML(markdown) !== lute.Md2HTML(roundTrip)) return '这段 Markdown 无法完整转换为可视化内容，已保留源码编辑。';

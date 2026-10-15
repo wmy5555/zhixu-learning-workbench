@@ -21,6 +21,8 @@
 
 编辑器的脚本、样式、Lute、中文界面和图标均在 `public/vendor/vditor/` 自托管。关闭本地草稿缓存，不把资料写进 localStorage。Vditor 的 `preview.markdown.sanitize` 明确开启；HTML 默认保留源码，粘贴不直接插入剪贴板 HTML。图片在进入页面 DOM 前转换为本地占位或受控附件地址，读取 Markdown 时只恢复图片目标，普通文本中的 URL 不被替换。页面原有 CSP、CSRF、会话和外发限制保持有效。
 
+可视化切换、纯文本粘贴和拖入文本先读取同一固定 Lute 引擎的 `RenderJSON` 语法树，只跳过解析器实际识别的代码块和代码跨度。HTML 块、行内 HTML 和 frontmatter 保留源码；结构解析不可用或异常也保留源码。不能用正则删除看似代码的片段再作 HTML 安全判断：含非法反引号 info 的伪围栏或跨段落的未闭合反引号，可能仍被实际解析为 HTML。此保护在正文交给 Vditor 前执行；不能依靠 sanitizer 或 CSP 自动阻止表单、iframe 和固定定位内容覆盖界面。
+
 工具栏图标随主脚本以本地外链脚本预载，两者就绪才启用可视化。通过公开 `icon: ''` 选项关闭上游的自动图标加载，避免其同步 XHR 后插入内联脚本被现有 CSP 拒绝而留下空白工具栏；不放宽 CSP，不修改 vendor 或 manifest。
 
 本轮不加载 Vditor 包内可选 KaTeX、图表或 PlantUML 渲染器；这些资源不随网页发布。已有只读 Markdown 入口仍使用原来的安全 DOM 阅读器，不能把它的旧验证代替新编辑器安全验证。没有新增 AI 调用、提示词或外发授权。
