@@ -681,7 +681,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
   async function generate({ system = '', prompt, privacy, signal, json } = {}) {
     assertCloud(privacy);
     prompt = outboundText(prompt);
-    system = outboundText(String(system));
+    if (system) system = outboundText(String(system));
     if (typeof prompt !== 'string' || !prompt.trim()) throw fail('INVALID_INPUT', 'prompt 不能为空。');
     const { allSettings, config, secret } = await requireCapability('model');
     if (!config.baseUrl || !config.model) throw fail('INVALID_CONFIG', '模型服务地址或模型名称未配置。');
