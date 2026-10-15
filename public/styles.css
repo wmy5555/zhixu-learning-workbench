@@ -516,6 +516,7 @@ input[type="color"] { height: 44px; padding: 5px 8px; cursor: pointer; }
 /* Shared reading view: stored Markdown and textarea values stay untouched. */
 .source-group-drawer { grid-template-columns: minmax(0, 1fr); }
 .source-group-drawer > .original-material { min-width: 0; max-width: 100%; }
+.source-group-drawer > .original-material > .original-body { max-height: none; overflow: visible; }
 .markdown-reader { min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; line-height: 1.75; }
 .markdown-reader > :first-child { margin-top: 0; }
 .markdown-reader > :last-child { margin-bottom: 0; }
@@ -528,12 +529,14 @@ input[type="color"] { height: 44px; padding: 5px 8px; cursor: pointer; }
 .markdown-reader blockquote { margin: .8em 0; padding: .2em 1em; border-inline-start: 3px solid var(--accent); background: var(--accent-soft); }
 .markdown-reader a { text-decoration: underline; text-underline-offset: 3px; }
 .markdown-reader code { font-family: Consolas, monospace; font-size: .92em; }
-.markdown-code { min-width: 0; max-width: 100%; margin: .8em 0; padding: 14px; overflow: auto; white-space: pre; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); }
-.markdown-code code { white-space: pre; overflow-wrap: normal; }
+.markdown-code { min-width: 0; max-width: 100%; margin: .8em 0; padding: 14px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); }
+.markdown-code code { white-space: pre-wrap; overflow-wrap: anywhere; }
 .markdown-table-scroll { min-width: 0; max-width: 100%; overflow: auto; margin: .8em 0; }
 .markdown-table-scroll table { width: max-content; min-width: 100%; border-collapse: collapse; }
 .markdown-table-scroll th, .markdown-table-scroll td { border: 1px solid var(--line); padding: 7px 10px; max-width: 36rem; }
 .markdown-table-scroll th { background: var(--panel); }
+.original-body .markdown-table-scroll table { width: 100%; table-layout: fixed; }
+.original-body .markdown-table-scroll th, .original-body .markdown-table-scroll td { overflow-wrap: anywhere; white-space: normal; }
 .markdown-align-left { text-align: left; }
 .markdown-align-center { text-align: center; }
 .markdown-align-right { text-align: right; }

@@ -471,6 +471,52 @@ test('source reading, search excerpts and historical body use Markdown while met
   assert.ok(descendants(search).some(node => node.tagName === 'h2' && node.textContent === '阅读标题'));
 });
 
+test('captured conversation history uses message presentation without resolving current attachments', () => {
+  const app = browser();
+  const body = '## 会话原文（按收到的顺序保留）\n\n### 1. ChatGPT\n\n```text\n## 历史标题\n\n**历史回答**\n\n![图](../.zhixu-attachments/old.png)\n```';
+  for (const marker of ['chatgptCapture', 'chatgptSync']) {
+    const note = { kind: 'source', meta: { [marker]: { version: 1 }, attachments: [{ id: 'old.png', kind: 'image' }] } };
+    const historical = app.historyReadingBody(note, { raw: '---\ntitle: 旧版本\n---\n' + body });
+    assert.ok(descendants(historical).some(node => node.tagName === 'strong' && node.textContent === '历史回答'));
+    assert.equal(historical.querySelectorAll('.conversation-message').length, 1);
+    assert.equal(historical.querySelectorAll('img').length, 0);
+    assert.ok(historical.querySelector('.history-metadata'));
+  }
+});
+
+test('non-source note editors expose Markdown modes and preserve rich drafts across conflict and retry', async () => {
+  for (const kind of ['proposal', 'knowledge', 'mistake']) {
+    const note = { id: `synthetic-${kind}`, kind, title: '合成标题', body: '# 初始\r\n', hash: 'original-hash', meta: {} };
+    const writes = []; let fail = true;
+    const app = browser({ updateNote: async (id, payload) => {
+      writes.push(plain(payload));
+      if (fail) throw new Error('内容冲突，请重试');
+      return { ...note, ...payload, hash: 'saved-hash' };
+    }, bootstrap: async () => ({}) });
+    app.refs.drawer.classList.add('is-open'); app.renderNoteEditor(note);
+    const form = app.refs.drawerBody.querySelector('form'), editor = form.querySelector('.markdown-editor');
+    assert.ok(editor, kind);
+    assert.ok(findButton(form, '可视化编辑'));
+    assert.equal(editor.getValue(), note.body);
+    assert.equal(findButton(form, '插入本地图片'), undefined);
+    const richDraft = '# 修改\n\n**富文本草稿**\n'; editor.getValue = () => richDraft;
+    const cancel = click(findButton(form, '取消'));
+    await click(findButton(app.dialogs, '取消')); await cancel;
+    assert.equal(app.refs.drawerBody.querySelector('form'), form);
+    await form.events.submit({ preventDefault() {} });
+    assert.equal(editor.getValue(), richDraft);
+    assert.equal(app.refs.drawerBody.querySelector('form'), form);
+    assert.equal(writes[0].expectedHash, note.hash);
+    assert.equal(writes[0].body, richDraft);
+    assert.equal('attachmentUploadIds' in writes[0], false);
+    fail = false;
+    await form.events.submit({ preventDefault() {} });
+    assert.equal(writes.length, 2);
+    assert.equal(writes[1].body, richDraft);
+    assert.equal(writes[1].expectedHash, note.hash);
+  }
+});
+
 test('today card preserves the scheduler calendar day in a browser west of UTC', async () => {
   const app = browser({}, function (locale, options) {
     return new Intl.DateTimeFormat(locale, { timeZone: 'America/Los_Angeles', ...options });
