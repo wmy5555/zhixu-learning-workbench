@@ -2795,10 +2795,25 @@ async function confirmUnsavedInputDiscard() {
   return !form?.confirmDiscardChanges || await form.confirmDiscardChanges();
 }
 
+let contextPreparation = null;
+
+function finishContextChange() {
+  const pending = contextPreparation;
+  contextPreparation = null;
+  if (!pending || refs.main.querySelector(".loading-panel") !== pending.loading) return;
+  const context = api.getContext();
+  if (context.version !== pending.context.version || context.practiceId !== pending.context.practiceId) return;
+  clear(refs.main).append(...pending.content);
+}
+
 async function prepareContextChange() {
   if (!await confirmUnsavedInputDiscard()) return false;
   if (!await confirmDrawerDiscard()) return false;
-  showLoading();
+  if (!contextPreparation) {
+    const content = [...refs.main.children], context = api.getContext();
+    showLoading();
+    contextPreparation = { content, context, loading: refs.main.querySelector(".loading-panel") };
+  }
   return true;
 }
 
@@ -2833,13 +2848,15 @@ async function init() {
         fillSample: fillTutorialSample,
         refresh: async () => { await refreshBootstrap(); await renderCurrent(); },
         beforeContextChange: prepareContextChange,
+        contextChangeFinished: finishContextChange,
         contextChanged: async () => {
           closeDrawer(); state.currentStudy = null; state.studyMaterialVisible = true; state.studyTab = "queue";
           state.lastOutput = null;
           state.restoreBackup = null; state.restoreToken = "";
           state.libraryFilters = { q: "", kind: "", stage: "" };
           state.searchFilters = { q: "", mode: "keyword", kind: "", stage: "", topic: "", source: "", from: "", to: "", privacy: "local" };
-          await refreshBootstrap(); await renderCurrent();
+          try { await refreshBootstrap(); await renderCurrent(); }
+          catch (error) { renderFailure(error, async () => { await refreshBootstrap(); await renderCurrent(); }); throw error; }
         },
       });
       await onboarding.init();
