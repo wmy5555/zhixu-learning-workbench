@@ -40,19 +40,52 @@ function cosine(a, b) {
   let dot = 0, na = 0, nb = 0; for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i] ** 2; nb += b[i] ** 2; } return dot / (Math.sqrt(na * nb) || 1);
 }
 
-// A local display hint only: preserve the body and keep AI title generation pending.
-function sourceTitlePlaceholder(body) {
-  const lines = body.replace(/\r\n?/g, '\n').split('\n'), visible = [];
-  let fence;
-  for (const line of lines) {
-    const marker = line.match(/^ {0,3}(`{3,}|~{3,})/);
-    if (fence) {
-      if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && !line.slice(marker[0].length).trim()) fence = null;
+// Mirror the reader's bounded container traversal without rendering or changing source text.
+function titleTextLines(lines, depth = 0) {
+  if (depth >= 16) return [];
+  const visible = [];
+  for (let i = 0; i < lines.length;) {
+    const line = lines[i], marker = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    if (marker && !(marker[1][0] === '`' && marker[2].includes('`'))) {
+      i++;
+      while (i < lines.length) {
+        const close = lines[i++].match(/^ {0,3}(`{3,}|~{3,})[ \t]*$/);
+        if (close && close[1][0] === marker[1][0] && close[1].length >= marker[1].length) break;
+      }
+      visible.push('');
       continue;
     }
-    if (marker) { fence = marker[1]; visible.push(''); continue; }
-    visible.push(line);
+    if (/^ {0,3}>/.test(line)) {
+      const quote = [];
+      while (i < lines.length && /^ {0,3}>/.test(lines[i])) quote.push(lines[i++].replace(/^ {0,3}> ?/, ''));
+      visible.push('');
+      for (const value of titleTextLines(quote, depth + 1)) visible.push(value);
+      visible.push('');
+      continue;
+    }
+    const item = line.match(/^( {0,3})(?:[-+*]|\d{1,9}[.)])[ \t]+(.*)$/);
+    if (item) {
+      const itemLines = [item[2].replace(/^\[[ xX]\][ \t]+/, '')], width = item[0].length - item[2].length;
+      i++;
+      while (i < lines.length) {
+        if (!lines[i].trim()) { itemLines.push(''); i++; continue; }
+        const indent = lines[i].match(/^ */)[0].length;
+        if (indent <= item[1].length) break;
+        itemLines.push(lines[i++].slice(Math.min(indent, width)));
+      }
+      visible.push('');
+      for (const value of titleTextLines(itemLines, depth + 1)) visible.push(value);
+      visible.push('');
+      continue;
+    }
+    visible.push(line); i++;
   }
+  return visible;
+}
+
+// A local display hint only: preserve the body and keep AI title generation pending.
+function sourceTitlePlaceholder(body) {
+  const visible = titleTextLines(body.replace(/\r\n?/g, '\n').split('\n'));
   const plain = value => value
     .replace(/^\s*(?:>\s*)+/, '').replace(/^\s*(?:[-+*]|\d+[.)])\s+(?:\[[ xX]\]\s*)?/, '')
     .replace(/!?\[([^\]\n]*)\]\([^\n]*?\)/g, '$1')
