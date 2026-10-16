@@ -178,3 +178,8 @@ Capacitor 生成的默认图标和启动图属于模板资源，其许可范围�
 直接依赖：FilePond 4.32.12、file-validate-type 1.2.9、file-validate-size 2.2.8、image-preview 4.6.12 均MIT；Mammoth 1.13.0为BSD-2-Clause；yauzl 3.4.0为MIT。JSZip采用其MIT选项，pako保留MIT与Zlib附属条件，duck的BSD声明已按随包正文核为BSD-2-Clause，isarray的MIT正文位于README。其余传递依赖见机器清单。代码从已安装包的固定dist路径提供，不复制删改其版权头，不打包node_modules；安装物保留随包许可。未选择或更改本项目许可证。
 
 高危生产审计通过但仍有1项moderate：Mammoth CLI的argparse引入sprintf-js 1.0.3，详见 [附件已知边界](SOURCE_FILES.md#验证与已知边界)。只调用worker内rawText API，未引入CLI执行；不以审计退出码0声称无漏洞。
+
+
+## 公开模型价格目录（2026-10-16）
+
+models.dev 采用 MIT，固定研究版本 `f3c0c7d6f0a553dc00391c94017029cc9c43200c` 的 LICENSE 已核对，全文随 [model-prices-notice.txt](../public/model-prices-notice.txt) 保存。只下载公开数据，不引入上游程序或新增 npm 依赖；LiteLLM 仅为研究交叉核对，无运行时依赖。来源、单位与限制见 [MODEL_PRICES.md](MODEL_PRICES.md)。

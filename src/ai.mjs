@@ -1,3 +1,4 @@
+import { resolvePricing, snapshotCost } from './pricing.mjs';
 import dns from 'node:dns/promises';
 import http from 'node:http';
 import https from 'node:https';
@@ -440,7 +441,7 @@ function passagesOverlap(a, b) {
  * All outward methods require the internal operation gate privacy === "cloud".
  * This gate does not represent a persisted material classification.
  */
-export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchImpl, callLedger } = {}) {
+export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchImpl, callLedger, getPricingSnapshot } = {}) {
   if (![getSettings, getSecret, recordCall, getUsage].every((fn) => typeof fn === 'function')) {
     throw fail('INVALID_CONFIG', 'createAI 缺少必需的配置、密钥、用量或记录函数。');
   }
@@ -565,6 +566,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
       if (replay.entry.ok === false) throw Object.assign(fail('PROVIDER_ERROR', replay.entry.error || '已有调用返回失败；没有重新发送。'), { callId: replay.callId });
       return { ...replay.response, body: Buffer.from(replay.response.body), headers: normalizeResponseHeaders(replay.response.headers), callId: replay.callId, accountingEntry: replay.entry, recovered: true };
     }
+    const pricingSnapshot = getPricingSnapshot ? getPricingSnapshot(capabilityConfig(allSettings, capability), capability) : resolvePricing(capabilityConfig(allSettings, capability), capability);
     const { signal: combinedSignal, timeoutSignal } = composeSignal(signal, timeoutMs);
     let target;
     try {
@@ -576,7 +578,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     }
     if (combinedSignal.aborted) throw classifyAbort(combinedSignal.reason, signal, timeoutSignal);
     const sourceId = sourceBudget.getStore()?.sourceId;
-    const reservation = await reserveBudget(allSettings, { capability, model, sourceId, key, contextKey, singleRequest: context?.singleRequest, jobId: context?.jobId, turnId: context?.turnId,
+    const reservation = await reserveBudget(allSettings, { capability, model, sourceId, key, contextKey, pricingSnapshot, singleRequest: context?.singleRequest, jobId: context?.jobId, turnId: context?.turnId,
       reservedCost: capability === 'fetch' ? 0 : capability === 'search' ? safeNumber(allSettings.search?.requestPrice) : null });
     const callId = reservation.row?.id;
     let started = Date.now();
@@ -608,9 +610,9 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
         operationError = error;
       }
       if (typeof accounting === 'function' && response.status >= 200 && response.status < 300) {
-        try { measured = { ...measured, ...accounting(response) }; } catch { /* invalid data is handled by the response parser */ }
+        try { measured = { ...measured, ...accounting(response, pricingSnapshot) }; } catch { /* invalid data is handled by the response parser */ }
       }
-      const entry = { capability, model, ...measured, durationMs: Date.now() - started, ok: !operationError,
+      const entry = { capability, model, ...measured, pricingSnapshot, durationMs: Date.now() - started, ok: !operationError,
         error: operationError ? sanitizeError(operationError, secrets) : undefined, ...(sourceId ? { sourceId } : {}) };
       if (callLedger) {
         // The bounded response is committed before accounting. Only response headers
@@ -642,7 +644,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
         catch (saveError) { throw Object.assign(fail('CALL_PERSISTENCE_FAILED', '调用结果未知且状态保存失败，请先处理调用记录；不会自动重发。', saveError), { callId }); }
       } else if (!callLedger && sent && !response) {
         accountingBlocked = true;
-        await safeRecord({ capability, model, ...measured, durationMs: Date.now() - started, ok: false, error: operationError, ...(sourceId ? { sourceId } : {}) }, secrets);
+        await safeRecord({ capability, model, ...measured, pricingSnapshot, durationMs: Date.now() - started, ok: false, error: operationError, ...(sourceId ? { sourceId } : {}) }, secrets);
       }
       throw operationError;
     } finally {
@@ -706,10 +708,10 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
         url: endpoint(config.baseUrl, 'chat/completions'), method: 'POST',
         headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/json', accept: 'application/json' },
         body, signal, secrets: [secret],
-        accounting: (response) => {
+        accounting: (response, pricingSnapshot) => {
           const data = JSON.parse(response.body.toString('utf8'));
           const counts = readTokenUsage(data?.usage);
-          return { ...counts, cost: tokenCost(counts, config) };
+          return { ...counts, cost: snapshotCost(counts, pricingSnapshot) };
         },
       });
     } catch (error) {
@@ -725,6 +727,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
       ...readTokenUsage(result.data?.usage),
       durationMs: Date.now() - started,
     };
+    usage.pricingSnapshot = result.response.accountingEntry?.pricingSnapshot;
     usage.cost = result.response.accountingEntry ? result.response.accountingEntry.cost : tokenCost(usage, config);
     // The transport and returned usage share one calculation; never append a second call.
     return { text, usage, callId: result.response.callId, recovered: result.response.recovered === true };
@@ -746,10 +749,10 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
       url: endpoint(config.baseUrl, 'embeddings'), method: 'POST',
       headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/json', accept: 'application/json' },
       body: JSON.stringify({ model: config.model, input: texts }), signal, secrets: [secret],
-      accounting: (response) => {
+      accounting: (response, pricingSnapshot) => {
         const responseData = JSON.parse(response.body.toString('utf8'));
         const counts = readTokenUsage(responseData?.usage, { embedding: true });
-        return { ...counts, cost: tokenCost(counts, config, { embedding: true }) };
+        return { ...counts, cost: snapshotCost(counts, pricingSnapshot) };
       },
     });
     if (!Array.isArray(data?.data) || data.data.length !== texts.length) throw fail('INVALID_RESPONSE', '嵌入响应数量与输入不一致。');
@@ -776,7 +779,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
       headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/json', accept: 'application/json' },
       body: JSON.stringify({ query, search_depth: 'advanced', max_results: 6, include_answer: false, include_raw_content: false }),
       signal, secrets: [secret],
-      accounting: () => ({ cost: safeNumber(config.requestPrice) }),
+      accounting: (_response, pricingSnapshot) => ({ cost: snapshotCost({}, pricingSnapshot) }),
     });
     if (!Array.isArray(data?.results)) throw fail('INVALID_RESPONSE', '搜索服务响应缺少结果列表。');
     const results = data.results.flatMap((item) => {

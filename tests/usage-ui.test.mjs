@@ -106,7 +106,7 @@ test('dashboard labels incomplete costs, renders model names as text and saves o
   control(panel, 'sourceCallLimit').value = '180'; control(panel, 'monthlyBudget').value = '9'; control(panel, 'inputPrice').value = '';
   await form.events.submit({ preventDefault() {} });
   assert.equal(saves[0].ai.sourceCallLimit, 180); assert.equal(saves[0].ai.monthlyBudget, 9); assert.equal(saves[0].ai.inputPrice, null);
-  assert.deepEqual(Object.keys(saves[0]).sort(), ['ai', 'embedding', 'pricingFor', 'search']);
+  assert.deepEqual(Object.keys(saves[0]).sort(), ['ai', 'embedding', 'pricingCatalog', 'pricingFor', 'search']);
   assert.equal(saves[0].pricingFor.ai.model, 'alpha'); assert.equal(requests.length, 2);
   assert.match(panel.textContent, /新单价从后续请求开始生效/);
 });
@@ -182,14 +182,60 @@ test('positive sub-micro costs remain distinct from free calls in tables, trends
   const data = report({ ...buildUsageReport(calls, { at: new Date('2026-10-02T12:00:00Z') }), budget: { callsToday: 2, dailyCallLimit: 20, monthlyBudget: 5, costMonth: .0000001, knownCostMonth: .0000001, unknownCostCalls: 0 } });
   const panel = await browser().createUsagePanel({ load: async () => data, settings, save: async () => {} });
   const cells = descendants(panel).filter(node => node.tagName === 'td').map(node => node.textContent);
-  assert.equal(cells.filter(text => text === '< 0.000001').length, 3, 'Daily, model and recent-request costs stay visibly positive');
+  assert.equal(cells.filter(text => text.startsWith('< 0.000001 ')).length, 3, 'Daily, model and recent-request costs stay visibly positive');
   const freeRows = descendants(panel).filter(node => node.tagName === 'tr' && node.textContent.includes('explicit-free'));
   assert.equal(freeRows.length, 2);
-  assert.equal(freeRows.find(row => row.children[0].textContent.includes('explicit-free')).children[4].textContent, '0');
-  assert.equal(freeRows.find(row => row.children[1].textContent === 'explicit-free').children[3].textContent, '0');
+  assert.equal(freeRows.find(row => row.children[0].textContent.includes('explicit-free')).children[4].textContent, '0 币种未确认');
+  assert.equal(freeRows.find(row => row.children[1].textContent === 'explicit-free').children[3].textContent, '0 币种未确认 · legacy_manual');
   assert.match(panel.textContent, /< 0\.000001 \/ 5/);
   await click(findButton(panel, '费用'));
   const paidDay = descendants(panel).find(node => node.attributes.role === 'listitem' && node.attributes['aria-label']?.startsWith('2026-10-02'));
   assert.match(paidDay.attributes['aria-label'], /< 0\.000001/);
   assert.equal(data.totals.knownCost, .0000001, 'Formatting never rounds ledger/export amounts');
+});
+
+test('mixed-currency dashboard separates amounts, hides combined fee trend and preserves unknown price labels', async () => {
+  const calls = [{ currency: 'USD', cost: 2 }, { currency: 'CNY', cost: 3 }].map(row => ({ ...row, capability: 'model', model: 'alpha', createdAt: '2026-10-02T00:00:00Z' }));
+  const data = report({ ...buildUsageReport(calls, { at: new Date('2026-10-02T12:00:00Z') }), pricing: { enabled: true, stale: true, fetchedAt: null, lastError: 'PRICE_CATALOG_INVALID', current: { ai: { source: 'unknown', status: 'unknown', identity: { model: '<script>synthetic</script>', currency: null }, limitations: ['exact_identity_not_found'] } } } });
+  const panel = await browser().createUsagePanel({ load: async () => data, settings, save: async () => {} });
+  assert.match(panel.textContent, /按币种分列/); assert.match(panel.textContent, /2 USD；3 CNY/);
+  assert.equal(findButton(panel, '费用'), undefined);
+  assert.match(panel.textContent, /更新失败，保留上次成功目录/); assert.match(panel.textContent, /未知\/部分覆盖/);
+  assert.equal(descendants(panel).some(node => node.tagName === 'script'), false);
+});
+
+test('price refresh suppresses duplicate clicks and is disabled in practice or when auto update is off', async () => {
+  let finish, requests = 0;
+  const pricing = { enabled: true, stale: true, current: {} };
+  const refreshPricing = async () => { requests++; await new Promise(resolve => { finish = resolve; }); };
+  const options = { load: async () => report({ pricing }), settings, save: async () => {}, refreshPricing };
+  const panel = await browser().createUsagePanel(options), control = findButton(panel, '更新公开价格');
+  const pending = click(control); await click(control); assert.equal(requests, 1); assert.equal(control.disabled, true);
+  finish(); await pending;
+  for (const changes of [{ readOnly: true }, { load: async () => report({ pricing: { ...pricing, enabled: false } }) }]) {
+    const disabled = await browser().createUsagePanel({ ...options, ...changes });
+    assert.equal(findButton(disabled, '更新公开价格').disabled, true);
+  }
+});
+
+test('budget currency mismatch never relabels spending or displays a comparable progress balance', async () => {
+  for (const currency of ['USD', null]) {
+    const data = report({ budget: { callsToday: 1, dailyCallLimit: 20, monthlyBudget: 100, budgetCurrency: 'CNY', currency, comparable: false, costMonth: 5, knownCostMonth: 5, unknownCostCalls: 0, byCurrency: [{ currency, knownCost: 5, unknownCostCalls: 0 }] } });
+    const panel = await browser().createUsagePanel({ load: async () => data, settings, save: async () => {} });
+    assert.match(panel.textContent, /月预算无法比较/); assert.match(panel.textContent, /100 CNY；费用币种不一致/);
+    assert.match(panel.textContent, currency ? /本月已记录：5 USD/ : /本月已记录：5 币种未确认/);
+    assert.equal(descendants(panel).filter(node => node.tagName === 'progress').length, 1, 'Only the independent daily call-count progress is comparable');
+  }
+});
+
+test('accounted stale price review explains immutable estimate and submits separate amount/currency confirmation', async () => {
+  const calls = [], app = browser();
+  const panel = await app.createUsagePanel({ load: async () => report(), settings, save: async () => {}, loadRecovery: async () => ({ pending: [{ id: 'stale-price', phase: 'accounted', pricingReview: true, estimatedCost: .2, currency: 'USD' }] }), recoverCall: async (...args) => calls.push(plain(args)) });
+  assert.match(panel.textContent, /过期估算待核对/); assert.match(panel.textContent, /原估算和价格快照保留/);
+  const submit = findButton(panel, '记录核对结果，不重发');
+  const form = descendants(panel).find(node => node.tagName === 'form' && node.children.includes(submit));
+  control(form, 'confirmedCost').value = '.3'; control(form, 'confirmedCurrency').value = 'USD'; control(form, 'confirmationReason').value = '核对合成账单';
+  const checked = control(form, 'checkedProvider'); checked.checked = true; checked.events.change();
+  await form.events.submit({ preventDefault() {} });
+  assert.deepEqual(calls, [['stale-price', { action: 'confirm-price', cost: .3, currency: 'USD', reason: '核对合成账单' }]]);
 });

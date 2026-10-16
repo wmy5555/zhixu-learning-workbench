@@ -3,8 +3,9 @@ import { el, clear, button, badge, field, emptyState, serializeForm } from './ui
 const names = { model: '文本生成', embedding: '语义嵌入', search: '联网搜索', fetch: '网页读取' };
 const count = value => new Intl.NumberFormat('zh-CN').format(value ?? 0);
 const amount = value => value === null || value === undefined ? '未知' : value > 0 && value < .000001 ? '< 0.000001' : new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 6 }).format(value);
-const compactAmount = value => value > 0 && value < .0001 ? '< 0.0001' : new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 4 }).format(value);
-const costText = row => row.unknownCostCalls ? `${amount(row.knownCost)} + 未知` : amount(row.knownCost);
+const compactAmount = value => value === null || value === undefined ? '分币种查看' : value > 0 && value < .0001 ? '< 0.0001' : new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 4 }).format(value);
+const currencyLabel = value => value || '币种未确认';
+const costText = row => row.byCurrency?.length ? row.byCurrency.map(group => `${amount(group.knownCost)}${group.unknownCostCalls ? ' + 未知' : ''} ${currencyLabel(group.currency)}`).join('；') : row.unknownCostCalls ? `${amount(row.knownCost)} + 未知` : amount(row.knownCost);
 const heading = (title, subtitle, action) => el('div', { class: 'section-heading' }, [el('div', {}, [el('h2', { text: title }), el('p', { text: subtitle })]), action]);
 const select = (label, options, value) => el('select', { ariaLabel: label }, options.map(([key, text]) => el('option', { value: key, selected: key === value, text })));
 const metric = (label, value, detail) => el('article', { class: 'usage-stat' }, [el('span', { class: 'muted', text: label }), el('strong', { text: value }), el('small', { text: detail })]);
@@ -31,13 +32,13 @@ function trendPanel(report) {
   const switcher = el('div', { class: 'usage-segments', role: 'group', ariaLabel: '趋势指标' });
   const chart = el('div'), buttons = new Map();
   let selected = 'totalTokens';
-  const choices = [['totalTokens', 'Token'], ['knownCost', '费用'], ['calls', '请求']];
+  const choices = [['totalTokens', 'Token'], ...(!report.totals.mixedCurrency ? [['knownCost', '费用']] : []), ['calls', '请求']];
   function render() {
     for (const [key, control] of buttons) control.setAttribute('aria-pressed', String(key === selected));
     const max = Math.max(0, ...report.daily.map(row => row[selected])) || 1;
     const bars = el('div', { class: 'usage-bars', role: 'list', ariaLabel: `${report.from} 至 ${report.to} 每日${choices.find(([key]) => key === selected)[1]}` });
     report.daily.forEach((row, index) => {
-      const unknown = selected === 'knownCost' ? row.unknownCostCalls : selected === 'totalTokens' ? row.unknownTokenCalls : 0;
+      const unknown = selected === 'knownCost' ? row.unknownCostCalls || row.mixedCurrency : selected === 'totalTokens' ? row.unknownTokenCalls : 0;
       const detail = `${row.date} · ${selected === 'knownCost' ? costText(row) : count(row[selected])}${unknown ? '（部分记录未知）' : ''}`;
       const bar = el('span', { class: `usage-bar${unknown ? ' is-partial' : ''}`, style: `height:${Math.max(row[selected] > 0 ? 1 : 0, row[selected] / max * 100)}%` });
       bars.append(el('div', { class: 'usage-day', role: 'listitem', tabIndex: 0, ariaLabel: detail, title: detail }, [
@@ -59,7 +60,7 @@ function trendPanel(report) {
 function modelPanel(report) {
   return el('section', { class: 'panel' }, [heading('模型与服务', '按调用时保存的模型统计；更换模型不会重算历史费用。'),
     report.models.length ? table(['模型 / 服务', '请求', '输入 / 输出', '缓存输入¹', '费用²'], report.models.map(row => [
-      el('div', {}, [el('strong', { text: row.model || names[row.capability] || '其他' }), el('small', { text: names[row.capability] || '其他' })]),
+      el('div', {}, [el('strong', { text: row.model || names[row.capability] || '其他' }), el('small', { text: `${names[row.capability] || '其他'} · ${row.provider || '供应商未记录'} · ${row.billingMode || '旧记录'}${row.endpointId ? ` · 渠道 ${row.endpointId.slice(0, 10)}` : ''}` })]),
       count(row.calls), row.tokenCalls ? el('div', {}, [`${count(row.inputTokens)} / ${count(row.outputTokens)}`, row.unknownTokenCalls ? el('small', { text: `${row.unknownTokenCalls} 次用量不完整` }) : null]) : '—',
       row.tokenCalls ? `${count(row.cachedInputTokens)}${row.unknownCacheCalls ? ' + 未知' : ''}` : '—', costText(row),
     ]), '按模型与服务统计') : emptyState('这段时间还没有调用', '使用知序的 AI 或联网能力后，记录会出现在这里。'),
@@ -74,7 +75,7 @@ function recentPanel(report) {
     clear(content).append(table(['时间', '模型 / 服务', '输入 / 输出', '费用²', '传输状态'], report.recentCalls.slice(page * 10, page * 10 + 10).map(row => [
       new Intl.DateTimeFormat('zh-CN', { timeZone: report.timezone, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(row.createdAt)),
       row.model || names[row.capability] || '其他', ['model', 'embedding'].includes(row.capability) ? `${row.inputTokens === null ? '未知' : count(row.inputTokens)} / ${row.outputTokens === null ? '未知' : count(row.outputTokens)}` : '—',
-      amount(row.cost), row.ok === true ? 'HTTP 响应成功' : row.ok === false ? '连接或 HTTP 失败' : '未知',
+      `${amount(row.cost)} ${currencyLabel(row.currency)} · ${row.pricing?.source || 'legacy_manual'}${row.pricing?.stale ? '（过期目录）' : ''}${row.pricingConfirmation ? `；账单已核对 ${amount(row.pricingConfirmation.cost)} ${currencyLabel(row.pricingConfirmation.currency)}` : ''}`, row.ok === true ? 'HTTP 响应成功' : row.ok === false ? '连接或 HTTP 失败' : '未知',
     ]), '最近请求明细'));
     clear(pager).append(el('span', { text: `第 ${page + 1} / ${pages} 页` }), el('div', { class: 'item-actions' }, [
       button('上一页', { disabled: page === 0, onClick: () => { page--; render(); } }), button('下一页', { disabled: page >= pages - 1, onClick: () => { page++; render(); } }),
@@ -87,6 +88,7 @@ function recentPanel(report) {
 function settingsForm(settings, readOnly, save, refresh) {
   const ai = settings.ai || {}, embedding = settings.embedding || {}, search = settings.search || {};
   const numberInput = (name, value, step = 'any') => el('input', { name, type: 'number', min: 0, step, value: value ?? '', placeholder: '未知', required: ['dailyCallLimit', 'monthlyBudget'].includes(name) });
+  const currencyInput = (name, value) => el('input', { name, value: value || '', placeholder: '如 USD / CNY；空白为未确认', pattern: '[A-Z]{3}', maxLength: 3 });
   const submit = button('保存预算与单价', { type: 'submit', kind: 'primary', disabled: readOnly });
   const status = el('p', { role: 'status', class: 'fine-print' });
   const form = el('form', { class: 'panel page-stack', dataset: { tour: 'usage-budget' } }, [
@@ -97,17 +99,22 @@ function settingsForm(settings, readOnly, save, refresh) {
       el('div', { class: 'form-grid' }, [
         field('每日外部请求总上限', numberInput('dailyCallLimit', ai.dailyCallLimit ?? 500, '1'), '涵盖模型、嵌入、搜索和网页读取；0 表示暂停外部请求。'),
         field('单任务外部请求上限', el('input', { name: 'sourceCallLimit', type: 'number', min: 1, max: 300, step: 1, required: true, value: ai.sourceCallLimit ?? 120 }), '默认 120 次，范围 1–300；包括搜索、网页读取、重定向、重试和模型请求，任务完成即停止。'),
-        field('月预算', numberInput('monthlyBudget', ai.monthlyBudget ?? 0), '0 表示未设置。启用后如本月存在未知费用，将停止新请求。'),
+        field('月预算', numberInput('monthlyBudget', ai.monthlyBudget ?? 0), '0 表示未设置。启用后如有未知费用、跨币种费用，将停止新请求。'),
+        field('月预算币种', currencyInput('budgetCurrency', ai.budgetCurrency), '公开目录使用 USD。不猜旧记录币种，不自动换汇。'),
       ]),
-      el('p', { class: 'notice info', text: '所有单价和月预算须使用同一货币单位（例如都用人民币），此处不自动换汇。留空表示未知，只有明确免费才填 0。' }),
+      el('p', { class: 'notice info', text: '公开价格与手动覆盖分开保存。填写任何手动单价即优先使用该组手动价；清空该组所有单价才恢复自动匹配。未知不是免费；只有明确免费才填 0。' }),
+      field('自动更新公开价格', el('input', { name: 'catalogEnabled', type: 'checkbox', checked: settings.pricingCatalog?.enabled !== false }), '开启后每 24 小时获取固定 models.dev 公开目录，不上传模型配置、资料或密钥。关闭保留上次缓存。'),
       el('h3', { text: `文本生成 · ${ai.model || '尚未配置模型'}` }),
       el('div', { class: 'form-grid' }, [
+        field('手动文本价格币种', currencyInput('aiCurrency', ai.currency)),
         field('输入单价 / 百万 token', numberInput('inputPrice', ai.inputPrice)),
         field('输出单价 / 百万 token', numberInput('outputPrice', ai.outputPrice)),
         field('缓存命中输入单价 / 百万 token', numberInput('cachedInputPrice', ai.cachedInputPrice), '留空时全部输入按普通输入价估算；填写后若供应商未报告缓存数量，该次费用保持未知。'),
       ]),
       el('div', { class: 'form-grid' }, [
         field(`语义嵌入输入单价 / 百万 token${embedding.model ? ` · ${embedding.model}` : ''}`, numberInput('embeddingPrice', embedding.inputPrice)),
+        field('手动嵌入价格币种', currencyInput('embeddingCurrency', embedding.currency)),
+        field('搜索价格币种', currencyInput('searchCurrency', search.currency)),
         field('联网搜索单价 / 次', numberInput('searchPrice', search.requestPrice), '按当前高级搜索请求填写；连接或 HTTP 失败时费用保持未知。'),
       ]),
       el('p', { class: 'fine-print', text: `多个核验批次共享单任务额度；模型等待上限为 ${(ai.timeoutMs ?? 180000) / 1000} 秒。更换服务地址或模型后需重新填写单价。预算按请求前的已记录费用检查，单次请求仍可能超过余额。` }),
@@ -119,11 +126,13 @@ function settingsForm(settings, readOnly, save, refresh) {
     const data = serializeForm(form), number = key => data[key] === '' ? null : Number(data[key]);
     submit.disabled = true; status.textContent = '正在保存…';
     try {
-      await save({
-        pricingFor: Object.fromEntries(['ai', 'embedding', 'search'].map(group => [group, { baseUrl: settings[group]?.baseUrl || '', model: settings[group]?.model || '' }])),
-        ai: { sourceCallLimit: number('sourceCallLimit'), dailyCallLimit: number('dailyCallLimit'), monthlyBudget: number('monthlyBudget'), inputPrice: number('inputPrice'), outputPrice: number('outputPrice'), cachedInputPrice: number('cachedInputPrice') },
-        embedding: { inputPrice: number('embeddingPrice') }, search: { requestPrice: number('searchPrice') },
+      const savedSettings = await save({
+        pricingCatalog: { enabled: Boolean(data.catalogEnabled) },
+        pricingFor: Object.fromEntries(['ai', 'embedding', 'search'].map(group => [group, { baseUrl: settings[group]?.baseUrl || '', model: settings[group]?.model || '', providerId: settings[group]?.providerId || '', billingMode: settings[group]?.billingMode || 'standard', currency: settings[group]?.currency || null }])),
+        ai: { currency: data.aiCurrency || null, budgetCurrency: data.budgetCurrency || null, sourceCallLimit: number('sourceCallLimit'), dailyCallLimit: number('dailyCallLimit'), monthlyBudget: number('monthlyBudget'), inputPrice: number('inputPrice'), outputPrice: number('outputPrice'), cachedInputPrice: number('cachedInputPrice') },
+        embedding: { currency: data.embeddingCurrency || null, inputPrice: number('embeddingPrice') }, search: { currency: data.searchCurrency || null, requestPrice: number('searchPrice') },
       });
+      if (savedSettings) Object.assign(settings, savedSettings);
       status.textContent = '已保存。新单价从后续请求开始生效；历史记录保持原样。';
       await refresh();
     } catch (error) { status.textContent = `未保存：${error.message}`; }
@@ -132,7 +141,7 @@ function settingsForm(settings, readOnly, save, refresh) {
   return form;
 }
 
-export async function createUsagePanel({ load, settings, readOnly = false, save, loadRecovery, recoverCall }) {
+export async function createUsagePanel({ load, settings, readOnly = false, save, loadRecovery, recoverCall, refreshPricing }) {
   const root = el('div', { class: 'page-stack usage-dashboard' });
   const period = select('统计时间范围', [['month', '本月'], ['7d', '近 7 天'], ['30d', '近 30 天'], ['today', '今天']], 'month');
   const capability = select('调用类型', [['', '全部服务'], ...Object.entries(names)], '');
@@ -157,16 +166,16 @@ export async function createUsagePanel({ load, settings, readOnly = false, save,
       clear(body).append(
         el('div', { class: 'usage-stats' }, [
           metric('总 Token', count(t.totalTokens), t.unknownTokenCalls ? `${t.unknownTokenCalls} 次用量不完整，仅汇总已知部分` : '输入 + 输出，来自供应商响应'),
-          metric('已记录费用', compactAmount(t.knownCost), t.unknownCostCalls ? `另有 ${t.unknownCostCalls} 次费用未知 · 总费用待确认` : '按请求当时单价估算'),
+          metric('已记录费用', t.mixedCurrency ? '按币种分列' : compactAmount(t.knownCost), t.mixedCurrency ? costText(t) : t.unknownCostCalls ? `另有 ${t.unknownCostCalls} 次费用未知 · 总费用待确认` : `按请求当时单价估算 · ${currencyLabel(t.currency)}`),
           metric('外部请求', count(t.calls), `${count(t.failedCalls)} 次连接或 HTTP 失败 · 包含重试与连接测试`),
           metric('缓存输入¹', t.tokenCalls && t.unknownCacheCalls === t.tokenCalls ? '未知' : count(t.cachedInputTokens), `${count(t.inputTokens)} 输入 / ${count(t.outputTokens)} 输出${t.unknownCacheCalls ? ` · ${t.unknownCacheCalls} 次缓存未知` : ''}`),
         ]),
         budget.unavailable ? el('p', { class: 'notice warn', text: '部分调用日期无效，当前无法读取预算状态；统计只包含日期有效的记录。请检查诊断记录。' }) : el('div', { class: 'usage-budget-grid' }, [
           budgetCard('今日请求', budget.callsToday, budget.dailyCallLimit, '所有服务共用 · 按正式库时区每日重置'),
-          budgetCard('本月费用', budget.knownCostMonth, budget.monthlyBudget, budget.unknownCostCalls ? `${budget.unknownCostCalls} 次费用未知，无法确定剩余额度` : '所有服务共用 · 与下方筛选条件无关', budget.costMonth === null),
+          budget.comparable === false ? el('article', { class: 'usage-budget-card' }, [el('strong', { text: '月预算无法比较' }), el('p', { text: `本月已记录：${costText({ byCurrency: budget.byCurrency })}` }), el('p', { text: `预算：${amount(budget.monthlyBudget)} ${currencyLabel(budget.budgetCurrency)}；${budget.untrustedPriceCalls ? '包含过期自动价估算' : '费用币种不一致'}，不计算剩余额度。` })]) : budgetCard(`本月费用 · ${currencyLabel(budget.currency || budget.budgetCurrency)}`, budget.knownCostMonth, budget.monthlyBudget, budget.mixedCurrency ? '有不同币种或旧币种未确认费用，不合计、不换汇' : budget.unknownCostCalls ? `${budget.unknownCostCalls} 次费用未知，无法确定剩余额度` : `所有服务共用 · ${budget.confirmedPriceCalls || 0} 笔使用已核对金额 · 与下方筛选条件无关`, budget.costMonth === null),
         ]),
-        trendPanel(report), modelPanel(report), recentPanel(report),
-        el('p', { class: 'fine-print usage-footnotes', text: `¹ 缓存输入已包含在输入 token 中；推理 token 已包含在输出中，不重复累加。未报告的明细保持未知。² 费用使用设置中的统一货币单位；不含供应商账单调整。${report.invalidDateCalls ? `有 ${report.invalidDateCalls} 条日期无效的记录未参与统计。` : ''}` }),
+        report.pricing ? pricingPanel(report.pricing, readOnly, refreshPricing, refresh) : null, trendPanel(report), modelPanel(report), recentPanel(report),
+        el('p', { class: 'fine-print usage-footnotes', text: `¹ 缓存输入已包含在输入 token 中；推理 token 已包含在输出中，不重复累加。未报告的明细保持未知。² 费用按币种独立汇总；旧手动记录不猜币种。公开价为估算，不含账单调整。${report.invalidDateCalls ? `有 ${report.invalidDateCalls} 条日期无效的记录未参与统计。` : ''}` }),
       );
       if (loadRecovery) {
         const recovery = await loadRecovery();
@@ -188,13 +197,13 @@ export async function createUsagePanel({ load, settings, readOnly = false, save,
 
 function recoveryPanel(pending, readOnly, recoverCall, refresh) {
   const panel = el('section', { class: 'panel', ariaLabel: '待核对的外部调用' }, [
-    heading('外部调用已暂停', '已有输入和已收到的回答保留在本机。先核对下面的记录；这些操作不会重新发送请求。'),
+    heading(pending.every(record => record.pricingReview) ? '过期估算待核对' : '外部调用已暂停', '已有输入和已收到的回答保留在本机。先核对下面的记录；这些操作不会重新发送请求。'),
   ]);
   for (const record of pending) {
     const status = el('p', { role: 'status', class: 'fine-print' });
     const card = el('div', { class: 'page-stack' }, [
       el('p', { text: `${names[record.capability] || '外部请求'} · ${record.model || '未记录模型'} · ${record.createdAt || ''}` }),
-      el('p', { text: record.hasResult ? '已收到结果，等待完成本地记账。补记后返回原来的学习任务或问答与输出继续，使用已保存的结果。' : '没有完整结果，无法判断服务是否已收费。请先核对供应商记录，原请求不会自动重发。' }), status,
+      el('p', { text: record.pricingReview ? `原估算 ${amount(record.estimatedCost)} ${currencyLabel(record.currency)} 使用了过期目录。核对供应商账单后，单独保存实际金额用于预算；原估算和价格快照保留，不重发请求。` : record.hasResult ? '已收到结果，等待完成本地记账。补记后返回原来的学习任务或问答与输出继续，使用已保存的结果。' : '没有完整结果，无法判断服务是否已收费。请先核对供应商记录，原请求不会自动重发。' }), status,
     ]);
     if (readOnly) card.append(el('p', { text: '请返回正式库的用量与费用页面处理。' }));
     else if (record.hasResult || record.phase === 'reserved') {
@@ -205,20 +214,21 @@ function recoveryPanel(pending, readOnly, recoverCall, refresh) {
       } });
       card.append(action);
     } else {
-      const cost = el('input', { type: 'number', min: '0', step: 'any', name: 'confirmedCost', placeholder: '留空表示费用仍未知' });
+      const cost = el('input', { type: 'number', min: '0', step: 'any', name: 'confirmedCost', required: Boolean(record.pricingReview), placeholder: record.pricingReview ? '供应商账单实际金额' : '留空表示费用仍未知' });
+      const currency = record.pricingReview ? el('input', { name: 'confirmedCurrency', value: record.currency || '', required: true, pattern: '[A-Z]{3}', maxLength: 3, placeholder: '例如 USD' }) : null;
       const reason = el('textarea', { name: 'confirmationReason', required: true, maxLength: 500, rows: 2 });
       const checked = el('input', { type: 'checkbox', name: 'checkedProvider' });
       const submit = button('记录核对结果，不重发', { type: 'submit', disabled: true });
       checked.addEventListener('change', () => { submit.disabled = !checked.checked; });
       const form = el('form', { class: 'page-stack' }, [
-        field('已核对的费用', cost), field('核对说明', reason),
+        field('已核对的费用', cost), currency ? field('实际账单币种', currency) : null, field('核对说明', reason),
         el('label', {}, [checked, ' 我已核对供应商记录；费用仍未知时继续暂停新调用，之后可在这里补填金额。']), submit,
       ]);
       form.addEventListener('submit', async event => {
         event.preventDefault();
         if (!checked.checked || !reason.value.trim() || submit.disabled) return;
         submit.disabled = true;
-        try { await recoverCall(record.id, { action: 'confirm', cost: cost.value.trim() === '' ? null : Number(cost.value), reason: reason.value.trim() }); await refresh(); }
+        try { await recoverCall(record.id, { action: record.pricingReview ? 'confirm-price' : 'confirm', cost: cost.value.trim() === '' ? null : Number(cost.value), ...(record.pricingReview ? { currency: currency.value } : {}), reason: reason.value.trim() }); await refresh(); }
         catch (error) { status.textContent = `尚未保存：${error.message}`; submit.disabled = !checked.checked; }
       });
       card.append(form);
@@ -226,4 +236,22 @@ function recoveryPanel(pending, readOnly, recoverCall, refresh) {
     panel.append(card);
   }
   return panel;
+}
+
+function pricingPanel(pricing, readOnly, refreshPricing, refresh) {
+  const status = el('p', { role: 'status', class: 'fine-print' });
+  const control = button('更新公开价格', { disabled: readOnly || !pricing.enabled || !refreshPricing, onClick: async () => {
+    if (control.disabled) return;
+    control.disabled = true; status.textContent = '正在获取公开目录…';
+    try { await refreshPricing(); await refresh(); }
+    catch (error) { status.textContent = `未更新：${error.message}`; control.disabled = false; }
+  } });
+  const sourceNames = { 'models.dev': '公开目录 models.dev', manual_override: '手动覆盖', legacy_manual: '旧手动价（币种未确认）', unknown: '未匹配' };
+  return el('section', { class: 'panel page-stack' }, [
+    heading('公开模型价格', '按供应商、精确服务地址、模型及计费模式匹配；同名代理不套用官方价格。', control),
+    el('p', { text: `${pricing.enabled ? '自动更新已开启' : '自动更新已关闭'} · ${pricing.fetchedAt ? `最近成功 ${pricing.fetchedAt}` : '尚无成功目录'}${pricing.stale ? ' · 目录过期或不可用' : ''}${pricing.lastError ? ' · 更新失败，保留上次成功目录' : ''}` }),
+    el('a', { href: 'https://models.dev', target: '_blank', rel: 'noopener noreferrer', text: 'models.dev 公开目录（USD / 百万 token）' }),
+    ...Object.entries(pricing.current || {}).map(([group, snapshot]) => el('p', { text: `${names[group === 'ai' ? 'model' : group]} · ${snapshot.identity?.model || '未配置'} · ${sourceNames[snapshot.source] || snapshot.source} · ${snapshot.status === 'known' ? '可估算' : '未知/部分覆盖'} · ${currencyLabel(snapshot.identity?.currency)}${snapshot.source === 'models.dev' ? ` · 输入 ${amount(snapshot.rates?.inputPrice)} / 输出 ${amount(snapshot.rates?.outputPrice)}` : ''}${snapshot.limitations?.length ? ` · ${snapshot.limitations.join(', ')}` : ''}${snapshot.stale ? ' · 采用过期目录估算，正数月预算下禁止新调用' : ''}` })),
+    el('p', { class: 'fine-print', text: '手动覆盖不会被刷新改写。上下文阶梯、缓存写入/TTL、特殊服务档位和批量计费尚未支持，费用保持未知。推理 token 已包含在输出中，不重复计价。历史调用使用请求前价格快照。' }), status,
+  ]);
 }

@@ -207,6 +207,7 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
       else if(resource==='settings'&&!id&&method==='PUT'){if(!practiceId&&body.vaultDir)onboarding.assertVaultIsolation(body.vaultDir);result=service.updateSettings(body);if(!practiceId)onboarding.settingsChanged(body);}
       else if(resource==='settings'&&id==='test'&&method==='POST')result=(await onboarding.test(body.capability)).testResult;
       else if(resource==='usage'&&!id&&method==='GET'){result=mainService.usageReport(query);result.sharedUsage=Boolean(practiceId);}
+      else if(resource==='usage'&&id==='pricing-refresh'&&method==='POST')result=await service.refreshPricing({force:body.force===true});
       else if(resource==='usage'&&id==='settings'&&method==='PUT')result=service.updateUsageSettings(body);
       else if(resource==='call-recovery'&&!id&&method==='GET')result=mainService.callRecovery();
       else if(resource==='call-recovery'&&id&&method==='POST'){
@@ -235,7 +236,7 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
   });
   server.requestTimeout=60000;server.headersTimeout=15000;
   let practiceTimer;
-  server.on('listening',()=>{if(scheduler){const tick=async()=>{if(busyTick)return;busyTick=true;try{await service.tick();}catch(error){console.error('后台任务暂时失败：',error.code||'ERROR');}finally{busyTick=false;}};timer=setInterval(tick,3000);timer.unref();tick();practiceTimer=setInterval(()=>{onboarding.pump().catch(error=>console.error('练习任务暂时失败：',error.code||'ERROR'));},1000);practiceTimer.unref();}});
+  server.on('listening',()=>{if(scheduler){const tick=async()=>{if(busyTick)return;busyTick=true;try{service.refreshPricing?.().catch(()=>{});await service.tick();}catch(error){console.error('后台任务暂时失败：',error.code||'ERROR');}finally{busyTick=false;}};timer=setInterval(tick,3000);timer.unref();tick();practiceTimer=setInterval(()=>{onboarding.pump().catch(error=>console.error('练习任务暂时失败：',error.code||'ERROR'));},1000);practiceTimer.unref();}});
   return {server,service,onboarding,async close(){clearInterval(timer);clearInterval(practiceTimer);await new Promise(resolve=>server.close(resolve));await onboarding.close();await service.close();}};
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href){

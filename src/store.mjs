@@ -608,6 +608,11 @@ export class Store {
       const call = billing.get(`calls:${row.key}`);
       if (ledger.phase !== 'cancelled' && !call) fail('备份调用账本缺少对应的预算记账记录。');
       if (['received','accounted'].includes(ledger.phase) && (!response || response.entry.capability !== ledger.capability || response.entry.model !== ledger.model)) fail('备份调用账本缺少对应的完整响应证据。');
+      if (JSON.stringify(ledger.pricingConfirmation || null) !== JSON.stringify(call?.pricingConfirmation || null)) fail('备份调用价格核对证据不一致。');
+      if (ledger.pricingSnapshot || call?.pricingSnapshot || response?.entry?.pricingSnapshot) {
+        const snapshot = JSON.stringify(ledger.pricingSnapshot);
+        if (call && JSON.stringify(call.pricingSnapshot) !== snapshot || response && JSON.stringify(response.entry.pricingSnapshot) !== snapshot) fail('备份调用价格快照不一致。');
+      }
       if (ledger.phase === 'accounted' && call.cost !== response.entry.cost) fail('备份调用费用与已记账响应不一致。');
     }
     const versionIds = new Set();

@@ -9,18 +9,21 @@ const serviceUrl = z.string().max(2000).refine(value => {
   try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password; } catch { return false; }
 }, '服务地址须为不含凭据的 HTTPS 地址。');
 const credential = { apiKey: z.string().max(10000).optional(), clearKey: z.boolean().optional(), hasKey: z.boolean().optional() };
-const prices = { inputPrice: price.nullish(), outputPrice: price.nullish(), cachedInputPrice: price.nullish() };
+const currency = z.union([z.literal(''), z.string().regex(/^[A-Z]{3}$/)]).nullish();
+const pricingIdentity = { currency, providerId: z.string().max(500).optional(), billingMode: z.enum(['standard','batch','priority','flex']).optional(), pricingMode: z.enum(['auto','manual']).optional() };
+const prices = { ...pricingIdentity, inputPrice: price.nullish(), outputPrice: price.nullish(), cachedInputPrice: price.nullish() };
 const schema = z.object({
   dailyMinutes: numeric.pipe(z.number().min(5).max(240)),
   timezone: z.string().min(1).max(100).refine(value => { try { new Intl.DateTimeFormat('en', { timeZone: value }); return true; } catch { return false; } }, '时区无效。'),
   scheduleTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
   focusTopics: z.array(z.string().max(1000)).max(1000), pausedIds: z.array(z.string().max(500)).max(100000),
   discoveryDays: numeric.pipe(z.number().int().min(1).max(3650)), prompts: z.record(z.string()),
-  ai: z.object({ enabled: z.boolean(), baseUrl: serviceUrl, model: z.string().max(500),
+  pricingCatalog: z.object({ enabled: z.boolean() }),
+  ai: z.object({ budgetCurrency: currency, enabled: z.boolean(), baseUrl: serviceUrl, model: z.string().max(500),
     timeoutMs: numeric.pipe(z.number().int().min(1000).max(600000)), dailyCallLimit: numeric.pipe(z.number().int().nonnegative()),
     sourceCallLimit: numeric.pipe(z.number().int().min(1).max(300)), monthlyBudget: numeric.pipe(z.number().nonnegative()), ...prices, ...credential }),
   embedding: z.object({ enabled: z.boolean(), baseUrl: serviceUrl, model: z.string().max(500), ...prices, ...credential }),
-  search: z.object({ enabled: z.boolean(), baseUrl: serviceUrl, requestPrice: price.nullish(), ...credential }),
+  search: z.object({ currency, enabled: z.boolean(), baseUrl: serviceUrl, requestPrice: price.nullish(), ...credential }),
   fetch: z.object({ enabled: z.boolean(), testUrl: serviceUrl.optional() }),
   mcp: z.object({ enabled: z.boolean(), allowProposals: z.boolean(), chatgptEnabled: z.boolean(), chatgptAllowRead: z.boolean() }),
 });
@@ -36,7 +39,8 @@ export function validateSettings(input, old, defaults) {
     if (!group && Object.hasOwn(input, key)) draft[key] = input[key];
   }
   for (const group of ['ai','embedding','search']) {
-    const config = draft[group], changed = config.baseUrl !== old[group].baseUrl || config.model !== old[group].model;
+    const config = draft[group], changed = config.baseUrl !== old[group].baseUrl || config.model !== old[group].model || config.providerId !== old[group].providerId || config.billingMode !== old[group].billingMode;
+    if (changed && !Object.hasOwn(input[group] || {}, 'currency')) config.currency = null;
     for (const key of group === 'search' ? ['requestPrice'] : ['inputPrice','outputPrice','cachedInputPrice']) {
       if (changed && !Object.hasOwn(input[group] || {}, key) || config[key] === undefined) config[key] = null;
     }

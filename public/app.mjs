@@ -2156,7 +2156,7 @@ async function renderSystem() {
     const { createUsagePanel } = await import("./usage.mjs");
     wrapper.append(await createUsagePanel({
       load: filters => api.usage(filters), settings: await api.settings(), readOnly: Boolean(api.getContext?.().practiceId),
-      save: payload => api.updateUsageSettings(payload),
+      save: payload => api.updateUsageSettings(payload), refreshPricing: () => api.refreshPricing(),
       loadRecovery: () => api.callRecovery(), recoverCall: (id, payload) => api.recoverCall(id, payload),
     }));
   }
