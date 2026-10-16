@@ -56,6 +56,7 @@ const state = {
   systemTab: "settings",
   studyTab: "queue",
   lastOutput: null,
+  lastCapture: null,
   restoreBackup: null,
   restoreToken: "",
   sourceMaps: new Map(),
@@ -122,8 +123,8 @@ function historyReadingBody(note, version) {
   const frontmatter = raw.match(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/);
   const body = version.body ?? (frontmatter ? raw.slice(frontmatter[0].length) : raw);
   return el('div', { class: 'history-reading-body' }, [
-    frontmatter ? el('pre', { class: 'mono-block history-metadata', text: frontmatter[0] }) : null,
     renderMarkdown(body, { className: 'prose', emptyText: '此版本没有可显示的正文快照', conversation: conversationReading(note) }),
+    frontmatter ? el('details', {}, [el('summary', { text: '查看版本属性' }), el('pre', { class: 'mono-block history-metadata', text: frontmatter[0] })]) : null,
   ]);
 }
 let onboarding = null;
@@ -175,7 +176,7 @@ function errorMessage(error) {
 function renderFailure(error, retry) {
   const actions = el("div", { class: "form-actions" }, [button("重试", { kind: "primary", onClick: retry })]);
   if (api.getContext?.().practiceId) actions.append(button("明确返回正式知识库", { onClick: async () => {
-    try { api.setContext(""); onboarding?.dispose(); onboarding = null; state.currentStudy = null; state.lastOutput = null; state.bootstrap = null; await init(); }
+    try { api.setContext(""); onboarding?.dispose(); onboarding = null; state.currentStudy = null; state.lastOutput = null; state.lastCapture = null; state.bootstrap = null; await init(); }
     catch (nextError) { handleError(nextError); }
   } }));
   clear(refs.main).append(emptyState("暂时无法读取", errorMessage(error), actions));
@@ -418,6 +419,32 @@ function groupJobSummary(job) {
 
 async function renderCapture() {
   if (unsavedInputForm()?.hasUnsavedChanges() && !await confirmUnsavedInputDiscard()) return;
+  const captureContext = api.getContext();
+  const sameCaptureContext = () => {
+    const current = api.getContext();
+    return current.version === captureContext.version && current.practiceId === captureContext.practiceId;
+  };
+  const savedReceipt = el("div", { class: "notice", role: "status", ariaLive: "polite", dataset: { tour: "capture-saved" }, hidden: true });
+  function renderSavedReceipt() {
+    const receipt = state.lastCapture;
+    clear(savedReceipt); savedReceipt.hidden = true;
+    if (!receipt) return;
+    if (!sameCaptureContext() || receipt.context.version !== captureContext.version || receipt.context.practiceId !== captureContext.practiceId) {
+      state.lastCapture = null;
+      return;
+    }
+    savedReceipt.hidden = false;
+    savedReceipt.append(el("strong", { text: "最近一次快速收集已保存" }),
+      el("p", { text: "原文已保存。重复内容会沿用已有资料；AI 加工状态请在整组详情中查看。可以继续输入下一份资料。" }),
+      el("div", { class: "list" }, receipt.notes.map(note => el("div", { class: "item-copy" }, [
+        el("p", { text: note.title || "未命名资料" }),
+        button("查看整组", { kind: "text", title: `查看资料 ${note.id}`, onClick: () => {
+          if (!sameCaptureContext()) { renderSavedReceipt(); return; }
+          return openNote(note.id);
+        } }),
+      ]))));
+  }
+  renderSavedReceipt();
   const sourceForm = el("form", { class: "panel capture-form", dataset: { tour: "capture-form" } });
   const title = el("input", { name: "title", placeholder: "可留空，根据原文生成便于检索的标题" });
   const body = el("textarea", { name: "body", placeholder: "粘贴原文。系统会保留这份原始快照，不用摘要替代。", required: true, rows: 12 });
@@ -457,6 +484,7 @@ async function renderCapture() {
     el("label", { class: "check-field" }, [process, el("span", { text: "保存后使用 AI 拆解（发送所需原文给已配置的服务，可能计费）" })]),
     el("label", { class: "check-field" }, [research, el("span", { text: "拆解时联网检验正确性并寻找反例（可选，需同时勾选 AI 拆解）" })]),
     el("div", { class: "form-actions" }, [button("保存原始资料", { kind: "primary", type: "submit" }), button("清空", { onClick: () => sourceForm.reset() })]),
+    savedReceipt,
   );
   const captureValues = () => ({ ...serializeForm(sourceForm), body: bodyEditor?.getValue() ?? body.value, process: process.checked, research: research.checked });
   const importItems = () => fileDrafts.map(({ item, title, editor }) => ({ ...item, title: title.value, body: editor.getValue() }));
@@ -475,6 +503,10 @@ async function renderCapture() {
       const submit = sourceForm.querySelector("button[type='submit']");
       saving = true; submit.disabled = true;
       const result = await api.import({ items: [item], captureMode: "text", process: process.checked, research: process.checked && research.checked });
+      if (!sameCaptureContext()) return;
+      const notes = asArray(result.notes).filter(note => typeof note?.id === "string" && note.id);
+      state.lastCapture = notes.length ? { context: captureContext, notes: notes.map(({ id, title }) => ({ id, title })) } : null;
+      renderSavedReceipt();
       if (JSON.stringify(captureValues()) === submitted) sourceForm.reset();
       toast(`已保存 ${asArray(result.notes).length || 1} 条原始资料${!String(item.title || "").trim() ? "，暂用原文片段作为标题" : ""}`, "success");
       await refreshBootstrap();
@@ -2886,6 +2918,7 @@ async function init() {
         beforeContextChange: prepareContextChange,
         contextChangeFinished: finishContextChange,
         contextChanged: async () => {
+          state.lastCapture = null;
           closeDrawer(); state.currentStudy = null; state.studyMaterialVisible = true; state.studyTab = "queue";
           state.lastOutput = null;
           state.restoreBackup = null; state.restoreToken = "";
