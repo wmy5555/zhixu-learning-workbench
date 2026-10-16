@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -19,10 +19,15 @@ const raw = value => JSON.stringify(value || fixture());
 const catalog = value => parsePriceCatalog(raw(value), date.toISOString());
 const config = values => ({ baseUrl: 'https://8.8.8.8/v1', model: 'alpha', ...values });
 const usage = { inputTokens: 100, outputTokens: 20, cachedInputTokens: 40, reasoningTokens: 10 };
+// File cleanup runs after per-test resource hooks; Windows cannot remove open SQLite files.
+const directories = [];
+after(() => {
+  for (const root of directories) fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+});
 function directory(t) {
   fs.mkdirSync('.tmp', { recursive: true });
   const root = fs.mkdtempSync(path.resolve('.tmp/pricing-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  directories.push(root);
   return root;
 }
 
