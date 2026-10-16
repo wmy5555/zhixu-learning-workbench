@@ -276,7 +276,7 @@ export class Store {
     walk(this.vaultDir);
     const previous = this.db.prepare('SELECT id,path,hash FROM notes').all();
     const byPath = new Map(previous.map(row => [row.path, row])), byHash = new Map();
-    for (const row of previous) if (!byHash.has(row.hash)) byHash.set(row.hash, row);
+    for (const row of previous) { const matches=byHash.get(row.hash)||[];matches.push(row);byHash.set(row.hash,matches); }
     for (const { file, fingerprint } of files) {
       const rel = path.relative(this.vaultDir, file).replaceAll('\\', '/');
       try {
@@ -286,8 +286,8 @@ export class Store {
         else { raw = fs.readFileSync(assertTree(file, this.vaultDir), 'utf8'); readFiles++; parsed = parse(raw); }
         let id = parsed.meta.id;
         if (id !== undefined && (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(id))) fail('id 必须为短字符串。');
-        const moved = !id && !byPath.has(rel) ? byHash.get(hash(raw)) : null;
-        id ||= byPath.get(rel)?.id || (moved && !fs.existsSync(path.join(this.vaultDir, moved.path)) ? moved.id : null) || cached?.id || randomUUID();
+        const missing = !id && !byPath.has(rel) ? (byHash.get(hash(raw))||[]).filter(row=>!fs.existsSync(path.join(this.vaultDir,row.path))) : [];
+        id ||= byPath.get(rel)?.id || (missing.length===1 ? missing[0].id : null) || cached?.id || randomUUID();
         if (seen.has(id)) conflicts.push({ path: rel, id, error: '重复稳定 id；两个文件暂时从检索中隔离。', other: seen.get(id) });
         seen.set(id, rel); valid.push({ id, file, raw, parsed, unchanged });
         cache.set(file, { fingerprint, raw, parsed, id });

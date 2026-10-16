@@ -6,6 +6,10 @@
 
 已实际读回上述候选的 Windows Quality、Linux Quality、Secrets、Dependencies **四项 completed/success**。代码总结仍为 running；安全请求有连接机器人 👀 回执，但 summary 的 security 状态与提交仍为空，未取得可读报告，不能记为安全通过。不重复发送请求，不合并或更新正式服务；后续只补说明不构成新的代码初审理由，最终说明提交 CI 另核。
 
+代码初审于 2026-10-16 返回三项具体问题，均采纳并先复现：[高熵长文内存](https://github.com/wmy5555/zhixu-learning-workbench/pull/81#discussion_r4291466625)、[相同哈希的无 ID 文件改名](https://github.com/wmy5555/zhixu-learning-workbench/pull/81#discussion_r4291466636)、[异常 sources 筛选](https://github.com/wmy5555/zhixu-learning-workbench/pull/81#discussion_r4291466644)。原实现分别出现 128 MiB V8 old-space 子进程 OOM、改名后原 ID NOT_FOUND、malformed JSON。修复为有界重叠全文片段与逐条脏索引读取、保留同哈希全部路径后选择唯一消失路径、按 JSON 元素类型安全提取 id。新三项及检索专项实际 13/13 通过；不把 V8 old-space 限制称为总 RSS 上限。旧投影布局重建和跨块长型号召回另纳入完整回归；容量重新测量，不继续把旧全文布局耗时当新布局结果。
+
+复审判断：默认不复审，但本次 P1 修复将全文投影从每笔记一行调整为有界重叠片段，并增加布局版本重建，实际扩大派生数据影响。已有堆限制、跨片段召回、事务回滚/重开与原向量保留证据；仍需定向静态核对分段候选完整性和旧布局升级，不扩大为全仓审阅。必要完整验证、容量对照和候选推送后只请求一次代码复审，安全初审未给可读结果前不重发或另启审阅者。
+
 ## 2026-10-16 PR #71 接入最新主线
 
 将历史增强候选 `b8fe8dc622adf288a038d9acae04228db5a682a9` 正常合并 main `47bcb63611e41edd8ca11895b61ff3173897af97`，保留双方提交历史。八份冲突文件逐块融合：本机撤销路由与附件/恢复请求读取同时保留，Store 同时保留磁盘核验、独占恢复及主线的持久恢复阻塞保护，服务同时导出会话撤销、附件与调用恢复。说明记录并列保留。主线主动 AI 取材快照与图片外发过滤、50 MB 附件、100 MB 备份、调用账本与凭据事务、Markdown 编辑器及 #78–#80 网页修复保留；未同步 Android。

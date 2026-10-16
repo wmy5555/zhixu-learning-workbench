@@ -169,6 +169,9 @@ test('abrupt process exit before projection sync recovers from the committed dir
   await h.reopen();assert.deepEqual(ids(await h.s.search('crashRecoveryZVQX')),['crash']);
   h.s.store.db.exec('DELETE FROM search_fts');await h.reopen();
   assert.deepEqual(ids(await h.s.search('crashRecoveryZVQX')),['crash'],'missing FTS rows rebuild from authoritative notes');
+  h.s.store.db.exec('UPDATE search_state SET version=1; DELETE FROM search_segments');await h.reopen();
+  assert.equal(h.s.store.db.prepare('SELECT version FROM search_state').get().version,2);
+  assert.deepEqual(ids(await h.s.search('crashRecoveryZVQX')),['crash'],'legacy projection layout is rebuilt without modifying Markdown');
 });
 
 test('semantic fusion keeps per-note best chunks and cached pages never re-embed the query', async t => {
@@ -183,4 +186,44 @@ test('semantic fusion keeps per-note best chunks and cached pages never re-embed
   while(cursor){const result=await s.search('ZVQX',{mode:'hybrid',privacy:'cloud',limit:2,cursor});seen.push(...ids(result));cursor=result.nextCursor;}
   assert.equal(new Set(seen).size,7);assert.equal(seen.length,7);assert.equal(calls,1);
   await s.search('ZVQX',{mode:'hybrid',privacy:'local'});assert.equal(calls,1);
+});
+
+test('an ID-less move selects the missing path among every equal-hash candidate', async t => {
+  const {s}=harness(t),dir=s.store.vaultDir,raw='---\nkind: knowledge\ntitle: identical legacy\n---\nlegacyMoveZVQX';
+  fs.writeFileSync(path.join(dir,'one.md'),raw);fs.writeFileSync(path.join(dir,'two.md'),raw);s.store.scan();
+  const first=s.store.list().find(n=>n.path==='one.md'),second=s.store.list().find(n=>n.path==='two.md');
+  s.store.put('syntheticReferences','ref',{noteId:second.id});
+  fs.renameSync(path.join(dir,'two.md'),path.join(dir,'renamed.md'));
+  await s.search('legacyMoveZVQX');
+  assert.equal(s.store.read(first.id).path,'one.md');
+  assert.equal(s.store.read(second.id).path,'renamed.md');
+  assert.equal(s.store.get('syntheticReferences','ref').noteId,second.id);
+});
+
+test('source filtering ignores invalid but parseable source metadata', async t => {
+  const {s}=harness(t);
+  note(s,'source','source body',{},'source');
+  note(s,'valid','sourceFilterZVQX',{sources:[{id:'source',role:'input'}]});
+  note(s,'invalid','sourceFilterZVQX',{sources:['plain-text']});
+  assert.deepEqual(ids(await s.search('sourceFilterZVQX',{source:'source'})),['valid']);
+});
+
+test('near-limit high-entropy Markdown indexes within a bounded Node heap and recalls cross-segment terms', t => {
+  const root=fs.mkdtempSync(path.join(temp,'search-memory-')),vaultDir=path.join(root,'vault'),dataDir=path.join(root,'data');
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));fs.mkdirSync(vaultDir);
+  let seed=17;const blocks=[];
+  for(let block=0;block<1600;block++) {
+    const chars=[];
+    for(let i=0;i<1000;i++){seed=(Math.imul(seed,1664525)+1013904223)>>>0;chars.push(String.fromCharCode(0x4e00+seed%20992));}
+    blocks.push(chars.join(''));
+  }
+  const random=blocks.join(''),needle='BOUNDARY_MODEL_ZVQX_'+'0123456789'.repeat(20);
+  const body=random.slice(0,8175)+needle+random.slice(8175)+'\ntailModelZVQX';
+  const file=path.join(vaultDir,'large.md');fs.writeFileSync(file,'---\nid: large\nkind: knowledge\ntitle: 容量样本\n---\n'+body);
+  assert.ok(fs.statSync(file).size>4_700_000&&fs.statSync(file).size<5_000_000);
+  const child=spawnSync(process.execPath,['--max-old-space-size=128','--input-type=module','-e',
+    "import {createService} from './src/service.mjs'; const s=createService(JSON.parse(process.argv[1]));for(const q of [process.argv[2],'tailModelZVQX']){const r=await s.search(q);if(r.results[0]?.id!=='large'||!r.results[0].snippet.includes(q))process.exit(3);}console.log(JSON.stringify({segments:s.store.db.prepare('SELECT count(*) n FROM search_fts').get().n,max:s.store.db.prepare('SELECT max(length(grams)) n FROM search_fts').get().n}));await s.close();",
+    JSON.stringify({dataDir,vaultDir}),needle],{cwd:path.resolve(import.meta.dirname,'..'),windowsHide:true,encoding:'utf8',timeout:120_000,maxBuffer:16*1024});
+  assert.equal(child.status,0,child.stderr);
+  const result=JSON.parse(child.stdout);assert.ok(result.segments>1);assert.ok(result.max<1_000_000);
 });
