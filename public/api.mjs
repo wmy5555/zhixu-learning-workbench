@@ -220,6 +220,7 @@ export const api = {
   updatePrompts: (body) => request("/api/prompts", { method: "PUT", body }),
   testSetting: (capability) => request("/api/settings/test", { method: "POST", body: { capability } }),
   diagnostics: () => request("/api/diagnostics"),
+  refreshPricing: () => request('/api/usage/pricing-refresh', { method: 'POST', body: { force: true } }),
   usage: (filters = {}) => request(`/api/usage?${new URLSearchParams(filters)}`),
   updateUsageSettings: (body) => request("/api/usage/settings", { method: "PUT", body }),
   callRecovery: () => request("/api/call-recovery"),

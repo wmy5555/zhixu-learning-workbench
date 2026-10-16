@@ -1,3 +1,5 @@
+import { createPriceCatalog } from './price-catalog.mjs';
+import { resolvePricing, summarizeCosts, budgetAccounting } from './pricing.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -20,10 +22,11 @@ import { assertTextSource, processingText } from './attachments.mjs';
 import { outboundText, outboundTitle } from './outbound-text.mjs';
 
 export const defaults = {
+  pricingCatalog: { enabled: true },
   dailyMinutes: 25, timezone: 'Asia/Shanghai', scheduleTime: '08:00', focusTopics: [], pausedIds: [],
-  ai: { enabled: false, baseUrl: '', model: '', timeoutMs: 180000, dailyCallLimit: 500, sourceCallLimit: 120, monthlyBudget: 0, inputPrice: null, outputPrice: null, cachedInputPrice: null },
-  embedding: { enabled: false, baseUrl: '', model: '', inputPrice: null },
-  search: { enabled: false, baseUrl: 'https://api.tavily.com', requestPrice: null }, fetch: { enabled: false },
+  ai: { currency: null, budgetCurrency: null, providerId: '', billingMode: 'standard', pricingMode: 'auto', enabled: false, baseUrl: '', model: '', timeoutMs: 180000, dailyCallLimit: 500, sourceCallLimit: 120, monthlyBudget: 0, inputPrice: null, outputPrice: null, cachedInputPrice: null },
+  embedding: { currency: null, providerId: '', billingMode: 'standard', pricingMode: 'auto', enabled: false, baseUrl: '', model: '', inputPrice: null },
+  search: { currency: null, enabled: false, baseUrl: 'https://api.tavily.com', requestPrice: null }, fetch: { enabled: false },
   mcp: { enabled: false, allowProposals: false, chatgptEnabled: false, chatgptAllowRead: false }, discoveryDays: 7, prompts: {},
 };
 const stages = ['reference','candidate','learning','integrated','core','retired'];
@@ -126,7 +129,7 @@ function sourceTitlePlaceholder(body) {
   return excerpt.trimEnd() + '…';
 }
 
-export function createService({ dataDir, vaultDir, aiOverride, learningClock = () => new Date(), getExternalSettings, practice = false, getPracticeQuestion, receiveHistorySnapshot } = {}) {
+export function createService({ dataDir, vaultDir, aiOverride, learningClock = () => new Date(), getExternalSettings, practice = false, getPracticeQuestion, receiveHistorySnapshot, priceCatalogFetch } = {}) {
   if (practice && (!dataDir || !vaultDir)) fail('练习空间必须使用独立的数据与资料目录。', 'PRACTICE_PATH_REQUIRED');
   if (typeof learningClock !== 'function' || getExternalSettings !== undefined && typeof getExternalSettings !== 'function') fail('学习时间或外部能力配置无效。');
   dataDir ||= path.resolve('.data');
@@ -142,6 +145,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   }
   vaultDir ||= path.resolve('vault');
   let store = new Store({ dataDir, vaultDir, backupPurpose: practice ? practicePurpose : undefined });
+  const priceCatalog = createPriceCatalog({ dataDir, fetchImpl: priceCatalogFetch });
   let sourceFiles;
   let jobRevision = randomUUID();
   let jobSnapshot = 0;
@@ -152,6 +156,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   const settings = () => {
     const saved = store.get('settings', 'main', {});
     const value = { ...defaults, ...saved };
+    value.pricingCatalog = { ...defaults.pricingCatalog, ...saved.pricingCatalog };
     for (const group of ['ai','embedding','search','fetch','mcp']) value[group] = { ...defaults[group], ...saved[group], hasKey: secret.has(group === 'ai' ? 'model' : group) };
     for (const key of ['enabled', 'allowProposals', 'chatgptEnabled', 'chatgptAllowRead']) value.mcp[key] = value.mcp[key] === true;
     if (value.mcp.chatgptEnabled !== true) value.mcp.chatgptAllowRead = false;
@@ -169,15 +174,24 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   const usage = () => {
     const calls = store.records('calls'), day = localDay(new Date(), settings().timezone), month = day.slice(0,7);
     const monthly = calls.filter(c => localDay(new Date(c.createdAt), settings().timezone).startsWith(month));
-    return { callsToday: calls.filter(c => localDay(new Date(c.createdAt), settings().timezone) === day).length, costMonth: monthly.some(c => c.cost == null) ? null : monthly.reduce((s,c) => s + c.cost, 0), knownCostMonth: monthly.reduce((s,c) => s + (c.cost || 0), 0), unknownCostCalls: monthly.filter(c => c.cost == null).length };
+    const budgetRecords = monthly.map(budgetAccounting), costs = summarizeCosts(budgetRecords);
+    return { callsToday: calls.filter(c => localDay(new Date(c.createdAt), settings().timezone) === day).length, costMonth: costs.cost, knownCostMonth: costs.knownCost, unknownCostCalls: costs.unknownCostCalls, confirmedPriceCalls: budgetRecords.filter(call => call.confirmed).length, untrustedPriceCalls: budgetRecords.filter(call => !call.trusted).length, currency: costs.currency, byCurrency: costs.byCurrency, mixedCurrency: costs.mixedCurrency };
   };
   const callLedger = createCallLedger({ getStore: () => store });
-  const ai = aiOverride || createAI({ getSettings: settings, getSecret: (capability, config) => secret.get(capability === 'ai' ? 'model' : capability, config), getUsage: usage, recordCall: call => store.put('calls', randomUUID(), { ...call, createdAt: now() }), callLedger });
+  const pricingSnapshot = (config, capability) => resolvePricing(config, capability, priceCatalog.current());
+  const pricingStatus = () => ({ ...priceCatalog.status(), enabled: settings().pricingCatalog.enabled, current: Object.fromEntries(['ai','embedding','search'].map(group => [group, pricingSnapshot(settings()[group], group === 'ai' ? 'model' : group)])) });
+  const refreshPricing = async ({ force = false } = {}) => {
+    if (practice) fail('请返回正式库更新公开价格。', 'PRACTICE_SETTINGS_LOCKED', 409);
+    if (settings().pricingCatalog.enabled) await priceCatalog.refresh({ force });
+    return pricingStatus();
+  };
+  const ai = aiOverride || createAI({ getPricingSnapshot: pricingSnapshot, getSettings: settings, getSecret: (capability, config) => secret.get(capability === 'ai' ? 'model' : capability, config), getUsage: usage, recordCall: call => store.put('calls', randomUUID(), { ...call, createdAt: now() }), callLedger });
   const callRecovery = () => ({ pending: callLedger.listPending().filter(record => !record.active) });
   function recoverCall(id, input = {}) {
     if (practice) fail('请返回正式库核对调用。', 'PRACTICE_SETTINGS_LOCKED', 409);
     if (processing || activeOperations || pausing) fail('请等待当前操作结束后核对调用。', 'BUSY', 409);
     if (input.action === 'recover') callLedger.recover(id);
+    else if (input.action === 'confirm-price') callLedger.confirmPrice(id, { cost: input.cost, currency: input.currency, reason: input.reason });
     else if (input.action === 'confirm') callLedger.confirm(id, { cost: input.cost, reason: input.reason });
     else fail('调用恢复操作无效。');
     return callRecovery();
@@ -186,7 +200,9 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     const config = settings(), report = buildUsageReport(store.records('calls'), { period, capability, model, timezone: config.timezone });
     // Malformed imported dates must not turn a broken budget ledger into a zero balance.
     const budget = report.invalidDateCalls ? { unavailable: true } : usage();
-    return { ...report, budget: { ...budget, dailyCallLimit: config.ai.dailyCallLimit, monthlyBudget: config.ai.monthlyBudget } };
+    const budgetCurrency = config.ai.budgetCurrency || null;
+    const comparable = !budget.unavailable && !budget.untrustedPriceCalls && budget.byCurrency.every(group => group.knownCost === 0 && group.unknownCostCalls === 0 || group.currency === budgetCurrency);
+    return { ...report, pricing: pricingStatus(), budget: { ...budget, budgetCurrency, comparable, dailyCallLimit: config.ai.dailyCallLimit, monthlyBudget: config.ai.monthlyBudget } };
   };
   function updateUsageSettings(input) {
     const current = settings();
@@ -196,10 +212,11 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     }
     for (const group of ['ai','embedding','search']) {
       const expected = input.pricingFor?.[group];
-      if (!expected || expected.baseUrl !== current[group].baseUrl || expected.model !== (current[group].model || '')) fail('服务或模型已变化，请刷新用量页面后重新设置单价。', 'PRICING_CHANGED', 409);
+      const identityChanged = expected && ['providerId','billingMode','currency'].some(key => (expected[key] ?? (key === 'billingMode' ? 'standard' : key === 'providerId' ? '' : null)) !== (current[group][key] ?? (key === 'billingMode' ? 'standard' : key === 'providerId' ? '' : null)));
+      if (!expected || identityChanged || expected.baseUrl !== current[group].baseUrl || expected.model !== (current[group].model || '')) fail('服务或模型已变化，请刷新用量页面后重新设置单价。', 'PRICING_CHANGED', 409);
     }
     const pick = (group, keys) => Object.fromEntries(keys.filter(key => Object.hasOwn(input[group] || {}, key)).map(key => [key, input[group][key]]));
-    return updateSettings({ ai: pick('ai', ['dailyCallLimit','sourceCallLimit','monthlyBudget','inputPrice','outputPrice','cachedInputPrice']), embedding: pick('embedding', ['inputPrice']), search: pick('search', ['requestPrice']) });
+    return updateSettings({ ...(typeof input.pricingCatalog?.enabled === 'boolean' ? { pricingCatalog: { enabled: input.pricingCatalog.enabled } } : {}), ai: pick('ai', ['dailyCallLimit','sourceCallLimit','monthlyBudget','budgetCurrency','inputPrice','outputPrice','cachedInputPrice','currency','pricingMode']), embedding: pick('embedding', ['inputPrice','currency','pricingMode']), search: pick('search', ['requestPrice','currency']) });
   }
   const promptText = (key, values={}) => renderPrompt(key,values,settings().prompts);
   function getPrompts() {
@@ -1206,10 +1223,10 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   const commitFile = tracked(input => sourceFiles.commit(input));
   const readFile = (id, assetId) => sourceFiles.read(id, assetId);
   const pendingUploads = () => sourceFiles.pending();
-  return { get store(){return store;}, get processing(){return processing;}, get hasPendingOperations(){return processing||activeOperations>0||pausing;}, chatgpt, chatgptUndo, learningNow, settings, updateSettings, getPrompts, updatePrompts, usage, usageReport, updateUsageSettings, callRecovery, recoverCall, ai, importItems, processNote, requestSourceStructure, listNotes, publicNote, publicJob, library, readPublicNote, noteEvidence, linksPreview, syncLinks, getNote, editNote, extractNote, promote, confirmNote, merge, search:tracked(search), today, planAction, startStudy, session, answerStudy, hintStudy, confirmStudy, finishStudy, mistakeAction, topics, createTopic, updateTopic, topicAction, recommendations, recommendationAction, requestRelations, relationReview, relationAction, related, ask:tracked(ask), updateDraft, propose, proposalAction, queue, runJobs, pauseJobs, jobAction, tick, demo, diagnostics, backup, restore,
+  return { get store(){return store;}, get processing(){return processing;}, get hasPendingOperations(){return processing||activeOperations>0||pausing;}, chatgpt, chatgptUndo, learningNow, settings, updateSettings, refreshPricing, pricingStatus, getPrompts, updatePrompts, usage, usageReport, updateUsageSettings, callRecovery, recoverCall, ai, importItems, processNote, requestSourceStructure, listNotes, publicNote, publicJob, library, readPublicNote, noteEvidence, linksPreview, syncLinks, getNote, editNote, extractNote, promote, confirmNote, merge, search:tracked(search), today, planAction, startStudy, session, answerStudy, hintStudy, confirmStudy, finishStudy, mistakeAction, topics, createTopic, updateTopic, topicAction, recommendations, recommendationAction, requestRelations, relationReview, relationAction, related, ask:tracked(ask), updateDraft, propose, proposalAction, queue, runJobs, pauseJobs, jobAction, tick, demo, diagnostics, backup, restore,
     jobStatuses,
     bootstrap(){return{settings:settings(),stats:{notes:store.list().filter(n=>!n.meta.excerptOnly).length,sources:store.list().filter(n=>n.kind==='source'&&!n.meta.excerptOnly).length,knowledge:store.list().filter(n=>n.kind==='knowledge').length,pending:store.records('jobs').filter(j=>['waiting','failed'].includes(j.state)).length},today:today(),notes:listNotes().filter(n=>!n.meta.excerptOnly).map(publicNote),jobs:store.records('jobs').map(publicJob),jobRevision,jobSnapshot:++jobSnapshot,conflicts:store.conflicts,capabilities:{offline:true,model:settings().ai.enabled,embedding:settings().embedding.enabled,search:settings().search.enabled}};},
     uploadFile, revertUpload, commitFile, readFile, pendingUploads,
-    async close(){stopped=true;if(practice)await pauseJobs();else{controller?.abort();while(processing||activeOperations)await new Promise(resolve=>setTimeout(resolve,20));}store.close();}
+    async close(){await priceCatalog.close();stopped=true;if(practice)await pauseJobs();else{controller?.abort();while(processing||activeOperations)await new Promise(resolve=>setTimeout(resolve,20));}store.close();}
   };
 }

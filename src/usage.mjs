@@ -1,8 +1,9 @@
+import { summarizeCosts, costCurrency, validPriceConfirmation } from './pricing.mjs';
 import { tokenCount } from './token-usage.mjs';
 
 const capabilities = new Set(['model', 'embedding', 'search', 'fetch']);
 const finiteCost = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
-const empty = () => ({ calls: 0, pendingCalls: 0, unknownResultCalls: 0, failedCalls: 0, tokenCalls: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, unknownTokenCalls: 0, unknownCacheCalls: 0, unknownReasoningCalls: 0, knownCost: 0, unknownCostCalls: 0 });
+const empty = () => ({ calls: 0, pendingCalls: 0, unknownResultCalls: 0, failedCalls: 0, tokenCalls: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, unknownTokenCalls: 0, unknownCacheCalls: 0, unknownReasoningCalls: 0, knownCost: 0, unknownCostCalls: 0, costRecords: [] });
 const shiftDay = (day, offset) => new Date(Date.parse(`${day}T12:00:00Z`) + offset * 86400000).toISOString().slice(0, 10);
 const invalid = message => { throw Object.assign(new Error(message), { code: 'INVALID_USAGE_FILTER', status: 400 }); };
 
@@ -11,6 +12,7 @@ function add(bucket, call) {
   if (['reserved', 'dispatch', 'received', 'unknown'].includes(call.phase)) bucket.pendingCalls++;
   if (['dispatch', 'unknown', 'resolved_unknown'].includes(call.phase)) bucket.unknownResultCalls++;
   if (call.ok === false) bucket.failedCalls++;
+  bucket.costRecords.push({ cost: call.cost, currency: costCurrency(call) });
   const cost = finiteCost(call.cost);
   if (cost === null) bucket.unknownCostCalls++;
   else bucket.knownCost += cost;
@@ -31,7 +33,7 @@ function add(bucket, call) {
   }
 }
 
-const finish = bucket => ({ ...bucket, cost: bucket.unknownCostCalls ? null : bucket.knownCost });
+const finish = ({ costRecords, ...bucket }) => ({ ...bucket, ...summarizeCosts(costRecords) });
 
 // Aggregate the complete local call ledger. Presentation pagination must never cap totals.
 export function buildUsageReport(calls, { timezone = 'Asia/Shanghai', period = 'month', capability = '', model = '', at = new Date() } = {}) {
@@ -51,15 +53,19 @@ export function buildUsageReport(calls, { timezone = 'Asia/Shanghai', period = '
     if (call.model) availableModels.add(String(call.model));
     if (model && call.model !== model) continue;
     add(totals, call); add(days.get(day), call); selected.push(call);
-    const key = JSON.stringify([call.capability, call.model || '']);
-    if (!models.has(key)) models.set(key, { capability: call.capability, model: call.model || '', ...empty() });
+    const identity = call.pricingSnapshot?.identity || {};
+    const identityFields = { provider: identity.provider || null, endpointId: identity.endpointId || null, billingMode: identity.billingMode || null, currency: costCurrency(call) };
+    const key = JSON.stringify([call.capability, call.model || '', identityFields]);
+    if (!models.has(key)) models.set(key, { capability: call.capability, model: call.model || '', ...identityFields, ...empty() });
     add(models.get(key), call);
   }
   const recentCalls = selected.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))).slice(0, 100).map(call => ({
     // Only accounting metadata: no note IDs, prompts, errors, credentials or endpoint paths.
     createdAt: call.createdAt, capability: call.capability, model: call.model || '', phase: call.phase || 'legacy', ok: typeof call.ok === 'boolean' ? call.ok : null,
     inputTokens: tokenCount(call.inputTokens), outputTokens: tokenCount(call.outputTokens),
-    cachedInputTokens: tokenCount(call.cachedInputTokens), cost: finiteCost(call.cost),
+    cachedInputTokens: tokenCount(call.cachedInputTokens), cost: finiteCost(call.cost), currency: costCurrency(call),
+    pricingConfirmation: validPriceConfirmation(call.pricingConfirmation) ? { cost: call.pricingConfirmation.cost, currency: call.pricingConfirmation.currency, at: call.pricingConfirmation.at } : null,
+    pricing: call.pricingSnapshot ? { source: call.pricingSnapshot.source, status: call.pricingSnapshot.status, revision: call.pricingSnapshot.revision || null, stale: call.pricingSnapshot.stale, provider: call.pricingSnapshot.identity?.provider || null } : { source: 'legacy_manual', status: 'unknown_currency' },
   }));
   return {
     // Ledger ok/failedCalls describe transport, not later JSON/content validation.

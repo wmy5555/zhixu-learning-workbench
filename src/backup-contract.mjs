@@ -1,3 +1,4 @@
+import { validPricingSnapshot, validPriceConfirmation } from './pricing.mjs';
 import path from 'node:path';
 import YAML from 'yaml';
 
@@ -65,6 +66,9 @@ export function validateBackupRecord(row) {
   if (value.id !== undefined && (typeof value.id !== 'string' || !value.id || value.id !== row.key)) invalid('备份运行记录身份不一致。');
   for (const key of ['noteId','fromId','toId']) if (value[key] !== undefined && !validBackupId(value[key])) invalid('备份运行记录引用身份无效。');
   if (row.namespace === 'jobs' && (!validBackupId(value.id) || typeof value.type !== 'string' || !backupObject(value.payload) || !['queued','running','waiting','failed','done','cancelled'].includes(value.state) || !Number.isInteger(value.attempts) || value.attempts < 0)) invalid('备份任务记录无效。');
+  if (['calls','callLedger'].includes(row.namespace) && value.pricingConfirmation != null && !validPriceConfirmation(value.pricingConfirmation)) invalid('备份价格核对记录无效。');
+  const snapshotOwner = row.namespace === 'callResults' ? value.entry : value;
+  if (['calls','callLedger','callResults'].includes(row.namespace) && snapshotOwner?.pricingSnapshot !== undefined && (!validPricingSnapshot(snapshotOwner.pricingSnapshot) || snapshotOwner.pricingSnapshot.identity.capability !== snapshotOwner.capability || snapshotOwner.pricingSnapshot.identity.model !== (snapshotOwner.model || null))) invalid('备份价格快照无效。');
   if (row.namespace === 'calls' && !date(value.createdAt)) invalid('备份调用记录时间无效。');
   if (row.namespace === 'calls' && value.cost !== undefined && value.cost !== null && (!Number.isFinite(value.cost) || value.cost < 0)) invalid('备份调用费用无效。');
   if (row.namespace === 'sessions' && value.turns !== undefined && (!Array.isArray(value.turns) || value.turns.some(item => !backupObject(item)))) invalid('备份学习回答记录无效。');
