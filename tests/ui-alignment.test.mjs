@@ -514,6 +514,24 @@ test('source reading, search excerpts and historical body use Markdown while met
   assert.ok(descendants(search).some(node => node.tagName === 'h2' && node.textContent === '阅读标题'));
 });
 
+test('source history shows body first with literal version properties collapsed by default', () => {
+  const app = browser();
+  const raw = '---\r\ntitle: "<script>metadata</script>"\r\ncustom: retained\r\n---\r\n## 历史正文\n\n<script>body</script>';
+  const historical = app.historyReadingBody({ kind: 'source' }, { raw });
+  const properties = historical.querySelector('details');
+  assert.ok(properties);
+  assert.equal(properties.open, false);
+  assert.equal(properties.querySelector('summary').textContent, '查看版本属性');
+  assert.ok(properties.querySelector('.history-metadata').textContent.includes('custom: retained'));
+  assert.ok(historical.children[0].classList.contains('prose'));
+  assert.equal(descendants(historical).filter(node => node.tagName === 'script').length, 0);
+  properties.open = true;
+  assert.ok(properties.textContent.includes('<script>metadata</script>'));
+  const legacy = app.historyReadingBody({ kind: 'source' }, { raw: '旧版无属性正文' });
+  assert.equal(legacy.querySelector('details'), null);
+  assert.ok(legacy.textContent.includes('旧版无属性正文'));
+});
+
 test('captured conversation history uses message presentation without resolving current attachments', () => {
   const app = browser();
   const body = '## 会话原文（按收到的顺序保留）\n\n### 1. ChatGPT\n\n```text\n## 历史标题\n\n**历史回答**\n\n![图](../.zhixu-attachments/old.png)\n```';
