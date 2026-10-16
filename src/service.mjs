@@ -18,6 +18,8 @@ import { structureBasis, structureRecord, structureView } from './source-structu
 import { createSourceFiles } from './source-files.mjs';
 import { assertTextSource, processingText } from './attachments.mjs';
 import { outboundText, outboundTitle } from './outbound-text.mjs';
+import { searchContext } from './search-index.mjs';
+import { performance } from 'node:perf_hooks';
 
 export const defaults = {
   dailyMinutes: 25, timezone: 'Asia/Shanghai', scheduleTime: '08:00', focusTopics: [], pausedIds: [],
@@ -33,7 +35,6 @@ const practicePurpose = 'onboarding-practice';
 const practicePreferences = ['dailyMinutes','timezone','scheduleTime','focusTopics','pausedIds','discoveryDays','prompts'];
 const externalCapabilities = ['ai','embedding','search','fetch'];
 const localDay = (date, timezone) => new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
-const tokens = text => [...new Set(String(text).toLowerCase().match(/[a-z0-9_]+|[\p{Script=Han}]/gu) || [])];
 function parseJSON(text) { try { return JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, '')); } catch { fail('模型没有返回要求的数据结构；原始资料已保存，可重试。', 'MODEL_FORMAT', 422); } }
 function cosine(a, b) {
   if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return 0;
@@ -497,28 +498,46 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     const result = store.update(keepId, { body, expectedHash, meta: { sources, privacy: keep.meta.privacy === 'cloud' && other.meta.privacy === 'cloud' ? 'cloud' : 'local', researchLimitations: [...(keep.meta.researchLimitations || []), ...(other.meta.researchLimitations || [])] } });
     store.update(mergeId, { expectedHash: mergeHash, meta: { stage: 'retired', supersededBy: keepId } }); return result;
   }
+  const searchPages = new Map();
+  function rebuildLocalSearch() {
+    const sync=store.scan(); store.searchIndex.rebuild(); searchPages.clear();
+    return { count: sync.count, conflicts: sync.conflicts.length, revision: store.searchIndex.revision() };
+  }
   async function search(query, options = {}) {
-    if(options.scan!==false)store.scan(); const started = Date.now(), q = String(query || '').trim();
-    if (!q) return { results: [], diagnostics: { mode: options.mode || 'keyword', semanticUsed: false, limitations: [], elapsedMs: 0 } };
-    const browse = options.browse === true;
-    const kinds = options.scope || (options.kind ? [options.kind] : (browse ? null : ['knowledge','source','topic']));
-    const includeRetired = browse && options.stage === 'retired';
-    const notes = store.list().filter(n => !n.meta.excerptOnly && (!kinds || kinds.includes(n.kind)) && (includeRetired ? n.meta.stage === 'retired' : n.meta.stage !== 'retired' && !n.meta.supersededBy) && (browse || (n.kind !== 'mistake' && n.kind !== 'report')) && (!options.stage || n.meta.stage === options.stage) && (!options.topic || n.meta.topic === options.topic) && (!options.source || n.meta.sources?.some(s => s.id === options.source)) && (!options.from || n.updatedAt.slice(0,10) >= options.from) && (!options.to || n.updatedAt.slice(0,10) <= options.to));
-    const qtokens = tokens(q), limitations = [], keyword = [];
-    for (const n of notes) {
-      const text = `${n.title}\n${n.body}`.toLowerCase();
-      const overlap = qtokens.filter(t => text.includes(t)).length / (qtokens.length || 1);
-      const exact = text.includes(q.toLowerCase());
-      if (exact || overlap >= Math.min(0.65, 2 / Math.max(1, qtokens.length))) keyword.push({ note: n, score: (exact ? 8 : 0) + overlap * 3 + (n.title.toLowerCase().includes(q.toLowerCase()) ? 3 : 0), via: ['keyword'] });
+    const started = performance.now(), phases = {}, q = String(query || '').trim(), mode = options.mode || 'keyword';
+    if (q.length > 512) fail('检索词最多 512 个字符。', 'SEARCH_QUERY_TOO_LONG');
+    if (options.scope !== undefined && !Array.isArray(options.scope)) fail('检索范围须为类别列表。');
+    const limit = Math.max(1, Math.min(50, Math.floor(Number(options.limit) || 12)));
+    let stamp = started;
+    const mark = name => { const at = performance.now(); phases[name] = at - stamp; stamp = at; };
+    const sync = options.scan === false ? { mode: 'caller-synchronized', readFiles: 0 } : store.ensureFresh();
+    mark('syncMs');
+    const indexUpdated = store.searchIndex.sync(), revision = store.searchIndex.revision();
+    mark('indexMs');
+    const binding = hash(JSON.stringify([store.vaultDir,q,mode,options.scope,options.kind,options.browse === true,options.stage,options.topic,options.source,options.from,options.to,options.privacy,limit]));
+    for (const [id, page] of searchPages) if (Date.now()-page.at > 300_000) searchPages.delete(id);
+    let cached, cursor;
+    if (options.cursor) {
+      try {
+        if (typeof options.cursor !== 'string' || options.cursor.length > 2048) throw new Error();
+        cursor = JSON.parse(Buffer.from(options.cursor,'base64url').toString());
+        if (!cursor || typeof cursor.session !== 'string' || typeof cursor.id !== 'string' || !Number.isFinite(cursor.score)) throw new Error();
+      }
+      catch { fail('分页位置无效，请重新检索。', 'SEARCH_CURSOR_INVALID', 409); }
+      cached = searchPages.get(cursor.session);
+      if (!cached || cached.binding !== binding || cached.revision !== revision || !cached.ranked.some(r => r.note.id === cursor.id && r.rankScore === cursor.score)) fail('资料或检索条件已变化，请重新检索。', 'SEARCH_CURSOR_STALE', 409);
     }
-    keyword.sort((a,b) => b.score - a.score);
+    if (!q) return { results: [], nextCursor: null, total: 0, diagnostics: { mode, semanticUsed: false, limitations: [], phases, sync, indexUpdated, elapsedMs: performance.now()-started } };
+    const limitations = cached ? [...cached.limitations] : [], keyword = cached?.keyword || store.searchIndex.candidates(q, options);
+    mark('keywordMs');
     let semantic = [], semanticUsed = false;
-    if (['semantic','hybrid'].includes(options.mode)) {
+    if (!cached && ['semantic','hybrid'].includes(mode)) {
       if (options.privacy !== 'cloud') limitations.push('本次查询仅留本地，使用中文关键词查找；可单独允许查询外发以使用语义服务。');
       else if (!settings().embedding.enabled) limitations.push('语义服务未配置，当前使用中文关键词查找。');
       else {
         try {
           const queryVec = (await ai.embed({ texts: [q], privacy: 'cloud' })).vectors[0];
+          const notes = store.searchIndex.candidates(q, options, { all: true }).map(r => r.note);
           const allowed = new Map(notes.filter(n => privacyFor(n) === 'cloud').map(n => [n.id,n]));
           const chunks = store.db.prepare('SELECT * FROM index_chunks WHERE vector IS NOT NULL AND model=?').all(settings().embedding.model);
           const best = new Map();
@@ -527,23 +546,41 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
             const vector = JSON.parse(c.vector);
             if (!validVector(queryVec) || !validVector(vector) || queryVec.length !== vector.length) continue;
             const score = cosine(queryVec, vector);
-            if (!best.has(c.noteId) || score > best.get(c.noteId).score) best.set(c.noteId, { note: allowed.get(c.noteId), score, via: ['semantic'] });
+            if (!best.has(c.noteId) || score > best.get(c.noteId).score) best.set(c.noteId, { note: allowed.get(c.noteId), score, via: ['semantic'], semanticOffset: Math.max(0, Number(c.id.slice(c.noteId.length+1)) - allowed.get(c.noteId).title.length - 1) });
           }
           semanticUsed = best.size > 0;
-          semantic = [...best.values()].filter(r => r.score > 0.2).sort((a,b) => b.score - a.score);
+          semantic = [...best.values()].filter(r => r.score > 0.2).sort((a,b) => b.score - a.score || (a.note.id < b.note.id ? 1 : -1));
           const pending = store.missingEmbeddings({model:settings().embedding.model,noteIds:[...allowed.keys()]}).length;
           if (!chunks.length) limitations.push('向量索引为空；请在系统页构建索引。');
           else if (pending) limitations.push(`有 ${pending} 个片段尚待更新语义索引；本次仍结合现有关键词结果。`);
         } catch (error) { semanticUsed = false; limitations.push(error.message); }
       }
     }
+    mark('semanticMs');
+    // An external edit while awaiting embedding must not hydrate old rankings
+    // with new bodies; subsequent pages also bind to this exact revision.
+    if (!cached && ['semantic','hybrid'].includes(mode) && options.privacy === 'cloud') {
+      store.ensureFresh(); store.searchIndex.sync();
+      if (store.searchIndex.revision() !== revision) fail('检索期间资料已变化，请重新检索。', 'SEARCH_CHANGED', 409);
+    }
     const fused = new Map();
-    for (const list of (options.mode === 'semantic' && semantic.length ? [semantic] : [keyword, semantic])) list.forEach((r,i) => {
+    if (!cached) for (const list of (mode === 'semantic' && semantic.length ? [semantic] : [keyword, semantic])) list.forEach((r,i) => {
       const prior = fused.get(r.note.id) || { ...r, score: 0, via: [] };
       prior.score += 1 / (60 + i); prior.via.push(...r.via); fused.set(r.note.id, prior);
     });
-    const results = [...fused.values()].sort((a,b) => (b.score + (['integrated','core'].includes(b.note.meta.stage) ? 0.002 : 0)) - (a.score + (['integrated','core'].includes(a.note.meta.stage) ? 0.002 : 0))).slice(0, Math.min(50, options.limit || 12)).map(r => ({ ...r.note, score: Number(r.score.toFixed(6)), via: [...new Set(r.via)], snippet: r.note.body.slice(0,600), limitations: materialLimitations(r.note) }));
-    return { results, diagnostics: { mode: options.mode || 'keyword', semanticUsed, keywordIds: keyword.slice(0,12).map(r => r.note.id), semanticIds: semantic.slice(0,12).map(r => r.note.id), scanned: notes.length, elapsedMs: Date.now() - started, limitations } };
+    const ranked = cached?.ranked || [...fused.values()].map(r => ({...r,rankScore:r.score+(['integrated','core'].includes(r.note.meta.stage)?0.002:0)})).sort((a,b) => b.rankScore-a.rankScore || (a.note.id < b.note.id ? 1 : -1));
+    const remaining = cursor ? ranked.filter(r => r.rankScore < cursor.score || r.rankScore === cursor.score && r.note.id < cursor.id) : ranked;
+    const page = remaining.slice(0, limit);
+    mark('rankingMs');
+    const results = page.map(r => { const note = store.read(r.note.id); return { ...note, score: Number(r.score.toFixed(6)), via: [...new Set(r.via)], ...searchContext(note,q,r.semanticOffset), limitations: materialLimitations(note) }; });
+    mark('hydrateMs');
+    let session = cursor?.session, nextCursor = null;
+    if (remaining.length > limit) {
+      session ||= randomUUID();
+      if (!cached) { if (searchPages.size >= 8) searchPages.delete(searchPages.keys().next().value); searchPages.set(session,{binding,revision,at:Date.now(),ranked,keyword,semantic,semanticUsed,limitations}); }
+      const last = page.at(-1); nextCursor = Buffer.from(JSON.stringify({ session,score:last.rankScore,id:last.note.id })).toString('base64url');
+    }
+    return { results, nextCursor, total: ranked.length, diagnostics: { mode, semanticUsed: cached?.semanticUsed ?? semanticUsed, keywordIds: keyword.slice(0,12).map(r => r.note.id), semanticIds: (cached?.semantic || semantic).slice(0,12).map(r => r.note.id), scanned: sync.count, candidateCount: keyword.length, bodyReads: page.length, indexUpdated, revision, sync, phases, elapsedMs: performance.now() - started, limitations } };
   }
   const {today,planAction,session,startStudy,answerStudy,hintStudy,confirmStudy,finishStudy,mistakeAction,topics,createTopic,updateTopic,topicAction,grade} = createLearning({
     get store(){return store;}, settings, getNote, eligible, limitationsFor: materialLimitations, privacyFor, queue, ai, promptText, parseJSON, confirmNote, updateSettings, learningClock: learningDate, practice, getPracticeQuestion: practice ? getPracticeQuestion : undefined
@@ -1029,7 +1066,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     })().finally(() => { pausing = false; pausePromise = null; });
     return pausePromise;
   }
-  function tick(){if(practice)return runJobs();store.scan();const cfg=settings(),date=learningDate(),time=new Intl.DateTimeFormat('en-GB',{timeZone:cfg.timezone,hour:'2-digit',minute:'2-digit',hour12:false}).format(date);if(time>=cfg.scheduleTime)today();const last=store.get('schedule','discovery');if(store.list().some(n=>n.kind==='knowledge')&&(!last||date.getTime()-Date.parse(last.at)>cfg.discoveryDays*86400000))queue('discover',{},`discovery:${localDay(date,cfg.timezone)}`);return runJobs();}
+  function tick(){if(practice)return runJobs();store.ensureFresh();const cfg=settings(),date=learningDate(),time=new Intl.DateTimeFormat('en-GB',{timeZone:cfg.timezone,hour:'2-digit',minute:'2-digit',hour12:false}).format(date);if(time>=cfg.scheduleTime)today();const last=store.get('schedule','discovery');if(store.list().some(n=>n.kind==='knowledge')&&(!last||date.getTime()-Date.parse(last.at)>cfg.discoveryDays*86400000))queue('discover',{},`discovery:${localDay(date,cfg.timezone)}`);return runJobs();}
   function demo(){const existing=store.list().filter(n=>n.meta.demo);if(existing.length)return{notes:existing};const source=store.create({kind:'source',title:'演示资料 · 小林的读书项目',body:'【虚构演示，不代表用户真实经历】小林正在整理一份读书报告。他保存了原始摘录，希望用自己的话说明观点，再找到能支持或反对它的材料。此条用于体验输入、查找和编辑。',meta:{demo:true,privacy:'local',platform:'内置演示'}});const note=store.create({kind:'knowledge',title:'演示知识 · 给读书报告保留出处',body:'【演示设定】为小林的读书报告记录：一句观点、对应原文、页码，以及哪些条件会限制该观点。\n\n练习：假设你是小林，请用自己的话说明报告中为何要保留出处。这个练习仅针对上述虚构任务，没有预先记录任何学习成绩。',meta:{demo:true,privacy:'local',stage:'candidate',topic:'读书与表达',depth:'explain',sources:[{id:source.id,role:'input'}],promotionReason:'用于试用学习流程，可自行加入学习。'}});return{notes:[source,note]};}
   function diagnostics() {
     store.scan();
@@ -1117,7 +1154,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   const readFile = (id, assetId) => sourceFiles.read(id, assetId);
   const pendingUploads = () => sourceFiles.pending();
   return { get store(){return store;}, get processing(){return processing;}, get hasPendingOperations(){return processing||activeOperations>0||pausing;}, chatgpt, chatgptUndo, learningNow, settings, updateSettings, getPrompts, updatePrompts, usage, usageReport, updateUsageSettings, callRecovery, recoverCall, ai, importItems, processNote, requestSourceStructure, listNotes, publicNote, publicJob, library, readPublicNote, noteEvidence, linksPreview, syncLinks, getNote, editNote, extractNote, promote, confirmNote, merge, search:tracked(search), today, planAction, startStudy, session, answerStudy, hintStudy, confirmStudy, finishStudy, mistakeAction, topics, createTopic, updateTopic, topicAction, recommendations, recommendationAction, requestRelations, relationReview, relationAction, related, ask:tracked(ask), updateDraft, propose, proposalAction, queue, runJobs, pauseJobs, jobAction, tick, demo, diagnostics, backup, restore,
-    jobStatuses,
+    jobStatuses, rebuildLocalSearch,
     bootstrap(){return{settings:settings(),stats:{notes:store.list().filter(n=>!n.meta.excerptOnly).length,sources:store.list().filter(n=>n.kind==='source'&&!n.meta.excerptOnly).length,knowledge:store.list().filter(n=>n.kind==='knowledge').length,pending:store.records('jobs').filter(j=>['waiting','failed'].includes(j.state)).length},today:today(),notes:listNotes().filter(n=>!n.meta.excerptOnly).map(publicNote),jobs:store.records('jobs').map(publicJob),jobRevision,jobSnapshot:++jobSnapshot,conflicts:store.conflicts,capabilities:{offline:true,model:settings().ai.enabled,embedding:settings().embedding.enabled,search:settings().search.enabled}};},
     uploadFile, revertUpload, commitFile, readFile, pendingUploads,
     async close(){stopped=true;if(practice)await pauseJobs();else{controller?.abort();while(processing||activeOperations)await new Promise(resolve=>setTimeout(resolve,20));}store.close();}

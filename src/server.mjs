@@ -8,6 +8,8 @@ import { atomicWrite, fail, now } from './store.mjs';
 import { createOnboarding } from './onboarding.mjs';
 import { BACKUP_REQUEST_MAX_BYTES } from './backup-contract.mjs';
 import { MAX_FILE_BYTES } from './attachments.mjs';
+import { searchContext } from './search-index.mjs';
+import { performance } from 'node:perf_hooks';
 
 const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
 const vendorAssets = Object.fromEntries([
@@ -40,8 +42,20 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
   if (!fs.existsSync(chatgptTokenPath)) atomicWrite(chatgptTokenPath, randomBytes(32).toString('hex'));
   const chatgptToken = fs.readFileSync(chatgptTokenPath, 'utf8').trim();
   const sessions = new Map(); let timer, busyTick = false;
-  function json(res, status, data, headers = {}) { res.writeHead(status, { 'Content-Type':'application/json; charset=utf-8', 'Cache-Control':'no-store', 'X-Content-Type-Options':'nosniff', ...headers }); res.end(JSON.stringify(data)); }
+  function json(res, status, data, headers = {}) {
+    if (data?.diagnostics?.phases) data.diagnostics.httpPrepareMs = performance.now()-res.requestStarted;
+    res.writeHead(status, { 'Content-Type':'application/json; charset=utf-8', 'Cache-Control':'no-store', 'X-Content-Type-Options':'nosniff', ...headers }); res.end(JSON.stringify(data));
+  }
+  function publicSearch(result, query, service) {
+    result.results = result.results.map(n => {
+      const clean = service.publicNote(n), context = searchContext(clean,query,n.location?.type === 'semantic' ? n.location.offset : undefined);
+      // Full Markdown is fetched by the detail route only when opened.
+      return { ...clean, ...context, body: context.snippet };
+    });
+    return result;
+  }
   const server = http.createServer(async(req,res) => {
+    res.requestStarted = performance.now();
     try {
       const localPort = server.address()?.port;
       const allowedHosts = [`127.0.0.1:${localPort}`,`localhost:${localPort}`];
@@ -175,7 +189,7 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
       else if(resource==='recommendations'&&!id&&method==='GET')result=service.recommendations();
       else if(resource==='recommendations'&&action==='action'&&method==='POST')result=service.recommendationAction(id,body);
       else if(resource==='import'&&method==='POST')result=service.importItems(body);
-      else if(resource==='search'&&method==='GET'){result=await service.search(query.q,{...query,browse:true});result.results=result.results.map(n=>{const clean=service.publicNote(n);return {...clean,snippet:clean.body.slice(0,500)};});}
+      else if(resource==='search'&&method==='GET'){result=publicSearch(await service.search(query.q,{...query,browse:true}),query.q,service);}
       else if(resource==='ask'&&method==='POST')result=await service.ask(body);
       else if(resource==='drafts'&&!id&&method==='GET')result={drafts:service.store.records('drafts')};
       else if(resource==='drafts'&&id&&!action&&method==='PUT')result=service.updateDraft(id,body);
@@ -214,6 +228,7 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
         result=mainService.recoverCall(id,body);
       }
       else if(resource==='diagnostics'&&method==='GET'){result=service.diagnostics();if(practiceId){result.usage=mainService.usage();result.calls=mainService.store.records('calls').slice(0,100);result.sharedUsage=true;result.usageNotice='请求上限与日常使用共用。下方调用记录来自共用 AI 服务，包含正式与练习请求；仅在此查看，不写入练习备份。';}}
+      else if(resource==='index'&&id==='local'&&method==='POST')result=service.rebuildLocalSearch();
       else if(resource==='index'&&id==='rebuild'&&method==='POST')result=service.queue('index',{},'index:manual');
       else if(resource==='index'&&id==='update'&&method==='POST')result=service.queue('index',{incremental:true},'index:manual');
       else if(resource==='backup'&&method==='GET'){

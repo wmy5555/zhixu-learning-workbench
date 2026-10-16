@@ -186,7 +186,12 @@ export const api = {
   promote: (id, body) => request(`/api/notes/${encodeURIComponent(id)}/promote`, { method: "POST", body }),
   confirmNote: (id, body) => request(`/api/notes/${encodeURIComponent(id)}/confirm`, { method: "POST", body }),
   merge: (body) => request("/api/notes/merge", { method: "POST", body }),
-  search: (filters) => request(`/api/search${toQuery(filters)}`),
+  search: async (filters) => {
+    const clock = () => globalThis.performance?.now() ?? Date.now(), started = clock();
+    const result = await request(`/api/search${toQuery(filters)}`);
+    result.diagnostics = { ...result.diagnostics, clientRoundTripMs: clock()-started };
+    return result;
+  },
   ask: (body) => request("/api/ask", { method: "POST", body }),
   drafts: () => request("/api/drafts"),
   updateDraft: (id, body) => request(`/api/drafts/${encodeURIComponent(id)}`, { method: "PUT", body }),
@@ -225,6 +230,7 @@ export const api = {
   callRecovery: () => request("/api/call-recovery"),
   recoverCall: (id, body) => request(`/api/call-recovery/${encodeURIComponent(id)}`, { method: "POST", body }),
   rebuildIndex: () => request("/api/index/rebuild", { method: "POST", body: {} }),
+  rebuildLocalSearch: () => request('/api/index/local', { method: 'POST', body: {} }),
   updateIndex: () => request("/api/index/update", { method: "POST", body: {} }),
   backup: () => request("/api/backup", { blob: true }),
   restore: (body) => request("/api/restore", { method: "POST", body }),
