@@ -2,6 +2,10 @@
 
 2026-10-16 检索优化开始前获取最新 main `4a5f90b`，独立 worktree 保留主工作区其他任务的全部未提交改动。增量读取 #80、#71、#77、#70 的普通评论、行内意见及 Code/Security 总结：#71 的文件竞争/持久续跑、#77 的本地图片外发过滤及逐引用附件校验已有后续修复，保留这些实现；#70/#80 无未处理的新检索问题。旧独立安全报告不可得的边界不因本次检索改动解除。当前任务的代码/安全审查与四项 CI 将按实际回执继续登记，不把已有 PR 完成状态当作本次已审查。
 
+检索 [PR #81](https://github.com/wmy5555/zhixu-learning-workbench/pull/81) 候选 `2a6f18671d4a4da8fd41e5576318917b14865d3e`：发送前已读取当前全部评论，无已有请求/自动总结；分别成功提交一次[代码初审](https://github.com/wmy5555/zhixu-learning-workbench/pull/81#issuecomment-6209236673)和一次[安全初审](https://github.com/wmy5555/zhixu-learning-workbench/pull/81#issuecomment-6209237529)。范围分别为召回/排序/分页/定位与不可信 Markdown/文件边界/索引事务一致性，不请求代改。连接工具不提供自动审查开关实时读取，未修改开关；代码审查已显示 running，安全请求仅确认评论创建，不能等同运行或通过。当前候选 [CI 38859273928](https://github.com/wmy5555/zhixu-learning-workbench/actions/runs/38859273928) 继续逐项核对。
+
+已实际读回上述候选的 Windows Quality、Linux Quality、Secrets、Dependencies **四项 completed/success**。代码总结仍为 running；安全请求有连接机器人 👀 回执，但 summary 的 security 状态与提交仍为空，未取得可读报告，不能记为安全通过。不重复发送请求，不合并或更新正式服务；后续只补说明不构成新的代码初审理由，最终说明提交 CI 另核。
+
 ## 2026-10-16 PR #71 接入最新主线
 
 将历史增强候选 `b8fe8dc622adf288a038d9acae04228db5a682a9` 正常合并 main `47bcb63611e41edd8ca11895b61ff3173897af97`，保留双方提交历史。八份冲突文件逐块融合：本机撤销路由与附件/恢复请求读取同时保留，Store 同时保留磁盘核验、独占恢复及主线的持久恢复阻塞保护，服务同时导出会话撤销、附件与调用恢复。说明记录并列保留。主线主动 AI 取材快照与图片外发过滤、50 MB 附件、100 MB 备份、调用账本与凭据事务、Markdown 编辑器及 #78–#80 网页修复保留；未同步 Android。

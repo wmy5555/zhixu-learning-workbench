@@ -21,6 +21,8 @@
 
 提交前另核实“跳过无变化 upsert”仍须比较 SQLite 的 raw 缓存：以保留相同 hash/JSON、仅损坏 raw 的合成回归先复现 `PERSISTED_MISMATCH`，再补 raw 相等条件；完整扫描恢复原 Markdown 缓存，未覆盖磁盘原件，向量不变。局部检索专项重新执行，当前 CI 另核。
 
+行为提交 `2a6f18671d4a4da8fd41e5576318917b14865d3e` 已推送至 [PR #81](https://github.com/wmy5555/zhixu-learning-workbench/pull/81)；该提交 [CI 38859273928](https://github.com/wmy5555/zhixu-learning-workbench/actions/runs/38859273928) 的 Windows/Linux Quality、Secrets、Dependencies 均已逐项实际读回 completed/success。无依赖变化，复用该 Dependencies，不重复本地审计或历史扫描。代码初审仍运行、安全请求只有 👀 回执无可读报告，均不冒充完整验收；仅补说明的后续提交仍核对自身 CI。
+
 完整 CI、云端代码/安全反馈及正式服务更新另行核对。已知边界：本次针对 search/发现页，bootstrap、资料库分组及其他业务仍有整库读取；关键词容量检查不代表语义外发性能、真实供应商或用户知识库验收。实现、重现和回退说明见 [SEARCH](SEARCH.md)。
 
 ## PR #71 与最新主线组合验证（2026-10-16）
