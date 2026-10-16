@@ -1,3 +1,4 @@
+import { testAndSaveCapability } from "./capability-test.mjs";
 import { api, ApiError, startSession } from "./api.mjs";
 import { parseSourceFile } from "./source-exchange.mjs";
 import { renderMarkdown } from "./markdown-reader.mjs";
@@ -2230,8 +2231,57 @@ async function settingsPanel() {
     item.querySelector(".field-label").append(help);
     hint.remove();
   }
+  let testing = false, formRevision = 0;
+  form.addEventListener("input", () => { formRevision += 1; });
+  form.addEventListener("change", () => { formRevision += 1; });
+  const testButtons = [];
+  function testButton(label, capability) {
+    const control = button(label, { onClick: () => testCapability(capability) });
+    testButtons.push(control);
+    return el("div", {}, [control, el("small", { class: "fine-print", text: "使用当前填写内容测试，成功后自动保存本项；会发起真实请求，可能产生费用。" })]);
+  }
+  async function testCapability(capability) {
+    if (practice || testing) return;
+    const data = serializeForm(form);
+    const snapshots = {
+      model: { enabled: aiEnabled.checked, baseUrl: data.aiBaseUrl, model: data.aiModel, apiKey: data.aiKey, timeoutMs: number(data.modelTimeoutSeconds) * 1000 },
+      embedding: { enabled: embeddingEnabled.checked, baseUrl: data.embeddingBaseUrl, model: data.embeddingModel, apiKey: data.embeddingKey },
+      search: { enabled: searchEnabled.checked, baseUrl: data.searchBaseUrl, apiKey: data.searchKey },
+      fetch: { enabled: fetchEnabled.checked },
+    };
+    const snapshot = snapshots[capability], before = formRevision;
+    if (!snapshot.enabled) { toast("请先勾选启用该能力，再测试并保存。", "error"); return; }
+    testing = true;
+    testButtons.forEach(control => { control.disabled = true; });
+    const saveButton = form.querySelector('button[type="submit"]');
+    if (saveButton) saveButton.disabled = true;
+    const locked = [];
+    try {
+      const result = await testAndSaveCapability({ capability, snapshot,
+        test: api.testMainSetting, save: api.saveTestedSetting,
+        unchanged: () => form.isConnected && before === formRevision,
+        saving: active => {
+          if (active) for (const control of form.querySelectorAll("input, select, textarea")) { if (!control.disabled) { locked.push(control); control.disabled = true; } }
+          else locked.forEach(control => { control.disabled = false; });
+        },
+      });
+      if (result.saved) {
+        const key = form.querySelector(`[name="${capability === "model" ? "ai" : capability}Key"]`);
+        if (key) { key.value = ""; key.placeholder = "已保存；留空保持不变"; }
+        let warning = result.warning;
+        try { await refreshBootstrap(); }
+        catch { warning = warning || "本项配置已保存，但页面状态未能刷新；请稍后刷新页面，无需重复测试。"; }
+        toast(warning || "连接测试成功，本项配置已自动保存；其他设置未保存。", warning ? "info" : "success");
+      } else toast("连接测试成功，但测试期间表单有修改；输入已保留，请重新测试后保存。", "info");
+    } catch (error) { handleError(error); }
+    finally {
+      testing = false;
+      testButtons.forEach(control => { control.disabled = false; });
+      if (saveButton) saveButton.disabled = false;
+    }
+  }
   const aiEnabled = el("input", { name: "aiEnabled", type: "checkbox", checked: Boolean(ai.enabled) });
-  const modelPanel = el("section", { class: "panel" }, [sectionHeading("文本生成", "OpenAI-compatible 接口；密钥只写入，不会回显", button("测试连接", { onClick: () => testCapability("model") })), el("label", { class: "check-field" }, [aiEnabled, "启用文本生成能力"]), el("div", { class: "form-grid" }, [field("服务地址", el("input", { name: "aiBaseUrl", value: ai.baseUrl || "", placeholder: "https://…" })), field("模型", el("input", { name: "aiModel", value: ai.model || "", placeholder: "模型名称" })), field("API 密钥", el("input", { name: "aiKey", type: "password", placeholder: ai.hasKey ? "已保存；留空保持不变" : "输入密钥" }))])]);
+  const modelPanel = el("section", { class: "panel" }, [sectionHeading("文本生成", "OpenAI-compatible 接口；密钥只写入，不会回显", testButton("测试连接", "model")), el("label", { class: "check-field" }, [aiEnabled, "启用文本生成能力"]), el("div", { class: "form-grid" }, [field("服务地址", el("input", { name: "aiBaseUrl", value: ai.baseUrl || "", placeholder: "https://…" })), field("模型", el("input", { name: "aiModel", value: ai.model || "", placeholder: "模型名称" })), field("API 密钥", el("input", { name: "aiKey", type: "password", placeholder: ai.hasKey ? "已保存；留空保持不变" : "输入密钥" }))])]);
   modelPanel.append(el("div", { class: "usage-settings-link" }, [el("span", { text: "Token 统计、请求上限和月预算已集中到用量与费用。" }), button("查看用量与费用", { onClick: () => { state.systemTab = "usage"; setPage("system"); renderSystem().catch(handleError); } })]));
   modelPanel.append(el("div", { class: "notice info", text: `每份原始资料的单次拆解默认最多使用 ${number(ai.sourceCallLimit ?? 120)} 次外部请求。达到系统每日总上限时，任务会显示“已保存，待继续”，不会把等待误报为完成。` }));
   modelPanel.append(field("模型最长等待时间（秒）", el("input", {name:"modelTimeoutSeconds",type:"number",min:1,max:600,value:(ai.timeoutMs ?? 180000)/1000}), "整理长资料通常比连接测试慢。默认等待 180 秒；失败不自动重发，避免重复计费。"));
@@ -2239,9 +2289,9 @@ async function settingsPanel() {
   const searchEnabled = el("input", { name: "searchEnabled", type: "checkbox", checked: Boolean(search.enabled) });
   const fetchEnabled = el("input", { name: "fetchEnabled", type: "checkbox", checked: Boolean(fetchSettings.enabled) });
   const capabilities = el("section", { class: "panel" }, [sectionHeading("独立能力", "嵌入、搜索与网页读取分别配置和验证"), el("div", { class: "three-column" }, [
-    el("div", { class: "panel soft" }, [el("label", { class: "check-field" }, [embeddingEnabled, "启用语义嵌入"]), field("服务地址", el("input", { name: "embeddingBaseUrl", value: embedding.baseUrl || "" })), field("模型", el("input", { name: "embeddingModel", value: embedding.model || "" })), field("密钥", el("input", { name: "embeddingKey", type: "password", placeholder: embedding.hasKey ? "已保存；留空保持" : "输入密钥" })), button("测试嵌入", { onClick: () => testCapability("embedding") })]),
-    el("div", { class: "panel soft" }, [el("label", { class: "check-field" }, [searchEnabled, "启用联网搜索"]), field("服务地址", el("input", { name: "searchBaseUrl", value: search.baseUrl || "https://api.tavily.com" })), field("密钥", el("input", { name: "searchKey", type: "password", placeholder: search.hasKey ? "已保存；留空保持" : "输入密钥" })), button("测试搜索", { onClick: () => testCapability("search") })]),
-    el("div", { class: "panel soft" }, [el("label", { class: "check-field" }, [fetchEnabled, "启用公开网页读取"]), el("p", { class: "muted", text: "网页读取受公开地址限制，搜索摘要不会冒充已读正文。" }), button("测试网页读取", { onClick: () => testCapability("fetch") })]),
+    el("div", { class: "panel soft" }, [el("label", { class: "check-field" }, [embeddingEnabled, "启用语义嵌入"]), field("服务地址", el("input", { name: "embeddingBaseUrl", value: embedding.baseUrl || "" })), field("模型", el("input", { name: "embeddingModel", value: embedding.model || "" })), field("密钥", el("input", { name: "embeddingKey", type: "password", placeholder: embedding.hasKey ? "已保存；留空保持" : "输入密钥" })), testButton("测试嵌入", "embedding")]),
+    el("div", { class: "panel soft" }, [el("label", { class: "check-field" }, [searchEnabled, "启用联网搜索"]), field("服务地址", el("input", { name: "searchBaseUrl", value: search.baseUrl || "https://api.tavily.com" })), field("密钥", el("input", { name: "searchKey", type: "password", placeholder: search.hasKey ? "已保存；留空保持" : "输入密钥" })), testButton("测试搜索", "search")]),
+    el("div", { class: "panel soft" }, [el("label", { class: "check-field" }, [fetchEnabled, "启用公开网页读取"]), el("p", { class: "muted", text: "网页读取受公开地址限制，搜索摘要不会冒充已读正文。" }), testButton("测试网页读取", "fetch")]),
   ])]);
   const mcpEnabled = el("input", { name: "mcpEnabled", type: "checkbox", checked: Boolean(mcp.enabled) });
   const proposals = el("input", { name: "allowProposals", type: "checkbox", checked: Boolean(mcp.allowProposals) });
@@ -2269,12 +2319,14 @@ async function settingsPanel() {
     notesFolder.querySelector("input").disabled = true;
     form.append(el("div", { class: "notice info practice-settings-note" }, [el("strong", { text: "练习库共用正式 API 配置" }), el("p", { text: "这里仅修改练习学习偏好和提示词。API 密钥、能力开关及地址需返回正式设置修改，对两边共同生效。" }), button("前往正式 API 配置", { onClick: () => onboarding?.openSettings() })]), general, el("fieldset", { class: "practice-readonly", disabled: true }, [modelPanel, capabilities, mcpPanel]));
   } else {
-    if (onboarding?.state?.practiceId) form.append(el("div", { class: "notice info" }, [el("strong", { text: "正在配置两边共用的 AI 能力" }), el("p", { text: "此处保存的 API 配置同时用于正式库和练习库。先保存，再点击测试连接；测试会发起真实请求并可能产生费用。密钥不会进入教程进度或练习备份。" })]));
+    if (onboarding?.state?.practiceId) form.append(el("div", { class: "notice info" }, [el("strong", { text: "正在配置两边共用的 AI 能力" }), el("p", { text: "此处保存的 API 配置同时用于正式库和练习库。点击测试连接使用当前表单，成功后自动保存对应能力；测试会发起真实请求并可能产生费用。密钥不会进入教程进度或练习备份。" })]));
     form.append(general, modelPanel, capabilities, mcpPanel);
   }
   form.append(tour(button(practice ? "保存练习偏好" : "保存能力设置", { kind: "primary", type: "submit" }), "settings-save"));
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (testing) return;
+    formRevision += 1;
     syncMcpChoices();
     const data = serializeForm(form);
     const payload = {
@@ -2363,13 +2415,6 @@ function promptSettingsPanel(data) {
     } catch (error) { handleError(error); }
   });
   return form;
-}
-
-async function testCapability(capability) {
-  try {
-    const result = onboarding?.state?.practiceId ? await onboarding.test(capability) : await api.testSetting(capability);
-    toast(result.message || `${capability} 连接测试成功`, "success");
-  } catch (error) { handleError(error); }
 }
 
 const jobTableState = { type: "", status: "", size: "10", page: 1 };
