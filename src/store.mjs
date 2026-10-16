@@ -246,7 +246,7 @@ export class Store {
     const cleanMeta = Object.fromEntries(Object.entries(meta).filter(([key]) => !reserved.has(key)));
     const note = { id, kind: meta.kind || 'knowledge', title: String(meta.title || path.basename(file, '.md')), body, meta: cleanMeta, hash: digest, path: path.relative(this.vaultDir, file).replaceAll('\\', '/'), updatedAt: meta.updatedAt || fs.statSync(file).mtime.toISOString() };
     if (!folders[note.kind]) note.kind = 'knowledge';
-    if (existing?.hash === digest && existing.path === note.path && existing.json === JSON.stringify(note)) return note;
+    if (existing?.hash === digest && existing.path === note.path && existing.raw === raw && existing.json === JSON.stringify(note)) return note;
     if (existing && existing.hash !== digest) this.version(existing, '外部修改或历史版本');
     this.db.prepare('INSERT INTO notes VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET path=excluded.path,hash=excluded.hash,raw=excluded.raw,json=excluded.json').run(id, note.path, digest, raw, JSON.stringify(note));
     if (!existing || existing.hash !== digest) { this.index(id, `${note.title}\n${body}`); this.put('changed', id, { id, hash: digest, at: now() }); }

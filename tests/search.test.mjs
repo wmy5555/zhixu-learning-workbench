@@ -79,6 +79,9 @@ test('warm queries skip unchanged content, same-size external edits, move, dupli
 test('internal saves, deletion, historical restoration and rebuild preserve authoritative content and vectors', async t => {
   const {s}=harness(t), n=note(s,'versioned','原版紫微');
   await s.search('原版紫微');
+  s.store.db.prepare('UPDATE notes SET raw=? WHERE id=?').run('corrupt derived cache',n.id);
+  s.store.scan();
+  assert.equal(s.store.readPersisted(n.id).body,n.body,'full reconciliation repairs the raw cache as well as JSON');
   s.store.db.prepare('UPDATE index_chunks SET vector=?,model=? WHERE noteId=?').run('[1,0]','synthetic','versioned');
   const changed=s.store.update(n.id,{expectedHash:n.hash,meta:{topic:'新主题'}});
   assert.equal((await s.search('原版紫微',{topic:'新主题'})).results[0].id,n.id);
