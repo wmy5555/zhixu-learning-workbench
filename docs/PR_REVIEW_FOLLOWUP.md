@@ -10,6 +10,10 @@
 
 复审判断：默认不复审，但本次 P1 修复将全文投影从每笔记一行调整为有界重叠片段，并增加布局版本重建，实际扩大派生数据影响。已有堆限制、跨片段召回、事务回滚/重开与原向量保留证据；仍需定向静态核对分段候选完整性和旧布局升级，不扩大为全仓审阅。必要完整验证、容量对照和候选推送后只请求一次代码复审，安全初审未给可读结果前不重发或另启审阅者。
 
+修复行为提交 `ba7d4b4780e8ccfcc49c98aa5af28ef0100d04be` 已推送，完整本地 **1090/1090** 与新布局容量复测通过。三条初审已[逐项说明](https://github.com/wmy5555/zhixu-learning-workbench/pull/81#issuecomment-6209474983)并解决线程；[唯一代码复审请求](https://github.com/wmy5555/zhixu-learning-workbench/pull/81#issuecomment-6209479076)已[完成且未发现重大问题](https://github.com/wmy5555/zhixu-learning-workbench/pull/81#issuecomment-6209536256)。该提交 [CI 38860895406](https://github.com/wmy5555/zhixu-learning-workbench/actions/runs/38860895406) 的 Windows/Linux Quality、Secrets、Dependencies 四项均实际读回 completed/success。请求计数：代码初审 1、定向复审 1、安全初审 1；不再自动追加。
+
+合并阻塞仍为完整独立安全结论不可读：安全请求有 👀 回执，但公开 summary 的 security 提交/状态为空，未返回可核对报告，没有被明确拒绝，不能记为通过或猜测收益。PR 保持 Draft，未合并、未更新正式 4318，不操作真实资料。当前合成后台预览保留用于验收，旧版合成服务已按 PID/监听归属确认后停止；浏览器任务会话组在阻塞期间保留。后续仅说明提交不触发新审查，其最新 CI 另核；不将说明变化视为重新测试未变产品的理由。
+
 ## 2026-10-16 PR #71 接入最新主线
 
 将历史增强候选 `b8fe8dc622adf288a038d9acae04228db5a682a9` 正常合并 main `47bcb63611e41edd8ca11895b61ff3173897af97`，保留双方提交历史。八份冲突文件逐块融合：本机撤销路由与附件/恢复请求读取同时保留，Store 同时保留磁盘核验、独占恢复及主线的持久恢复阻塞保护，服务同时导出会话撤销、附件与调用恢复。说明记录并列保留。主线主动 AI 取材快照与图片外发过滤、50 MB 附件、100 MB 备份、调用账本与凭据事务、Markdown 编辑器及 #78–#80 网页修复保留；未同步 Android。

@@ -29,6 +29,8 @@
 
 有界分段修复后固定产品再次实际完整 `pnpm verify` 退出 **0**：**1,090/1,090，失败/跳过/取消均 0**，322 跟踪文件检查及原 20 条本地质量检查通过，测试阶段 **190364.495 ms**，日志 `.tmp/search-review-verify.log`。这轮包含三项初审回归、128 MiB old-space 子进程和旧投影布局重建；此前 1,087 项不代替本轮。后续只登记回执时复用本轮未变的产品输入，不机械重跑。
 
+最终行为提交 `ba7d4b4780e8ccfcc49c98aa5af28ef0100d04be` 的 [CI 38860895406](https://github.com/wmy5555/zhixu-learning-workbench/actions/runs/38860895406) 四项已逐项核实成功，定向代码复审明确未发现重大问题。最新独立合成预览同样实际命中第 4003 行且无横向溢出，截图 `.tmp/search-segmented-page.png`；先前未加载完成的空状态未当作命中成功。独立安全初审仍只有回执无可读报告，故 PR Draft、未合并/部署。正式库、实际供应商与用户验收仍未完成。
+
 ## PR #71 与最新主线组合验证（2026-10-16）
 
 输入为历史增强候选 `b8fe8dc622adf288a038d9acae04228db5a682a9` 与 main `47bcb63611e41edd8ca11895b61ff3173897af97` 的正常合并及两项新增交叉回归。正常 Windows 用户上下文，固定 Node 24.21.0 / pnpm 11.19.0，显式 `pnpm install --frozen-lockfile` 后实际运行一次 `pnpm verify`，退出码 **0**：**318 个跟踪文件检查通过，1074/1074 测试通过，0 失败、0 取消、0 跳过，20 条本地合成检索检查通过**。测试阶段耗时 167767.8369ms；完整输出 `.tmp/pr71-main-integration-verify.log`，安装输出 `.tmp/pr71-main-integration-install.log`。此后只补说明，产品、回归和依赖未变。
