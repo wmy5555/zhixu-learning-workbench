@@ -71,9 +71,9 @@ function recentPanel(report) {
   let page = 0;
   function render() {
     const pages = Math.max(1, Math.ceil(report.recentCalls.length / 10));
-    clear(content).append(table(['时间', '模型 / 服务', '输入 / 输出', '费用²', '传输状态'], report.recentCalls.slice(page * 10, page * 10 + 10).map(row => [
+    clear(content).append(table(['时间', '用途 / 模型 / 服务', '输入 / 输出', '费用²', '传输状态'], report.recentCalls.slice(page * 10, page * 10 + 10).map(row => [
       new Intl.DateTimeFormat('zh-CN', { timeZone: report.timezone, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(row.createdAt)),
-      row.model || names[row.capability] || '其他', ['model', 'embedding'].includes(row.capability) ? `${row.inputTokens === null ? '未知' : count(row.inputTokens)} / ${row.outputTokens === null ? '未知' : count(row.outputTokens)}` : '—',
+      el('div', {}, [el('strong', { text: row.purposeLabel || '历史用途未记录' }), el('small', { text: [row.model, names[row.capability] || '其他服务'].filter(Boolean).join(' · ') })]), ['model', 'embedding'].includes(row.capability) ? `${row.inputTokens === null ? '未知' : count(row.inputTokens)} / ${row.outputTokens === null ? '未知' : count(row.outputTokens)}` : '—',
       amount(row.cost), row.ok === true ? 'HTTP 响应成功' : row.ok === false ? '连接或 HTTP 失败' : '未知',
     ]), '最近请求明细'));
     clear(pager).append(el('span', { text: `第 ${page + 1} / ${pages} 页` }), el('div', { class: 'item-actions' }, [
@@ -136,6 +136,7 @@ export async function createUsagePanel({ load, settings, readOnly = false, save,
   const root = el('div', { class: 'page-stack usage-dashboard' });
   const period = select('统计时间范围', [['month', '本月'], ['7d', '近 7 天'], ['30d', '近 30 天'], ['today', '今天']], 'month');
   const capability = select('调用类型', [['', '全部服务'], ...Object.entries(names)], '');
+  const purpose = select('调用用途', [['', '全部用途']], '');
   const model = select('统计模型', [['', '全部模型']], '');
   const status = el('p', { role: 'status', class: 'fine-print' }), body = el('div', { class: 'page-stack' });
   let current, revision = 0;
@@ -148,9 +149,11 @@ export async function createUsagePanel({ load, settings, readOnly = false, save,
     const version = ++revision;
     exportButton.disabled = true; status.textContent = '正在读取本地统计…';
     try {
-      const report = await load({ period: period.value, capability: capability.value, model: model.value });
+      const report = await load({ period: period.value, capability: capability.value, model: model.value, purpose: purpose.value });
       if (version !== revision) return;
       current = report;
+      const selectedPurpose = purpose.value;
+      clear(purpose).append(...[['', '全部用途'], ...(report.availablePurposes || [])].map(([value, text]) => el('option', { value, text, selected: value === selectedPurpose })));
       const selected = model.value;
       clear(model).append(el('option', { value: '', text: '全部模型' }), ...[...new Set([...report.availableModels, ...(selected ? [selected] : [])])].map(value => el('option', { value, text: value, selected: value === selected })));
       const t = report.totals, budget = report.budget;
@@ -181,8 +184,8 @@ export async function createUsagePanel({ load, settings, readOnly = false, save,
       status.textContent = '统计未加载，请重试。';
     }
   }
-  for (const control of [period, capability, model]) control.addEventListener('change', () => { if (control !== model) model.value = ''; refresh(); });
-  root.append(heading('用量与费用', '了解每次 AI 使用，把花费控制在自己的节奏内。', exportButton), el('div', { class: 'usage-toolbar' }, [period, capability, model, button('刷新统计', { onClick: refresh })]), status, body, settingsForm(settings, readOnly, save, refresh));
+  for (const control of [period, capability, model, purpose]) control.addEventListener('change', () => { if (control !== model) model.value = ''; refresh(); });
+  root.append(heading('用量与费用', '了解每次 AI 使用，把花费控制在自己的节奏内。', exportButton), el('div', { class: 'usage-toolbar' }, [period, purpose, capability, model, button('刷新统计', { onClick: refresh })]), status, body, settingsForm(settings, readOnly, save, refresh));
   await refresh(); return root;
 }
 

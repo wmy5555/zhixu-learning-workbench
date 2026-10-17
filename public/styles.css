@@ -162,6 +162,9 @@ main { padding: 30px clamp(24px, 4vw, 58px) 64px; width: 100%; }
 .call-table th { color: var(--muted); font-weight: 600; }
 .call-table td:first-child { white-space: nowrap; }
 .call-table small { display: block; color: var(--muted); overflow-wrap: anywhere; margin-top: 3px; }
+.call-purpose-cell { min-width: 150px; overflow-wrap: anywhere; }
+.call-history { min-width: 0; }
+.call-history .call-filters select { max-width: 100%; }
 .call-error { margin-top: 5px; max-width: 340px; }
 .call-error summary { cursor: pointer; color: var(--muted); }
 .call-error pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow: auto; font-size: 12px; }
@@ -642,3 +645,11 @@ input[type="color"] { height: 44px; padding: 5px 8px; cursor: pointer; }
 @media (max-width: 780px) {
   .api-configuration-center .api-capability-card > .section-heading { flex-direction: column; align-items: stretch; }
 }
+
+.recycle-bin-launcher { position: fixed; left: 76px; bottom: max(18px, env(safe-area-inset-bottom)); z-index: 60; background: var(--panel); color: var(--accent); border: 1px solid var(--line); box-shadow: 0 2px 8px #0002; }
+.recycle-bin-launcher svg { width: 22px; height: 22px; }
+
+.diagnostic-details { min-width: 0; max-width: 100%; }
+.diagnostic-details pre { max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
+.diagnostic-summary { display: grid; gap: 12px; margin-bottom: 16px; }
+.diagnostic-summary > p { margin: 0; }
