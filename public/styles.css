@@ -589,3 +589,11 @@ input[type="color"] { height: 44px; padding: 5px 8px; cursor: pointer; }
 .api-capability-card { min-width: 0; }
 .api-discovery-status { overflow-wrap: anywhere; }
 @media (prefers-reduced-motion: reduce) { .api-test-spinner { animation: none; } }
+
+/* Keep API feedback readable without stretching unrelated capability cards. */
+.api-configuration-center .api-capability-card > .section-heading { align-items: flex-start; }
+.api-configuration-center .three-column { align-items: start; }
+.api-configuration-center .api-test-status { font-size: 1rem; }
+@media (max-width: 780px) {
+  .api-configuration-center .api-capability-card > .section-heading { flex-direction: column; align-items: stretch; }
+}
