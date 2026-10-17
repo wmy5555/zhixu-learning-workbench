@@ -1,3 +1,4 @@
+import { historySourceMetadata } from './chatgpt-source-metadata.mjs';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -171,7 +172,7 @@ export function verifiedHistoryCapture(snapshot, input) {
     requestId, title: snapshot.title, summary,
     messages: snapshot.units.map(unit => ({ id: unit.message_id, role: unit.role, content: unit.content })),
     coverage: 'visible_history', limitations,
-    conversationUrl: `https://chatgpt.com/c/${snapshot.conversation_id}`,
+    ...historySourceMetadata(snapshot),
     sync: {
       conversationId: snapshot.conversation_id, branchId: 'active', snapshotId: snapshot.snapshot_id,
       mode: 'snapshot', complete: true,

@@ -885,6 +885,7 @@ function renderSourceGroupDrawer(source) {
       el("div", { class: "key-value" }, [el("dt", { text: "平台" }), el("dd", { text: meta.platform || "未记录" })]),
       el("div", { class: "key-value" }, [el("dt", { text: "作者" }), el("dd", { text: meta.author || "未记录" })]),
       el("div", { class: "key-value" }, [el("dt", { text: "资料日期" }), el("dd", { text: meta.date || "未记录" })]),
+      meta.dateBasis ? el("div", { class: "key-value" }, [el("dt", { text: "导入时日期依据" }), el("dd", { text: meta.dateBasis })]) : null,
       el("div", { class: "key-value" }, [el("dt", { text: "原文定位" }), el("dd", { text: meta.locator || "未记录" })]),
       el("div", { class: "key-value" }, [el("dt", { text: "原始地址" }), el("dd", {}, currentUrl ? el("a", { href: currentUrl, target: "_blank", rel: "noopener noreferrer", text: currentUrl }) : "未记录")]),
     ]),
@@ -1048,6 +1049,7 @@ function renderNoteDrawer(note) {
       el("div", { class: "key-value" }, [el("dt", { text: "平台" }), el("dd", { text: meta.platform || "未记录" })]),
       el("div", { class: "key-value" }, [el("dt", { text: "作者" }), el("dd", { text: meta.author || "未记录" })]),
       el("div", { class: "key-value" }, [el("dt", { text: "资料日期" }), el("dd", { text: meta.date || "未记录" })]),
+      meta.dateBasis ? el("div", { class: "key-value" }, [el("dt", { text: "导入时日期依据" }), el("dd", { text: meta.dateBasis })]) : null,
       el("div", { class: "key-value" }, [el("dt", { text: "原文定位" }), el("dd", { text: meta.locator || "未记录" })]),
       el("div", { class: "key-value" }, [el("dt", { text: "原始地址" }), el("dd", {}, currentUrl ? el("a", { href: currentUrl, target: "_blank", rel: "noopener noreferrer", text: currentUrl }) : "未记录")]),
     ]));
@@ -1058,6 +1060,7 @@ function renderNoteDrawer(note) {
     return el("div", { class: "citation" }, [
       el("strong", { text: origin.platform || "未记录平台" }),
       el("p", { text: [origin.author, origin.date, origin.locator].filter(Boolean).join(" · ") || "未记录作者、日期或定位" }),
+      origin.dateBasis ? el("p", { text: `导入时日期依据：${origin.dateBasis}` }) : null,
       origin.acquiredAt ? el("p", { text: `收集于 ${formatDate(origin.acquiredAt, true)}` }) : null,
       originUrl ? el("a", { href: originUrl, target: "_blank", rel: "noopener noreferrer", text: "打开原始地址 ↗" }) : null,
     ]);

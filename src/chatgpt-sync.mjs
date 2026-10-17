@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { conversationOrigin } from './chatgpt-source-metadata.mjs';
 import { fail, hash, now } from './store.mjs';
 import { readCapturePersisted, assertCaptureRecord, captureVerification, historicalVerification } from './chatgpt-integrity.mjs';
 
@@ -71,7 +72,7 @@ function ownsPath(store, id) {
   return store.list().some(n => owns(n.path)) || store.conflicts.some(c => c.id === id || owns(c.path));
 }
 function sourceMetadata(state, body) {
-  const origin = { platform: 'ChatGPT', url: state.snapshot.conversationUrl, author: '', date: '', acquiredAt: state.savedAt,
+  const origin = state.sourceMetadataVersion === 2 ? conversationOrigin(state.snapshot, state.savedAt) : { platform: 'ChatGPT', url: state.snapshot.conversationUrl, author: '', date: '', acquiredAt: state.savedAt,
     locator: `会话分支版本 ${state.revision}；累计 ${state.snapshot.messages.length} 条消息` };
   return { privacy: 'local', stage: 'reference', ...origin, origins: [origin], fingerprint: hash(body.trim()),
     chatgptSync: { version: 1, sessionHash: state.key, revision: state.revision, requestHash: state.requestHash,
@@ -288,7 +289,7 @@ export function captureIncremental(store, value, render, { acceptedRenderers = [
       candidateWrites[id] = { phase: 'prepared', itemHash: hash(JSON.stringify([item, messageBasis])), existing: Boolean(store.row(id)) };
     }
     state = { key, requestHash, payloadHash, pending: true, revision: (state?.revision || 0) + 1, snapshot: merged.snapshot,
-      candidateSourceRevisions, candidateWrites,
+      candidateSourceRevisions, candidateWrites, sourceMetadataVersion: 2,
       ...(historyHandoff ? { historyHandoff } : {}),
       previousHash: state?.noteHash || null, sourceWritePhase: 'prepared', added: merged.added, modified: merged.modified, savedAt: now() };
     store.put('chatgptSyncSessions', key, state);

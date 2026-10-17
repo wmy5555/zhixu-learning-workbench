@@ -29,6 +29,14 @@
 3. 首次用 `mode:snapshot`；以后用最后成功回执的 `syncRevision` 填入 `baseRevision`。重试沿用完全相同的 `requestId` 和内容。收到 `saved`、`updated` 或 `already_saved` 才报告成功。
 4. 可同时发送结构化整理。知序保存原文后，按顺序导入第二层未核验候选，并返回 `importedNoteIds`。不启动研究、付费模型调用、学习或晋级。
 
+## 原始资料来源信息
+
+新保存的原文定位使用读取时的真实会话标题，而不是摘要标题、消息数量或版本号。独立分片的资料标题仍有分片编号，但来源定位保留不带分片后缀的原会话标题。普通保存必须提供已知完整 `conversationUrl`；历史交接使用经认证的 `conversation_id` 对应 `https://chatgpt.com/c/<id>`，不创建分享链接。
+
+可选 `conversationDate` 为可核对的原资料日历日期（`YYYY-MM-DD`），`conversationDateBasis` 说明日期来源和语义；未知则省略或留空。当前历史交接没有平台会话创建日期，因此只取 `units[0].created_at` 的日历日期，保留原有时区中的日期、不转换为服务器日期，并记录原时间及消息编号。它表示“当前可见分支首条消息日期”，不保证是会话最初创建日。首条日期缺失或格式异常时留空，不选择后续消息、不用 `updated_at`、`issued_at` 或导入时间代替。
+
+界面在资料日期旁显示“导入时日期依据”，原始出处保留同一依据，收集时间仍独立保存为 `acquiredAt`。手动传入的信息不增加独立核验承诺。此变更只用于新保存/明确更新，不扫描修补已有历史资料；旧回执与中断重试使用原元信息版本，人工改动仍受哈希保护。
+
 ## 接口字段
 
 原有 `requestId/title/summary/messages/coverage/limitations/conversationUrl` 继续使用。增量保存的消息增加 `id`；只接收 `user/assistant` 角色。

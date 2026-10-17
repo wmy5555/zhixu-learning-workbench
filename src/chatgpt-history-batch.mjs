@@ -1,3 +1,4 @@
+import { historySourceMetadata } from './chatgpt-source-metadata.mjs';
 import { createHash } from 'node:crypto';
 
 export const historyBatchLimits = Object.freeze({ maxCharacters: 500000, maxMessages: 200,
@@ -121,7 +122,7 @@ export function planHistoryBatch(input, { summary, structured, now = Date.now() 
   validateSnapshot(snapshot, now);
   const items = clone(validateStructured(structured, snapshot.units));
   if (typeof summary !== 'string' || !summary.trim() || summary.length > historyBatchLimits.maxSummaryCharacters) invalid('摘要不能为空或超过原有限额。');
-  const global = { conversationId: snapshot.conversation_id, branchId: snapshot.branch, snapshotId: snapshot.snapshot_id,
+  const global = { sourceMetadata: historySourceMetadata(snapshot), conversationId: snapshot.conversation_id, branchId: snapshot.branch, snapshotId: snapshot.snapshot_id,
     transcriptSha256: snapshot.transcript_sha256, pagesSha256: jsonHash(snapshot.pages),
     snapshotPayloadSha256: jsonHash(snapshot), issuedAt: snapshot.issued_at, expiresAt: snapshot.expires_at,
     messageCount: snapshot.units.length, textCharacters: snapshot.units.reduce((n, unit) => n + unit.content.length, 0),
