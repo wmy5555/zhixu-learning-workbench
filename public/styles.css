@@ -561,6 +561,18 @@ input[type="color"] { height: 44px; padding: 5px 8px; cursor: pointer; }
 .markdown-align-left { text-align: left; }
 .markdown-align-center { text-align: center; }
 .markdown-align-right { text-align: right; }
+
+dialog.source-reader-dialog { position: fixed; inset: 0; width: 100%; height: 100%; max-width: none; max-height: none; margin: 0; padding: 0; border: 0; border-radius: 0; background: var(--paper); color: var(--ink); }
+dialog.source-reader-dialog[open] { display: flex; flex-direction: column; }
+dialog.source-reader-dialog::backdrop { background: var(--paper); }
+dialog.source-reader-dialog .source-reader-header { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px clamp(16px, 4vw, 48px); border-bottom: 1px solid var(--line); background: var(--panel); }
+dialog.source-reader-dialog .source-reader-header > div { min-width: 0; }
+dialog.source-reader-dialog .source-reader-header small { color: var(--muted); }
+dialog.source-reader-dialog .source-reader-header h2 { margin: 4px 0 0; font-size: clamp(18px, 2.5vw, 26px); overflow-wrap: anywhere; }
+dialog.source-reader-dialog .source-reader-header button { flex: none; }
+.source-reader-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 24px clamp(16px, 5vw, 64px) 64px; }
+.source-reader-scroll > .original-body { width: 100%; max-width: 960px; margin: 0 auto; padding: 0; max-height: none; overflow: visible; }
+.source-reader-scroll .markdown-code { max-height: none; overflow: visible; }
 .markdown-fallback { white-space: pre-wrap; }
 .markdown-empty { color: var(--muted); }
 .markdown-preview { max-height: 8em; overflow: hidden; font-size: 13px; }

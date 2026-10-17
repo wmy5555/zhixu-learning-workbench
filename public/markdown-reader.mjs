@@ -199,7 +199,7 @@ function blocks(lines, depth = 0, imageResolver, conversation = false, presentat
   if (depth >= MAX_DEPTH) return [el('p', { class: 'markdown-fallback' }, inline(lines.join('\n'), MAX_DEPTH))];
   const capturedConversation = conversation && lines.some(line => /^ {0,3}##[ \t]+会话原文（按收到的顺序保留）[ \t]*$/.test(line));
   const children = [];
-  let transcript = false, message = false;
+  let transcript = false, message = false, exportedSection = '';
   for (let i = 0; i < lines.length;) {
     const line = lines[i];
     if (!line.trim()) { i++; continue; }
@@ -221,11 +221,14 @@ function blocks(lines, depth = 0, imageResolver, conversation = false, presentat
       while (i < lines.length && !closesFence(lines[i], opening)) code.push(lines[i++]);
       const closed = i < lines.length;
       if (closed) i++;
-      if (capturedConversation && depth === 0 && closed && opening.language === 'text') {
-        // ChatGPT captures use top-level text fences as storage envelopes, not
-        // as code samples. Unwrap those once; nested fences remain literal code.
-        children.push(el('section', { class: 'conversation-message' }, blocks(code, depth + 1, imageResolver, false, true)));
+      const proseEnvelope = conversation && closed && opening.language === 'text'
+        && (transcript && message || exportedSection === 'summary' || exportedSection === 'limitations'
+          || capturedConversation && depth === 0 && exportedSection === 'scope');
+      if (proseEnvelope) {
+        // Unwrap only generated prose envelopes, once. Inner fenced samples stay literal.
+        children.push(el('section', { class: transcript && message ? 'conversation-message' : 'conversation-context' }, blocks(code, depth + 1, imageResolver, false, true)));
         message = false;
+        exportedSection = '';
         continue;
       }
       message = false;
@@ -239,6 +242,7 @@ function blocks(lines, depth = 0, imageResolver, conversation = false, presentat
       if (conversation) {
         if (title.level <= 2) transcript = title.level === 2 && title.text === '会话原文（按收到的顺序保留）';
         message = transcript && title.level === 3 && /^\d+\. (?:用户|ChatGPT)$/.test(title.text);
+        exportedSection = title.level === 2 ? ({ '整理摘要（ChatGPT 生成，未经独立核验）': 'summary', '收集范围': 'scope' }[title.text] || '') : '';
       }
       children.push(el(`h${title.level}`, {}, textInline(title.text))); i++; continue;
     }
@@ -289,6 +293,7 @@ function blocks(lines, depth = 0, imageResolver, conversation = false, presentat
       children.push(el(/^ *=/.test(lines[i + 1]) ? 'h1' : 'h2', {}, textInline(line)));
       i += 2; continue;
     }
+    if (conversation && !transcript && line === '补充限制：') exportedSection = 'limitations';
     const paragraph = [line];
     i++;
     while (i < lines.length && !blockStart(lines, i)) paragraph.push(lines[i++]);

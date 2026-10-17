@@ -12,7 +12,7 @@ import { createSourceMap } from "./source-map.mjs";
 import { initSidebar } from "./sidebar.mjs";
 import {
   el, clear, button, badge, emptyState, formatDate, formatCalendarDate, truncate, safeExternalUrl,
-  labels, stateTone, field, toast, confirmAction, promptAction, serializeForm, describeJobError,
+  labels, stateTone, field, toast, confirmAction, promptAction, serializeForm, describeJobError, showReadingDialog,
 } from "./ui.mjs";
 
 const refs = {
@@ -662,7 +662,7 @@ async function renderLibrary() {
   const standaloneCards = standalone.map((note) => el("article", { class: "card" }, [
     el("div", { class: "card-head" }, [badge(labels.kind(note.kind)), badge(labels.stage(note.meta?.stage), stateTone(note.meta?.stage))]),
     el("h3", { text: note.title || "未命名" }),
-    note.kind === 'source' ? sourceReadingBody(sourceBodyPreview(note.body), 'markdown-preview') : el("p", { text: truncate(readableBody(note.body), 135) || "暂无正文" }),
+    note.kind === 'source' ? sourceReadingBody(sourceBodyPreview(note.body), 'markdown-preview', '暂无原文', note) : el("p", { text: truncate(readableBody(note.body), 135) || "暂无正文" }),
     el("div", { class: "card-foot" }, [el("span", { text: formatDate(note.updatedAt, true) }), button("查看", { kind: "text", onClick: () => openNote(note.id) })]),
   ]));
   const visibleCount = groups.length + standalone.length;
@@ -818,6 +818,7 @@ async function previewNoteLinks(noteId) {
 
 function sourceGroupCard(group) {
   const source = group.source;
+  const context = api.getContext();
   const children = asArray(group.children).filter((note) => !isExcerptOnly(note));
   const jobs = asArray(group.jobs);
   const activeJob = jobs.find((job) => ["queued", "running", "waiting", "failed"].includes(job.state));
@@ -825,7 +826,17 @@ function sourceGroupCard(group) {
   return el("article", { class: "card source-group-card" }, [
     el("div", { class: "card-head" }, [badge("原始资料", "accent"), badge(`${children.length} 条拆解`, children.length ? "good" : "neutral")]),
     el("h3", { text: source.title || "未命名原始资料" }),
-    sourceReadingBody(sourceBodyPreview(source.body), 'markdown-preview'),
+    children.length ? button("阅读原始资料全文", { kind: "text", onClick: async () => {
+      const active = api.getContext();
+      if (active.practiceId !== context.practiceId || active.version !== context.version) return;
+      try {
+        const current = await api.note(source.id);
+        const latest = api.getContext();
+        if (latest.practiceId !== context.practiceId || latest.version !== context.version) return;
+        showReadingDialog({ title: current.title || '未命名原始资料', content: sourceReadingBody(current.body, 'original-body', '暂无原文', current) });
+      } catch (error) { handleError(error); }
+    } }) : null,
+    sourceReadingBody(sourceBodyPreview(source.body), 'markdown-preview', '暂无原文', source),
     childPreview.length ? el("div", { class: "group-child-preview" }, childPreview.map((child) => el("div", { class: "group-child-preview-item" }, [
       el("span", { text: child.title || "未命名拆解" }),
       badge(labels.stage(child.meta?.stage), stateTone(child.meta?.stage)),
@@ -875,6 +886,10 @@ function renderSourceGroupDrawer(source) {
   refs.drawerEyebrow.textContent = "原始资料与拆解";
   const content = el("div", { class: "page-stack source-group-drawer", dataset: { sourceId: source.id } });
   const headActions = el("div", { class: "form-actions" }, [
+    button("全屏阅读原文", { onClick: () => showReadingDialog({
+      title: source.title || '未命名原始资料',
+      content: sourceReadingBody(source.body, 'original-body', '暂无原文', source),
+    }) }),
     button("编辑原始资料", { kind: "primary", onClick: () => renderNoteEditor(source, { returnToSourceId: source.id }) }),
     button("查看版本", { disabled: isMobilePrototype(), title: isMobilePrototype() ? "样机暂不支持查看版本" : "", onClick: () => renderHistory(source, { returnToSourceId: source.id }) }),
     button("移入回收站", { kind: "danger", disabled: isMobilePrototype(), title: isMobilePrototype() ? "样机暂不支持删除" : "", onClick: () => deleteNote(source) }),
@@ -906,7 +921,7 @@ function renderSourceGroupDrawer(source) {
     sourceReadingBody(source.body, 'original-body', '暂无原文', source),
   ]);
   if (isMobilePrototype()) original.open = true;
-  content.append(original);
+  content.prepend(original);
   if (attachmentPanel(source)) content.append(attachmentPanel(source));
 
   const currentUrl = safeExternalUrl(meta.url);

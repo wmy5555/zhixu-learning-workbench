@@ -181,6 +181,33 @@ export function confirmAction({ title, message, confirmText = "确认", danger =
   });
 }
 
+// A native modal makes the underlying drawer inert and keeps its reading position.
+export function showReadingDialog({ title, content }) {
+  const returnFocus = document.activeElement;
+  const previousOverflow = document.body.style.overflow;
+  const dialog = el('dialog', { class: 'source-reader-dialog', ariaLabel: `原始资料全文：${title}` });
+  const close = () => dialog.close();
+  const exit = button('退出全屏', { onClick: close });
+  dialog.append(
+    el('header', { class: 'source-reader-header' }, [
+      el('div', {}, [el('small', { text: '原始资料全文' }), el('h2', { text: title })]), exit,
+    ]),
+    el('div', { class: 'source-reader-scroll', tabIndex: 0, ariaLabel: '原始资料全文阅读区' }, content),
+  );
+  containDialogKeyboard(dialog, close);
+  dialog.addEventListener('cancel', event => { event.preventDefault(); close(); });
+  dialog.addEventListener('close', () => {
+    document.body.style.overflow = previousOverflow;
+    dialog.remove();
+    if (returnFocus?.isConnected) returnFocus.focus();
+  });
+  document.body.append(dialog);
+  dialog.showModal();
+  document.body.style.overflow = 'hidden';
+  exit.focus();
+  return dialog;
+}
+
 export function promptAction({ title, message = "", label = "说明", initialValue = "", placeholder = "", submitText = "提交", danger = false, required = false }) {
   return new Promise((resolve) => {
     const returnFocus = document.activeElement;
