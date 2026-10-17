@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { conversationOrigin, validSourceDate } from './chatgpt-source-metadata.mjs';
 import { fail, hash, now } from './store.mjs';
 import { syncSchema, structuredSchema, validateSync, captureIncremental, checkSource, checkStructuredCandidates, verifySyncReceipt, literalBlock } from './chatgpt-sync.mjs';
 import { receiveHistorySnapshot, verifiedHistoryCapture } from './chatgpt-history-snapshot.mjs';
@@ -16,6 +17,8 @@ export const conversationSchema = z.object({
   coverage: z.enum(['current_context', 'selected_excerpt', 'visible_history']),
   limitations: text(4000).default(''),
   conversationUrl: text(2048).default(''),
+  conversationDate: z.string().refine(value => value === '' || validSourceDate(value)).optional().describe('可核对的原资料日期 YYYY-MM-DD；未知留空，不使用导入时间或最后更新时间。'),
+  conversationDateBasis: text(1000).optional().describe('日期的来源与语义，例如当前可见分支首条消息；不得把消息日期冒充平台会话创建日期。'),
   sync: syncSchema.optional(),
   structured: structuredSchema.optional(),
 }).strict();
@@ -113,7 +116,10 @@ function findCompletedHistoryRetry(store, input) {
 function verifyLegacyCapture(store, saved, value, { requireExact = false } = {}) {
   const note = readCapturePersisted(store, saved.noteId), marker = note.meta.chatgptCapture;
   const expectedMarker = ['version', 'noteId', 'requestHash', 'payloadHash', 'savedAt', 'messageCount', 'coverage'];
-  const matches = note.kind === 'source' && note.title === value.title && note.meta.privacy === 'local' &&
+  const origin = conversationOrigin(value, saved.savedAt);
+  const originMatches = saved.sourceMetadataVersion !== 2 || (Object.entries(origin).every(([key, expected]) => note.meta[key] === expected) &&
+    JSON.stringify(note.meta.origins) === JSON.stringify([origin]));
+  const matches = originMatches && note.kind === 'source' && note.title === value.title && note.meta.privacy === 'local' &&
     note.meta.stage === 'reference' && note.meta.platform === 'ChatGPT' && note.meta.url === value.conversationUrl &&
     expectedMarker.every(key => marker?.[key] === saved[key]) &&
     [renderConversation, ...acceptedSourceRenderers].some(render => note.body === render(value));
@@ -205,7 +211,7 @@ export function createChatgptBridge({ getStore, settings, search, getNote, relat
           existing.title !== value.title || !bodyMatchesKnownTemplate || existing.meta.platform !== 'ChatGPT' || existing.meta.url !== value.conversationUrl) {
           fail('会话回执已丢失，且原记录已编辑或标记无法核对；请在知序确认，不会覆盖或重复创建。', 'CHATGPT_CAPTURE_UNVERIFIABLE', 409);
         }
-        const saved = { version: 2, noteId: existing.id, requestHash: marker.requestHash, payloadHash, savedAt: marker.savedAt, messageCount: marker.messageCount, coverage: marker.coverage };
+        const saved = { ...(marker.sourceMetadataVersion === 2 ? { sourceMetadataVersion: 2 } : {}), version: 2, noteId: existing.id, requestHash: marker.requestHash, payloadHash, savedAt: marker.savedAt, messageCount: marker.messageCount, coverage: marker.coverage };
         const completed = { ...saved, verification: verifyLegacyCapture(store, saved, value, { requireExact: true }) };
         store.put('chatgptCaptures', requestHash, completed);
         assertCaptureRecord(store, 'chatgptCaptures', requestHash, completed);
@@ -218,8 +224,8 @@ export function createChatgptBridge({ getStore, settings, search, getNote, relat
       const timestamp = Date.now(), recent = store.get('chatgptCaptureRate', 'recent', []).filter(at => Number.isFinite(at) && at <= timestamp && timestamp - at < 60000);
       if (recent.length >= 30) fail('一分钟内收集过于频繁，请稍后继续。', 'CHATGPT_RATE_LIMIT', 429);
       store.put('chatgptCaptureRate', 'recent', [...recent, timestamp]);
-      const saved = { version: 2, noteId, requestHash, payloadHash, savedAt: now(), messageCount: value.messages.length, coverage: value.coverage };
-      const origin = { platform: 'ChatGPT', author: '', url: value.conversationUrl, date: '', locator: `本次收到 ${value.messages.length} 条消息；${value.coverage === 'selected_excerpt' ? '选定片段' : '当前可见上下文'}`, acquiredAt: saved.savedAt };
+      const saved = { version: 2, sourceMetadataVersion: 2, noteId, requestHash, payloadHash, savedAt: now(), messageCount: value.messages.length, coverage: value.coverage };
+      const origin = conversationOrigin(value, saved.savedAt);
       const note = store.create({ id: noteId, kind: 'source', title: value.title, body, meta: {
         privacy: 'local', stage: 'reference', fingerprint: hash(body.trim()),
         ...origin, origins: [origin], chatgptCapture: saved,

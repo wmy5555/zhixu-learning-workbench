@@ -6,7 +6,7 @@ export const chatgptToolNames = Object.freeze([
   'import_chatgpt_history_batch', 'preview_chatgpt_capture_undo', 'preview_chatgpt_capture_restore',
   'search_knowledge', 'read_note', 'read_source', 'related_knowledge',
 ]);
-const files = ['package.json', 'src/chatgpt-build.mjs', 'src/chatgpt-integrity.mjs', 'src/chatgpt.mjs',
+const files = ['src/chatgpt-source-metadata.mjs', 'package.json', 'src/chatgpt-build.mjs', 'src/chatgpt-integrity.mjs', 'src/chatgpt.mjs',
   'src/chatgpt-sync.mjs', 'src/chatgpt-history-snapshot.mjs', 'src/chatgpt-history-auth.mjs',
   'src/mcp-chatgpt.mjs', 'src/mcp.mjs', 'src/store.mjs', 'src/server.mjs', 'src/service.mjs',
   'src/chatgpt-history-batch.mjs', 'src/chatgpt-history-batch-store.mjs', 'src/chatgpt-undo.mjs'];
