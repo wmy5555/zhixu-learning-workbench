@@ -589,6 +589,9 @@ input[type="color"] { height: 44px; padding: 5px 8px; cursor: pointer; }
 .attachment-card { padding: 12px 0; overflow-wrap: anywhere; }
 .attachment-card a { display: inline-block; margin-right: 16px; }
 .source-attachments { min-width: 0; }
+.capture-layout, .capture-layout .page-stack, .capture-layout .panel { min-width: 0; }
+.capture-layout .attachment-card button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.filepond--root { min-width: 0; max-width: 100%; }
 .file-picker-formats { margin: 8px 0 16px; color: var(--ink); font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; }
 /* Error rows reserve their own height; FilePond measures this box for its list. */
 .filepond--item[data-filepond-item-state="load-invalid"] {
