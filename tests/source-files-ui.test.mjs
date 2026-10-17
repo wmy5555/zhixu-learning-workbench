@@ -21,14 +21,44 @@ test('file picker keeps specific MIME and rejects unsupported generic-binary for
   }
 });
 
+test('invalid files keep a short reason and separate help for the actual picker formats', async () => {
+  const options = [], help = [], removed = [];
+  let observe;
+  const vendor = { default: {}, registerPlugin() {}, create(_input, value) { options.push(value); return {
+    element: { isConnected: true, after(node) { help.push(node); } }, destroy() { removed.push('picker'); },
+  }; } };
+  const context = vm.createContext({ vendor, MAX_FILE_BYTES, document: { body: {} },
+    MutationObserver: class { constructor(callback) { observe = callback; } observe() {} disconnect() {} },
+    crypto: { randomUUID: () => 'test-upload-id' },
+    el(_tag, props) { return { ...props, after() {}, remove() { removed.push(props.class); }, set innerHTML(_) { assert.fail('help must be plain text'); } }; },
+  });
+  const source = fs.readFileSync(new URL('../public/source-files.mjs', import.meta.url), 'utf8')
+    .replace(/^import .*;\s*$/gm, '').replaceAll('export ', '')
+    .replace(/import\('\/vendor\/[^']+'\)/g, 'Promise.resolve(vendor)');
+  const createPicker = vm.runInContext(source + '\ncreateFilePicker;', context);
+  await createPicker({});
+  const imagePicker = await createPicker({}, { imagesOnly: true });
+  assert.equal(options[0].labelFileTypeNotAllowed, '不支持此文件格式');
+  assert.equal(options[0].fileValidateTypeLabelExpectedTypes, '请按下方支持格式重新选择');
+  assert.equal(options[0].labelButtonRemoveItem, '移除此文件');
+  assert.deepEqual(Array.from(options[0].acceptedFileTypes), [...new Set(Object.values(fileAccept))]);
+  assert.match(help[0].text, /PNG 图片（\.png）.*JPEG 图片（\.jpg \/ \.jpeg）.*PDF 文档（\.pdf）.*Word 文档（\.doc）.*Word 文档（\.docx）/);
+  assert.doesNotMatch(help[0].text, /text\/plain|SVG|TXT|image\//);
+  assert.match(help[1].text, /PNG.*JPEG.*GIF.*WebP/);
+  assert.doesNotMatch(help[1].text, /PDF|Word|\.doc|\.pdf/);
+  assert.ok(Array.from(options[1].acceptedFileTypes).every(type => type.startsWith('image/')));
+  imagePicker.element.isConnected = false; observe();
+  assert.deepEqual(removed, ['picker', 'file-picker-formats', 'notice']);
+});
+
 test('picker shows server rejection as plain text and preserves other queue errors on retry', async () => {
   let options, status;
   const uploads = [], failures = [];
-  const instance = { element: { isConnected: true, after(node) { status = node; } } };
+  const instance = { element: { isConnected: true, after() {} } };
   const vendor = { default: {}, registerPlugin() {}, create(_input, value) { options = value; return instance; } };
   const context = vm.createContext({ vendor, MAX_FILE_BYTES, document: { body: {} }, MutationObserver: class { observe() {} },
     crypto: { randomUUID: () => 'test-upload-id' },
-    el(_tag, value) { return { ...value, textContent: '', set innerHTML(_value) { assert.fail('upload errors must be text'); } }; },
+    el(_tag, value) { return { ...value, textContent: '', after(node) { status = node; }, set innerHTML(_value) { assert.fail('upload errors must be text'); } }; },
     uploadAttachment(file, callbacks) { uploads.push({ file, ...callbacks }); return { abort() {} }; },
   });
   const source = fs.readFileSync(new URL('../public/source-files.mjs', import.meta.url), 'utf8')
