@@ -8,6 +8,7 @@ import { createProcessFeedback } from '../public/process-feedback.mjs';
 import { initSidebar } from '../public/sidebar.mjs';
 import { parseSourceFile } from '../public/source-exchange.mjs';
 import { describeJobError } from '../public/ui.mjs';
+import { testAndSaveCapability } from '../public/capability-test.mjs';
 import { chapters, coreSteps, flatSteps, getCurriculum } from '../public/onboarding-curriculum.mjs';
 import { materials, customMaterial, customSample, getMaterial, materialSample } from '../public/onboarding-materials.mjs';
 
@@ -15,6 +16,7 @@ import { tutorialFixture } from './fixtures/tutorial-ui.mjs';
 const usageSource = await readFile(new URL('../public/usage.mjs', import.meta.url), 'utf8');
 const onboardingCss = await readFile(new URL('../public/onboarding.css', import.meta.url), 'utf8');
 
+const discoverySource = (await readFile(new URL('../public/model-discovery.mjs', import.meta.url), 'utf8')).replace(/^import.*;$/m, '').replaceAll('export ', '');
 const uiSource = await readFile(new URL('../public/ui.mjs', import.meta.url), 'utf8');
 const markdownSource = await readFile(new URL('../public/markdown-reader.mjs', import.meta.url), 'utf8');
 const appSource = await readFile(new URL('../public/app.mjs', import.meta.url), 'utf8');
@@ -59,6 +61,7 @@ class Element {
 }
 function descendants(node) { return [node, ...node.children.flatMap(child => child instanceof Element ? descendants(child) : [])]; }
 function matches(node, selector) {
+  if (selector.includes(',')) return selector.split(',').some(part => matches(node, part.trim()));
   const dataValue = selector.match(/^\[data-([\w-]+)=["']([^"']+)["']\]$/);
   if (dataValue) return node.dataset[dataValue[1].replace(/-([a-z])/g, (_, c) => c.toUpperCase())] === dataValue[2];
   const named = selector.match(/^\[name=["']([^"']+)["']\]$/);
@@ -325,7 +328,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat, savedSession = 
   };
   document.createTextNode = value => { const node = new Element('text'); node.textContent = value; return node; };
   const context = vm.createContext({
-    api, document, request: async () => ({ uploads: [] }), uploadAttachment: (...args) => api.uploadAttachment(...args), initSidebar, createProcessFeedback, parseSourceFile, TextDecoder, Node: Element, URL, Intl: Object.assign(Object.create(Intl), { DateTimeFormat: dateTimeFormat }), Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => `request-ui-${++browserRequestSequence}` },
+    testAndSaveCapability, AbortController, setTimeout, clearTimeout, api, document, request: async () => ({ uploads: [] }), uploadAttachment: (...args) => api.uploadAttachment(...args), initSidebar, createProcessFeedback, parseSourceFile, TextDecoder, Node: Element, URL, Intl: Object.assign(Object.create(Intl), { DateTimeFormat: dateTimeFormat }), Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => `request-ui-${++browserRequestSequence}` },
     FormData: class {
       constructor(form) { this.form = form; }
       entries() { return descendants(this.form).filter(node => node.name && !node.disabled && ['input', 'textarea', 'select'].includes(node.tagName)).map(node => [node.name, String(node.tagName === 'select' ? node.children.find(option => option.selected)?.value || '' : node.value)]); }
@@ -338,7 +341,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat, savedSession = 
   // is covered by the separate browser flow, not the minimal DOM fixture.
   vm.runInContext(fileUiSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') +
     '\ncreateFilePicker = async (_input, options) => { api.onImagePicker?.(options); return { getFiles: () => [] }; };\nthis.attachmentUrl = (id, asset, download = false) => "/api/notes/" + id + "/attachments?asset=" + asset + (download ? "&download=1" : "");', context);
-  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + ('const renderMarkdown = (() => {\n' + markdownSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn renderMarkdown;\n})();') + '\nconst createMarkdownEditor = (() => {\n' + editorSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn createMarkdownEditor;\n})();\n' + sourceMapSource + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { renderSourceGroupDrawer, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
+  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + discoverySource + '\n' + ('const renderMarkdown = (() => {\n' + markdownSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn renderMarkdown;\n})();') + '\nconst createMarkdownEditor = (() => {\n' + editorSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn createMarkdownEditor;\n})();\n' + sourceMapSource + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { attachModelDiscovery, renderSourceGroupDrawer, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
   context.app.beginStudy = vm.runInContext('beginStudy', context);
   context.app.manualExtract = vm.runInContext('manualExtract', context);
   context.app.serializeForm = vm.runInContext('serializeForm', context);
@@ -2438,4 +2441,175 @@ test('capture receipt clears across libraries and ignores stale completion and r
   release({ notes: [{ id: 'practice-id', title: '旧库迟到资料' }] }); await late;
   assert.equal(app.state.lastCapture, null); assert.equal(form.querySelector('[data-tour="capture-saved"]').hidden, true);
   await app.renderCapture(); assert.equal(app.refs.main.querySelector('[data-tour="capture-saved"]').hidden, true);
+});
+
+test('connection settings test current draft, save only tested capability, and retain unrelated edits', async () => {
+  const calls = [], saves = [];
+  const app = browser({ settings: async () => ({ ai: { enabled: false } }), prompts: async () => ({ prompts: [] }),
+    testMainSetting: async (cap, draft) => { calls.push([cap, plain(draft)]); return { receipt: 'mock-receipt' }; },
+    saveTestedSetting: async (...args) => { saves.push(plain(args)); return { saved: true }; },
+    bootstrap: async () => ({ settings: { ai: { enabled: true } }, capabilities: { model: true } }),
+  });
+  const panel = await app.settingsPanel(), form = panel.querySelector('form'); form.isConnected = true;
+  control(panel, 'aiEnabled').checked = true;
+  control(panel, 'aiBaseUrl').value = 'https://example.invalid/v1';
+  control(panel, 'aiModel').value = 'new-model'; control(panel, 'aiKey').value = 'synthetic-only';
+  control(panel, 'vaultDir').value = '/synthetic/unsaved'; control(panel, 'chatgptEnabled').checked = true;
+  await click(findButton(panel, '测试连接'));
+  assert.equal(calls.length, 1); assert.equal(calls[0][1].model, 'new-model');
+  assert.deepEqual(saves[0], ['model', calls[0][1], 'mock-receipt']);
+  assert.deepEqual(Object.keys(saves[0][1]).sort(), ['apiKey','baseUrl','enabled','model','timeoutMs']);
+  assert.equal(control(panel, 'aiKey').value, '');
+  assert.equal(app.state.bootstrap.settings.ai.enabled, true);
+  assert.equal(form, panel.querySelector('form'));
+  assert.equal(control(panel, 'vaultDir').value, '/synthetic/unsaved');
+  assert.equal(control(panel, 'chatgptEnabled').checked, true);
+  assert.equal(control(panel, 'allowProposals').disabled, true);
+  assert.match(app.toasts.textContent, /本项配置已自动保存/);
+});
+
+test('connection settings edits, repeated clicks and full saves during test cannot commit stale drafts', async () => {
+  let finish; const saves = []; let count = 0;
+  const app = browser({ settings: async () => ({ ai: { enabled: true } }), prompts: async () => ({ prompts: [] }),
+    testMainSetting: () => { count++; return new Promise(resolve => { finish = resolve; }); },
+    saveTestedSetting: async (...args) => saves.push(args), updateSettings: async (...args) => saves.push(args),
+  });
+  const panel = await app.settingsPanel(), form = panel.querySelector('form'); form.isConnected = true;
+  control(panel, 'aiKey').value = 'synthetic-only';
+  const button = findButton(panel, '测试连接'), pending = click(button);
+  await click(button); await form.events.submit({ preventDefault() {} });
+  assert.equal(count, 1); assert.equal(button.disabled, true);
+  control(panel, 'aiModel').value = 'edited'; form.events.input();
+  finish({ receipt: 'mock' }); await pending;
+  assert.equal(saves.length, 0); assert.equal(control(panel, 'aiKey').value, 'synthetic-only');
+  assert.equal(control(panel, 'aiModel').value, 'edited'); assert.equal(button.disabled, false);
+  assert.match(app.toasts.textContent, /输入已保留/);
+});
+
+test('API cards have independent loading states and unrelated edits do not invalidate a tested snapshot', async () => {
+  let finish; const saved = [];
+  const app = browser({ settings: async () => ({ ai: { enabled: true, baseUrl: 'https://synthetic.invalid/v1', model: 'text' }, embedding: { enabled: true } }), prompts: async () => ({ prompts: [] }),
+    testMainSetting: async cap => cap === 'model' ? new Promise(resolve => { finish = resolve; }) : { receipt: 'embedding-receipt' },
+    saveTestedSetting: async (cap, config) => { saved.push([cap, plain(config)]); return { saved: true }; }, bootstrap: async () => ({}) });
+  const panel = await app.settingsPanel(), form = panel.querySelector('form'); form.isConnected = true;
+  const textButton = findButton(panel, '测试连接'), embeddingButton = findButton(panel, '测试嵌入');
+  const pending = click(textButton);
+  assert.match(textButton.textContent, /正在测试/); assert.equal(textButton.attributes['aria-busy'], 'true');
+  assert.equal(embeddingButton.disabled, false);
+  control(panel, 'embeddingModel').value = 'changed-embedding'; form.events.input();
+  await click(embeddingButton);
+  assert.equal(saved[0][0], 'embedding'); assert.equal(saved[0][1].model, 'changed-embedding');
+  finish({ receipt: 'text-receipt' }); await pending;
+  assert.equal(saved[1][0], 'model'); assert.equal(saved[1][1].model, 'text');
+  assert.match(panel.querySelector('[data-capability="model"]').textContent, /本项配置已自动保存/);
+  assert.equal(textButton.attributes['aria-busy'], 'false');
+});
+
+test('API card distinguishes provider failure, save failure, and later edits without exposing provider text', async () => {
+  for (const stage of ['test', 'save']) {
+    const app = browser({ settings: async () => ({ ai: { enabled: true } }), prompts: async () => ({ prompts: [] }),
+      testMainSetting: async () => { if (stage === 'test') throw new Error('secret-provider-response'); return { receipt: 'mock' }; },
+      saveTestedSetting: async () => { throw new Error('secret-provider-response'); } });
+    const panel = await app.settingsPanel(); panel.querySelector('form').isConnected = true;
+    control(panel, 'aiKey').value = 'synthetic-key';
+    await click(findButton(panel, '测试连接'));
+    const card = panel.querySelector('[data-capability="model"]'), status = card.querySelector('.api-test-status');
+    assert.equal(status.attributes.role, 'alert');
+    assert.match(status.textContent, stage === 'test' ? /连接测试失败/ : /连接测试成功，但未能确认保存/);
+    assert.doesNotMatch(status.textContent, /secret-provider-response/);
+    assert.equal(control(panel, 'aiKey').value, 'synthetic-key');
+    card.events.input({ target: control(panel, 'aiModel') }); assert.match(status.textContent, /尚未测试保存/);
+  }
+});
+
+test('model discovery waits for blur, cancels obsolete requests, preserves full IDs and manual fallback', async () => {
+  const app = browser(), panel = new Element(), address = new Element('input'), key = new Element('input'), model = new Element('input');
+  const calls = []; let finish;
+  address.value = 'https://synthetic.invalid/v1'; key.value = 'synthetic'; model.value = 'hand-typed';
+  const discovery = app.attachModelDiscovery({ panel, address, key, model, capability: 'model', connected: () => true, delay: 1, interval: 0,
+    discover: async (cap, config, options) => { calls.push({ cap, config, options }); return new Promise(resolve => { finish = resolve; }); } });
+  address.events.input(); assert.equal(calls.length, 0);
+  address.events.blur(); await new Promise(resolve => setTimeout(resolve, 10)); assert.equal(calls.length, 1); assert.equal(calls[0].config.model, 'hand-typed');
+  address.value = 'https://new.synthetic.invalid/v1'; address.events.input(); assert.equal(calls[0].options.signal.aborted, true);
+  finish({ models: ['stale-model'] }); await new Promise(resolve => setTimeout(resolve, 0));
+  assert.doesNotMatch(panel.textContent, /stale-model/); assert.equal(model.value, 'hand-typed');
+  const work = discovery.run(); finish({ models: ['vendor/long:model-id-123', '<script>literal</script>', 'embedding-unknown'] }); await work;
+  const select = panel.querySelector('select'), query = panel.querySelector('input');
+  assert.equal(select.children.length, 3); assert.equal(descendants(panel).some(node => node.tagName === 'script'), false);
+  query.value = 'long:model'; query.events.input(); assert.equal(select.children.length, 1);
+  select.value = 'vendor/long:model-id-123'; select.events.change(); assert.equal(model.value, 'vendor/long:model-id-123');
+  assert.equal(panel.querySelector('select').children.length, 0);
+  assert.match(panel.textContent, /旧目录已清除/);
+  discovery.dispose();
+});
+
+test('model discovery failure, empty list and navigation keep manual model input available', async () => {
+  for (const response of [{ models: [], message: '目录为空，请手填。' }, new Error('provider-secret')]) {
+    const app = browser(), panel = new Element(), address = new Element('input'), key = new Element('input'), model = new Element('input');
+    address.value = 'https://synthetic.invalid'; model.value = 'manual-model';
+    const discovery = app.attachModelDiscovery({ panel, address, key, model, capability: 'embedding', connected: () => true, interval: 0,
+      discover: async () => { if (response instanceof Error) throw response; return response; } });
+    await discovery.run(); assert.equal(model.value, 'manual-model'); assert.equal(model.disabled, false);
+    assert.match(panel.textContent, /手填/); assert.doesNotMatch(panel.textContent, /provider-secret/); discovery.dispose();
+  }
+});
+
+test('practice settings expose only API status and a configuration link, never a second connection form', async () => {
+  const app = browser({ getContext: () => ({ practiceId: 'synthetic-practice', version: 1 }), settings: async () => ({ ai: { enabled: true, model: 'saved-model' } }), prompts: async () => ({ prompts: [] }) });
+  const panel = await app.settingsPanel();
+  assert.match(panel.textContent, /共用 API 状态/); assert.match(panel.textContent, /文本生成：已启用 · saved-model/);
+  assert.ok(findButton(panel, '前往正式 API 配置'));
+  assert.equal(control(panel, 'aiKey'), undefined); assert.equal(control(panel, 'embeddingKey'), undefined);
+  assert.equal(control(panel, 'aiBaseUrl'), undefined); assert.equal(findButton(panel, '测试连接'), undefined);
+});
+
+test('successful API save does not label newer edits successful while status refresh is pending', async () => {
+  let refresh; const app = browser({ settings: async () => ({ ai: { enabled: true, model: 'tested-model' } }), prompts: async () => ({ prompts: [] }),
+    testMainSetting: async () => ({ receipt: 'mock' }), saveTestedSetting: async () => ({ saved: true }),
+    bootstrap: async () => new Promise(resolve => { refresh = resolve; }) });
+  const panel = await app.settingsPanel(); panel.querySelector('form').isConnected = true;
+  const pending = click(findButton(panel, '测试连接'));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  control(panel, 'aiModel').value = 'new-unverified-model'; refresh({}); await pending;
+  assert.match(panel.querySelector('[data-capability="model"]').querySelector('.api-test-status').textContent, /当前输入随后有修改，尚未测试保存/);
+});
+
+test('late model directory cannot unlock controls or change the model while tested configuration is saving', async () => {
+  let directory, save, requestSignal;
+  const app = browser({ settings: async () => ({ ai: { enabled: true, baseUrl: 'https://synthetic.invalid/v1', model: 'tested-model' } }), prompts: async () => ({ prompts: [] }),
+    discoverModels: async (_cap, config, options) => { assert.equal(config.model, 'tested-model'); requestSignal = options.signal; return new Promise(resolve => { directory = resolve; }); },
+    testMainSetting: async () => ({ receipt: 'mock' }), saveTestedSetting: async () => new Promise(resolve => { save = resolve; }), bootstrap: async () => ({}) });
+  const panel = await app.settingsPanel(); panel.querySelector('form').isConnected = true;
+  const card = panel.querySelector('[data-capability="model"]'), refresh = findButton(card, '刷新模型列表');
+  const lookup = click(refresh), testing = click(findButton(card, '测试连接'));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(requestSignal.aborted, true); assert.equal(refresh.disabled, true); assert.equal(control(card, 'aiModel').disabled, true);
+  directory({ status: 'ready', models: ['unverified-late-model'] }); await lookup;
+  assert.equal(refresh.disabled, true); assert.equal(card.querySelector('select').disabled, true);
+  assert.equal(card.querySelector('select').children.length, 0); assert.equal(control(card, 'aiModel').value, 'tested-model');
+  save({ saved: true }); await testing;
+  assert.match(card.querySelector('.api-test-status').textContent, /本项配置已自动保存/);
+});
+
+test('same endpoint with a newly typed model and empty key sends the model binding and retains fallback', async () => {
+  const app = browser(), panel = new Element(), address = new Element('input'), key = new Element('input'), model = new Element('input');
+  address.value = 'https://synthetic.invalid/v1'; model.value = 'new-model'; key.value = '';
+  const discovery = app.attachModelDiscovery({ panel, address, key, model, capability: 'model', connected: () => true, interval: 0,
+    discover: async (_cap, config) => { assert.deepEqual(plain(config), { baseUrl: address.value, model: 'new-model', apiKey: '' }); return { status: 'missing_key', models: [], message: '地址或模型已变化，请重新填写密钥后获取目录。' }; } });
+  await discovery.run(); assert.match(panel.textContent, /重新填写密钥/); assert.equal(model.disabled, false); assert.equal(model.value, 'new-model'); discovery.dispose();
+});
+
+
+test('API and automatic-price tabs retain original navigation handlers and expose stable review markers', async () => {
+  const app = browser({ settings: async () => ({ ai: {}, embedding: {}, search: {} }), prompts: async () => ({ prompts: [] }) });
+  app.state.view = 'system'; app.state.systemTab = 'settings';
+  await app.renderCurrent();
+  const tabs = app.refs.main.querySelectorAll('[data-system-tab]');
+  assert.deepEqual(tabs.map(tab => tab.dataset.systemTab), ['settings', 'usage', 'appearance', 'jobs', 'data', 'diagnostics', 'proposals', 'conflicts']);
+  const settingsTab = tabs.find(tab => tab.dataset.systemTab === 'settings');
+  assert.equal(settingsTab.textContent, 'API 与能力设置');
+  await click(settingsTab);
+  assert.equal(app.state.systemTab, 'settings');
+  assert.equal(typeof tabs.find(tab => tab.dataset.systemTab === 'usage').events.click, 'function');
+  assert.ok(app.refs.main.querySelector('[data-review="api-center"]'));
 });

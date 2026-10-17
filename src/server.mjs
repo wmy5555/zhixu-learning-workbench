@@ -205,8 +205,31 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
       else if(resource==='prompts'&&method==='PUT')result=service.updatePrompts(body);
       else if(resource==='settings'&&!id&&method==='GET')result=service.settings();
       else if(resource==='settings'&&!id&&method==='PUT'){if(!practiceId&&body.vaultDir)onboarding.assertVaultIsolation(body.vaultDir);result=service.updateSettings(body);if(!practiceId)onboarding.settingsChanged(body);}
-      else if(resource==='settings'&&id==='test'&&method==='POST')result=(await onboarding.test(body.capability)).testResult;
+      else if(resource==='settings'&&id==='models'&&!action&&method==='POST') {
+        if (practiceId) fail('请返回正式设置获取共享 API 模型目录。', 'PRACTICE_SETTINGS_LOCKED', 409);
+        const controller = new AbortController();
+        const cancel = () => controller.abort();
+        res.once('close', cancel);
+        try { result=await mainService.ai.discoverModels(body.capability,body.config,{signal:controller.signal}); }
+        finally { res.removeListener('close', cancel); }
+      }
+      else if(resource==='settings'&&id==='test'&&method==='POST') {
+        if (body.config === undefined) result=(await onboarding.test(body.capability)).testResult;
+        else {
+          if (practiceId) fail('请返回正式设置测试并保存共享 API 配置。', 'PRACTICE_SETTINGS_LOCKED', 409);
+          result=await mainService.capabilityTests.test(body.capability,body.config);
+        }
+      }
+      else if(resource==='settings'&&id==='save-tested'&&method==='POST') {
+        if (practiceId) fail('练习空间不能更改共享 API 配置。', 'PRACTICE_SETTINGS_LOCKED', 409);
+        result=mainService.capabilityTests.save(body.capability,body.config,body.receipt);
+        try {
+          onboarding.settingsChanged({[body.capability==='model'?'ai':body.capability]:{}});
+          onboarding.tested(body.capability);
+        } catch { result.warning='配置已保存，但引导进度未更新；无需重复测试，请刷新后检查引导状态。'; }
+      }
       else if(resource==='usage'&&!id&&method==='GET'){result=mainService.usageReport(query);result.sharedUsage=Boolean(practiceId);}
+      else if(resource==='usage'&&id==='pricing-refresh'&&method==='POST')result=await service.refreshPricing({force:body.force===true});
       else if(resource==='usage'&&id==='settings'&&method==='PUT')result=service.updateUsageSettings(body);
       else if(resource==='call-recovery'&&!id&&method==='GET')result=mainService.callRecovery();
       else if(resource==='call-recovery'&&id&&method==='POST'){
@@ -235,7 +258,7 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
   });
   server.requestTimeout=60000;server.headersTimeout=15000;
   let practiceTimer;
-  server.on('listening',()=>{if(scheduler){const tick=async()=>{if(busyTick)return;busyTick=true;try{await service.tick();}catch(error){console.error('后台任务暂时失败：',error.code||'ERROR');}finally{busyTick=false;}};timer=setInterval(tick,3000);timer.unref();tick();practiceTimer=setInterval(()=>{onboarding.pump().catch(error=>console.error('练习任务暂时失败：',error.code||'ERROR'));},1000);practiceTimer.unref();}});
+  server.on('listening',()=>{if(scheduler){const tick=async()=>{if(busyTick)return;busyTick=true;try{service.refreshPricing?.().catch(()=>{});await service.tick();}catch(error){console.error('后台任务暂时失败：',error.code||'ERROR');}finally{busyTick=false;}};timer=setInterval(tick,3000);timer.unref();tick();practiceTimer=setInterval(()=>{onboarding.pump().catch(error=>console.error('练习任务暂时失败：',error.code||'ERROR'));},1000);practiceTimer.unref();}});
   return {server,service,onboarding,async close(){clearInterval(timer);clearInterval(practiceTimer);await new Promise(resolve=>server.close(resolve));await onboarding.close();await service.close();}};
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href){

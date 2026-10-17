@@ -1,3 +1,4 @@
+import { costCurrency, currencyValue, freezePricing, budgetAccounting } from './pricing.mjs';
 import { randomUUID } from 'node:crypto';
 import { tokenCount } from './token-usage.mjs';
 
@@ -23,10 +24,14 @@ export function createCallLedger({ store, getStore = () => store, at = () => new
   };
   function pending(current) { return current.records('callLedger').filter(row => unresolved.has(row.phase) || row.phase === 'resolved_unknown' && costValue(row.confirmation?.cost) === null); }
   function listPending() {
-    return pending(getStore()).map(({ id, phase, capability, model, createdAt, updatedAt, jobId, turnId, error }) =>
-      ({ id, phase, capability, model, createdAt, updatedAt, jobId, turnId, error, active: active.has(id), hasResult: phase === 'received' }));
+    const current = getStore();
+    const priceReviews = current.records('callLedger').filter(row => row.phase === 'accounted' && !budgetAccounting(current.get('calls', row.id) || {}).trusted);
+    return [...pending(current), ...priceReviews].map(({ id, phase, capability, model, createdAt, updatedAt, jobId, turnId, error }) => {
+      const call = current.get('calls', id), pricingReview = phase === 'accounted';
+      return { id, phase, capability, model, createdAt, updatedAt, jobId, turnId, error, active: active.has(id), hasResult: phase === 'received', pricingReview, ...(pricingReview ? { estimatedCost: call.cost, currency: costCurrency(call) } : {}) };
+    });
   }
-  function reserve({ capability, model = null, sourceId, key, contextKey, singleRequest = false, jobId, turnId, reservedCost = null }, config) {
+  function reserve({ capability, model = null, sourceId, key, contextKey, singleRequest = false, jobId, turnId, reservedCost = null, pricingSnapshot }, config) {
     const row = transaction(current => {
       if (pending(current).some(item => !active.has(item.id))) fail('CALL_RECOVERY_REQUIRED', '有结果未知或记账未完成的调用。请先在用量与费用中处理，系统不会自动重发。');
       if (contextKey && current.records('callLedger').some(item => item.contextKey === contextKey && item.phase === 'resolved_unknown')) fail('CALL_RECOVERY_REQUIRED', '原操作没有可恢复的响应。人工核对费用不会授权该操作重新发送。');
@@ -41,13 +46,19 @@ export function createCallLedger({ store, getStore = () => store, at = () => new
       const dailyLimit = costValue(config.ai?.dailyCallLimit), monthlyBudget = costValue(config.ai?.monthlyBudget);
       if (dailyLimit !== null && todayCalls.length >= dailyLimit) fail('BUDGET_EXCEEDED', '今日外部调用次数已达到上限。');
       if (monthlyBudget > 0) {
-        if (monthly.some(call => costValue(call.cost) === null)) fail('BUDGET_UNKNOWN', '本月仍有未知费用，无法在预算保护下继续调用。');
-        const known = monthly.reduce((total, call) => total + call.cost, 0);
+        const budgetCurrency = currencyValue(config.ai?.budgetCurrency);
+        const amounts = monthly.map(budgetAccounting);
+        if (pricingSnapshot?.source === 'models.dev' && pricingSnapshot.stale || amounts.some(call => !call.trusted)) fail('BUDGET_PRICE_STALE', '自动价格已超过 24 小时，或本月含过期自动价估算；不能据此核对剩余预算。请更新目录或核对费用，手动单价不受目录过期影响。');
+        if (pricingSnapshot && capability !== 'fetch' && (pricingSnapshot.status !== 'known' || pricingSnapshot.identity.currency !== budgetCurrency)) fail('BUDGET_CURRENCY_UNKNOWN', '本次价格未知或与月预算币种不一致，请核对用量与费用设置。');
+        if (amounts.some(call => call.cost !== 0 && call.currency !== budgetCurrency)) fail('BUDGET_CURRENCY_UNKNOWN', '本月存在其他币种或币种未确认的费用，不能合并预算；历史记录不会自动换汇。');
+        if (amounts.some(call => costValue(call.cost) === null)) fail('BUDGET_UNKNOWN', '本月仍有未知费用，无法在预算保护下继续调用。');
+        const known = amounts.reduce((total, call) => total + call.cost, 0);
         if (known >= monthlyBudget || costValue(reservedCost) !== null && known + reservedCost > monthlyBudget) fail('BUDGET_EXCEEDED', '本月外部服务预算已用尽或剩余额度不足。');
       }
-      const row = { id: randomUUID(), phase: 'reserved', capability, model, sourceId, key, contextKey, jobId, turnId, ...(singleRequest ? { singleRequest: true } : {}), reservedCost: costValue(reservedCost), createdAt: now, updatedAt: now };
+      pricingSnapshot = pricingSnapshot ? freezePricing(structuredClone(pricingSnapshot)) : undefined;
+      const row = { ...(pricingSnapshot ? { pricingSnapshot } : {}), id: randomUUID(), phase: 'reserved', capability, model, sourceId, key, contextKey, jobId, turnId, ...(singleRequest ? { singleRequest: true } : {}), reservedCost: costValue(reservedCost), createdAt: now, updatedAt: now };
       current.put('callLedger', row.id, row);
-      current.put('calls', row.id, { id: row.id, capability, model, sourceId, createdAt: now, phase: 'reserved', ok: null, cost: costValue(reservedCost) });
+      current.put('calls', row.id, { ...(pricingSnapshot ? { pricingSnapshot } : {}), id: row.id, capability, model, sourceId, createdAt: now, phase: 'reserved', ok: null, cost: costValue(reservedCost) });
       return row;
     });
     active.add(row.id);
@@ -66,13 +77,13 @@ export function createCallLedger({ store, getStore = () => store, at = () => new
     return transaction(current => {
       const row = read(current, id);
       if (row.phase !== 'dispatch') fail('CALL_STATE', '该调用不能保存新的响应。');
-      current.put('callResults', id, { id, response, entry, receivedAt: timestamp() });
+      current.put('callResults', id, { id, response, entry: { ...entry, ...(row.pricingSnapshot ? { pricingSnapshot: row.pricingSnapshot } : {}) }, receivedAt: timestamp() });
       current.put('calls', id, { ...current.get('calls', id), phase: 'received' });
       return current.put('callLedger', id, { ...row, phase: 'received', updatedAt: timestamp() });
     });
   }
   function account(current, row, entry, phase) {
-    current.put('calls', row.id, { ...entry, id: row.id, capability: row.capability, model: row.model, sourceId: row.sourceId,
+    current.put('calls', row.id, { ...entry, ...(row.pricingSnapshot ? { pricingSnapshot: row.pricingSnapshot } : {}), id: row.id, capability: row.capability, model: row.model, sourceId: row.sourceId,
       inputTokens: tokenCount(entry.inputTokens), outputTokens: tokenCount(entry.outputTokens), cost: costValue(entry.cost), createdAt: row.createdAt, phase });
     return current.put('callLedger', row.id, { ...row, phase, updatedAt: timestamp() });
   }
@@ -120,8 +131,21 @@ export function createCallLedger({ store, getStore = () => store, at = () => new
     return transaction(current => {
       const row = read(current, id);
       if (!['dispatch', 'unknown', 'resolved_unknown'].includes(row.phase)) fail('CALL_STATE', '只有未取得响应的调用可以人工核对费用。');
-      const saved = account(current, row, { ...current.get('calls', id), cost, ok: false }, 'resolved_unknown');
-      return current.put('callLedger', id, { ...saved, confirmation: { cost, reason: reason.trim(), at: timestamp() } });
+      const original = current.get('calls', id);
+      const pricingConfirmation = cost === null ? null : { cost, currency: costCurrency(original), reason: reason.trim(), at: timestamp() };
+      const saved = account(current, row, { ...original, cost, ok: false, pricingConfirmation }, 'resolved_unknown');
+      return current.put('callLedger', id, { ...saved, pricingConfirmation, confirmation: { cost, reason: reason.trim(), at: timestamp() } });
+    });
+  }
+  function confirmPrice(id, { cost, currency, reason } = {}) {
+    if (active.has(id)) fail('CALL_ACTIVE', '调用仍在执行，请等待完成后处理。');
+    if (costValue(cost) === null || !currencyValue(currency) || typeof reason !== 'string' || !reason.trim() || reason.length > 1000) fail('INVALID_INPUT', '请填写已核对的实际金额、三位币种代码与核对说明。');
+    return transaction(current => {
+      const row = read(current, id), call = current.get('calls', id);
+      if (row.phase !== 'accounted' || call?.pricingSnapshot?.source !== 'models.dev' || !call.pricingSnapshot.stale) fail('CALL_STATE', '只有已记账的过期自动价格估算需要此核对。');
+      const pricingConfirmation = { cost, currency, reason: reason.trim(), at: timestamp() };
+      current.put('calls', id, { ...call, pricingConfirmation });
+      return current.put('callLedger', id, { ...row, pricingConfirmation, updatedAt: timestamp() });
     });
   }
   function getResult(id) {
@@ -150,5 +174,5 @@ export function createCallLedger({ store, getStore = () => store, at = () => new
     if (!result) fail('CALL_RESULT_MISSING', '已有调用的响应缺失，不能重新发送。');
     return { ...result, callId: row.id };
   }
-  return { reserve, dispatch, received, accounted, unknown, cancel, finish: id => active.delete(id), listPending, recover, confirm, getResult, evidence, replay };
+  return { reserve, dispatch, received, accounted, unknown, cancel, finish: id => active.delete(id), listPending, recover, confirm, confirmPrice, getResult, evidence, replay };
 }

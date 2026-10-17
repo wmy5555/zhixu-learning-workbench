@@ -1,0 +1,30 @@
+.review-banner { margin: 1rem 1.5rem 0; padding: 1rem; border: 1px solid var(--border); border-radius: 12px; }
+.review-banner h2 { margin: 0; }
+.review-banner p, .review-banner li { font-size: .9rem; line-height: 1.65; }
+/* All presentation rules are opt-in; normal application URLs do not carry this marker. */
+html[data-review-mode="scoped"] #nav-list [hidden],
+html[data-review-mode="scoped"] #help-launcher,
+html[data-review-mode="scoped"] #theme-toggle,
+html[data-review-mode="scoped"] #quick-capture { display: none !important; }
+html[data-review-view="unavailable"] #main { display: none; }
+/* Keep the live capture form, including validation, capability notice and save receipt. */
+html[data-review-view="capture"] .capture-layout > .page-stack { display: none; }
+html[data-review-view="capture"] .capture-layout { grid-template-columns: minmax(0, 1fr); }
+/* Source selection is necessary to exercise real history; unrelated learning content is not. */
+html[data-review-view="library"] [data-tour="library-recommendations"],
+html[data-review-view="library"] [data-library-section="standalone"],
+html[data-review-view="library"] .group-child-preview,
+html[data-review-view="library"] .group-empty { display: none; }
+/* Keep original text, edit/history controls, pending-job states and all error/confirmation UI. */
+html[data-review-mode="scoped"] .source-group-drawer > .source-map,
+html[data-review-mode="scoped"] .group-process-actions > .section-heading,
+html[data-review-mode="scoped"] .group-process-actions > .form-actions,
+html[data-review-mode="scoped"] .source-group-drawer > .form-actions > .danger-button { display: none; }
+@media (max-width: 780px) { .review-banner { margin: .75rem; } }
+/* API center uses its real settings form and save handler. Never hide card feedback. */
+html[data-review-view="system"] #main > .page-stack > .tabs > :not([data-system-tab="settings"]):not([data-system-tab="usage"]),
+html[data-review-view="system"] [data-tour="settings-general"],
+html[data-review-view="system"] [data-tour="settings-mcp"],
+html[data-review-view="system"] [data-tour="settings-prompts"],
+html[data-review-view="system"] .page-stack:has(> form > [data-review="api-center"]) > :not(form) { display: none; }
+html[data-review-view="system"] [data-review="api-center"] { min-width: 0; }

@@ -127,7 +127,7 @@ async function performRequest(path, options = {}) {
   }
   const method = options.method || "GET";
   const headers = new Headers(options.headers || {});
-  const init = { method, headers, credentials: "same-origin" };
+  const init = { method, headers, credentials: "same-origin", ...(options.signal ? { signal: options.signal } : {}) };
   if (!["GET", "HEAD"].includes(method)) {
     if (!csrfToken) await startSession();
     headers.set("X-CSRF-Token", csrfToken);
@@ -218,8 +218,12 @@ export const api = {
   updateSettings: (body) => request("/api/settings", { method: "PUT", body }),
   prompts: () => request("/api/prompts"),
   updatePrompts: (body) => request("/api/prompts", { method: "PUT", body }),
+  discoverModels: (capability, config, options = {}) => request("/api/settings/models", { method: "POST", body: { capability, config }, scope: "main", signal: options.signal }),
+  testMainSetting: (capability, config) => request("/api/settings/test", { method: "POST", body: { capability, config }, scope: "main" }),
+  saveTestedSetting: (capability, config, receipt) => request("/api/settings/save-tested", { method: "POST", body: { capability, config, receipt }, scope: "main" }),
   testSetting: (capability) => request("/api/settings/test", { method: "POST", body: { capability } }),
   diagnostics: () => request("/api/diagnostics"),
+  refreshPricing: () => request('/api/usage/pricing-refresh', { method: 'POST', body: { force: true } }),
   usage: (filters = {}) => request(`/api/usage?${new URLSearchParams(filters)}`),
   updateUsageSettings: (body) => request("/api/usage/settings", { method: "PUT", body }),
   callRecovery: () => request("/api/call-recovery"),

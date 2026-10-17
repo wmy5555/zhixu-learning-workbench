@@ -1011,3 +1011,14 @@ test('external experience summary distinguishes call evidence from self-reported
   assert.match(ui.body.textContent, /用户确认已打开；外部编辑待体验/);
   ui.tutorial.dispose();
 });
+
+
+test('draft connection API explicitly targets main without writing credentials into tab storage', async () => {
+  const calls = [];
+  const client = apiBrowser(async (path, options) => { calls.push({ path, options }); return response(path === '/api/session' ? { csrf: 'mock' } : { ok: true }); });
+  client.api.setContext('practice-one');
+  await client.api.testMainSetting('model', { apiKey: 'synthetic-only' });
+  await client.api.saveTestedSetting('model', { apiKey: 'synthetic-only' }, 'mock-receipt');
+  assert.deepEqual(calls.map(call => call.path), ['/api/session', '/api/settings/test', '/api/settings/save-tested']);
+  assert.ok(!JSON.stringify([...client.sessionStorage.values]).includes('synthetic-only'));
+});
