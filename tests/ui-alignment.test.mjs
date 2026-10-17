@@ -1211,7 +1211,7 @@ test('core step seven navigates to its saved source and locates the rendered ori
   assert.ok(target.textContent.includes(source.body));
 });
 
-test('ChatGPT-shaped sources render text envelopes as prose and expand the original panel reversibly', async () => {
+test('ChatGPT-shaped sources render text envelopes as prose and keep the floating reader when the summary button moves', async () => {
   const body = '## 收集范围\n\n```text\n范围正文\n```\n\n## 会话原文（按收到的顺序保留）\n\n### 1. ChatGPT\n\n```text\n## 回答标题\n\n回答正文\n```';
   const source = { id: 'chatgpt-shaped', kind: 'source', title: '合成 ChatGPT 资料', body, meta: {}, children: [], jobs: [] };
   const app = browser();
@@ -1221,20 +1221,18 @@ test('ChatGPT-shaped sources render text envelopes as prose and expand the origi
   assert.equal(descendants(original).filter(node => node.tagName === 'pre').length, 0);
   assert.ok(descendants(original).some(node => node.tagName === 'h2' && node.textContent === '回答标题'));
   const fullscreen = findButton(original, '全屏阅读');
-  app.refs.drawer.scrollTop = 180;
+  const summaryActions = original.querySelector('.original-summary-actions');
+  assert.ok(summaryActions);
+  assert.equal(summaryActions.children[0].textContent, `${body.length} 字`);
+  assert.equal(summaryActions.children[1], fullscreen);
   await click(fullscreen);
-  assert.equal(original.open, true);
-  assert.equal(app.refs.drawer.classList.contains('source-reading-fullscreen'), true);
-  assert.equal(app.refs.drawerBody.querySelector('.source-group-drawer').classList.contains('source-reading-fullscreen'), true);
-  assert.equal(fullscreen.textContent, '退出全屏');
-  assert.equal(fullscreen.attributes['aria-pressed'], 'true');
-  assert.equal(app.refs.drawer.scrollTop, 0);
-  await click(fullscreen);
-  assert.equal(original.open, false, 'exit restores the previous collapsed state');
+  const dialog = app.document.body.querySelector('.source-reader-dialog');
+  assert.ok(dialog);
+  assert.match(dialog.textContent, /合成 ChatGPT 资料/);
+  assert.match(dialog.textContent, /回答正文/);
   assert.equal(app.refs.drawer.classList.contains('source-reading-fullscreen'), false);
-  assert.equal(fullscreen.textContent, '全屏阅读');
-  assert.equal(fullscreen.attributes['aria-pressed'], 'false');
-  assert.equal(app.refs.drawer.scrollTop, 180, 'exit restores the previous drawer position');
+  await click(findButton(dialog, '关闭全屏阅读'));
+  assert.equal(app.document.body.querySelector('.source-reader-dialog'), null);
 });
 
 test('capture research requires AI processing and clears on deselection, clear, and successful save', async () => {
