@@ -7,6 +7,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { renderPrompt, validatePromptOverrides } from './prompts.mjs';
 import { readTokenUsage, tokenCost, tokenCount } from './token-usage.mjs';
 import { outboundText } from './outbound-text.mjs';
+import { credentialBinding } from './settings-validation.mjs';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const PAGE_TIMEOUT_MS = 20_000;
@@ -451,9 +452,86 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
   const embeddingCache = makeCache(64);
   const sourceBudget = new AsyncLocalStorage();
   const callContext = new AsyncLocalStorage();
+  const testContext = new AsyncLocalStorage();
   let budgetTail = Promise.resolve();
   let reservedCalls = 0;
   let accountingBlocked = false;
+  // Catalogue discovery is ephemeral: no paid-call ledger, cache, receipt or credential write.
+  const discoveryActive = new Set();
+  const discoveryLastStarted = new Map();
+  async function discoverModels(capability, config, { signal } = {}) {
+    const outcome = (status, message, models = [], truncated = false) => ({
+      status, message, models, truncated, source: status === 'ready' || status === 'empty' ? 'provider' : 'none',
+    });
+    if (!['model', 'embedding'].includes(capability)) return outcome('unsupported', '此能力不支持 OpenAI-compatible 模型目录，请手动配置。');
+    if (!config || typeof config !== 'object' || Array.isArray(config)
+      || Object.keys(config).some(key => !['baseUrl', 'apiKey', 'model'].includes(key))
+      || typeof config.baseUrl !== 'string' || !config.baseUrl.trim() || config.baseUrl.length > 2000
+      || config.apiKey !== undefined && (typeof config.apiKey !== 'string' || config.apiKey.length > 10000 || /[\r\n\0]/.test(config.apiKey))
+      || config.model !== undefined && (typeof config.model !== 'string' || config.model.length > 500)) {
+      return outcome('invalid_config', '请填写有效的服务地址和密钥。');
+    }
+    let base;
+    try { base = new URL(config.baseUrl); } catch { return outcome('invalid_config', '服务地址无效。'); }
+    if (base.protocol !== 'https:' || base.username || base.password || base.search || base.hash) {
+      return outcome('invalid_config', '模型目录需要不含凭据、查询参数或片段的 HTTPS 服务地址。');
+    }
+    if (discoveryActive.has(capability) || Date.now() - (discoveryLastStarted.get(capability) ?? -Infinity) < 3000) {
+      return outcome('rate_limited', '模型目录请求过于频繁，请稍后刷新。');
+    }
+    discoveryActive.add(capability);
+    const { signal: combinedSignal, timeoutSignal } = composeSignal(signal, 10000);
+    try {
+      let key = config.apiKey?.trim() || '';
+      if (!key) {
+        const saved = (await getSettings())[capability === 'model' ? 'ai' : 'embedding'];
+        if (!saved || credentialBinding(config).baseUrl !== credentialBinding(saved).baseUrl
+          || config.model !== undefined && config.model !== saved.model) {
+          return outcome('missing_key', '地址或模型已变化，请重新填写密钥后获取目录。');
+        }
+        // Resolve using the full original binding. Discovery never rebinds a stored key.
+        key = await getSecret(capability, saved);
+      }
+      if (!key) return outcome('missing_key', '请填写密钥后获取模型目录。');
+      discoveryLastStarted.set(capability, Date.now());
+      const response = await withPermit(combinedSignal, async () => {
+        const target = await resolvePublicTarget(endpoint(base, 'models'), combinedSignal);
+        const options = { method: 'GET', headers: { authorization: `Bearer ${key}`, accept: 'application/json' }, signal: combinedSignal };
+        // Never follow redirects or pass credentials to another destination.
+        return abortable(fetchImpl ? injectedRequest(fetchImpl, target, options, 256 * 1024)
+          : pinnedRequest(target, options, 256 * 1024), combinedSignal);
+      });
+      if ([404, 405].includes(response.status)) return outcome('unsupported', '此服务不提供标准模型目录，可手动填写模型 ID 后测试。');
+      if ([401, 403].includes(response.status)) return outcome('unauthorized', '密钥或访问权限未通过，请检查后重试。');
+      if (response.status === 429) return outcome('rate_limited', '供应商限制了目录请求，请稍后刷新。');
+      if (response.status < 200 || response.status >= 300) return outcome('provider_error', '供应商未成功返回模型目录，可稍后刷新或手动填写。');
+      let data;
+      try { data = JSON.parse(response.body.toString('utf8')); } catch { return outcome('invalid_response', '服务返回的不是标准模型目录，可手动填写模型 ID。'); }
+      if (!data || !Array.isArray(data.data)) return outcome('invalid_response', '服务返回的不是标准模型目录，可手动填写模型 ID。');
+      const models = [], seen = new Set();
+      let invalid = false, truncated = false;
+      for (const item of data.data) {
+        const id = item?.id;
+        // Return complete IDs only, never arbitrary provider metadata or reflected credentials.
+        if (typeof id !== 'string' || !id.trim() || id.length > 500 || /[\u0000-\u001f\u007f]/.test(id)
+          || id.includes(key) || /bearer\s|(?:api[_-]?key|authorization|token)\s*[:=]/i.test(id)) { invalid = true; continue; }
+        if (seen.has(id)) continue;
+        seen.add(id);
+        if (models.length >= 500) { truncated = true; continue; }
+        models.push(id);
+      }
+      if (!models.length && data.data.length && invalid) return outcome('invalid_response', '目录条目格式无效，可手动填写模型 ID。');
+      if (!models.length) return outcome('empty', '目录为空，可手动填写模型 ID 后测试；空目录不代表推理不可用。');
+      return outcome('ready', `已获取模型目录${truncated ? '（仅显示前 500 项）' : ''}；目录可见不代表此能力可调用，请选定后测试。${invalid ? ' 已忽略无效条目。' : ''}`, models, truncated);
+    } catch (error) {
+      if (signal?.aborted) return outcome('cancelled', '模型目录请求已取消。');
+      if (timeoutSignal.aborted) return outcome('timeout', '获取模型目录超时，可稍后刷新或手动填写。');
+      if (['SSRF_BLOCKED', 'INVALID_URL'].includes(error?.code)) return outcome('blocked', '目标地址不在允许的公网范围内。');
+      if (error?.code === 'RESPONSE_TOO_LARGE') return outcome('too_large', '模型目录超过大小限制，请手动填写模型 ID。');
+      if (error?.code === 'SECRET_LOCKED') return outcome('missing_key', '已保存的密钥未解锁，请重新填写密钥。');
+      return outcome('network_error', '无法获取模型目录，请检查连接或手动填写模型 ID。');
+    } finally { discoveryActive.delete(capability); }
+  }
 
   function withCallContext(context, fn) {
     if (!context || typeof context.key !== 'string' || !context.key.trim() || context.key.length > 2000 || typeof fn !== 'function') throw fail('INVALID_INPUT', '调用上下文需要稳定 key 和任务函数。');
@@ -482,7 +560,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
   }
 
   async function settings() {
-    return (await getSettings()) ?? {};
+    return testContext.getStore()?.settings ?? (await getSettings()) ?? {};
   }
 
   function capabilityConfig(allSettings, capability) {
@@ -494,7 +572,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     const allSettings = await settings();
     const config = capabilityConfig(allSettings, capability);
     if (config.enabled !== true) throw fail('CAPABILITY_DISABLED', `${capability} 能力尚未启用。`);
-    const secret = needsSecret ? await getSecret(capability, config) : null;
+    const secret = needsSecret ? testContext.getStore()?.secret ?? await getSecret(capability, config) : null;
     if (needsSecret && (!secret || typeof secret !== 'string')) {
       throw fail('MISSING_CREDENTIALS', `${capability} 未配置凭据。`);
     }
@@ -740,7 +818,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     if (!config.baseUrl || !config.model) throw fail('INVALID_CONFIG', '嵌入服务地址或模型名称未配置。');
     const cacheKey = hashKey(['embedding', config.baseUrl, config.model, texts]);
     const cached = embeddingCache.get(cacheKey);
-    if (cached) return cached;
+    if (cached && !testContext.getStore()) return cached;
     const { data } = await requestJson({
       capability: 'embedding', model: config.model, allSettings,
       url: endpoint(config.baseUrl, 'embeddings'), method: 'POST',
@@ -758,7 +836,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
       throw fail('INVALID_RESPONSE', '嵌入响应包含无效向量。');
     }
     const value = { vectors };
-    embeddingCache.set(cacheKey, value, 24 * 60 * 60 * 1000);
+    if (!testContext.getStore()) embeddingCache.set(cacheKey, value, 24 * 60 * 60 * 1000);
     return value;
   }
 
@@ -770,7 +848,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     const baseUrl = config.baseUrl || 'https://api.tavily.com';
     const cacheKey = hashKey(['search', baseUrl, query]);
     const cached = searchCache.get(cacheKey);
-    if (cached) return cached;
+    if (cached && !testContext.getStore()) return cached;
     const { data } = await requestJson({
       capability: 'search', allSettings, url: endpoint(baseUrl, 'search'), method: 'POST',
       headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/json', accept: 'application/json' },
@@ -788,7 +866,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
       return [{ title: String(item.title ?? ''), url: item.url, snippet: String(item.content ?? item.snippet ?? '') }];
     });
     const value = { results };
-    searchCache.set(cacheKey, value, 15 * 60 * 1000);
+    if (!testContext.getStore()) searchCache.set(cacheKey, value, 15 * 60 * 1000);
     return value;
   }
 
@@ -801,7 +879,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     catch (error) { throw fail('INVALID_URL', '地址格式无效。', error); }
     const cacheKey = hashKey(['page', initialUrl]);
     const cached = pageCache.get(cacheKey);
-    if (cached) return cached;
+    if (cached && !testContext.getStore()) return cached;
     let current = new URL(initialUrl);
     let previousProtocol = current.protocol;
     for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
@@ -829,8 +907,8 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
       const parsed = contentType.includes('text/plain') ? { title: '', text: decoded.trim() } : htmlToText(decoded);
       if (!parsed.text) throw fail('EMPTY_PAGE', '网页正文为空或无法提取。');
       const value = { url: current.href, title: parsed.title || current.hostname, text: parsed.text, fetchedAt: new Date().toISOString() };
-      pageCache.set(cacheKey, value, 10 * 60 * 1000);
-      if (current.href !== initialUrl) pageCache.set(hashKey(['page', current.href]), value, 10 * 60 * 1000);
+      if (!testContext.getStore()) pageCache.set(cacheKey, value, 10 * 60 * 1000);
+      if (!testContext.getStore() && current.href !== initialUrl) pageCache.set(hashKey(['page', current.href]), value, 10 * 60 * 1000);
       return value;
     }
     throw fail('TOO_MANY_REDIRECTS', '网页重定向次数过多。');
@@ -1246,7 +1324,8 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     };
   }
 
-  async function test(capability) {
+  async function test(capability, draft) {
+    if (draft) return testContext.run(draft, () => test(capability));
     if (capability === 'model') {
       const result = await generate({ system: 'Return only OK.', prompt: 'Connection test.', privacy: 'cloud' });
       return { ok: true, capability, detail: result.text.slice(0, 100), usage: result.usage };
@@ -1268,7 +1347,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     throw fail('INVALID_CAPABILITY', '未知的外部能力。');
   }
 
-  return { generate, embed, search, readPage, research, researchBatch, withBudget, withCallContext, test,
+  return { generate, embed, search, readPage, research, researchBatch, withBudget, withCallContext, test, discoverModels,
     ...(typeof callLedger?.evidence === 'function' ? { getCallEvidence: jobId => callLedger.evidence(jobId) } : {}),
   };
 }

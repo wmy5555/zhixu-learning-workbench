@@ -219,7 +219,29 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
       else if(resource==='prompts'&&method==='PUT')result=service.updatePrompts(body);
       else if(resource==='settings'&&!id&&method==='GET')result=service.settings();
       else if(resource==='settings'&&!id&&method==='PUT'){if(!practiceId&&body.vaultDir)onboarding.assertVaultIsolation(body.vaultDir);result=service.updateSettings(body);if(!practiceId)onboarding.settingsChanged(body);}
-      else if(resource==='settings'&&id==='test'&&method==='POST')result=(await onboarding.test(body.capability)).testResult;
+      else if(resource==='settings'&&id==='models'&&!action&&method==='POST') {
+        if (practiceId) fail('请返回正式设置获取共享 API 模型目录。', 'PRACTICE_SETTINGS_LOCKED', 409);
+        const controller = new AbortController();
+        const cancel = () => controller.abort();
+        res.once('close', cancel);
+        try { result=await mainService.ai.discoverModels(body.capability,body.config,{signal:controller.signal}); }
+        finally { res.removeListener('close', cancel); }
+      }
+      else if(resource==='settings'&&id==='test'&&method==='POST') {
+        if (body.config === undefined) result=(await onboarding.test(body.capability)).testResult;
+        else {
+          if (practiceId) fail('请返回正式设置测试并保存共享 API 配置。', 'PRACTICE_SETTINGS_LOCKED', 409);
+          result=await mainService.capabilityTests.test(body.capability,body.config);
+        }
+      }
+      else if(resource==='settings'&&id==='save-tested'&&method==='POST') {
+        if (practiceId) fail('练习空间不能更改共享 API 配置。', 'PRACTICE_SETTINGS_LOCKED', 409);
+        result=mainService.capabilityTests.save(body.capability,body.config,body.receipt);
+        try {
+          onboarding.settingsChanged({[body.capability==='model'?'ai':body.capability]:{}});
+          onboarding.tested(body.capability);
+        } catch { result.warning='配置已保存，但引导进度未更新；无需重复测试，请刷新后检查引导状态。'; }
+      }
       else if(resource==='usage'&&!id&&method==='GET'){result=mainService.usageReport(query);result.sharedUsage=Boolean(practiceId);}
       else if(resource==='usage'&&id==='settings'&&method==='PUT')result=service.updateUsageSettings(body);
       else if(resource==='call-recovery'&&!id&&method==='GET')result=mainService.callRecovery();

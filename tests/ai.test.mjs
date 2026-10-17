@@ -322,3 +322,41 @@ test('external request concurrency is limited to three', async () => {
   })));
   assert.equal(peak, 3);
 });
+
+test('draft connection tests isolate unsaved settings and credentials from concurrent normal calls', async () => {
+  const seen = [];
+  const ai = createAI({ getSettings: () => baseSettings({ ai: { enabled: false } }), getSecret: () => 'saved-synthetic', getUsage: () => ({}), recordCall: () => {},
+    fetchImpl: async (url, options) => { seen.push([String(url), options.headers.authorization, JSON.parse(options.body).model]); return jsonResponse({ choices: [{ message: { content: 'OK' } }] }); } });
+  const pending = ai.test('model', { settings: baseSettings({ ai: { model: 'draft-model' } }), secret: 'draft-synthetic' });
+  await assert.rejects(ai.generate({ prompt: 'ordinary', privacy: 'cloud' }), { code: 'CAPABILITY_DISABLED' });
+  await pending;
+  assert.equal(seen.length, 1); assert.equal(seen[0][1], 'Bearer draft-synthetic'); assert.equal(seen[0][2], 'draft-model');
+  await assert.rejects(ai.test('model'), { code: 'CAPABILITY_DISABLED' });
+});
+test('draft tests honor saved budgets, SSRF and credential binding and do not reuse caches', async () => {
+  const h = harness({ fetchImpl: async () => jsonResponse({ data: [{ index: 0, embedding: [.1, .2] }] }) });
+  await h.ai.test('embedding');
+  await h.ai.test('embedding', { settings: baseSettings(), secret: 'synthetic-new' });
+  assert.equal(h.fetchCount, 2);
+  await assert.rejects(h.ai.test('model', { settings: baseSettings({ ai: { dailyCallLimit: 0 } }), secret: 'synthetic' }), { code: 'BUDGET_EXCEEDED' });
+  await assert.rejects(h.ai.test('model', { settings: baseSettings({ ai: { baseUrl: 'https://127.0.0.1' } }), secret: 'synthetic' }));
+  const bound = createAI({ getSettings: () => baseSettings(), getSecret: (_cap, cfg) => cfg.baseUrl === PUBLIC_BASE ? 'synthetic' : '', getUsage: () => ({}), recordCall: () => {}, fetchImpl: async () => { throw new Error('must not fetch'); } });
+  await assert.rejects(bound.test('model', { settings: baseSettings({ ai: { baseUrl: 'https://8.8.4.4/v1' } }) }), { code: 'MISSING_CREDENTIALS' });
+});
+
+test('draft fetch redirect results never populate the normal page cache or redirect alias', async () => {
+  let calls = 0;
+  const h = harness({ fetchImpl: async url => {
+    calls++;
+    return String(url) === 'https://8.8.8.8/start'
+      ? new Response('', { status: 302, headers: { location: 'https://8.8.8.8/final' } })
+      : new Response('synthetic page', { headers: { 'content-type': 'text/plain' } });
+  } });
+  const draft = baseSettings(); draft.fetch = { enabled: true, testUrl: 'https://8.8.8.8/start' };
+  await h.ai.test('fetch', { settings: draft });
+  assert.equal(calls, 2);
+  await h.ai.readPage({ url: 'https://8.8.8.8/final', privacy: 'cloud' });
+  assert.equal(calls, 3);
+  await h.ai.readPage({ url: 'https://8.8.8.8/start', privacy: 'cloud' });
+  assert.equal(calls, 5);
+});

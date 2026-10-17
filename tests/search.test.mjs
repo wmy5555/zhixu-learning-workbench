@@ -25,6 +25,21 @@ const legacy = (notes,q) => {
   return notes.filter(n => {const text = `${n.title}\n${n.body}`.toLowerCase();return text.includes(query) || terms.filter(t=>text.includes(t)).length/(terms.length||1)>=Math.min(0.65,2/Math.max(1,terms.length));}).map(n=>n.id).sort();
 };
 
+test('merged service exposes capability tests and rebuild while identical upserts do no writes', async t => {
+  const {s} = harness(t, { test: async () => ({ ok: true }) });
+  const receipt = await s.capabilityTests.test('fetch', { enabled: true });
+  assert.equal(typeof receipt.receipt, 'string');
+  const n = note(s, 'merge-contract', 'synthetic merge contract');
+  await s.search('synthetic');
+  const raw = fs.readFileSync(path.join(s.store.vaultDir, n.path), 'utf8');
+  const changes = () => s.store.db.prepare('SELECT total_changes() n').get().n;
+  const before = changes();
+  s.store.upsert(path.join(s.store.vaultDir, n.path), raw, n.id);
+  assert.equal(changes(), before, 'identical bytes, path and record must skip all derived writes');
+  assert.equal(s.rebuildLocalSearch().count, 1);
+  assert.deepEqual(ids(await s.search('synthetic')), [n.id]);
+});
+
 test('FTS candidate selection preserves Chinese/substring recall against the previous rule', async t => {
   const {s} = harness(t), notes = [
     note(s,'a','熵与检索可靠性；拉格朗日中值定理；RX7900-XTX，ThinkPadX1，abc_def。'),

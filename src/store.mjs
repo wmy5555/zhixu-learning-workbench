@@ -240,14 +240,16 @@ export class Store {
     return this.db.prepare('SELECT * FROM index_chunks WHERE vector IS NULL OR model IS NULL OR model != ? ORDER BY noteId,id').all(model ?? '')
       .filter(chunk => (!selected || selected.has(chunk.noteId)) && (model !== undefined || chunk.vector === null));
   }
-  upsert(file, raw, id, parsed) {
+  upsert(file, raw, id, parsed, { versionedHash } = {}) {
     const { meta, body } = parsed || parse(raw);
     const existing = this.row(id), digest = hash(raw);
     const cleanMeta = Object.fromEntries(Object.entries(meta).filter(([key]) => !reserved.has(key)));
     const note = { id, kind: meta.kind || 'knowledge', title: String(meta.title || path.basename(file, '.md')), body, meta: cleanMeta, hash: digest, path: path.relative(this.vaultDir, file).replaceAll('\\', '/'), updatedAt: meta.updatedAt || fs.statSync(file).mtime.toISOString() };
     if (!folders[note.kind]) note.kind = 'knowledge';
     if (existing?.hash === digest && existing.path === note.path && existing.raw === raw && existing.json === JSON.stringify(note)) return note;
-    if (existing && existing.hash !== digest) this.version(existing, '外部修改或历史版本');
+    // A controlled write already saved this exact before-image. Scans and any
+    // different indexed version must still retain their own history event.
+    if (existing && existing.hash !== digest && existing.hash !== versionedHash) this.version(existing, '外部修改或历史版本');
     this.db.prepare('INSERT INTO notes VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET path=excluded.path,hash=excluded.hash,raw=excluded.raw,json=excluded.json').run(id, note.path, digest, raw, JSON.stringify(note));
     if (!existing || existing.hash !== digest) { this.index(id, `${note.title}\n${body}`); this.put('changed', id, { id, hash: digest, at: now() }); }
     return note;
@@ -496,7 +498,7 @@ export class Store {
     if (hash(fs.readFileSync(file)) !== expectedHash) fail('外部编辑冲突，未覆盖文件。', 'CONFLICT', 409);
     const safeMeta = Object.fromEntries(Object.entries(meta).filter(([key]) => !reserved.has(key)));
     const raw = serialize(old.raw, { ...safeMeta, id, kind: note.kind, title: title ?? note.title, updatedAt: now() }, body ?? note.body);
-    this.version(old, 'Web 修改前'); atomicWrite(file, raw); const result = this.upsert(file, raw, id); this.syncMirrors(); return result;
+    this.version(old, 'Web 修改前'); atomicWrite(file, raw); const result = this.upsert(file, raw, id, undefined, { versionedHash: old.hash }); this.syncMirrors(); return result;
   }
   beginFileOperation(id, relative, { operationId = randomUUID(), kind, beforeHash = null, afterHash = null, undoId = null } = {}) {
     if (this.get('fileRecovery', operationId)) fail('文件操作已有恢复记录，须核对后继续。', 'FILE_OPERATION_PENDING', 409);
