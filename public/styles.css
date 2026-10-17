@@ -358,7 +358,7 @@ button.map-node { cursor: pointer; }
 .map-edge-detail summary { cursor: pointer; }
 .map-edge-detail blockquote { margin: 8px 0; padding-left: 10px; border-left: 2px solid var(--accent); color: var(--muted); }
 .map-detail .child-note { margin: 0; }
-.source-map .map-viewport[data-reading="true"] { display: grid; gap: 15px; height: auto; max-height: none; border: 0; background: none; }
+.source-map .map-viewport[data-reading="true"] { display: grid; gap: 15px; height: auto; max-height: none; overflow: visible; border: 0; background: none; }
 @media (max-width: 600px) {
   .source-map { padding: 12px; }
   .map-toolbar { gap: 6px; }

@@ -974,6 +974,9 @@ test('wheel zoom anchors both maps under the pointer, retains selection and leav
   }
   await click(findButton(panel, '阅读全部条目'));
   const zoom = view.zoom; assert.equal(wheel(), false); assert.equal(view.zoom, zoom);
+  const css = await readFile(new URL('../public/styles.css', import.meta.url), 'utf8');
+  const readingRule = css.match(/\.source-map \.map-viewport\[data-reading="true"\]\s*\{([^}]+)\}/)?.[1];
+  assert.match(readingRule, /overflow:\s*visible\s*;/, 'expanded reading must not create a scroll container that traps the drawer wheel chain');
 });
 
 test('task failures explain stored error codes and retain original diagnostics behind a separate disclosure', async () => {

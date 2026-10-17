@@ -328,7 +328,7 @@ export function createOnboarding(adapter) {
     banner.hidden = !current?.practiceId;
     clear(banner).append(el("div", {}, [el("strong", { text: practice ? "新手练习库" : "正式知识库" }), el("span", { text: practice ? " 示例内容与正式资料分开保存" : " API 配置保存在这里，练习库共用这些能力" }), el("span", { class: "practice-date", text: `练习时间：${practiceDate(current?.clock?.now, current?.clock?.timezone || current?.settings?.timezone)}` })]),
       el("div", { class: "practice-banner-actions" }, [
-        button("退出引导，返回正式库", { kind: "quiet compact", disabled: working || current?.busy, onClick: () => run(pause) }),
+        practice || visible ? button("退出引导，返回正式库", { kind: "quiet compact", disabled: working || current?.busy, onClick: () => run(pause) }) : null,
         button(visible ? "仅收起说明" : "继续新手引导", { kind: "text compact", disabled: working, onClick: () => { if (visible) { visible = false; render(); } else run(resume); } }),
       ]));
     document.body.classList.toggle("onboarding-open", visible);

@@ -1,5 +1,17 @@
 # 测试结果与当前边界
 
+## 全部拆解滚动链修复（2026-10-18）
+
+基线 `4eeafb4ff50574b6d2a60fe25e614cb3c0897e6a`，独立 4397/4398 实例，各用 8 份合成原文、每份 12 条拆解，不调用 AI、不操作正式资料。正式配置及 PID 23768 的命令行已核对指向 task-5/formal-release。
+
+根因：全部拆解已设置 height:auto，却继承结构图的 overflow:auto 与 overscroll-behavior:contain。阅读视口 clientHeight=scrollHeight=9454，不能自身滚动且阻断滚动链。CDP 原生 wheel deltaY=500（浏览器实际事件454.545）命中拆解正文，抽屉 scrollTop 529.697→529.697；defaultPrevented=false，观察窗口 DOM childList 变化0、longtask 0。仅将此阅读视口 overflow 改为 visible，同坐标同滚轮使抽屉 529.697→984.242。修复候选实际CSS再次取得相同结果，12条拆解和最后 NOTE-END-0 均保留。这是滚动链停滞的证据，不是普遍FPS或所有硬件性能结论。
+
+候选边界：列表卡片 wheel 300 使页面 267.879→540.606，未取消事件；逻辑图 wheel -100 使100%→120%、抽屉327.879不变，事件被图形缩放正常取消；C+A原文阅读器包含 ORIGINAL-END、clientHeight779/scrollHeight3231，wheel400使scrollTop0→363.636、未取消事件。图形模式仍 overflow:auto。未发现滚动引起重复渲染或长任务，未以此排除其他负载下的问题。键盘/读屏结构及正文渲染代码未改。
+
+实际执行：`node --test --test-name-pattern='source group reading|wheel zoom|both source maps' tests/ui-alignment.test.mjs`，3/3通过（包含图形拖动/触屏、两图缩放锚点与阅读模式、全部当前正文与原文保留）；`git diff --check`通过。新增CSS回归断言防止展开阅读重新形成阻断滚动链的容器。没有运行全量/组合回归或付费AI。
+
+父线程提供并审阅的回收站文案增量 SHA256 `72f040ed89fc94bad70b80868c90550aee2b4f0f70700ea1c6fcce9b974582ad`、引导退出显示增量 `55df39a6305e54a5cd7a595c54ed57483df83d8594a4fcf244d1800b460ad8c9` 精确核对并无冲突合入；对应行为未被滚动CSS修改影响，复用原执行者既有定向测试，不重复运行。相关PR90无评论、PR87已读取评论及审阅总结，无此滚动范围未处理意见。局部CSS修复不触发额外云端审阅；按用户要求暂不创建PR、不合main。统一PR证据复用约定已写入AGENTS和维护说明，强制CI未修改。
+
 ## 五项统一交付候选与 C+A 保留（2026-10-18）
 
 在四项候选 `99419a3b6ffb1f33c31558fec38cc259e3254bcd` 上，核对第五项补丁 SHA256 为 `a6edce333cdda5046fab9e17e57c082e01842fffb1f0d6f8a1fb4c26d414189f`，五份 manifest 的 before/after 均匹配；原 C+A 工作树的 11 份未提交文件仍与交接快照一致。逐块合入用户改动及第五项增量，未以旧基线或整工作树覆盖正式成果。
