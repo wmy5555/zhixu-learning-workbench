@@ -2,6 +2,8 @@
 
 ## 全部拆解滚动链修复（2026-10-18）
 
+发布整合：视觉增量 SHA256 `c3a98f7cdb31176ed89d7e4630c98d5fdc28d4c18843b87d975d3a294119830f` 精确匹配。除 CHANGELOG 顶部追加位置外均直接应用，文档并列保留；诊断 app.mjs 与测试文件保持原交付内容，CSS 为原视觉追加及独立阅读 overflow 修复，无行为冲突。复用交付 REVIEW.md 中诊断3/3、语法检查及1854/390px合成浏览器证据，不重复测试。另一个活跃AI修复任务已核对为隔离候选且不部署4318。
+
 基线 `4eeafb4ff50574b6d2a60fe25e614cb3c0897e6a`，独立 4397/4398 实例，各用 8 份合成原文、每份 12 条拆解，不调用 AI、不操作正式资料。正式配置及 PID 23768 的命令行已核对指向 task-5/formal-release。
 
 根因：全部拆解已设置 height:auto，却继承结构图的 overflow:auto 与 overscroll-behavior:contain。阅读视口 clientHeight=scrollHeight=9454，不能自身滚动且阻断滚动链。CDP 原生 wheel deltaY=500（浏览器实际事件454.545）命中拆解正文，抽屉 scrollTop 529.697→529.697；defaultPrevented=false，观察窗口 DOM childList 变化0、longtask 0。仅将此阅读视口 overflow 改为 visible，同坐标同滚轮使抽屉 529.697→984.242。修复候选实际CSS再次取得相同结果，12条拆解和最后 NOTE-END-0 均保留。这是滚动链停滞的证据，不是普遍FPS或所有硬件性能结论。

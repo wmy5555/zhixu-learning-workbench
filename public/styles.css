@@ -665,3 +665,50 @@ dialog.source-reader-dialog .source-reader-header button { flex: none; }
 .diagnostic-details pre { max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
 .diagnostic-summary { display: grid; gap: 12px; margin-bottom: 16px; }
 .diagnostic-summary > p { margin: 0; }
+.diagnostic-grid { align-items: start; }
+.diagnostic-panel { min-width: 0; display: grid; gap: 18px; }
+.diagnostic-panel > .section-heading { margin-bottom: 0; }
+.diagnostic-panel .diagnostic-summary { gap: 14px; margin-bottom: 0; }
+.diagnostic-context { padding: 8px 11px; border-left: 2px solid var(--line-strong); color: var(--muted); font-size: 12px; line-height: 1.6; }
+.diagnostic-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; }
+.diagnostic-metric { min-width: 0; padding: 14px 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-soft); }
+.diagnostic-metric dt { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.diagnostic-metric dd { margin: 7px 0 5px; color: var(--ink); font-size: 30px; font-weight: 650; line-height: 1.1; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.diagnostic-metric small { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; font-weight: 400; line-height: 1.5; }
+.diagnostic-caption { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
+.diagnostic-health { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.diagnostic-status { min-width: 0; }
+.diagnostic-status-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 7px 12px; }
+.diagnostic-status-heading strong, .diagnostic-panel h3 { margin: 0; font-size: 13px; font-weight: 600; line-height: 1.5; }
+.diagnostic-status p, .diagnostic-connection p { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.65; }
+.diagnostic-pill { display: inline-flex; flex-shrink: 0; align-items: center; padding: 3px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-soft); color: var(--muted); font-size: 11px; font-weight: 500; line-height: 1.5; }
+.diagnostic-pill[data-tone="attention"] { color: var(--warn); background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 22%, var(--line)); }
+.diagnostic-status-list { display: grid; gap: 0; }
+.diagnostic-status-list > .diagnostic-status { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.diagnostic-status-list > .diagnostic-status:first-child { padding-top: 0; }
+.diagnostic-status-list > .diagnostic-status:last-child { padding-bottom: 0; border-bottom: 0; }
+.diagnostic-connection { padding: 14px; background: var(--panel-soft); border: 1px solid var(--line); border-radius: 12px; }
+.diagnostic-connection a { display: inline-block; margin-top: 10px; font-size: 12px; font-weight: 550; }
+.diagnostic-action { display: grid; justify-items: start; gap: 9px; padding-top: 16px; border-top: 1px solid var(--line); }
+.diagnostic-action > p { margin: 0; max-width: 60ch; line-height: 1.65; }
+.diagnostic-action .form-actions { margin: 0; gap: 8px; }
+.diagnostic-risk { padding-left: 10px; border-left: 2px solid var(--warn); }
+.diagnostic-links { padding-top: 16px; border-top: 1px solid var(--line); min-width: 0; }
+.diagnostic-links .section-heading h2 { font-family: inherit; font-size: 13px; }
+.diagnostic-links .section-heading p { font-size: 12px; }
+.diagnostic-links .list-item { grid-template-columns: minmax(0, 1fr) auto; padding: 10px 12px; font-size: 12px; }
+.diagnostic-links .list-item strong { min-width: 0; overflow-wrap: anywhere; }
+.diagnostic-retention { padding-top: 14px; border-top: 1px solid var(--line); }
+.diagnostic-panel .diagnostic-details { color: var(--muted); font-size: 12px; line-height: 1.65; }
+.diagnostic-panel .diagnostic-details summary { cursor: pointer; }
+.diagnostic-panel .diagnostic-details pre { font-size: 11px; }
+.diagnostic-panel .diagnostic-details p { margin-top: 10px; }
+@media (max-width: 480px) {
+  .diagnostic-panel { padding: 16px; gap: 16px; }
+  .diagnostic-metric { padding: 12px 8px; }
+  .diagnostic-metric dd { font-size: 26px; }
+  .diagnostic-metric small { display: none; }
+  .diagnostic-health { grid-template-columns: 1fr; gap: 12px; }
+  .diagnostic-action .form-actions { width: 100%; }
+  .diagnostic-action .form-actions > button { flex: 1 1 140px; }
+}
