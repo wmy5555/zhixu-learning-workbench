@@ -51,6 +51,12 @@
 
 四个源 SHA 的 Linux/Windows Quality、Secrets、Dependencies 均通过：[PR #83 CI](https://github.com/wmy5555/zhixu-learning-workbench/actions/runs/38995909382)、[PR #85 CI](https://github.com/wmy5555/zhixu-learning-workbench/actions/runs/38995899282)、[PR #87 CI](https://github.com/wmy5555/zhixu-learning-workbench/actions/runs/38937209146)、[PR #88 CI](https://github.com/wmy5555/zhixu-learning-workbench/actions/runs/38942137940)。组合候选仍须绑定其精确 SHA 在正常 CI 环境完成四项检查，随后才可替换现有本地审阅部署。
 
+### 组合 CI 与启动入口返工
+
+`03190b251774e42dc1e22852c5bb272b27c24642` 的 [精确组合 CI](https://github.com/wmy5555/zhixu-learning-workbench/actions/runs/38998035114) 已完成：Linux 全套 1177 项中 1173 通过、4 个 Windows 专用跳过，Secrets、Dependencies 成功；Windows 1176/1177 通过，真实启动测试失败。正常 Linux CI 已覆盖此前本地 Unix socket 与文件进程缺口。
+
+已定位首页切换为 `/review-entry.mjs` 与启动器旧 `app.mjs` 判断冲突，修复及先失败后通过的入口回归见 [启动说明](STARTUP_PERFORMANCE.md#2026-10-17-审阅入口兼容修复)。原超时和错误站点保护保留；新候选仍须 Windows 实际启动回归及完整四项 CI 后才可替换本地部署；完整 Windows CI 会执行全部启动回归。
+
 ### 上一候选历史证据
 
 `api-20261017-r1` 曾通过 354 项聚焦测试及离线检索质量；当时明确排除了两项 createApp UI 夹具，来源完整 verify 仍有 Unix socket EPERM。该历史结果不代表本轮组合全套通过，也不能替代新增价格能力的回归。

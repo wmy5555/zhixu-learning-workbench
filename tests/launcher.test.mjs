@@ -9,6 +9,24 @@ import test from 'node:test';
 const project = path.resolve(import.meta.dirname, '..');
 const windows = process.platform === 'win32';
 const shell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
+const applicationEntry = '<script type="module" src="/app.mjs"></script>';
+const reviewEntry = '<script type="module" src="/review-entry.mjs"></script>';
+
+// Exercise the launcher's literal readiness markers against the actual served file
+// on every OS; the Windows cases below still execute the real PowerShell probe.
+test('launcher readiness markers recognize the deployed shell and reject bare filenames', () => {
+  const source = fs.readFileSync(path.join(project, 'start.ps1'), 'utf8');
+  const markers = [...source.matchAll(/\.Contains\('([^']+)'\)/g)].map(match => match[1]);
+  const recognizes = html => markers.some(marker => html.includes(marker));
+  assert.ok(recognizes(fs.readFileSync(path.join(project, 'public/index.html'), 'utf8')), 'The current shell must satisfy the actual launcher readiness markers');
+  assert.ok(recognizes(applicationEntry));
+  assert.ok(recognizes(reviewEntry));
+  for (const html of ['Another local application; app.mjs and review-entry.mjs are only text.',
+    '<script type="module" src="/not-app.mjs"></script>', '<script type="module" src="/app.mjs.bak"></script>',
+    '<script type="module" src="https://example.invalid/review-entry.mjs"></script>']) {
+    assert.equal(recognizes(html), false);
+  }
+});
 
 async function listener(t, handler) {
   const server = http.createServer(handler);
@@ -50,14 +68,16 @@ function fixture(t) {
   return { root, run };
 }
 
-test('Windows launcher reuses a ready service without Node lookup or data writes', { skip: !windows }, async t => {
+for (const [entryName, html] of [['application', applicationEntry], ['review', fs.readFileSync(path.join(project, 'public/index.html'), 'utf8')]]) {
+test(`Windows launcher reuses a ready ${entryName} service without Node lookup or data writes`, { skip: !windows }, async t => {
   const { root, run } = fixture(t);
-  const server = await listener(t, (_req, res) => res.end('<script src="/app.mjs"></script>'));
+  const server = await listener(t, (_req, res) => res.end(html));
   const result = await run(server.address().port, { PATH: '', USERPROFILE: root });
   assert.equal(result.code, 0, result.stderr);
   assert.match(result.stdout, /ReadyMs=\d+; BrowserDispatchMs=\d+; TotalMs=\d+/);
   assert.equal(fs.existsSync(path.join(root, '.data')), false);
 });
+}
 
 test('Windows launcher starts the real app in an isolated directory and reuses its PID', { skip: !windows }, async t => {
   const { root, run } = fixture(t);
@@ -72,24 +92,43 @@ app.server.listen(Number(process.env.PORT), '127.0.0.1');
 app.server.on('error', () => process.exit(1));
 `);
   const cold = await run(port);
+  if (cold.code !== 0) {
+    const pidFile = path.join(root, '.data/web.pid'), errorFile = path.join(root, '.data/server-error.log');
+    const pid = fs.existsSync(pidFile) ? Number(fs.readFileSync(pidFile, 'utf8')) : null;
+    let alive = false, response;
+    if (Number.isSafeInteger(pid) && pid > 0) { try { process.kill(pid, 0); alive = true; } catch {} }
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/`, { redirect: 'manual', signal: AbortSignal.timeout(2000) });
+      const html = await res.text();
+      response = { status: res.status, applicationEntry: html.includes(applicationEntry), reviewEntry: html.includes(reviewEntry) };
+    } catch (error) { response = { error: error.cause?.code || error.name }; }
+    // Only this synthetic fixture's stderr is included; never read credential files.
+    const stderr = fs.existsSync(errorFile) ? fs.readFileSync(errorFile, 'utf8').slice(-4096).replace(/\b[a-f0-9]{64}\b/gi, '[redacted]') : '(missing)';
+    t.diagnostic(JSON.stringify({ elapsedMs: cold.ms, pid, alive, response, stderr }));
+  }
   assert.equal(cold.code, 0, cold.stderr);
   const pid = fs.readFileSync(path.join(root, '.data/web.pid'), 'utf8');
-  assert.match(await (await fetch(`http://127.0.0.1:${port}/`)).text(), /app\.mjs/);
+  assert.equal(await (await fetch(`http://127.0.0.1:${port}/`)).text(), fs.readFileSync(path.join(project, 'public/index.html'), 'utf8'));
   const warm = await run(port);
   assert.equal(warm.code, 0, warm.stderr);
   assert.equal(fs.readFileSync(path.join(root, '.data/web.pid'), 'utf8'), pid);
   t.diagnostic(`Isolated launcher process: cold=${cold.ms}ms, warm=${warm.ms}ms; browser excluded.`);
 });
 
-for (const redirect of [false, true]) {
-  test(`Windows launcher rejects ${redirect ? 'redirects' : 'unrelated HTML'} and reports a stopped child`, { skip: !windows }, async t => {
+for (const { name, redirect, status = 200, body } of [
+  { name: 'unrelated HTML', body: 'Another local application' },
+  { name: 'bare entry filenames', body: 'app.mjs and review-entry.mjs are only text.' },
+  { name: 'redirects', redirect: true, body: reviewEntry },
+  { name: 'non-200 responses', status: 201, body: applicationEntry },
+]) {
+  test(`Windows launcher rejects ${name} and reports a stopped child`, { skip: !windows }, async t => {
     const { root, run } = fixture(t);
     fs.writeFileSync(path.join(root, 'src/server.mjs'), 'process.exit(1);');
     let redirected = 0;
     const server = await listener(t, (req, res) => {
-      if (req.url === '/other') { redirected++; res.end('app.mjs'); }
-      else if (redirect) { res.writeHead(302, { Location: '/other' }); res.end('app.mjs'); }
-      else res.end('Another local application');
+      if (req.url === '/other') { redirected++; res.end(reviewEntry); }
+      else if (redirect) { res.writeHead(302, { Location: '/other' }); res.end(body); }
+      else { res.writeHead(status); res.end(body); }
     });
     const result = await run(server.address().port);
     assert.notEqual(result.code, 0);

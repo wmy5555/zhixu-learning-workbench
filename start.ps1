@@ -26,7 +26,10 @@ function Test-WorkbenchReady {
     $request.ReadWriteTimeout = 1500
     $response = $request.GetResponse()
     $reader = [IO.StreamReader]::new($response.GetResponseStream())
-    return [int]$response.StatusCode -eq 200 -and $reader.ReadToEnd().Contains('app.mjs')
+    $html = $reader.ReadToEnd()
+    # Both shipped entry points start this workbench; bare filenames are not enough.
+    $hasAppEntry = $html.Contains('<script type="module" src="/app.mjs"></script>') -or $html.Contains('<script type="module" src="/review-entry.mjs"></script>')
+    return [int]$response.StatusCode -eq 200 -and $hasAppEntry
   } catch { return $false }
   finally {
     $socket.Dispose()
