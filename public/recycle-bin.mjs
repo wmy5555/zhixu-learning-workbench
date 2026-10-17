@@ -16,7 +16,7 @@ export async function renderRecycleBin({ main, refresh, onError, isActive = () =
   let clearing = false, verified = true;
   const restoreControls = [];
   const status = el('p', { class: 'notice', role: 'status', text: notice, hidden: !notice });
-  const retry = button('重新核对回收站', { onClick: () => reconcile() });
+  const retry = button('刷新列表', { onClick: () => reconcile() });
   retry.hidden = true;
   async function reconcile(message = '') {
     if (!current()) return;
@@ -30,10 +30,10 @@ export async function renderRecycleBin({ main, refresh, onError, isActive = () =
       await renderRecycleBin({ main, refresh, onError, isActive, snapshot, notice: message });
     } catch (error) {
       if (!current()) return;
-      status.textContent = '回收站状态暂未核对，当前列表可能已过时。请重新核对后再操作；不会自动重发清空请求。';
+      status.textContent = '当前列表可能不是最新。请点击“刷新列表”；刷新成功后可继续恢复或清空。刷新只会更新列表，不会再次永久删除资料。';
       status.hidden = false;
       retry.hidden = false;
-      onError(new Error(`重新核对回收站失败：${error.message}`));
+      onError(new Error(`刷新列表失败：${error.message}`));
     } finally {
       if (current()) retry.disabled = false;
     }
@@ -52,8 +52,8 @@ export async function renderRecycleBin({ main, refresh, onError, isActive = () =
       if (current()) toast(value.cleared ? `已永久清空 ${value.cleared} 份原始资料` : '已完成回收站文件清理', 'success');
     } catch (error) {
       if (!current()) return;
-      message = '清空未完整完成或结果暂未确认，已重新核对当前列表。若需继续清理，请再次点击清空并确认。';
-      onError(new Error(`清空回收站失败，正在重新核对结果（不会自动重试清空）：${error.message}`));
+      message = '清空未全部完成，或暂时无法确认结果。列表已刷新；如需继续清空，请再次点击并确认。';
+      onError(new Error(`清空回收站失败，正在刷新列表（不会自动再次永久删除资料）：${error.message}`));
     } finally {
       if (current()) await reconcile(message);
       clearing = false;

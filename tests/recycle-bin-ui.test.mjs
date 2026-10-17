@@ -17,7 +17,7 @@ test('UI restore sends exact version and stale library actions do nothing',async
 test('clear failure reconciles list and restores button; another attempt requires another confirmation',async()=>{
  const h=harness({failClear:'ordinary'});await h.render();await h.find('一键清空回收站').onClick();
  assert.deepEqual(h.calls,[['clear','revision']]);assert.equal(h.find('一键清空回收站').disabled,false);assert.ok(h.find('恢复'));
- assert.match(h.errors[0],/清空回收站失败.*不会自动重试清空.*synthetic ordinary failure/);
+ assert.match(h.errors[0],/清空回收站失败.*不会自动再次永久删除资料.*synthetic ordinary failure/);
  await h.find('一键清空回收站').onClick();assert.equal(h.confirmations,2);assert.equal(h.calls.length,2);
 });
 
@@ -30,10 +30,10 @@ test('partial physical cleanup failure renders actual empty list and pending cle
 
 test('unknown clear result and failed refresh keep explicit read retry; retry never resends clear',async()=>{
  const h=harness({failClear:'network',failReads:2});await h.render();await h.find('一键清空回收站').onClick();
- assert.equal(h.find('一键清空回收站').disabled,true);assert.equal(h.find('重新核对回收站').hidden,false);assert.equal(h.find('重新核对回收站').disabled,false);
- assert.ok(h.main.body.children.some(n=>n.textContent?.includes('当前列表可能已过时')));
- await h.find('重新核对回收站').onClick();assert.equal(h.find('重新核对回收站').disabled,false);assert.equal(h.find('一键清空回收站').disabled,true);
- await h.find('重新核对回收站').onClick();assert.equal(h.find('一键清空回收站').disabled,false);assert.equal(h.calls.length,1);assert.equal(h.confirmations,1);
+ assert.equal(h.find('一键清空回收站').disabled,true);assert.equal(h.find('刷新列表').hidden,false);assert.equal(h.find('刷新列表').disabled,false);
+ assert.ok(h.main.body.children.some(n=>n.textContent?.includes('当前列表可能不是最新') && n.textContent.includes('刷新成功后可继续恢复或清空') && n.textContent.includes('不会再次永久删除资料')));
+ await h.find('刷新列表').onClick();assert.equal(h.find('刷新列表').disabled,false);assert.equal(h.find('一键清空回收站').disabled,true);
+ await h.find('刷新列表').onClick();assert.equal(h.find('一键清空回收站').disabled,false);assert.equal(h.calls.length,1);assert.equal(h.confirmations,1);
 });
 
 for(const change of ['switchContext','leave'])test('late failed clear cannot update another context or page: '+change,async()=>{
@@ -45,7 +45,7 @@ for(const change of ['switchContext','leave'])test('late failed clear cannot upd
 test('partial cleanup followed by failed refresh can be read-retried without another deletion',async()=>{
  const h=harness({failClear:'partial',failReads:1});await h.render();await h.find('一键清空回收站').onClick();
  assert.equal(h.find('一键清空回收站').disabled,true);assert.equal(h.find('恢复').disabled,true);
- await h.find('重新核对回收站').onClick();assert.equal(h.find('恢复'),undefined);
+ await h.find('刷新列表').onClick();assert.equal(h.find('恢复'),undefined);
  assert.ok(h.main.body.children.some(n=>n.text?.includes('部分文件尚未清理完成')));assert.equal(h.calls.length,1);assert.equal(h.confirmations,1);
 });
 

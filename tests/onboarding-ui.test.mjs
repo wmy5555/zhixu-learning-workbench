@@ -195,6 +195,15 @@ async function tutorialBrowser({ modelReady = true, exists = true, narrow = fals
   return { tutorial, adapter, api, body, workspace, main, drawer, drawerBody, toasts, requests, navigations, contexts, intervals, document, setNarrow(value) { narrow = value; windowEvents.resize?.(); }, progress: context.progress, get state() { return state; }, setState: value => { state = { ...state, ...value }; } };
 }
 
+test('formal library hides exit despite a retained practice record', async () => {
+  for (const status of ['active', 'paused']) {
+    const ui = await tutorialBrowser({ initialContext: '', status });
+    assert.equal(ui.tutorial.state.practiceId, 'practice-one');
+    assert.equal(findButton(ui.body, '退出引导，返回正式库'), undefined);
+    ui.tutorial.dispose();
+  }
+});
+
 test('exit remains available after collapse, hiding instructions and refresh, preserving unfinished progress', async () => {
   const progress = { 'setup-welcome': { status: 'demonstrated' } };
   for (const narrow of [false, true]) {
@@ -212,6 +221,7 @@ test('exit remains available after collapse, hiding instructions and refresh, pr
       assert.equal(ui.api.getContext().practiceId, '');
       assert.equal(ui.state.status, 'paused');
       assert.equal(panel.hidden, true);
+      assert.equal(findButton(banner, '退出引导，返回正式库'), undefined);
       assert.deepEqual(ui.state.progress, progress);
       if (!cycle) await ui.tutorial.open();
     }
@@ -219,6 +229,7 @@ test('exit remains available after collapse, hiding instructions and refresh, pr
     const reloaded = await tutorialBrowser({ progress, initialContext: ui.api.getContext().practiceId, status: ui.state.status });
     assert.equal(reloaded.api.getContext().practiceId, '');
     assert.equal(descend(reloaded.body).find(node => node.classList.contains('onboarding-panel')).hidden, true);
+    assert.equal(findButton(reloaded.body, '退出引导，返回正式库'), undefined);
     ui.tutorial.dispose(); reloaded.tutorial.dispose();
   }
 });
