@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { tokenCount } from './token-usage.mjs';
+import { knownPurpose } from './call-purpose.mjs';
 
 const unresolved = new Set(['reserved', 'dispatch', 'received', 'unknown']);
 const costValue = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
@@ -26,7 +27,8 @@ export function createCallLedger({ store, getStore = () => store, at = () => new
     return pending(getStore()).map(({ id, phase, capability, model, createdAt, updatedAt, jobId, turnId, error }) =>
       ({ id, phase, capability, model, createdAt, updatedAt, jobId, turnId, error, active: active.has(id), hasResult: phase === 'received' }));
   }
-  function reserve({ capability, model = null, sourceId, key, contextKey, singleRequest = false, jobId, turnId, reservedCost = null }, config) {
+  function reserve({ capability, model = null, sourceId, key, contextKey, singleRequest = false, jobId, turnId, purpose, reservedCost = null }, config) {
+    const metadata = knownPurpose(purpose) ? { purpose } : {};
     const row = transaction(current => {
       if (pending(current).some(item => !active.has(item.id))) fail('CALL_RECOVERY_REQUIRED', '有结果未知或记账未完成的调用。请先在用量与费用中处理，系统不会自动重发。');
       if (contextKey && current.records('callLedger').some(item => item.contextKey === contextKey && item.phase === 'resolved_unknown')) fail('CALL_RECOVERY_REQUIRED', '原操作没有可恢复的响应。人工核对费用不会授权该操作重新发送。');
@@ -45,9 +47,9 @@ export function createCallLedger({ store, getStore = () => store, at = () => new
         const known = monthly.reduce((total, call) => total + call.cost, 0);
         if (known >= monthlyBudget || costValue(reservedCost) !== null && known + reservedCost > monthlyBudget) fail('BUDGET_EXCEEDED', '本月外部服务预算已用尽或剩余额度不足。');
       }
-      const row = { id: randomUUID(), phase: 'reserved', capability, model, sourceId, key, contextKey, jobId, turnId, ...(singleRequest ? { singleRequest: true } : {}), reservedCost: costValue(reservedCost), createdAt: now, updatedAt: now };
+      const row = { id: randomUUID(), phase: 'reserved', capability, model, sourceId, key, contextKey, jobId, turnId, ...metadata, ...(singleRequest ? { singleRequest: true } : {}), reservedCost: costValue(reservedCost), createdAt: now, updatedAt: now };
       current.put('callLedger', row.id, row);
-      current.put('calls', row.id, { id: row.id, capability, model, sourceId, createdAt: now, phase: 'reserved', ok: null, cost: costValue(reservedCost) });
+      current.put('calls', row.id, { id: row.id, capability, model, sourceId, ...metadata, createdAt: now, phase: 'reserved', ok: null, cost: costValue(reservedCost) });
       return row;
     });
     active.add(row.id);
@@ -72,7 +74,7 @@ export function createCallLedger({ store, getStore = () => store, at = () => new
     });
   }
   function account(current, row, entry, phase) {
-    current.put('calls', row.id, { ...entry, id: row.id, capability: row.capability, model: row.model, sourceId: row.sourceId,
+    current.put('calls', row.id, { ...entry, id: row.id, capability: row.capability, model: row.model, sourceId: row.sourceId, ...(knownPurpose(row.purpose) ? { purpose: row.purpose } : {}),
       inputTokens: tokenCount(entry.inputTokens), outputTokens: tokenCount(entry.outputTokens), cost: costValue(entry.cost), createdAt: row.createdAt, phase });
     return current.put('callLedger', row.id, { ...row, phase, updatedAt: timestamp() });
   }

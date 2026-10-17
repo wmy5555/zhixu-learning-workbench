@@ -35,6 +35,17 @@ test('practice requests use an explicit tab context while shared configuration a
   assert.ok(![...client.sessionStorage.values.values()].some(value => value.includes('synthetic-only')));
 });
 
+test('practice selection survives reload and exiting removes it without persisting settings', () => {
+  const client = apiBrowser(async () => response({}));
+  client.api.setContext('practice-one');
+  const resumed = apiBrowser(async () => response({}), Object.fromEntries(client.sessionStorage.values));
+  assert.equal(resumed.api.getContext().practiceId, 'practice-one');
+  resumed.api.setContext('');
+  const exited = apiBrowser(async () => response({}), Object.fromEntries(resumed.sessionStorage.values));
+  assert.equal(exited.api.getContext().practiceId, '');
+  assert.equal(resumed.sessionStorage.values.size, 0);
+});
+
 test('a stored invalid practice identity fails explicitly and never retries against the real library', async () => {
   const paths = [];
   const client = apiBrowser(async path => { paths.push(path); return response({ error: '练习库不存在', code: 'PRACTICE_NOT_FOUND' }, 404); }, { 'zhixu.practiceContext.v1': 'missing-practice' });
@@ -149,13 +160,13 @@ async function startTutorial(ui) {
   await pending;
 }
 
-async function tutorialBrowser({ modelReady = true, exists = true, narrow = false, reducedMotion = false, query = '', checkpoint, advance, resetRequest, stateRead, currentStepId, savedStepId, progress = {} } = {}) {
+async function tutorialBrowser({ modelReady = true, exists = true, narrow = false, reducedMotion = false, query = '', checkpoint, advance, resetRequest, stateRead, currentStepId, savedStepId, progress = {}, initialContext = '', status = 'paused' } = {}) {
   const body = new Element('body'), workspace = new Element(), main = new Element('main'), drawer = new Element(), drawerBody = new Element(), launcher = new Element('button'), toasts = new Element();
   body.append(workspace, drawer, launcher, toasts); workspace.append(main); drawer.append(drawerBody);
   const roots = { '.workspace': workspace, '#main': main, '#drawer': drawer, '#drawer-body': drawerBody, '#onboarding-launcher': launcher, '#toast-region': toasts };
   const document = { body, get activeElement() { return Element.activeElement; }, createElement: tag => new Element(tag), createTextNode: text => { const node = new Element('text'); node.textContent = text; return node; }, querySelector: selector => roots[selector] || null, querySelectorAll: selector => selector === '[data-tour]' ? descend(body).filter(node => node.dataset.tour) : [] };
   const requests = [], navigations = [], contexts = [], intervals = [], windowEvents = {};
-  let practiceId = '', version = 0, state = { practiceId: exists ? 'practice-one' : null, status: exists ? 'paused' : 'not_started', modelReady, currentStepId, progress, roles: {}, clock: { now: '2026-09-30T08:00:00Z' }, busy: false };
+  let practiceId = initialContext, version = 0, state = { practiceId: exists ? 'practice-one' : null, status: exists ? status : 'not_started', modelReady, currentStepId, progress, roles: {}, clock: { now: '2026-09-30T08:00:00Z' }, busy: false };
   const api = {
     getContext: () => ({ practiceId, version, pending: 0 }),
     setContext: id => { if (practiceId !== id) version++; practiceId = id; contexts.push(id); },
@@ -183,6 +194,73 @@ async function tutorialBrowser({ modelReady = true, exists = true, narrow = fals
   const tutorial = context.make(adapter); await tutorial.init();
   return { tutorial, adapter, api, body, workspace, main, drawer, drawerBody, toasts, requests, navigations, contexts, intervals, document, setNarrow(value) { narrow = value; windowEvents.resize?.(); }, progress: context.progress, get state() { return state; }, setState: value => { state = { ...state, ...value }; } };
 }
+
+test('formal library hides exit despite a retained practice record', async () => {
+  for (const status of ['active', 'paused']) {
+    const ui = await tutorialBrowser({ initialContext: '', status });
+    assert.equal(ui.tutorial.state.practiceId, 'practice-one');
+    assert.equal(findButton(ui.body, '退出引导，返回正式库'), undefined);
+    ui.tutorial.dispose();
+  }
+});
+
+test('exit remains available after collapse, hiding instructions and refresh, preserving unfinished progress', async () => {
+  const progress = { 'setup-welcome': { status: 'demonstrated' } };
+  for (const narrow of [false, true]) {
+    const ui = await tutorialBrowser({ narrow, progress, initialContext: 'practice-one', status: 'active' });
+    const banner = descend(ui.body).find(node => node.classList.contains('practice-banner'));
+    const panel = descend(ui.body).find(node => node.classList.contains('onboarding-panel'));
+    await click(findButton(panel, narrow ? '收成小窗' : '折叠步骤'));
+    assert.equal(panel.classList.contains('is-compact'), true);
+    assert.ok(findButton(banner, '退出引导，返回正式库'));
+    await click(findButton(banner, '仅收起说明'));
+    assert.equal(panel.hidden, true);
+    assert.equal(ui.api.getContext().practiceId, 'practice-one', 'hiding does not change the library');
+    for (let cycle = 0; cycle < 2; cycle++) {
+      await click(findButton(banner, '退出引导，返回正式库'));
+      assert.equal(ui.api.getContext().practiceId, '');
+      assert.equal(ui.state.status, 'paused');
+      assert.equal(panel.hidden, true);
+      assert.equal(findButton(banner, '退出引导，返回正式库'), undefined);
+      assert.deepEqual(ui.state.progress, progress);
+      if (!cycle) await ui.tutorial.open();
+    }
+    assert.ok(ui.requests.every(row => !['reset', 'start'].includes(row.action)));
+    const reloaded = await tutorialBrowser({ progress, initialContext: ui.api.getContext().practiceId, status: ui.state.status });
+    assert.equal(reloaded.api.getContext().practiceId, '');
+    assert.equal(descend(reloaded.body).find(node => node.classList.contains('onboarding-panel')).hidden, true);
+    assert.equal(findButton(reloaded.body, '退出引导，返回正式库'), undefined);
+    ui.tutorial.dispose(); reloaded.tutorial.dispose();
+  }
+});
+
+test('banner exit respects unsaved input cancellation and busy practice work', async () => {
+  const ui = await tutorialBrowser({ initialContext: 'practice-one', status: 'active' });
+  const banner = descend(ui.body).find(node => node.classList.contains('practice-banner'));
+  const requests = ui.requests.length;
+  ui.adapter.beforeContextChange = async () => false;
+  await click(findButton(banner, '退出引导，返回正式库'));
+  assert.equal(ui.requests.length, requests);
+  assert.equal(ui.api.getContext().practiceId, 'practice-one');
+  ui.setState({ busy: true }); await ui.tutorial.refresh();
+  assert.equal(findButton(banner, '退出引导，返回正式库').disabled, true);
+  ui.setState({ busy: false }); await ui.tutorial.refresh();
+  ui.adapter.beforeContextChange = async () => true;
+  await click(findButton(banner, '退出引导，返回正式库'));
+  assert.equal(ui.api.getContext().practiceId, '');
+  ui.tutorial.dispose();
+});
+
+test('missing stored practice safely returns to main while transient failures keep explicit context', async () => {
+  for (const missing of ['mismatch', 'not-found']) {
+    const ui = await tutorialBrowser({ initialContext: 'missing-practice', stateRead: missing === 'not-found' ? async () => { throw Object.assign(new Error('missing'), { code: 'PRACTICE_NOT_FOUND' }); } : undefined });
+    assert.equal(ui.api.getContext().practiceId, '');
+    assert.match(ui.toasts.textContent, /已返回正式库/);
+    assert.deepEqual(ui.requests.map(row => row.action), ['state']);
+    ui.tutorial.dispose();
+  }
+  await assert.rejects(tutorialBrowser({ initialContext: 'practice-one', stateRead: async () => { throw Object.assign(new Error('offline'), { code: 'REQUEST_FAILED' }); } }), /offline/);
+});
 
 test('onboarding start resume pause and shared settings allow cancelling before any library change', async () => {
   for (const action of ['start', 'resume', 'pause', 'settings']) {

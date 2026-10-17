@@ -15,6 +15,7 @@ import { createLifecycle } from './knowledge-lifecycle.mjs';
 import { createChatgptBridge } from './chatgpt.mjs';
 import { createChatgptUndo } from './chatgpt-undo.mjs';
 import { buildUsageReport } from './usage.mjs';
+import { callPurpose, callPurposes } from './call-purpose.mjs';
 import { structureBasis, structureRecord, structureView } from './source-structure.mjs';
 import { createSourceFiles } from './source-files.mjs';
 import { assertTextSource, processingText } from './attachments.mjs';
@@ -187,8 +188,16 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     else fail('调用恢复操作无效。');
     return callRecovery();
   }
-  const usageReport = ({ period, capability, model } = {}) => {
-    const config = settings(), report = buildUsageReport(store.records('calls'), { period, capability, model, timezone: config.timezone });
+  const callsWithPurpose = () => store.records('calls').map(call => {
+    const ledger = typeof call.id === 'string' ? store.get('callLedger', call.id) : null;
+    const jobId = typeof ledger?.jobId === 'string' ? ledger.jobId : '';
+    const job = jobId ? store.get('jobs', jobId) : null;
+    const request = jobId.startsWith('ask:') ? store.get('askRequests', jobId.slice(4)) : null;
+    const purpose = callPurpose(call, { ledger, job, request });
+    return { ...call, purpose, purposeLabel: callPurposes[purpose] || '历史用途未记录' };
+  });
+  const usageReport = ({ period, capability, model, purpose } = {}) => {
+    const config = settings(), report = buildUsageReport(callsWithPurpose(), { period, capability, model, purpose, timezone: config.timezone });
     // Malformed imported dates must not turn a broken budget ledger into a zero balance.
     const budget = report.invalidDateCalls ? { unavailable: true } : usage();
     return { ...report, budget: { ...budget, dailyCallLimit: config.ai.dailyCallLimit, monthlyBudget: config.ai.monthlyBudget } };
@@ -630,7 +639,8 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
       else if (!settings().embedding.enabled) limitations.push('语义服务未配置，当前使用中文关键词查找。');
       else {
         try {
-          const queryVec = (await ai.embed({ texts: [q], privacy: 'cloud' })).vectors[0];
+          const embedQuery = () => ai.embed({ texts: [q], privacy: 'cloud' });
+          const queryVec = (await (ai.withPurpose ? ai.withPurpose('retrieval', embedQuery) : embedQuery())).vectors[0];
           const notes = store.searchIndex.candidates(q, options, { all: true }).map(r => r.note);
           const allowed = new Map(notes.filter(n => privacyFor(n) === 'cloud').map(n => [n.id,n]));
           const chunks = store.db.prepare('SELECT * FROM index_chunks WHERE vector IS NOT NULL AND model=?').all(settings().embedding.model);
@@ -740,7 +750,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   const askBasis = (input, prepared) => hash(JSON.stringify([input, prepared.references]));
   const askCalls = id => (ai.getCallEvidence ? ai.getCallEvidence(`ask:${id}`) : callLedger.evidence(`ask:${id}`)).filter(call => call.phase !== 'cancelled');
   const askContext = (id, step, input, operation, basisHash) => ai.withCallContext
-    ? ai.withCallContext({ key: `ask:${id}:${step}`, jobId: `ask:${id}`, turnId: `${hash(JSON.stringify(input))}${basisHash ? `:${basisHash}` : ''}`, singleRequest: true }, operation) : operation();
+    ? ai.withCallContext({ key: `ask:${id}:${step}`, jobId: `ask:${id}`, turnId: `${hash(JSON.stringify(input))}${basisHash ? `:${basisHash}` : ''}`, purpose: input.mode, singleRequest: true }, operation) : operation();
   function checkAskCalls(request, { fresh = false } = {}) {
     const calls = askCalls(request.id);
     if (calls.some(call => call.phase !== 'accounted')) fail('原请求仍有未决调用，请先完成本地记账或核对；备份中的完成状态不会替代本机证据。', 'CALL_RECOVERY_REQUIRED', 409);
@@ -1138,7 +1148,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     const execute = async () => { if(job.type==='process')await (ai.withBudget ? ai.withBudget({limit:settings().ai.sourceCallLimit,sourceId:job.payload.noteId},()=>processSource(job,controller.signal)) : processSource(job,controller.signal));else if(job.type==='title')await (ai.withBudget ? ai.withBudget({limit:settings().ai.sourceCallLimit,sourceId:job.payload.noteId},()=>generateSourceTitle(job,controller.signal)) : generateSourceTitle(job,controller.signal));else if(job.type==='structure')await (ai.withBudget ? ai.withBudget({limit:settings().ai.sourceCallLimit,sourceId:job.payload.noteId},()=>analyzeSourceStructure(job,controller.signal)) : analyzeSourceStructure(job,controller.signal));else if(job.type==='grade')await grade(job,controller.signal);else if(job.type==='relate')await (ai.withBudget ? ai.withBudget({limit:settings().ai.sourceCallLimit,sourceId:job.payload.noteId},()=>relate(job,controller.signal)) : relate(job,controller.signal));else if(job.type==='discover')await (ai.withBudget ? ai.withBudget({limit:settings().ai.sourceCallLimit,sourceId:'discovery'},()=>discover(job,controller.signal)) : discover(job,controller.signal));else if(job.type==='index')await rebuildIndex(job,controller.signal);else if(job.type==='topics')await suggestTopics(job,controller.signal);else fail('未知任务类型。'); };
     try {
       if (job.outboundIntentVersion !== 1 && !localJob(job)) fail('旧任务尚未按当前操作规则启动，请在任务页主动重试。', 'OUTBOUND_INTENT_REQUIRED');
-      const context = { key: 'job:' + job.id + ':' + (job.payload.hash || job.payload.turnId || ''), jobId: job.id, turnId: job.payload.turnId, singleRequest: job.type === 'grade' };
+      const context = { key: 'job:' + job.id + ':' + (job.payload.hash || job.payload.turnId || ''), jobId: job.id, turnId: job.payload.turnId, purpose: job.type, singleRequest: job.type === 'grade' };
       if (ai.withCallContext) await ai.withCallContext(context, execute); else await execute();
       if(store.get('jobs',job.id)?.state!=='cancelled')putJob({...job,state:'done',progress:100});
     }
@@ -1168,7 +1178,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     const chunks=store.db.prepare('SELECT COUNT(*) count,SUM(CASE WHEN vector IS NOT NULL AND model=? THEN 1 ELSE 0 END) vectors FROM index_chunks').get(settings().embedding.model);
     const pending=store.missingEmbeddings({model:settings().embedding.model,noteIds:allowed.map(n=>n.id)}).length;
     const pendingLinks=store.pendingManagedLinks().map(p=>({id:p.id,title:store.read(p.id).title,conflict:p.conflict}));
-    return {usage:usage(),calls:store.records('calls').slice(0,100),index:{...chunks,pending,notes:notes.length,method:'中文关键词与可选语义检索；现有片段保留，缺失向量需手动更新，保存资料不会自动外发'},mcp:{...settings().mcp,transport:'stdio',tools:['search_knowledge','read_note','read_source','related_knowledge','propose_change'],events:store.records('mcpCalls').slice(0,30)},storage:{vaultDir:store.vaultDir,dataDir:store.dataDir,conflicts:store.conflicts,pendingLinks,retention:'删除移除当前文件与检索缓存；历史版本和你此前导出的备份仍保留。JSON备份包含Markdown、运行记录及笔记/历史引用的受管理附件；完整JSON最多100 MB（100,000,000字节）。外部附件和.obsidian仍需另存整个Vault；撤销上传不删除字节。'},sessions:store.records('sessions').slice(0,20)};
+    return {usage:usage(),calls:callsWithPurpose().slice(0,100),index:{...chunks,pending,notes:notes.length,method:'中文关键词与可选语义检索；现有片段保留，缺失向量需手动更新，保存资料不会自动外发'},mcp:{...settings().mcp,transport:'stdio',tools:['search_knowledge','read_note','read_source','related_knowledge','propose_change'],events:store.records('mcpCalls').slice(0,30)},storage:{vaultDir:store.vaultDir,dataDir:store.dataDir,conflicts:store.conflicts,pendingLinks,retention:'删除移除当前文件与检索缓存；历史版本和你此前导出的备份仍保留。JSON备份包含Markdown、运行记录及笔记/历史引用的受管理附件；完整JSON最多100 MB（100,000,000字节）。外部附件和.obsidian仍需另存整个Vault；撤销上传不删除字节。'},sessions:store.records('sessions').slice(0,20)};
   }
   function backup(){const config=settings(), result={...store.backup(),...(practice?{purpose:practicePurpose}:{}),preferences:practice?Object.fromEntries(practicePreferences.map(key=>[key,config[key]])):config};assertBackupSize(result);return result;}
   function restore({backup:input,preview=true,token}) {
