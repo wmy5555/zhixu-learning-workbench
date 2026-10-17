@@ -21,6 +21,43 @@ test('file picker keeps specific MIME and rejects unsupported generic-binary for
   }
 });
 
+test('unsupported file errors are Chinese and list only the configured formats', async () => {
+  const options = [];
+  const vendor = { default: {}, registerPlugin() {}, create(_input, value) { options.push(value); return { element: { isConnected: true, after() {} } }; } };
+  const context = vm.createContext({ vendor, MAX_FILE_BYTES, document: { body: {} }, MutationObserver: class { observe() {} },
+    crypto: { randomUUID: () => 'test-upload-id' }, el: () => ({ textContent: '', set innerHTML(_value) { assert.fail('upload errors must be text'); } }),
+    uploadAttachment() { return { abort() {} }; },
+  });
+  const source = fs.readFileSync(new URL('../public/source-files.mjs', import.meta.url), 'utf8')
+    .replace(/^import .*;\s*$/gm, '').replaceAll('export ', '')
+    .replace(/import\('\/vendor\/[^']+'\)/g, 'Promise.resolve(vendor)');
+  const createPicker = vm.runInContext(source + '\ncreateFilePicker;', context);
+  await createPicker({});
+  await createPicker({}, { imagesOnly: true });
+
+  const [allFiles, images] = options;
+  assert.equal(allFiles.labelFileTypeNotAllowed, '不支持此文件格式。');
+  assert.equal(allFiles.fileValidateTypeLabelExpectedTypes, '允许的格式：{allTypes}');
+  assert.deepEqual(Array.from(allFiles.acceptedFileTypes), [...new Set(Object.values(fileAccept))]);
+  assert.deepEqual({ ...allFiles.fileValidateTypeLabelExpectedTypesMap }, {
+    'image/png': 'PNG 图片（.png）',
+    'image/jpeg': 'JPEG 图片（.jpg/.jpeg）',
+    'image/gif': 'GIF 图片（.gif）',
+    'image/webp': 'WebP 图片（.webp）',
+    'application/pdf': 'PDF 文档（.pdf）',
+    'application/msword': 'Word 文档（.doc）',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'Word 文档（.docx）',
+  });
+  const visibleCopy = allFiles.labelFileTypeNotAllowed + allFiles.fileValidateTypeLabelExpectedTypes + Object.values(allFiles.fileValidateTypeLabelExpectedTypesMap).join(' ');
+  assert.doesNotMatch(visibleCopy, /image\/|application\//);
+  assert.deepEqual(Array.from(images.acceptedFileTypes), [...new Set(Object.values(fileAccept).filter(mime => mime.startsWith('image/')))]);
+  assert.deepEqual(Object.keys(images.fileValidateTypeLabelExpectedTypesMap).sort(), Array.from(images.acceptedFileTypes).sort());
+  const styles = fs.readFileSync(new URL('../public/styles.css', import.meta.url), 'utf8');
+  const statusStyle = styles.match(/\.filepond--file-status-sub\s*\{([^}]*)\}/)?.[1] || '';
+  assert.match(statusStyle, /white-space:\s*normal/);
+  assert.match(statusStyle, /overflow-wrap:\s*anywhere/);
+});
+
 test('picker shows server rejection as plain text and preserves other queue errors on retry', async () => {
   let options, status;
   const uploads = [], failures = [];

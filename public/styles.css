@@ -571,6 +571,8 @@ input[type="color"] { height: 44px; padding: 5px 8px; cursor: pointer; }
 .attachment-card { padding: 12px 0; overflow-wrap: anywhere; }
 .attachment-card a { display: inline-block; margin-right: 16px; }
 .source-attachments { min-width: 0; }
+.filepond--file-status { min-width: 0; }
+.filepond--file-status-sub { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .extracted-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 60vh; overflow: auto; }
 
 /* Persistent connection feedback: text and icon supplement high-contrast borders. */
