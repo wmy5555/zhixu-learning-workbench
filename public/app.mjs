@@ -110,7 +110,13 @@ function sourceBodyPreview(value, length = 420) {
   return text.length > length ? `${text.slice(0, length)}\n…` : text;
 }
 
-function conversationReading(note) { return Boolean(note?.meta?.chatgptCapture || note?.meta?.chatgptSync); }
+function conversationReading(note) {
+  if (note?.meta?.chatgptCapture || note?.meta?.chatgptSync) return true;
+  const body = String(note?.body || '');
+  return note?.kind === 'source'
+    && /^## 会话原文（按收到的顺序保留）\s*$/m.test(body)
+    && /^### \d+\. (?:用户|ChatGPT)\s*$/m.test(body);
+}
 function sourceReadingBody(value, className = '', emptyText = '暂无原文', note = null) {
   const images = [note?.meta?.sourceFile, ...(note?.meta?.attachments || [])].filter(file => file?.kind === 'image');
   return renderMarkdown(value, { className: `prose ${className}`.trim(), emptyText,
@@ -868,6 +874,7 @@ function renderSourceGroupDrawer(source) {
   const content = el("div", { class: "page-stack source-group-drawer", dataset: { sourceId: source.id } });
   const headActions = el("div", { class: "form-actions" }, [
     button("编辑原始资料", { kind: "primary", onClick: () => renderNoteEditor(source, { returnToSourceId: source.id }) }),
+    button("全屏阅读原文", { onClick: () => openSourceReader(source) }),
     button("查看版本", { disabled: isMobilePrototype(), title: isMobilePrototype() ? "样机暂不支持查看版本" : "", onClick: () => renderHistory(source, { returnToSourceId: source.id }) }),
     button("删除", { kind: "danger", disabled: isMobilePrototype(), title: isMobilePrototype() ? "样机暂不支持删除" : "", onClick: () => deleteNote(source) }),
   ]);
@@ -925,6 +932,29 @@ function renderSourceGroupDrawer(source) {
   clear(refs.drawerBody).append(content);
   refs.drawerBody.querySelectorAll('[data-structure-submit]').forEach(updateStructureButton);
   refs.drawerBody.querySelectorAll('.structure-job-status').forEach(updateStructureStatus);
+}
+
+function openSourceReader(source) {
+  const returnFocus = document.activeElement;
+  const backdrop = el('div', { class: 'source-reader-backdrop' });
+  const dialog = el('section', { class: 'source-reader-dialog', role: 'dialog', ariaModal: 'true', ariaLabel: `原始资料全文：${source.title || '未命名原始资料'}` });
+  const close = () => {
+    backdrop.remove();
+    if (returnFocus?.isConnected) returnFocus.focus();
+  };
+  const closeButton = button('关闭全屏阅读', { kind: 'quiet', onClick: close });
+  dialog.append(
+    el('header', { class: 'source-reader-header' }, [
+      el('div', {}, [el('p', { class: 'eyebrow', text: '原始资料全文' }), el('h2', { text: source.title || '未命名原始资料' })]),
+      el('div', { class: 'source-reader-actions' }, [el('small', { text: `${String(source.body || '').length} 字` }), closeButton]),
+    ]),
+    el('div', { class: 'source-reader-body' }, sourceReadingBody(source.body, '', '暂无原文', source)),
+  );
+  backdrop.addEventListener('click', event => { if (event.target === backdrop) close(); });
+  backdrop.addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); close(); } });
+  backdrop.append(dialog);
+  document.body.append(backdrop);
+  closeButton.focus();
 }
 
 function updateStructureStatus(control) {
