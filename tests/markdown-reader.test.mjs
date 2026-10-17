@@ -56,6 +56,17 @@ test('captured messages unwrap once for reading without changing original text o
   assert.equal(tags(render(body), 'section').length, 0);
 });
 
+test('captured top-level text envelopes render as prose while nested code remains code', () => {
+  const { render } = browser();
+  const body = '## 收集范围\n\n```text\n普通说明 **重点**\n```\n\n## 会话原文（按收到的顺序保留）\n\n### 1. ChatGPT\n\n````text\n## 正文标题\n\n```js\nconst answer = 42;\n```\n````';
+  const root = render(body, { conversation: true });
+  assert.equal(tags(root, 'section').length, 2);
+  assert.equal(tags(root, 'strong')[0].textContent, '重点');
+  assert.equal(tags(root, 'h2').at(-1).textContent, '正文标题');
+  assert.equal(tags(root, 'pre').length, 1);
+  assert.equal(tags(root, 'pre')[0].textContent, 'const answer = 42;\n');
+});
+
 test('conversation rendering keeps malformed envelopes literal and untrusted content inert', () => {
   const { render } = browser();
   const prefix = '## 会话原文（按收到的顺序保留）\n\n### 1. ChatGPT\n\n';

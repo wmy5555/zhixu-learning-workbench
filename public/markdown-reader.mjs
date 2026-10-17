@@ -197,6 +197,7 @@ function blockStart(lines, index) {
 function blocks(lines, depth = 0, imageResolver, conversation = false, presentation = false) {
   const textInline = text => inline(text, 0, true, { remaining: text.length * 4 + INLINE_SCAN_LIMIT, imageResolver, presentation });
   if (depth >= MAX_DEPTH) return [el('p', { class: 'markdown-fallback' }, inline(lines.join('\n'), MAX_DEPTH))];
+  const capturedConversation = conversation && lines.some(line => /^ {0,3}##[ \t]+会话原文（按收到的顺序保留）[ \t]*$/.test(line));
   const children = [];
   let transcript = false, message = false;
   for (let i = 0; i < lines.length;) {
@@ -220,8 +221,9 @@ function blocks(lines, depth = 0, imageResolver, conversation = false, presentat
       while (i < lines.length && !closesFence(lines[i], opening)) code.push(lines[i++]);
       const closed = i < lines.length;
       if (closed) i++;
-      if (conversation && transcript && message && closed && opening.language === 'text') {
-        // Only unwrap the generated message envelope, once. Inner code stays code.
+      if (capturedConversation && depth === 0 && closed && opening.language === 'text') {
+        // ChatGPT captures use top-level text fences as storage envelopes, not
+        // as code samples. Unwrap those once; nested fences remain literal code.
         children.push(el('section', { class: 'conversation-message' }, blocks(code, depth + 1, imageResolver, false, true)));
         message = false;
         continue;
