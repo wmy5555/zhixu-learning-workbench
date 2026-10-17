@@ -3,6 +3,17 @@ import { request, uploadAttachment, attachmentUrl } from './api.mjs';
 import { MAX_FILE_BYTES } from './source-file-limits.mjs';
 
 export const fileAccept = { 'png': 'image/png', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'gif': 'image/gif', 'webp': 'image/webp', 'pdf': 'application/pdf', 'doc': 'application/msword', 'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
+const fileFormatNames = { png: 'PNG 图片', jpg: 'JPEG 图片', jpeg: 'JPEG 图片', gif: 'GIF 图片', webp: 'WebP 图片', pdf: 'PDF 文档', doc: 'Word 文档', docx: 'Word 文档' };
+function acceptedTypeLabels(acceptedTypes) {
+  const groups = new Map();
+  for (const [extension, mime] of Object.entries(fileAccept)) {
+    if (!acceptedTypes.includes(mime)) continue;
+    const group = groups.get(mime) || { name: fileFormatNames[extension] || '文件', extensions: [] };
+    group.extensions.push(extension);
+    groups.set(mime, group);
+  }
+  return Object.fromEntries([...groups].map(([mime, group]) => [mime, `${group.name}（.${group.extensions.join('/.')}）`]));
+}
 export function pickerFileType(file, detected) {
   const mime = String(detected || '').toLowerCase();
   // Some Windows installations report Office files as generic binary data.
@@ -60,6 +71,9 @@ export async function createFilePicker(input, { imagesOnly = false, onChange = (
     allowPaste: false, allowDrop: true, dropOnPage: false, dropOnElement: true, allowDirectoriesOnly: false,
     allowImagePreview: true, imagePreviewMaxFileSize: '2MB', imagePreviewMaxHeight: 160,
     acceptedFileTypes: acceptedTypes,
+    labelFileTypeNotAllowed: '不支持此文件格式。',
+    fileValidateTypeLabelExpectedTypes: '允许的格式：{allTypes}',
+    fileValidateTypeLabelExpectedTypesMap: acceptedTypeLabels(acceptedTypes),
     // Folder drops are expanded by FilePond; reject their nested paths before upload.
     beforeAddFile: item => typeof item.source !== 'string' && !String(item.relativePath || '').replace(/^\//, '').includes('/'),
     fileValidateTypeDetectType: (file, detected) => Promise.resolve(pickerFileType(file, detected)),
