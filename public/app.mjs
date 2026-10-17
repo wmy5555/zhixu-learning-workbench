@@ -125,8 +125,8 @@ function historyReadingBody(note, version) {
   const frontmatter = raw.match(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/);
   const body = version.body ?? (frontmatter ? raw.slice(frontmatter[0].length) : raw);
   return el('div', { class: 'history-reading-body' }, [
-    frontmatter ? el('pre', { class: 'mono-block history-metadata', text: frontmatter[0] }) : null,
     renderMarkdown(body, { className: 'prose', emptyText: '此版本没有可显示的正文快照', conversation: conversationReading(note) }),
+    frontmatter ? el('details', {}, [el('summary', { text: '查看版本属性' }), el('pre', { class: 'mono-block history-metadata', text: frontmatter[0] })]) : null,
   ]);
 }
 let onboarding = null;
