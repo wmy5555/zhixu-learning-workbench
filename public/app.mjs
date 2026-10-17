@@ -2726,36 +2726,60 @@ function diagnosticDetails(title, value) {
   return el("details", { class: "diagnostic-details" }, [el("summary", { text: title }), el("pre", { text: JSON.stringify(value, null, 2) })]);
 }
 
+function diagnosticMetric(label, value, help) {
+  return el("div", { class: "diagnostic-metric" }, [el("dt", { text: label }), el("dd", {}, [el("span", { class: "diagnostic-number", text: String(diagnosticCount(value)) }), el("small", { text: help })])]);
+}
+
+function diagnosticStatus(label, status, explanation, tone = "neutral") {
+  return el("div", { class: "diagnostic-status" }, [
+    el("div", { class: "diagnostic-status-heading" }, [el("strong", { text: label }), el("span", { class: "diagnostic-pill", dataset: { tone }, text: status })]),
+    el("p", { text: explanation }),
+  ]);
+}
+
 function storageSummary(storage, index) {
   const practice = Boolean(api.getContext?.().practiceId);
   const conflicts = Array.isArray(storage.conflicts) ? storage.conflicts.length : null;
   const links = Array.isArray(storage.pendingLinks) ? storage.pendingLinks.length : null;
   return el("div", { class: "diagnostic-summary" }, [
-    el("p", { class: "notice info", text: practice ? "当前查看的是新手练习库，以下存储与索引属于练习资料。" : "当前查看的是正式知识库。" }),
-    el("p", { text: "原始资料和知识笔记保存在本机文件夹；搜索索引可重新生成。" }),
-    el("p", { text: `内容片段：${diagnosticCount(index.count)}；已建立语义索引的片段：${diagnosticCount(index.vectors)}；可补建语义索引的片段：${diagnosticCount(index.pending)}。这些数量不是资料篇数。` }),
-    el("p", { text: conflicts === null ? "文件冲突状态未知。" : conflicts ? `有 ${conflicts} 项文件冲突，请到“文件冲突”核对后处理。` : "未发现文件冲突。" }),
-    el("p", { text: links === null ? "笔记链接更新状态未知。" : links ? `有 ${links} 篇笔记需要核对链接，请先预览下方更新内容。` : "没有待更新的笔记链接。" }),
-    el("p", { class: "fine-print", text: storage.retention || "删除和备份保留范围未知；操作前请先核对备份与恢复说明。" }),
-    diagnosticDetails("查看存储与索引技术详情", { storage, index }),
+    el("p", { class: "diagnostic-context", text: practice ? "当前查看的是新手练习库，以下存储与索引属于练习资料。" : "当前查看的是正式知识库。" }),
+    el("dl", { class: "diagnostic-metrics", "aria-label": "索引内容片段统计" }, [
+      diagnosticMetric("内容片段", index.count, "本地检索内容"),
+      diagnosticMetric("已建语义索引", index.vectors, "已具备语义向量"),
+      diagnosticMetric("可补建", index.pending, "允许补建的片段"),
+    ]),
+    el("p", { class: "diagnostic-caption", text: "按内容片段计数，不是资料篇数；一篇资料可能包含多个片段。" }),
+    el("div", { class: "diagnostic-health" }, [
+      diagnosticStatus("文件冲突", conflicts === null ? "未知" : conflicts ? conflicts + " 项待处理" : "无冲突", conflicts === null ? "文件冲突状态未知。" : conflicts ? "请到“文件冲突”核对后处理。" : "未发现文件冲突。", conflicts === null || conflicts ? "attention" : "neutral"),
+      diagnosticStatus("笔记链接", links === null ? "未知" : links ? links + " 篇待核对" : "无需更新", links === null ? "笔记链接更新状态未知。" : links ? "请先预览下方更新内容。" : "没有待更新的笔记链接。", links === null || links ? "attention" : "neutral"),
+    ]),
   ]);
 }
 
 function mcpSummary(mcp) {
   const setting = (value, yes, no) => value === true ? yes : value === false ? no : "未知，请到接入设置核对。";
+  const label = (value, yes, no) => value === true ? yes : value === false ? no : "未知";
   const tools = { search_knowledge: "搜索知识", read_note: "阅读知识笔记", read_source: "阅读原始资料", related_knowledge: "查找相关知识", propose_change: "提交待确认的修改建议" };
   const events = Array.isArray(mcp.events) ? mcp.events.length : null;
   const practice = Boolean(api.getContext?.().practiceId);
   return el("div", { class: "diagnostic-summary" }, [
-    practice ? el("p", { class: "notice info", text: "当前是练习库视图；以下为该视图返回的权限状态，不能据此判断正式库的接入设置。请返回正式库核对。" }) : null,
-    el("p", { text: `本机应用接入：${setting(mcp.enabled, "已开启，允许本机客户端调用知识工具。", "已关闭，本机客户端不能调用知识工具。")}` }),
-    el("p", { text: `本机修改建议：${mcp.enabled === false ? "本机接入已关闭，当前不能提交建议。" : setting(mcp.allowProposals, "已许可；本机接入开启后可提交，修改仍须你确认后生效。", "未许可；本机接入开启时也只能读取。")}` }),
-    el("p", { text: `ChatGPT 会话收集：${setting(mcp.chatgptEnabled, "入口已开启，可按连接指南配置会话收集。", "入口已关闭，不能通过此入口新增会话资料。")}` }),
-    el("p", { text: `ChatGPT 读取知识库：${mcp.chatgptEnabled === false ? "接入入口已关闭，当前不能读取。" : setting(mcp.chatgptAllowRead, "已授权，包含仅本地资料；读取内容会进入 ChatGPT 上下文。", "未授权；开启会话收集本身不授予读取权限。")}` }),
-    el("p", { class: "notice info", text: "客户端是否已配置：未知。ChatGPT 网页实际连接：尚未验证。开关状态和本机调用记录都不能证明网页已连通；需要使用时，请按连接指南完成一次实际收集验证。" }),
-    el("p", { text: Array.isArray(mcp.tools) ? mcp.tools.length ? `本机工具功能（能否使用取决于上方权限）：${mcp.tools.map(name => tools[name] || "其他功能（见技术详情）").join("、")}。` : "当前未列出本机工具功能。" : "本机工具功能未知。" }),
-    el("p", { text: events === null ? "本机调用记录未知。" : events ? `当前返回 ${events} 条本机调用记录，详情可展开查看；这不是 ChatGPT 网页连接证明。` : "暂无本机调用记录；这不能判断是否配置过客户端。" }),
-    el("p", { class: "fine-print", text: "MCP 是外部应用使用知识工具的入口，模型 API 需单独配置。会话导入不覆盖已有资料；修改已有笔记仍须确认。" }),
+    practice ? el("p", { class: "diagnostic-context", text: "当前是练习库视图；以下为该视图返回的权限状态，不能据此判断正式库的接入设置。请返回正式库核对。" }) : null,
+    el("div", { class: "diagnostic-status-list" }, [
+      diagnosticStatus("本机应用接入", label(mcp.enabled, "已开启", "已关闭"), setting(mcp.enabled, "允许本机客户端调用知识工具。", "本机客户端不能调用知识工具。")),
+      diagnosticStatus("本机修改建议", mcp.enabled === false ? "当前不可用" : label(mcp.allowProposals, "已许可", "未许可"), mcp.enabled === false ? "本机接入已关闭，当前不能提交建议。" : setting(mcp.allowProposals, "本机接入开启后可提交，修改仍须你确认后生效。", "本机接入开启时也只能读取。")),
+      diagnosticStatus("ChatGPT 会话收集", label(mcp.chatgptEnabled, "入口已开启", "入口已关闭"), setting(mcp.chatgptEnabled, "可按连接指南配置会话收集。", "不能通过此入口新增会话资料。")),
+      diagnosticStatus("ChatGPT 读取知识库", mcp.chatgptEnabled === false ? "当前不可用" : label(mcp.chatgptAllowRead, "已授权", "未授权"), mcp.chatgptEnabled === false ? "接入入口已关闭，当前不能读取。" : setting(mcp.chatgptAllowRead, "包含仅本地资料；读取内容会进入 ChatGPT 上下文。", "开启会话收集本身不授予读取权限。"), mcp.chatgptEnabled !== false && mcp.chatgptAllowRead === true ? "attention" : "neutral"),
+    ]),
+    el("section", { class: "diagnostic-connection", "aria-label": "实际连接验证" }, [
+      el("div", { class: "diagnostic-status-heading" }, [el("h3", { text: "实际连接" }), el("span", { class: "diagnostic-pill", dataset: { tone: "attention" }, text: "尚未验证" })]),
+      el("p", { text: "客户端是否已配置：未知。开关状态和本机调用记录都不能证明网页已连通。" }),
+      el("a", { href: "/chatgpt-setup.html", target: "_blank", rel: "noopener", text: "按指南完成实际收集验证 →" }),
+    ]),
+    el("p", { class: "diagnostic-caption", text: events === null ? "本机调用记录未知。" : events ? "当前返回 " + events + " 条本机调用记录，详情可展开查看；这不是 ChatGPT 网页连接证明。" : "暂无本机调用记录；这不能判断是否配置过客户端。" }),
+    el("details", { class: "diagnostic-details" }, [el("summary", { text: "工具功能与使用说明" }),
+      el("p", { class: "diagnostic-caption", text: Array.isArray(mcp.tools) ? mcp.tools.length ? "本机工具功能（能否使用取决于上方权限）：" + mcp.tools.map(name => tools[name] || "其他功能（见技术详情）").join("、") + "。" : "当前未列出本机工具功能。" : "本机工具功能未知。" }),
+      el("p", { class: "diagnostic-caption", text: "MCP 是外部应用使用知识工具的入口，模型 API 需单独配置。会话导入不覆盖已有资料；修改已有笔记仍须确认。" }),
+    ]),
     diagnosticDetails("查看 MCP 技术详情与调用记录", mcp),
   ]);
 }
@@ -2771,14 +2795,20 @@ async function diagnosticsPanel() {
     data.usageNotice ? el("p", { class: "notice info", text: data.usageNotice }) : null,
     el("section", { class: "stats" }, [statCard("今日调用", usage.callsToday ?? calls.length, "实际记录"), statCard("本月费用", usage.costMonth === null || usage.costMonth === undefined ? "未知" : usage.costMonth, "供应商价格未知时不估算"), statCard("索引片段", diagnosticCount(index.count), "按内容片段计数"), statCard("MCP", "待实际验证", "开关不代表网页已连通")]),
     el("section", { class: "panel soft", dataset: { tour: "system-diagnostics" } }, [sectionHeading("系统怎样工作", "只展示可核对的输入、工具调用与结果，不展示模型隐藏推理"), el("div", { class: "step-list" }, [step("1. 切分与索引", "本地资料被拆成检索片段；关键词索引可离线使用，向量索引需由你主动补建。", true), step("2. 召回候选", "关键词与可选语义结果分别返回，再合并为有限候选。", true), step("3. 形成回答", "只有实际召回且可用的材料进入回答，并返回引用与限制。", true), step("4. MCP 调用", "外部客户端共用知识服务。ChatGPT 可按独立许可读取或新增会话资料；修改已有笔记仍需确认。", true)])]),
-    el("div", { class: "two-column" }, [
-      el("section", { class: "panel", dataset: { tour: "system-index" } }, [sectionHeading("存储与索引", "查看本机资料保存与搜索准备情况"), storageSummary(storage, index),
+    el("div", { class: "two-column diagnostic-grid" }, [
+      el("section", { class: "panel diagnostic-panel", dataset: { tour: "system-index" } }, [sectionHeading("存储与索引", "原文保存在本机文件夹，搜索索引可重建"), storageSummary(storage, index),
+        el('section', { class: 'diagnostic-action' }, [el('h3', { text: '本地全文检索' }),
         el('p', { class: 'fine-print', text: '本地全文检索自动同步保存和外部文件变化。重建全文索引会全量校对 Markdown，不调用模型，也不清除已有向量。' }),
-        button('重建本地全文索引', { onClick: async () => { try { const result=await api.rebuildLocalSearch(); toast(`本地全文索引已重建：${result.count} 条资料，${result.conflicts} 项冲突。`, 'success'); } catch(error) { handleError(error); } } }),
-        el("p", { class: "fine-print", text: "保存知识只更新本地索引。点击补建后，本次所需且缺少向量的片段会发送给已配置的嵌入服务，可能产生费用。" }),
+        button('重建本地全文索引', { onClick: async () => { try { const result=await api.rebuildLocalSearch(); toast(`本地全文索引已重建：${result.count} 条资料，${result.conflicts} 项冲突。`, 'success'); } catch(error) { handleError(error); } } })]),
+        el("section", { class: "diagnostic-action" }, [el("h3", { text: "语义索引" }),
+        el("p", { class: "fine-print diagnostic-risk", text: "保存知识只更新本地索引。点击补建后，本次所需且缺少向量的片段会发送给已配置的嵌入服务，可能产生费用。" }),
         el("div", { class: "form-actions" }, [button("只补建缺失向量", { kind: "primary", disabled: !number(index.pending), onClick: async () => { try { const result = await api.updateIndex(); toast(`补建任务已${labels.state(result.state)}`, "success"); } catch (error) { handleError(error); } } }), button("全量重建索引", { onClick: async () => { try { const result = await api.rebuildIndex(); toast(`索引任务已${labels.state(result.state)}`, "success"); } catch (error) { handleError(error); } } })]),
-        asArray(storage.pendingLinks).length ? el("section", {}, [sectionHeading("待更新的 Obsidian 链接", "文件改名后，先核对预览再更新引用"), el("div", { class: "list" }, storage.pendingLinks.map(note => el("div", { class: "list-item no-icon" }, [el("strong", { text: note.title }), button("核对链接", { kind: "text compact", onClick: () => previewNoteLinks(note.id) })])))]) : null]),
-      el("section", { class: "panel" }, [sectionHeading("外部应用接入（MCP）", "区分接入许可与实际连接"), mcpSummary(mcp), el("a", { href: "/chatgpt-setup.html", target: "_blank", rel: "noopener", text: "ChatGPT 连接与验收步骤" })]),
+        ]),
+        asArray(storage.pendingLinks).length ? el("section", { class: "diagnostic-links" }, [sectionHeading("待更新的 Obsidian 链接", "文件改名后，先核对预览再更新引用"), el("div", { class: "list" }, storage.pendingLinks.map(note => el("div", { class: "list-item no-icon" }, [el("strong", { text: note.title }), button("核对链接", { kind: "text compact", onClick: () => previewNoteLinks(note.id) })])))]) : null,
+        el("p", { class: "diagnostic-caption diagnostic-retention", text: storage.retention || "删除和备份保留范围未知；操作前请先核对备份与恢复说明。" }),
+        diagnosticDetails("查看存储与索引技术详情", { storage, index }),
+      ]),
+      el("section", { class: "panel diagnostic-panel" }, [sectionHeading("外部应用接入（MCP）", "接入许可与实际连接分开查看"), mcpSummary(mcp)]),
     ]),
     callHistoryPanel(calls),
   ]);
