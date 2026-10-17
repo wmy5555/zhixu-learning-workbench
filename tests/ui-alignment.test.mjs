@@ -689,6 +689,8 @@ test('source maps switch layouts and selection locally, collapse branches, keep 
   app.renderSourceGroupDrawer(source);
   let panel = app.refs.drawerBody;
   const node = id => descendants(panel).find(n => n.dataset.noteId === id);
+  assert.equal(panel.querySelectorAll('.child-note').length, 3);
+  await click(findButton(panel, '逻辑图'));
   await click(node('b'));
   assert.equal(node('b').attributes['aria-pressed'], 'true');
   assert.match(panel.querySelector('.map-detail').textContent, /正文b/);
@@ -699,11 +701,13 @@ test('source maps switch layouts and selection locally, collapse branches, keep 
   assert.equal(node('b'), undefined);
   await click(findButton(panel, '逻辑图')); assert.ok(node('b'));
   await click(findButton(panel, '阅读全部条目'));
-  assert.equal(panel.querySelectorAll('.child-note').length, 4, 'all three reading cards plus hidden selected detail preserve existing operations');
+  assert.equal(panel.querySelectorAll('.child-note').length, 3, 'all three reading cards preserve existing operations without a duplicate selected detail');
   assert.equal(external, 0, 'layout and reading interactions never submit model requests');
   await click(findButton(panel, '逻辑图')); await click(node('c'));
   app.renderSourceGroupDrawer(source); assert.equal(node('c').attributes['aria-pressed'], 'true');
   practiceId = 'practice-only'; app.renderSourceGroupDrawer(source);
+  assert.equal(panel.querySelectorAll('.child-note').length, 3);
+  await click(findButton(panel, '逻辑图'));
   assert.equal(node('a').attributes['aria-pressed'], 'true');
 });
 
@@ -812,6 +816,7 @@ test('structure submission retains its lock after read failure and completion re
     note: async () => ({ ...source, structure: { state: 'ready', message: '新结构已保存', edges: [], hierarchy: [] } }),
   });
   app.renderSourceGroupDrawer(source); app.refs.drawer.classList.add('is-open');
+  await click(findButton(app.refs.drawerBody, '逻辑图'));
   await click(descendants(app.refs.drawerBody).find(n => n.dataset.noteId === 'b'));
   const submit = findButton(app.refs.drawerBody, '重新分析结构');
   const submitting = click(submit);
@@ -837,6 +842,7 @@ test('source-map expansion preserves zoom, fit uses the visible canvas, and repl
   assert.equal(findButton(panel, '补充逻辑关系'), undefined);
   assert.ok(findButton(panel, '重新分析结构'));
   assert.equal(view.zoom, 1, 'opening preserves readable original scale');
+  await click(findButton(panel, '逻辑图'));
   await click(findButton(panel, '+'));
   const zoom = view.zoom, viewport = panel.querySelector('.map-viewport');
   viewport.clientWidth = 630; viewport.clientHeight = 340; viewport.scrollLeft = 55;
@@ -2678,4 +2684,68 @@ test('same endpoint with a newly typed model and empty key sends the model bindi
   const discovery = app.attachModelDiscovery({ panel, address, key, model, capability: 'model', connected: () => true, interval: 0,
     discover: async (_cap, config) => { assert.deepEqual(plain(config), { baseUrl: address.value, model: 'new-model', apiKey: '' }); return { status: 'missing_key', models: [], message: '地址或模型已变化，请重新填写密钥后获取目录。' }; } });
   await discovery.run(); assert.match(panel.textContent, /重新填写密钥/); assert.equal(model.disabled, false); assert.equal(model.value, 'new-model'); discovery.dispose();
+});
+
+test('source group reading shows every current child once and keeps original text first', async t => {
+  const tempRoot = path.resolve(import.meta.dirname, '..', '.tmp');
+  await mkdir(tempRoot, { recursive: true });
+  const root = await mkdtemp(path.join(tempRoot, 'source-group-reading-'));
+  const backend = createApp({ dataDir: path.join(root, 'data'), vaultDir: path.join(root, 'vault'), scheduler: false });
+  t.after(async () => { await backend.close(); assert.ok(root.startsWith(tempRoot + path.sep)); await rm(root, { recursive: true, force: true }); });
+  const store = backend.service.store;
+  const source = store.create({ kind: 'source', title: '合成同名资料', body: '## 完整原文\n\n唯一原文结尾 ORIGINAL-END', meta: { privacy: 'local' } });
+  const other = store.create({ kind: 'source', title: source.title, body: '其他来源正文 OTHER-SOURCE', meta: { privacy: 'local' } });
+  const children = ['甲', '乙', '丙'].map((label, i) => store.create({ kind: 'knowledge', title: `合成拆解${label}`, body: `拆解正文${label}`, meta: { privacy: 'local', stage: 'candidate', sources: [{ id: source.id, role: 'input' }], processKey: `${source.id}:batch-${i}:0` } }));
+  store.update(children[0].id, { expectedHash: children[0].hash, body: '人工修订拆解甲 CURRENT-CHILD' });
+  store.create({ kind: 'knowledge', title: '其他来源拆解', body: '不应混入', meta: { sources: [{ id: other.id, role: 'input' }] } });
+  const group = backend.service.library().groups.find(g => g.source.id === source.id);
+  const detail = backend.service.readPublicNote(source.id);
+  assert.equal(group.children.length, 3);
+  assert.deepEqual(detail.children.map(n => n.id).sort(), group.children.map(n => n.id).sort());
+  const app = browser({ library: async () => backend.service.library(), recommendations: async () => ({ suggestions: [] }), note: async id => backend.service.readPublicNote(id) });
+  app.renderSourceGroupDrawer(detail);
+  assert.equal(app.refs.drawerBody.querySelectorAll('.child-note').length, 3, 'opening a source shows all three current breakdowns');
+  app.state.view = 'library'; await app.renderLibrary();
+  const card = app.refs.main.querySelectorAll('.source-group-card').find(n => n.textContent.includes('合成拆解甲'));
+  assert.match(card.textContent, /3 条拆解/);
+  const reader = findButton(card, '阅读原始资料全文');
+  assert.ok(card.children.indexOf(reader) < card.children.indexOf(card.querySelector('.group-child-preview')));
+  await click(findButton(card, '查看整组'));
+  const panel = app.refs.drawerBody.querySelector('.source-group-drawer');
+  assert.equal(panel.children[0].dataset.tour, 'note-original');
+  assert.match(panel.children[0].textContent, /ORIGINAL-END/);
+  assert.equal(panel.querySelectorAll('.child-note').length, 3);
+  assert.match(panel.textContent, /CURRENT-CHILD/);
+  assert.doesNotMatch(panel.textContent, /其他来源拆解|OTHER-SOURCE|拆解正文甲/);
+  await click(findButton(panel, '逻辑图'));
+  assert.equal(panel.querySelectorAll('.map-node').length, 3);
+  await click(findButton(panel, '阅读全部条目'));
+  assert.equal(panel.querySelectorAll('.child-note').length, 3);
+});
+
+test('source card full-text reader ignores retained cards and late replies after library switches', async () => {
+  let context = { practiceId: '', version: 0 }, release, reads = 0;
+  const data = libraryFixture(['source']);
+  const app = browser({ getContext: () => context, library: async () => data, recommendations: async () => ({ suggestions: [] }), note: () => { reads++; return new Promise(resolve => { release = resolve; }); } });
+  app.state.view = 'library'; await app.renderLibrary();
+  const reader = findButton(app.refs.main, '阅读原始资料全文');
+  const pending = click(reader);
+  context = { practiceId: 'practice', version: 1 };
+  release({ ...data.groups[0].source, body: '旧库迟到原文' }); await pending;
+  assert.equal(app.dialogs.querySelectorAll('.source-reader-dialog').length, 0);
+  await click(reader); assert.equal(reads, 1);
+});
+
+test('captured source cards use the same conversation prose display as full reading', async () => {
+  for (const marker of ['chatgptCapture', 'chatgptSync']) {
+    const data = libraryFixture(['source']);
+    data.groups[0].source.meta = { [marker]: { version: 1 } };
+    data.groups[0].source.body = '## 整理摘要（ChatGPT 生成，未经独立核验）\n\n```text\n**摘要**\n```\n\n## 会话原文（按收到的顺序保留）\n\n### 1. ChatGPT\n\n```text\n**解释**\n```';
+    const app = browser({ library: async () => data, recommendations: async () => ({ suggestions: [] }) });
+    app.state.view = 'library';
+    await app.renderLibrary();
+    const preview = app.refs.main.querySelector('.markdown-preview');
+    assert.equal(preview.querySelectorAll('pre').length, 0, marker);
+    assert.deepEqual(preview.querySelectorAll('strong').map(n => n.textContent), ['摘要', '解释']);
+  }
 });

@@ -261,3 +261,34 @@ test('unsupported or incomplete syntax stays visible instead of dropping charact
   assert.equal(tags(title, 'h2')[0].textContent, '次级标题');
   assert.equal(tags(title, 'h6')[0].textContent, '六级标题');
 });
+
+test('generated summary and limitations read as prose while structured data and nested code stay literal', () => {
+  const { render } = browser();
+  const body = [
+    '## 收集范围', '合成测试范围', '补充限制：', '```text', '**仅供预览**', '```',
+    '## 整理摘要（ChatGPT 生成，未经独立核验）', '````text', '# 摘要标题', '- 摘要条目',
+    '```text', '必须保持代码格式的文本示例', '```', '````',
+    '## 结构化整理（模型建议，未经独立核验）', '```text', '{"sample":true}', '```',
+    '## 会话原文（按收到的顺序保留）', '### 1. ChatGPT', '````text', '**正文解释**',
+    '```js', 'const value = 1;', '```', '````',
+  ].join('\n\n');
+  const root = render(body, { conversation: true });
+  assert.equal(tags(root, 'pre').length, 3);
+  assert.ok(tags(root, 'pre')[0].textContent.includes('必须保持代码格式'));
+  assert.ok(tags(root, 'pre')[1].textContent.includes('{"sample":true}'));
+  assert.ok(tags(root, 'pre')[2].textContent.includes('const value = 1;'));
+  assert.deepEqual(tags(root, 'strong').map(n => n.textContent), ['仅供预览', '正文解释']);
+  assert.equal(tags(root, 'h1')[0].textContent, '摘要标题');
+  assert.equal(tags(root, 'li')[0].textContent, '摘要条目');
+  assert.equal(tags(render(body), 'pre').length, 4, 'ordinary notes retain their literal fences');
+});
+
+test('unclosed summary envelopes and unrelated fenced text remain literal', () => {
+  const { render } = browser();
+  const unclosed = render('## 整理摘要（ChatGPT 生成，未经独立核验）\n\n```text\n**不完整**', { conversation: true });
+  assert.equal(tags(unclosed, 'pre').length, 1);
+  assert.equal(tags(unclosed, 'strong').length, 0);
+  const unrelated = render('## 其他资料\n\n```text\n# 字面文本\n```', { conversation: true });
+  assert.equal(tags(unrelated, 'h1').length, 0);
+  assert.equal(tags(unrelated, 'pre').length, 1);
+});
