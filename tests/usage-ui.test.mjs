@@ -63,6 +63,20 @@ function browser(api = {}) {
 }
 
 const settings = { ai: { model: 'alpha', baseUrl: 'https://example.org/v1', dailyCallLimit: 20, monthlyBudget: 5, inputPrice: 2 }, embedding: {}, search: {} };
+
+test('business-purpose usage filter is sent with service filters and recent rows retain model details', async () => {
+  const requests = [];
+  const data = report({ ...buildUsageReport([{ createdAt: '2026-10-02T00:00:00Z', capability: 'model', model: 'synthetic-model', purpose: 'structure', cost: 0 }], { at: new Date('2026-10-02T12:00:00Z') }) });
+  const panel = await browser().createUsagePanel({ load: async filters => { requests.push(filters); return data; }, settings, save: async () => {} });
+  const purpose = descendants(panel).find(node => node.attributes['aria-label'] === '调用用途');
+  assert.ok(purpose.children.some(option => option.textContent === '历史用途未记录'));
+  purpose.value = 'structure';
+  await purpose.events.change();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(requests.at(-1).purpose, 'structure');
+  const recent = descendants(panel).find(node => node.tagName === 'td' && node.textContent.includes('单资料逻辑图'));
+  assert.match(recent.textContent, /synthetic-model.*文本生成/);
+});
 function report(options = {}) {
   return { ...buildUsageReport([{ createdAt: '2026-10-02T00:00:00Z', capability: 'model', model: '<script>bad()</script>', inputTokens: 100, outputTokens: 20, cost: null }], { at: new Date('2026-10-02T12:00:00Z') }), budget: { callsToday: 4, dailyCallLimit: 20, monthlyBudget: 5, costMonth: null, knownCostMonth: 1, unknownCostCalls: 1 }, ...options };
 }
@@ -186,7 +200,7 @@ test('positive sub-micro costs remain distinct from free calls in tables, trends
   const freeRows = descendants(panel).filter(node => node.tagName === 'tr' && node.textContent.includes('explicit-free'));
   assert.equal(freeRows.length, 2);
   assert.equal(freeRows.find(row => row.children[0].textContent.includes('explicit-free')).children[4].textContent, '0');
-  assert.equal(freeRows.find(row => row.children[1].textContent === 'explicit-free').children[3].textContent, '0');
+  assert.equal(freeRows.find(row => row.children[1].textContent.includes('explicit-free')).children[3].textContent, '0');
   assert.match(panel.textContent, /< 0\.000001 \/ 5/);
   await click(findButton(panel, '费用'));
   const paidDay = descendants(panel).find(node => node.attributes.role === 'listitem' && node.attributes['aria-label']?.startsWith('2026-10-02'));

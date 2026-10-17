@@ -313,6 +313,27 @@ test('finishing context preparation never restores another library or replaces a
 });
 
 let browserRequestSequence = 0;
+test('call purpose history filters reset pagination and preserve model/service details', async () => {
+  const app = browser();
+  const calls = Array.from({ length: 12 }, (_, index) => ({ createdAt: '2026-10-17T00:00:00Z', capability: 'model', model: `synthetic-model-${index}`, purpose: 'structure', purposeLabel: '单资料逻辑图', ok: true }));
+  calls.push({ createdAt: '2026-10-17T00:00:00Z', capability: 'model', model: 'legacy-model', ok: false });
+  const panel = app.callHistoryPanel(calls);
+  assert.match(panel.textContent, /单资料逻辑图synthetic-model-0 · 文本生成/);
+  await click(findButton(panel, '下一页'));
+  const purpose = control(panel, 'callPurpose');
+  purpose.value = 'unrecorded'; await purpose.events.change();
+  assert.match(panel.textContent, /共 1 条 · 第 1 \/ 1 页/);
+  assert.match(panel.textContent, /历史用途未记录legacy-model · 文本生成/);
+  assert.equal(panel.textContent.includes('synthetic-model-'), false);
+  purpose.value = 'structure'; await purpose.events.change();
+  control(panel, 'callOutcome').value = 'failure'; await control(panel, 'callOutcome').events.change();
+  assert.match(panel.textContent, /没有匹配的调用记录/);
+  const css = await readFile(new URL('../public/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\.call-history\s*\{[^}]*min-width:\s*0/);
+  assert.match(css, /\.call-purpose-cell\s*\{[^}]*overflow-wrap:\s*anywhere/);
+  assert.match(css, /\.call-table-scroll\s*\{[^}]*overflow-x:\s*auto/);
+});
+
 function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat, savedSession = new Map()) {
   api = { getContext: () => ({ practiceId: '', version: 0 }), ...api };
   const roots = new Map();
@@ -343,6 +364,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat, savedSession = 
     '\ncreateFilePicker = async (_input, options) => { api.onImagePicker?.(options); return { getFiles: () => [] }; };\nthis.attachmentUrl = (id, asset, download = false) => "/api/notes/" + id + "/attachments?asset=" + asset + (download ? "&download=1" : "");', context);
   vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + discoverySource + '\n' + ('const renderMarkdown = (() => {\n' + markdownSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn renderMarkdown;\n})();') + '\nconst createMarkdownEditor = (() => {\n' + editorSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn createMarkdownEditor;\n})();\n' + sourceMapSource + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { attachModelDiscovery, renderSourceGroupDrawer, conversationReading, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
   context.app.beginStudy = vm.runInContext('beginStudy', context);
+  context.app.callHistoryPanel = vm.runInContext('callHistoryPanel', context);
   context.app.manualExtract = vm.runInContext('manualExtract', context);
   context.app.serializeForm = vm.runInContext('serializeForm', context);
   context.app.processControls = vm.runInContext('processControls', context);

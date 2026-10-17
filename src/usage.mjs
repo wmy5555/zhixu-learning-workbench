@@ -1,4 +1,5 @@
 import { tokenCount } from './token-usage.mjs';
+import { callPurposes, knownPurpose } from './call-purpose.mjs';
 
 const capabilities = new Set(['model', 'embedding', 'search', 'fetch']);
 const finiteCost = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
@@ -34,9 +35,10 @@ function add(bucket, call) {
 const finish = bucket => ({ ...bucket, cost: bucket.unknownCostCalls ? null : bucket.knownCost });
 
 // Aggregate the complete local call ledger. Presentation pagination must never cap totals.
-export function buildUsageReport(calls, { timezone = 'Asia/Shanghai', period = 'month', capability = '', model = '', at = new Date() } = {}) {
+export function buildUsageReport(calls, { timezone = 'Asia/Shanghai', period = 'month', capability = '', model = '', purpose = '', at = new Date() } = {}) {
   if (!['today', '7d', '30d', 'month'].includes(period)) invalid('请选择今天、近 7 天、近 30 天或本月。');
   if (capability && !capabilities.has(capability)) invalid('调用类型无效。');
+  if (purpose && purpose !== 'unrecorded' && !knownPurpose(purpose)) invalid('调用用途无效。');
   if (typeof model !== 'string' || model.length > 300) invalid('模型筛选无效。');
   const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' });
   const dayOf = value => { const date = new Date(value); return Number.isFinite(date.getTime()) ? formatter.format(date) : null; };
@@ -47,7 +49,7 @@ export function buildUsageReport(calls, { timezone = 'Asia/Shanghai', period = '
   for (const call of calls) {
     const day = dayOf(call.createdAt);
     if (!day) { invalidDateCalls++; continue; }
-    if (day < from || day > to || capability && call.capability !== capability) continue;
+    if (day < from || day > to || capability && call.capability !== capability || purpose && (knownPurpose(call.purpose) || 'unrecorded') !== purpose) continue;
     if (call.model) availableModels.add(String(call.model));
     if (model && call.model !== model) continue;
     add(totals, call); add(days.get(day), call); selected.push(call);
@@ -58,12 +60,14 @@ export function buildUsageReport(calls, { timezone = 'Asia/Shanghai', period = '
   const recentCalls = selected.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))).slice(0, 100).map(call => ({
     // Only accounting metadata: no note IDs, prompts, errors, credentials or endpoint paths.
     createdAt: call.createdAt, capability: call.capability, model: call.model || '', phase: call.phase || 'legacy', ok: typeof call.ok === 'boolean' ? call.ok : null,
+    purpose: knownPurpose(call.purpose) || 'unrecorded', purposeLabel: callPurposes[knownPurpose(call.purpose)] || '历史用途未记录',
     inputTokens: tokenCount(call.inputTokens), outputTokens: tokenCount(call.outputTokens),
     cachedInputTokens: tokenCount(call.cachedInputTokens), cost: finiteCost(call.cost),
   }));
   return {
     // Ledger ok/failedCalls describe transport, not later JSON/content validation.
-    resultScope: 'transport', period, from, to, timezone, generatedAt: at.toISOString(), filters: { capability, model },
+    resultScope: 'transport', period, from, to, timezone, generatedAt: at.toISOString(), filters: { capability, model, purpose },
+    availablePurposes: Object.entries({ ...callPurposes, unrecorded: '历史用途未记录' }),
     availableModels: [...availableModels].sort(), totals: finish(totals),
     daily: [...days.values()].map(finish),
     models: [...models.values()].sort((a, b) => b.totalTokens - a.totalTokens || b.calls - a.calls).map(finish),

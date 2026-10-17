@@ -327,7 +327,10 @@ export function createOnboarding(adapter) {
     const practice = inPractice();
     banner.hidden = !current?.practiceId;
     clear(banner).append(el("div", {}, [el("strong", { text: practice ? "新手练习库" : "正式知识库" }), el("span", { text: practice ? " 示例内容与正式资料分开保存" : " API 配置保存在这里，练习库共用这些能力" }), el("span", { class: "practice-date", text: `练习时间：${practiceDate(current?.clock?.now, current?.clock?.timezone || current?.settings?.timezone)}` })]),
-      button(visible ? "收起引导" : "继续新手引导", { kind: "text compact", disabled: working, onClick: () => { if (visible) { visible = false; render(); } else run(resume); } }));
+      el("div", { class: "practice-banner-actions" }, [
+        button("退出引导，返回正式库", { kind: "quiet compact", disabled: working || current?.busy, onClick: () => run(pause) }),
+        button(visible ? "仅收起说明" : "继续新手引导", { kind: "text compact", disabled: working, onClick: () => { if (visible) { visible = false; render(); } else run(resume); } }),
+      ]));
     document.body.classList.toggle("onboarding-open", visible);
     document.body.classList.toggle("practice-active", practice);
     panel.hidden = !visible;
@@ -493,12 +496,19 @@ export function createOnboarding(adapter) {
     try {
       adopt(await api.onboarding("state", api.getContext().practiceId ? { practiceId: api.getContext().practiceId } : {}));
       const storedContext = api.getContext().practiceId;
-      if (storedContext && current?.practiceId !== storedContext) throw new Error("找不到此前的练习库。请重新选择练习库，系统不会把操作转到正式资料。");
-      visible = Boolean(storedContext) || new URLSearchParams(window.location.search || "").get("onboarding") === "start";
+      if (storedContext && current?.practiceId !== storedContext) {
+        api.setContext("");
+        toast("此前的练习库已不可用，已返回正式库；没有新建或删除资料库。", "error");
+      }
+      visible = Boolean(api.getContext().practiceId) || new URLSearchParams(window.location.search || "").get("onboarding") === "start";
       if (storedContext && current?.status === "paused") { api.setContext(""); visible = false; }
     } catch (error) {
       errorText = error.message;
-      if (api.getContext().practiceId) throw error;
+      if (api.getContext().practiceId) {
+        if (error.code !== "PRACTICE_NOT_FOUND") throw error;
+        api.setContext(""); visible = false;
+        toast("此前的练习库已不存在，已返回正式库；没有新建或删除资料库。", "error");
+      }
     }
     document.querySelector("#onboarding-launcher")?.addEventListener("click", () => run(current?.practiceId ? resume : start));
     document.querySelector("#onboarding-reset")?.addEventListener("click", () => current?.practiceId ? reset().catch(error => toast(error.message, "error")) : run(start));

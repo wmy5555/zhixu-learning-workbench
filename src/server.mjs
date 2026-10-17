@@ -1,5 +1,6 @@
 import http from 'node:http';
 import fs from 'node:fs';
+import { createRecycleBin } from './recycle-bin.mjs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
@@ -160,7 +161,10 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
       try {
       const service = lease?.service || mainService;
       let result;
-      if(resource==='uploads'&&!id&&method==='POST') result=service.uploadFile({ name: query.name, mime: req.headers['content-type'] || '', uploadId: query.uploadId, bytes: await readBinary(req) });
+      if(resource==='recycle-bin'&&!id&&method==='GET')result=createRecycleBin(service.store).list();
+      else if(resource==='recycle-bin'&&id&&action==='restore'&&method==='POST')result=createRecycleBin(service.store).restore(id,body.versionId);
+      else if(resource==='recycle-bin'&&!id&&method==='DELETE')result=createRecycleBin(service.store).clear(body);
+      else if(resource==='uploads'&&!id&&method==='POST') result=service.uploadFile({ name: query.name, mime: req.headers['content-type'] || '', uploadId: query.uploadId, bytes: await readBinary(req) });
       else if(resource==='uploads'&&!id&&method==='GET') result={uploads:service.pendingUploads()};
       else if(resource==='uploads'&&id&&method==='DELETE') result=service.revertUpload(id);
       else if(resource==='file-import'&&method==='POST') result=await service.commitFile(body);
@@ -176,7 +180,7 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
       else if(resource==='notes'&&id==='merge'&&method==='POST')result=service.merge(body);
       else if(resource==='notes'&&id&&!action&&method==='GET')result=service.readPublicNote(id);
       else if(resource==='notes'&&id&&!action&&method==='PUT')result=service.editNote(id,body);
-      else if(resource==='notes'&&id&&!action&&method==='DELETE'){result=service.store.delete(id,body.expectedHash);for(const j of service.store.records('jobs'))if(j.payload.noteId===id&&['queued','waiting','running'].includes(j.state))service.jobAction(j.id,{action:'cancel'});service.store.db.prepare("DELETE FROM records WHERE namespace='research'").run();}
+      else if(resource==='notes'&&id&&!action&&method==='DELETE'){result=service.store.delete(id,body.expectedHash);for(const j of service.store.records('jobs'))if(j.payload.noteId===id&&['queued','waiting','running'].includes(j.state))service.jobAction(j.id,{action:'cancel'});}
       else if(resource==='notes'&&action==='extract'&&method==='POST')result=service.extractNote(id,body);
       else if(resource==='notes'&&action==='process'&&method==='POST')result=service.processNote(id,body);
       else if(resource==='notes'&&action==='structure'&&method==='POST')result=service.requestSourceStructure(id);
