@@ -451,6 +451,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
   const embeddingCache = makeCache(64);
   const sourceBudget = new AsyncLocalStorage();
   const callContext = new AsyncLocalStorage();
+  const testContext = new AsyncLocalStorage();
   let budgetTail = Promise.resolve();
   let reservedCalls = 0;
   let accountingBlocked = false;
@@ -482,7 +483,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
   }
 
   async function settings() {
-    return (await getSettings()) ?? {};
+    return testContext.getStore()?.settings ?? (await getSettings()) ?? {};
   }
 
   function capabilityConfig(allSettings, capability) {
@@ -494,7 +495,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     const allSettings = await settings();
     const config = capabilityConfig(allSettings, capability);
     if (config.enabled !== true) throw fail('CAPABILITY_DISABLED', `${capability} 能力尚未启用。`);
-    const secret = needsSecret ? await getSecret(capability, config) : null;
+    const secret = needsSecret ? testContext.getStore()?.secret ?? await getSecret(capability, config) : null;
     if (needsSecret && (!secret || typeof secret !== 'string')) {
       throw fail('MISSING_CREDENTIALS', `${capability} 未配置凭据。`);
     }
@@ -740,7 +741,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     if (!config.baseUrl || !config.model) throw fail('INVALID_CONFIG', '嵌入服务地址或模型名称未配置。');
     const cacheKey = hashKey(['embedding', config.baseUrl, config.model, texts]);
     const cached = embeddingCache.get(cacheKey);
-    if (cached) return cached;
+    if (cached && !testContext.getStore()) return cached;
     const { data } = await requestJson({
       capability: 'embedding', model: config.model, allSettings,
       url: endpoint(config.baseUrl, 'embeddings'), method: 'POST',
@@ -758,7 +759,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
       throw fail('INVALID_RESPONSE', '嵌入响应包含无效向量。');
     }
     const value = { vectors };
-    embeddingCache.set(cacheKey, value, 24 * 60 * 60 * 1000);
+    if (!testContext.getStore()) embeddingCache.set(cacheKey, value, 24 * 60 * 60 * 1000);
     return value;
   }
 
@@ -770,7 +771,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     const baseUrl = config.baseUrl || 'https://api.tavily.com';
     const cacheKey = hashKey(['search', baseUrl, query]);
     const cached = searchCache.get(cacheKey);
-    if (cached) return cached;
+    if (cached && !testContext.getStore()) return cached;
     const { data } = await requestJson({
       capability: 'search', allSettings, url: endpoint(baseUrl, 'search'), method: 'POST',
       headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/json', accept: 'application/json' },
@@ -788,7 +789,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
       return [{ title: String(item.title ?? ''), url: item.url, snippet: String(item.content ?? item.snippet ?? '') }];
     });
     const value = { results };
-    searchCache.set(cacheKey, value, 15 * 60 * 1000);
+    if (!testContext.getStore()) searchCache.set(cacheKey, value, 15 * 60 * 1000);
     return value;
   }
 
@@ -801,7 +802,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     catch (error) { throw fail('INVALID_URL', '地址格式无效。', error); }
     const cacheKey = hashKey(['page', initialUrl]);
     const cached = pageCache.get(cacheKey);
-    if (cached) return cached;
+    if (cached && !testContext.getStore()) return cached;
     let current = new URL(initialUrl);
     let previousProtocol = current.protocol;
     for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
@@ -829,8 +830,8 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
       const parsed = contentType.includes('text/plain') ? { title: '', text: decoded.trim() } : htmlToText(decoded);
       if (!parsed.text) throw fail('EMPTY_PAGE', '网页正文为空或无法提取。');
       const value = { url: current.href, title: parsed.title || current.hostname, text: parsed.text, fetchedAt: new Date().toISOString() };
-      pageCache.set(cacheKey, value, 10 * 60 * 1000);
-      if (current.href !== initialUrl) pageCache.set(hashKey(['page', current.href]), value, 10 * 60 * 1000);
+      if (!testContext.getStore()) pageCache.set(cacheKey, value, 10 * 60 * 1000);
+      if (!testContext.getStore() && current.href !== initialUrl) pageCache.set(hashKey(['page', current.href]), value, 10 * 60 * 1000);
       return value;
     }
     throw fail('TOO_MANY_REDIRECTS', '网页重定向次数过多。');
@@ -1246,7 +1247,8 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     };
   }
 
-  async function test(capability) {
+  async function test(capability, draft) {
+    if (draft) return testContext.run(draft, () => test(capability));
     if (capability === 'model') {
       const result = await generate({ system: 'Return only OK.', prompt: 'Connection test.', privacy: 'cloud' });
       return { ok: true, capability, detail: result.text.slice(0, 100), usage: result.usage };

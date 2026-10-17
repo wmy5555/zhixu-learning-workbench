@@ -8,6 +8,7 @@ import { createProcessFeedback } from '../public/process-feedback.mjs';
 import { initSidebar } from '../public/sidebar.mjs';
 import { parseSourceFile } from '../public/source-exchange.mjs';
 import { describeJobError } from '../public/ui.mjs';
+import { testAndSaveCapability } from '../public/capability-test.mjs';
 import { chapters, coreSteps, flatSteps, getCurriculum } from '../public/onboarding-curriculum.mjs';
 import { materials, customMaterial, customSample, getMaterial, materialSample } from '../public/onboarding-materials.mjs';
 
@@ -59,6 +60,7 @@ class Element {
 }
 function descendants(node) { return [node, ...node.children.flatMap(child => child instanceof Element ? descendants(child) : [])]; }
 function matches(node, selector) {
+  if (selector.includes(',')) return selector.split(',').some(part => matches(node, part.trim()));
   const dataValue = selector.match(/^\[data-([\w-]+)=["']([^"']+)["']\]$/);
   if (dataValue) return node.dataset[dataValue[1].replace(/-([a-z])/g, (_, c) => c.toUpperCase())] === dataValue[2];
   const named = selector.match(/^\[name=["']([^"']+)["']\]$/);
@@ -325,7 +327,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat, savedSession = 
   };
   document.createTextNode = value => { const node = new Element('text'); node.textContent = value; return node; };
   const context = vm.createContext({
-    api, document, request: async () => ({ uploads: [] }), uploadAttachment: (...args) => api.uploadAttachment(...args), initSidebar, createProcessFeedback, parseSourceFile, TextDecoder, Node: Element, URL, Intl: Object.assign(Object.create(Intl), { DateTimeFormat: dateTimeFormat }), Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => `request-ui-${++browserRequestSequence}` },
+    testAndSaveCapability, api, document, request: async () => ({ uploads: [] }), uploadAttachment: (...args) => api.uploadAttachment(...args), initSidebar, createProcessFeedback, parseSourceFile, TextDecoder, Node: Element, URL, Intl: Object.assign(Object.create(Intl), { DateTimeFormat: dateTimeFormat }), Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => `request-ui-${++browserRequestSequence}` },
     FormData: class {
       constructor(form) { this.form = form; }
       entries() { return descendants(this.form).filter(node => node.name && !node.disabled && ['input', 'textarea', 'select'].includes(node.tagName)).map(node => [node.name, String(node.tagName === 'select' ? node.children.find(option => option.selected)?.value || '' : node.value)]); }
@@ -2348,6 +2350,50 @@ test('PDF attachment explains viewer failure and keeps the same protected origin
   assert.equal(download.attributes.download, file.name);
   const image = app.attachmentPanel({ id: 'image', meta: { sourceFile: { ...file, kind: 'image', format: 'png' } } });
   assert.doesNotMatch(image.textContent, /灰屏/);
+});
+
+
+test('connection settings test current draft, save only tested capability, and retain unrelated edits', async () => {
+  const calls = [], saves = [];
+  const app = browser({ settings: async () => ({ ai: { enabled: false } }), prompts: async () => ({ prompts: [] }),
+    testMainSetting: async (cap, draft) => { calls.push([cap, plain(draft)]); return { receipt: 'mock-receipt' }; },
+    saveTestedSetting: async (...args) => { saves.push(plain(args)); return { saved: true }; },
+    bootstrap: async () => ({ settings: { ai: { enabled: true } }, capabilities: { model: true } }),
+  });
+  const panel = await app.settingsPanel(), form = panel.querySelector('form'); form.isConnected = true;
+  control(panel, 'aiEnabled').checked = true;
+  control(panel, 'aiBaseUrl').value = 'https://example.invalid/v1';
+  control(panel, 'aiModel').value = 'new-model'; control(panel, 'aiKey').value = 'synthetic-only';
+  control(panel, 'vaultDir').value = '/synthetic/unsaved'; control(panel, 'chatgptEnabled').checked = true;
+  await click(findButton(panel, '测试连接'));
+  assert.equal(calls.length, 1); assert.equal(calls[0][1].model, 'new-model');
+  assert.deepEqual(saves[0], ['model', calls[0][1], 'mock-receipt']);
+  assert.deepEqual(Object.keys(saves[0][1]).sort(), ['apiKey','baseUrl','enabled','model','timeoutMs']);
+  assert.equal(control(panel, 'aiKey').value, '');
+  assert.equal(app.state.bootstrap.settings.ai.enabled, true);
+  assert.equal(form, panel.querySelector('form'));
+  assert.equal(control(panel, 'vaultDir').value, '/synthetic/unsaved');
+  assert.equal(control(panel, 'chatgptEnabled').checked, true);
+  assert.equal(control(panel, 'allowProposals').disabled, true);
+  assert.match(app.toasts.textContent, /本项配置已自动保存/);
+});
+
+test('connection settings edits, repeated clicks and full saves during test cannot commit stale drafts', async () => {
+  let finish; const saves = []; let count = 0;
+  const app = browser({ settings: async () => ({ ai: { enabled: true } }), prompts: async () => ({ prompts: [] }),
+    testMainSetting: () => { count++; return new Promise(resolve => { finish = resolve; }); },
+    saveTestedSetting: async (...args) => saves.push(args), updateSettings: async (...args) => saves.push(args),
+  });
+  const panel = await app.settingsPanel(), form = panel.querySelector('form'); form.isConnected = true;
+  control(panel, 'aiKey').value = 'synthetic-only';
+  const button = findButton(panel, '测试连接'), pending = click(button);
+  await click(button); await form.events.submit({ preventDefault() {} });
+  assert.equal(count, 1); assert.equal(button.disabled, true);
+  control(panel, 'aiModel').value = 'edited'; form.events.input();
+  finish({ receipt: 'mock' }); await pending;
+  assert.equal(saves.length, 0); assert.equal(control(panel, 'aiKey').value, 'synthetic-only');
+  assert.equal(control(panel, 'aiModel').value, 'edited'); assert.equal(button.disabled, false);
+  assert.match(app.toasts.textContent, /输入已保留/);
 });
 
 test('capture receipt opens the returned source group and survives page redraw without forcing navigation', async () => {

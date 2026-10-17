@@ -89,7 +89,7 @@ JSON 请求/响应；正常状态 200/201；错误 `{error,code}`。GET /api/boo
 - GET /api/topics → `{topics}`；POST /api/topics `{title,body,noteIds:[],prerequisites:[],minutes:20}`；PUT /api/topics/:id 使用 notes 编辑接口同类字段；POST /api/topics/:id/action `{action:'pause'|'resume'}`。
 - GET /api/relations → `{relations,reports}`；POST /api/relations/:id/action `{action:'accept'|'reject',reason?}`；POST /api/discover → job。
 - GET /api/jobs → `{jobs}`；POST /api/jobs/:id/action `{action:'retry'|'cancel'}`。
-- GET /api/settings → sanitized settings；PUT /api/settings 更新非空字段，apiKey 仅写入且不返回，空值保持旧密钥；POST /api/settings/test `{capability:'model'|'embedding'|'search'|'fetch'}`。
+- GET /api/settings → sanitized settings；PUT /api/settings 更新非空字段，apiKey 仅写入且不返回，空值保持旧密钥；POST /api/settings/test `{capability:'model'|'embedding'|'search'|'fetch'}` 仍测试已保存配置；正式设置可另传 `config` 测试单项表单快照，不落盘，返回短期一次性 `receipt`。POST /api/settings/save-tested 提交同一 `capability/config/receipt`，校验草稿摘要和设置/加密凭据版本后经原安全保存路径提交；练习路由拒绝草稿测试和保存。回执最多保留 16 个，5 分钟过期，不含明文密钥。
 - GET /api/usage → `{totals,daily,models,recentCalls,budget}`；按正式库时区汇总完整调用记录。PUT /api/usage/settings → 只更新预算与单价，验证当前模型标识；练习只读共用统计。详见 [用量说明](USAGE.md)。
 - GET /api/call-recovery → `{pending}`；POST /api/call-recovery/:id `{action:'recover'}` 补记已有响应或取消未发预留，`{action:'confirm',cost:number|null,reason}` 核对无响应调用费用；不重新发送请求，练习只读。
 - GET /api/diagnostics → `{usage,calls,index,mcp,storage}`；POST /api/index/rebuild → 状态。

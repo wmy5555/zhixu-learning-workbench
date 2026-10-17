@@ -7,6 +7,7 @@ import { createSecrets } from './secrets.mjs';
 import { validateSettings, credentialBinding } from './settings-validation.mjs';
 import { assertBackupSize } from './backup-contract.mjs';
 import { createAI } from './ai.mjs';
+import { createCapabilityTests } from './capability-test.mjs';
 import { createCallLedger } from './call-ledger.mjs';
 import { promptDefaults, renderPrompt, validatePromptOverrides, sourceExtractionStructure, sourceTitleContract, extractionResearchContract, effectivePromptTemplate } from './prompts.mjs';
 import { createLearning } from './learning.mjs';
@@ -173,6 +174,9 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   };
   const callLedger = createCallLedger({ getStore: () => store });
   const ai = aiOverride || createAI({ getSettings: settings, getSecret: (capability, config) => secret.get(capability === 'ai' ? 'model' : capability, config), getUsage: usage, recordCall: call => store.put('calls', randomUUID(), { ...call, createdAt: now() }), callLedger });
+  const capabilityTests = createCapabilityTests({ settings, defaults, ai, save: updateSettings,
+    revision: () => hash(JSON.stringify([settings(), store.db.prepare('SELECT * FROM encrypted_credentials ORDER BY capability').all()])),
+  });
   const callRecovery = () => ({ pending: callLedger.listPending().filter(record => !record.active) });
   function recoverCall(id, input = {}) {
     if (practice) fail('请返回正式库核对调用。', 'PRACTICE_SETTINGS_LOCKED', 409);
@@ -1206,7 +1210,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   const commitFile = tracked(input => sourceFiles.commit(input));
   const readFile = (id, assetId) => sourceFiles.read(id, assetId);
   const pendingUploads = () => sourceFiles.pending();
-  return { get store(){return store;}, get processing(){return processing;}, get hasPendingOperations(){return processing||activeOperations>0||pausing;}, chatgpt, chatgptUndo, learningNow, settings, updateSettings, getPrompts, updatePrompts, usage, usageReport, updateUsageSettings, callRecovery, recoverCall, ai, importItems, processNote, requestSourceStructure, listNotes, publicNote, publicJob, library, readPublicNote, noteEvidence, linksPreview, syncLinks, getNote, editNote, extractNote, promote, confirmNote, merge, search:tracked(search), today, planAction, startStudy, session, answerStudy, hintStudy, confirmStudy, finishStudy, mistakeAction, topics, createTopic, updateTopic, topicAction, recommendations, recommendationAction, requestRelations, relationReview, relationAction, related, ask:tracked(ask), updateDraft, propose, proposalAction, queue, runJobs, pauseJobs, jobAction, tick, demo, diagnostics, backup, restore,
+  return { get store(){return store;}, get processing(){return processing;}, get hasPendingOperations(){return processing||activeOperations>0||pausing;}, chatgpt, chatgptUndo, learningNow, settings, updateSettings, capabilityTests, getPrompts, updatePrompts, usage, usageReport, updateUsageSettings, callRecovery, recoverCall, ai, importItems, processNote, requestSourceStructure, listNotes, publicNote, publicJob, library, readPublicNote, noteEvidence, linksPreview, syncLinks, getNote, editNote, extractNote, promote, confirmNote, merge, search:tracked(search), today, planAction, startStudy, session, answerStudy, hintStudy, confirmStudy, finishStudy, mistakeAction, topics, createTopic, updateTopic, topicAction, recommendations, recommendationAction, requestRelations, relationReview, relationAction, related, ask:tracked(ask), updateDraft, propose, proposalAction, queue, runJobs, pauseJobs, jobAction, tick, demo, diagnostics, backup, restore,
     jobStatuses,
     bootstrap(){return{settings:settings(),stats:{notes:store.list().filter(n=>!n.meta.excerptOnly).length,sources:store.list().filter(n=>n.kind==='source'&&!n.meta.excerptOnly).length,knowledge:store.list().filter(n=>n.kind==='knowledge').length,pending:store.records('jobs').filter(j=>['waiting','failed'].includes(j.state)).length},today:today(),notes:listNotes().filter(n=>!n.meta.excerptOnly).map(publicNote),jobs:store.records('jobs').map(publicJob),jobRevision,jobSnapshot:++jobSnapshot,conflicts:store.conflicts,capabilities:{offline:true,model:settings().ai.enabled,embedding:settings().embedding.enabled,search:settings().search.enabled}};},
     uploadFile, revertUpload, commitFile, readFile, pendingUploads,

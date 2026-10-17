@@ -218,6 +218,8 @@ export const api = {
   updateSettings: (body) => request("/api/settings", { method: "PUT", body }),
   prompts: () => request("/api/prompts"),
   updatePrompts: (body) => request("/api/prompts", { method: "PUT", body }),
+  testMainSetting: (capability, config) => request("/api/settings/test", { method: "POST", body: { capability, config }, scope: "main" }),
+  saveTestedSetting: (capability, config, receipt) => request("/api/settings/save-tested", { method: "POST", body: { capability, config, receipt }, scope: "main" }),
   testSetting: (capability) => request("/api/settings/test", { method: "POST", body: { capability } }),
   diagnostics: () => request("/api/diagnostics"),
   usage: (filters = {}) => request(`/api/usage?${new URLSearchParams(filters)}`),
