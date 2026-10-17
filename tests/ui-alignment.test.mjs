@@ -2384,3 +2384,75 @@ test('PDF attachment explains viewer failure and keeps the same protected origin
   const image = app.attachmentPanel({ id: 'image', meta: { sourceFile: { ...file, kind: 'image', format: 'png' } } });
   assert.doesNotMatch(image.textContent, /灰屏/);
 });
+
+test('capture receipt opens the returned source group and survives page redraw without forcing navigation', async () => {
+  const note = { id: 'actual-source-id', kind: 'source', title: '服务端保留的标题', body: '合成正文', meta: {}, children: [], jobs: [] }, reads = [];
+  const app = browser({ import: async () => ({ notes: [note], jobs: [{ state: 'queued' }] }), bootstrap: async () => ({}), note: async id => { reads.push(id); return note; } });
+  await app.renderCapture();
+  const form = app.refs.main.querySelector('[data-tour="capture-form"]');
+  control(form, 'body').markdownEditor.setValue('合成正文');
+  control(form, 'title').value = '提交时标题'; control(form, 'process').checked = true;
+  await form.events.submit({ preventDefault() {} });
+  let receipt = form.querySelector('[data-tour="capture-saved"]');
+  assert.equal(receipt.hidden, false); assert.match(receipt.textContent, /服务端保留的标题/);
+  assert.doesNotMatch(receipt.textContent, /加工完成|拆解完成|提交时标题/);
+  assert.deepEqual(reads, []); assert.equal(app.refs.main.querySelector('[data-tour="capture-form"]'), form);
+  assert.equal(control(form, 'body').markdownEditor.getValue(), '');
+  control(form, 'body').markdownEditor.setValue('查看时仍在填写的新草稿');
+  await click(findButton(receipt, '查看整组'));
+  assert.equal(control(form, 'body').markdownEditor.getValue(), '查看时仍在填写的新草稿');
+  assert.deepEqual(reads, [note.id]); assert.equal(app.refs.drawerTitle.textContent, note.title);
+  assert.equal(app.refs.drawerBody.querySelector('[data-source-id="actual-source-id"]') !== null, true);
+  await click(app.refs.drawerClose);
+  assert.equal(control(form, 'body').markdownEditor.getValue(), '查看时仍在填写的新草稿');
+  assert.equal(unloadRequested(app), true);
+  control(form, 'body').markdownEditor.setValue('');
+  await app.renderCapture(); receipt = app.refs.main.querySelector('[data-tour="capture-saved"]');
+  assert.equal(receipt.hidden, false); assert.match(receipt.textContent, /服务端保留的标题/);
+});
+
+test('capture receipt follows duplicate and consecutive saves, and a failed save preserves the last success and draft', async () => {
+  let result = { id: 'existing-source', title: '重复资料标题' }, fail = false, writes = 0;
+  const app = browser({ import: async () => { writes++; if (fail) throw new Error('合成保存失败'); return { notes: [result] }; }, bootstrap: async () => ({}) });
+  await app.renderCapture(); const form = app.refs.main.querySelector('[data-tour="capture-form"]'), editor = control(form, 'body').markdownEditor;
+  const submit = async body => { editor.setValue(body); await form.events.submit({ preventDefault() {} }); };
+  await submit('相同原文'); await submit('相同原文');
+  assert.equal(app.state.lastCapture.notes[0].id, 'existing-source');
+  assert.equal(form.querySelector('[data-tour="capture-saved"]').querySelectorAll('button').length, 1);
+  result = { id: 'next-source', title: '下一份资料' }; await submit('下一份');
+  assert.equal(app.state.lastCapture.notes[0].id, 'next-source');
+  assert.doesNotMatch(form.querySelector('[data-tour="capture-saved"]').textContent, /重复资料标题/);
+  fail = true; await submit('失败时应保留的正文');
+  assert.equal(editor.getValue(), '失败时应保留的正文');
+  assert.equal(app.state.lastCapture.notes[0].id, 'next-source'); assert.equal(writes, 4);
+});
+
+test('capture receipt waits for success, preserves newer input, and rejects missing IDs', async () => {
+  let release, writes = 0;
+  const app = browser({ import: () => { writes++; return new Promise(resolve => { release = resolve; }); }, bootstrap: async () => ({}) });
+  await app.renderCapture(); const form = app.refs.main.querySelector('[data-tour="capture-form"]'), editor = control(form, 'body').markdownEditor;
+  editor.setValue('已提交正文'); const pending = form.events.submit({ preventDefault() {} });
+  await form.events.submit({ preventDefault() {} });
+  assert.equal(writes, 1); assert.equal(form.querySelector('[data-tour="capture-saved"]').hidden, true);
+  editor.setValue('继续输入的正文'); release({ notes: [{ id: 'saved-id', title: '已保存标题' }] }); await pending;
+  assert.equal(editor.getValue(), '继续输入的正文'); assert.equal(unloadRequested(app), true);
+  assert.equal(app.state.lastCapture.notes[0].id, 'saved-id');
+  const next = form.events.submit({ preventDefault() {} }); release({ notes: [{}] }); await next;
+  assert.equal(form.querySelector('[data-tour="capture-saved"]').hidden, true); assert.equal(app.state.lastCapture, null);
+});
+
+test('capture receipt clears across libraries and ignores stale completion and retained buttons', async () => {
+  let context = { practiceId: '', version: 0 }, release; const reads = [];
+  const app = browser({ getContext: () => context, import: () => new Promise(resolve => { release = resolve; }), bootstrap: async () => ({}), note: async id => { reads.push(id); throw new Error('unexpected read'); } });
+  await app.renderCapture(); let form = app.refs.main.querySelector('[data-tour="capture-form"]');
+  const save = form.events.submit({ preventDefault() {} }); release({ notes: [{ id: 'formal-id', title: '正式库资料' }] }); await save;
+  const oldButton = findButton(form.querySelector('[data-tour="capture-saved"]'), '查看整组');
+  context = { practiceId: 'practice', version: 1 }; await click(oldButton);
+  assert.deepEqual(reads, []); assert.equal(app.state.lastCapture, null);
+  await app.renderCapture(); form = app.refs.main.querySelector('[data-tour="capture-form"]');
+  assert.equal(form.querySelector('[data-tour="capture-saved"]').hidden, true);
+  const late = form.events.submit({ preventDefault() {} }); context = { practiceId: '', version: 2 };
+  release({ notes: [{ id: 'practice-id', title: '旧库迟到资料' }] }); await late;
+  assert.equal(app.state.lastCapture, null); assert.equal(form.querySelector('[data-tour="capture-saved"]').hidden, true);
+  await app.renderCapture(); assert.equal(app.refs.main.querySelector('[data-tour="capture-saved"]').hidden, true);
+});

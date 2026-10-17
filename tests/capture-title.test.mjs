@@ -30,6 +30,46 @@ async function drain(service) {
   for (let i = 0; i < 12 && service.store.records('jobs').some(job => job.state === 'queued'); i++) await service.runJobs();
 }
 
+for (const [label, body, expected] of [
+  ['ATX heading', '# **检索策略**与[适用条件](https://example.invalid) ##\n\n正文保留。', '检索策略与适用条件'],
+  ['heading after introduction', '简短导语。\n\n## 正式标题\n正文', '正式标题'],
+  ['setext heading', '下划线式标题\n=====\n\n正文', '下划线式标题'],
+  ['paragraph boundary', '第一段保留完整。\n\n第二段不拼入标题。', '第一段保留完整。'],
+  ['wrapped paragraph', '第一行\n延续同一段。\n\n下一段', '第一行 延续同一段。'],
+  ['list and inline syntax', '> - [x] **已核对**的 `方法`与~~旧称~~', '已核对的 方法与旧称'],
+  ['fenced heading ignored', '```md\n# 代码里的伪标题\n```\n\n正文首段。', '正文首段。'],
+  ['list fenced heading ignored', '- ```md\n  # 代码里的伪标题\n  ```\n\n# 真实标题', '真实标题'],
+  ['ordered list fenced heading ignored', '1. ~~~md\n   # 代码里的伪标题\n   ~~~\n\n# 真实标题', '真实标题'],
+  ['quote fenced heading ignored', '> ```md\n> # 代码里的伪标题\n> ```\n\n# 真实标题', '真实标题'],
+  ['nested containers fenced heading ignored', '- > - ```md\n  >   # 代码里的伪标题\n  >   ```\n\n# 真实标题', '真实标题'],
+  ['unclosed list fence ends with item', '- ```md\n  # 代码里的伪标题\n\n# 真实标题', '真实标题'],
+  ['container fence paragraph fallback', '- ```md\n  # 代码里的伪标题\n  ```\n\n正文首段。', '正文首段。'],
+  ['sentence boundary', '这是一句完整的话。' + '这是后续较长的句子'.repeat(6), '这是一句完整的话。…'],
+  ['long heading', '# ' + '长'.repeat(40), '长'.repeat(35) + '…'],
+  ['graphemes', '# ' + '👩‍💻'.repeat(40), '👩‍💻'.repeat(35) + '…'],
+  ['syntax only', '---\n\n```\n# code\n```', '未命名资料'],
+]) {
+  test('local blank-title placeholder: ' + label, async t => {
+    let calls = 0;
+    const s = await harness(t, async () => { calls++; throw new Error('Unexpected AI call'); });
+    const { notes: [note], jobs } = s.importItems({ items: [{ title: '  ', body }] });
+    assert.equal(note.title, expected);
+    assert.equal(note.meta.titlePlaceholder, expected);
+    assert.equal(note.meta.titlePending, true);
+    assert.equal(note.meta.titleOrigin, 'temporary');
+    assert.equal(note.body, body);
+    assert.equal(s.readPublicNote(note.id).titleGeneration.state, 'idle');
+    assert.deepEqual(jobs, []);
+    await s.runJobs();
+    assert.equal(calls, 0);
+    const duplicate = s.importItems({ items: [{ title: '不得覆盖', body, platform: '另一来源' }] }).notes[0];
+    assert.equal(duplicate.id, note.id);
+    assert.equal(duplicate.title, expected);
+    assert.equal(duplicate.meta.titlePlaceholder, expected);
+    assert.equal(duplicate.meta.origins.length, 2);
+  });
+}
+
 test('an explicitly requested title task preserves source and uses the shared AI', async t => {
   const calls = [];
   const s = await harness(t, async request => { calls.push(request); return { text: JSON.stringify({ sourceTitle: '条件变化下的检索策略' }) }; });
