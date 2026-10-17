@@ -8,11 +8,11 @@ function acceptedTypeLabels(acceptedTypes) {
   const groups = new Map();
   for (const [extension, mime] of Object.entries(fileAccept)) {
     if (!acceptedTypes.includes(mime)) continue;
-    const group = groups.get(mime) || { name: fileFormatNames[extension] || '文件', extensions: [] };
+    const group = groups.get(mime) || { name: fileFormatNames[extension], extensions: [] };
     group.extensions.push(extension);
     groups.set(mime, group);
   }
-  return Object.fromEntries([...groups].map(([mime, group]) => [mime, `${group.name}（.${group.extensions.join('/.')}）`]));
+  return [...groups.values()].map(group => `${group.name}（.${group.extensions.join(' / .')}）`);
 }
 export function pickerFileType(file, detected) {
   const mime = String(detected || '').toLowerCase();
@@ -64,6 +64,8 @@ export async function createFilePicker(input, { imagesOnly = false, onChange = (
   const uploadStatus = el('p', { class: 'notice', role: 'status', ariaLive: 'polite', hidden: true });
   const showErrors = () => { uploadStatus.textContent = [...errors.values()].join('；'); uploadStatus.hidden = !errors.size; };
   const acceptedTypes = [...new Set(Object.values(fileAccept).filter(mime => !imagesOnly || mime.startsWith('image/')))];
+  // Keep format help outside FilePond's two-column, animated file status.
+  const formatHelp = el('p', { class: 'file-picker-formats', text: '支持格式：' + acceptedTypeLabels(acceptedTypes).join('、') + '。' });
   input.accept = acceptedTypes.join(',');
   const instance = pond.create(input, {
     allowMultiple: true, maxFiles: 20, maxParallelUploads: 2, maxFileSize: MAX_FILE_BYTES, instantUpload: true,
@@ -71,9 +73,9 @@ export async function createFilePicker(input, { imagesOnly = false, onChange = (
     allowPaste: false, allowDrop: true, dropOnPage: false, dropOnElement: true, allowDirectoriesOnly: false,
     allowImagePreview: true, imagePreviewMaxFileSize: '2MB', imagePreviewMaxHeight: 160,
     acceptedFileTypes: acceptedTypes,
-    labelFileTypeNotAllowed: '不支持此文件格式。',
-    fileValidateTypeLabelExpectedTypes: '允许的格式：{allTypes}',
-    fileValidateTypeLabelExpectedTypesMap: acceptedTypeLabels(acceptedTypes),
+    labelFileTypeNotAllowed: '不支持此文件格式',
+    fileValidateTypeLabelExpectedTypes: '请按下方支持格式重新选择',
+    labelButtonRemoveItem: '移除此文件',
     // Folder drops are expanded by FilePond; reject their nested paths before upload.
     beforeAddFile: item => typeof item.source !== 'string' && !String(item.relativePath || '').replace(/^\//, '').includes('/'),
     fileValidateTypeDetectType: (file, detected) => Promise.resolve(pickerFileType(file, detected)),
@@ -96,9 +98,10 @@ export async function createFilePicker(input, { imagesOnly = false, onChange = (
   });
   // FilePond's generic error label hides the server's actionable quota message.
   // Keep the message as plain text outside its HTML-based status renderer.
-  instance.element.after(uploadStatus);
+  instance.element.after(formatHelp);
+  formatHelp.after(uploadStatus);
   const observer = new MutationObserver(() => {
-    if (!instance.element.isConnected) { observer.disconnect(); instance.destroy(); uploadStatus.remove(); }
+    if (!instance.element.isConnected) { observer.disconnect(); instance.destroy(); formatHelp.remove(); uploadStatus.remove(); }
   });
   observer.observe(document.body, { childList: true, subtree: true });
   return instance;

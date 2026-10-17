@@ -589,8 +589,30 @@ input[type="color"] { height: 44px; padding: 5px 8px; cursor: pointer; }
 .attachment-card { padding: 12px 0; overflow-wrap: anywhere; }
 .attachment-card a { display: inline-block; margin-right: 16px; }
 .source-attachments { min-width: 0; }
-.filepond--file-status { min-width: 0; }
-.filepond--file-status-sub { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.file-picker-formats { margin: 8px 0 16px; color: var(--ink); font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; }
+/* Error rows reserve their own height; FilePond measures this box for its list. */
+.filepond--item[data-filepond-item-state="load-invalid"] {
+  height: auto !important; background: #963c32; border-radius: 8px;
+}
+.filepond--item[data-filepond-item-state="load-invalid"] .filepond--file-wrapper { height: auto; }
+.filepond--item[data-filepond-item-state="load-invalid"] .filepond--panel { display: none; }
+.filepond--item[data-filepond-item-state="load-invalid"] .filepond--file {
+  display: flex; flex-direction: column; align-items: stretch; gap: 10px;
+  height: auto; padding: 14px 14px 14px 52px; color: #fff;
+}
+.filepond--item[data-filepond-item-state="load-invalid"] .filepond--file-info,
+.filepond--item[data-filepond-item-state="load-invalid"] .filepond--file-status {
+  width: 100%; min-width: 0; margin: 0; transform: none !important; align-items: flex-start; text-align: left;
+}
+.filepond--item[data-filepond-item-state="load-invalid"] .filepond--file-info-main,
+.filepond--item[data-filepond-item-state="load-invalid"] .filepond--file-status-main,
+.filepond--item[data-filepond-item-state="load-invalid"] .filepond--file-status-sub {
+  white-space: normal; overflow-wrap: anywhere; font-size: 14px; line-height: 1.5;
+}
+.filepond--item[data-filepond-item-state="load-invalid"] .filepond--file-status-main { font-weight: 700; }
+.filepond--item[data-filepond-item-state="load-invalid"] .filepond--file-info-sub,
+.filepond--item[data-filepond-item-state="load-invalid"] .filepond--file-status-sub { opacity: 1; font-size: 13px; }
+.filepond--item[data-filepond-item-state="load-invalid"] .filepond--panel-root { background: #963c32; }
 .extracted-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 60vh; overflow: auto; }
 
 /* Persistent connection feedback: text and icon supplement high-contrast borders. */
