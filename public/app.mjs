@@ -226,7 +226,40 @@ function openDrawer(title, eyebrow, content) {
   onboarding?.rendered();
 }
 
+let sourceReadingFullscreen = null;
+function exitSourceReadingFullscreen({ restoreScroll = true } = {}) {
+  if (!sourceReadingFullscreen) return false;
+  const { content, original, control, previousOpen, previousScroll } = sourceReadingFullscreen;
+  refs.drawer.classList.remove('source-reading-fullscreen');
+  content.classList.remove('source-reading-fullscreen');
+  original.classList.remove('is-reading-fullscreen');
+  original.open = previousOpen;
+  control.textContent = '全屏阅读';
+  control.setAttribute('aria-pressed', 'false');
+  refs.drawer.setAttribute('aria-label', '详细信息');
+  sourceReadingFullscreen = null;
+  if (restoreScroll) refs.drawer.scrollTop = previousScroll;
+  return true;
+}
+
+function enterSourceReadingFullscreen(content, original, control) {
+  exitSourceReadingFullscreen();
+  sourceReadingFullscreen = {
+    content, original, control, previousOpen: original.open,
+    previousScroll: refs.drawer.scrollTop || 0,
+  };
+  refs.drawer.classList.add('source-reading-fullscreen');
+  content.classList.add('source-reading-fullscreen');
+  original.classList.add('is-reading-fullscreen');
+  original.open = true;
+  control.textContent = '退出全屏';
+  control.setAttribute('aria-pressed', 'true');
+  refs.drawer.setAttribute('aria-label', '原始资料全文阅读');
+  refs.drawer.scrollTop = 0;
+}
+
 function closeDrawer() {
+  exitSourceReadingFullscreen({ restoreScroll: false });
   refs.drawer.classList.remove("map-expanded");
   refs.drawer.classList.remove("is-open");
   refs.drawer.setAttribute("aria-hidden", "true");
@@ -865,6 +898,7 @@ async function openNote(id, searchHit = null) {
 }
 
 function renderSourceGroupDrawer(source) {
+  exitSourceReadingFullscreen();
   refs.drawerBody.dataset.tour = "note-detail";
   const meta = asObject(source.meta);
   const children = asArray(source.children).filter((note) => !isExcerptOnly(note));
@@ -874,7 +908,6 @@ function renderSourceGroupDrawer(source) {
   const content = el("div", { class: "page-stack source-group-drawer", dataset: { sourceId: source.id } });
   const headActions = el("div", { class: "form-actions" }, [
     button("编辑原始资料", { kind: "primary", onClick: () => renderNoteEditor(source, { returnToSourceId: source.id }) }),
-    button("全屏阅读原文", { onClick: () => openSourceReader(source) }),
     button("查看版本", { disabled: isMobilePrototype(), title: isMobilePrototype() ? "样机暂不支持查看版本" : "", onClick: () => renderHistory(source, { returnToSourceId: source.id }) }),
     button("删除", { kind: "danger", disabled: isMobilePrototype(), title: isMobilePrototype() ? "样机暂不支持删除" : "", onClick: () => deleteNote(source) }),
   ]);
@@ -891,8 +924,19 @@ function renderSourceGroupDrawer(source) {
     }));
   }
 
-  const original = el("details", { class: "original-material", dataset: { tour: "note-original" } }, [
-    el("summary", {}, [el("span", { text: "查看原始资料全文" }), el("small", { text: `${String(source.body || "").length} 字` })]),
+  let original;
+  const fullscreen = button('全屏阅读', { kind: 'text compact', onClick: event => {
+    event.preventDefault();
+    event.stopPropagation?.();
+    if (sourceReadingFullscreen?.original === original) exitSourceReadingFullscreen();
+    else enterSourceReadingFullscreen(content, original, fullscreen);
+  } });
+  fullscreen.setAttribute('aria-pressed', 'false');
+  original = el("details", { class: "original-material", dataset: { tour: "note-original" } }, [
+    el("summary", {}, [
+      el("span", { text: "查看原始资料全文" }),
+      el('span', { class: 'original-summary-actions' }, [el("small", { text: `${String(source.body || "").length} 字` }), fullscreen]),
+    ]),
     sourceReadingBody(source.body, 'original-body', '暂无原文', source),
   ]);
   if (isMobilePrototype()) original.open = true;
@@ -932,29 +976,6 @@ function renderSourceGroupDrawer(source) {
   clear(refs.drawerBody).append(content);
   refs.drawerBody.querySelectorAll('[data-structure-submit]').forEach(updateStructureButton);
   refs.drawerBody.querySelectorAll('.structure-job-status').forEach(updateStructureStatus);
-}
-
-function openSourceReader(source) {
-  const returnFocus = document.activeElement;
-  const backdrop = el('div', { class: 'source-reader-backdrop' });
-  const dialog = el('section', { class: 'source-reader-dialog', role: 'dialog', ariaModal: 'true', ariaLabel: `原始资料全文：${source.title || '未命名原始资料'}` });
-  const close = () => {
-    backdrop.remove();
-    if (returnFocus?.isConnected) returnFocus.focus();
-  };
-  const closeButton = button('关闭全屏阅读', { kind: 'quiet', onClick: close });
-  dialog.append(
-    el('header', { class: 'source-reader-header' }, [
-      el('div', {}, [el('p', { class: 'eyebrow', text: '原始资料全文' }), el('h2', { text: source.title || '未命名原始资料' })]),
-      el('div', { class: 'source-reader-actions' }, [el('small', { text: `${String(source.body || '').length} 字` }), closeButton]),
-    ]),
-    el('div', { class: 'source-reader-body' }, sourceReadingBody(source.body, '', '暂无原文', source)),
-  );
-  backdrop.addEventListener('click', event => { if (event.target === backdrop) close(); });
-  backdrop.addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); close(); } });
-  backdrop.append(dialog);
-  document.body.append(backdrop);
-  closeButton.focus();
 }
 
 function updateStructureStatus(control) {
@@ -2992,7 +3013,11 @@ refs.refresh.addEventListener("click", async () => {
 });
 refs.drawerClose.addEventListener("click", requestCloseDrawer);
 refs.drawerBackdrop.addEventListener("click", requestCloseDrawer);
-document.addEventListener("keydown", (event) => { if (event.key === "Escape") return requestCloseDrawer(); });
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  if (exitSourceReadingFullscreen()) return;
+  return requestCloseDrawer();
+});
 
 function unsavedInputForm() {
   return refs.main.querySelector('[data-tour="capture-form"]') || refs.main.querySelector('[data-tour="study-session"]');

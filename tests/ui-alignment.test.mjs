@@ -341,7 +341,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat, savedSession = 
   // is covered by the separate browser flow, not the minimal DOM fixture.
   vm.runInContext(fileUiSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') +
     '\ncreateFilePicker = async (_input, options) => { api.onImagePicker?.(options); return { getFiles: () => [] }; };\nthis.attachmentUrl = (id, asset, download = false) => "/api/notes/" + id + "/attachments?asset=" + asset + (download ? "&download=1" : "");', context);
-  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + discoverySource + '\n' + ('const renderMarkdown = (() => {\n' + markdownSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn renderMarkdown;\n})();') + '\nconst createMarkdownEditor = (() => {\n' + editorSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn createMarkdownEditor;\n})();\n' + sourceMapSource + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { attachModelDiscovery, renderSourceGroupDrawer, openSourceReader, conversationReading, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
+  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + discoverySource + '\n' + ('const renderMarkdown = (() => {\n' + markdownSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn renderMarkdown;\n})();') + '\nconst createMarkdownEditor = (() => {\n' + editorSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn createMarkdownEditor;\n})();\n' + sourceMapSource + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { attachModelDiscovery, renderSourceGroupDrawer, conversationReading, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
   context.app.beginStudy = vm.runInContext('beginStudy', context);
   context.app.manualExtract = vm.runInContext('manualExtract', context);
   context.app.serializeForm = vm.runInContext('serializeForm', context);
@@ -1211,7 +1211,7 @@ test('core step seven navigates to its saved source and locates the rendered ori
   assert.ok(target.textContent.includes(source.body));
 });
 
-test('ChatGPT-shaped sources render text envelopes as prose and open a full-screen reader', async () => {
+test('ChatGPT-shaped sources render text envelopes as prose and expand the original panel reversibly', async () => {
   const body = '## 收集范围\n\n```text\n范围正文\n```\n\n## 会话原文（按收到的顺序保留）\n\n### 1. ChatGPT\n\n```text\n## 回答标题\n\n回答正文\n```';
   const source = { id: 'chatgpt-shaped', kind: 'source', title: '合成 ChatGPT 资料', body, meta: {}, children: [], jobs: [] };
   const app = browser();
@@ -1220,13 +1220,21 @@ test('ChatGPT-shaped sources render text envelopes as prose and open a full-scre
   const original = app.refs.drawerBody.querySelector('[data-tour="note-original"]');
   assert.equal(descendants(original).filter(node => node.tagName === 'pre').length, 0);
   assert.ok(descendants(original).some(node => node.tagName === 'h2' && node.textContent === '回答标题'));
-  await click(findButton(app.refs.drawerBody, '全屏阅读原文'));
-  const dialog = app.document.body.querySelector('.source-reader-dialog');
-  assert.ok(dialog);
-  assert.match(dialog.textContent, /合成 ChatGPT 资料/);
-  assert.match(dialog.textContent, /回答正文/);
-  await click(findButton(dialog, '关闭全屏阅读'));
-  assert.equal(app.document.body.querySelector('.source-reader-dialog'), null);
+  const fullscreen = findButton(original, '全屏阅读');
+  app.refs.drawer.scrollTop = 180;
+  await click(fullscreen);
+  assert.equal(original.open, true);
+  assert.equal(app.refs.drawer.classList.contains('source-reading-fullscreen'), true);
+  assert.equal(app.refs.drawerBody.querySelector('.source-group-drawer').classList.contains('source-reading-fullscreen'), true);
+  assert.equal(fullscreen.textContent, '退出全屏');
+  assert.equal(fullscreen.attributes['aria-pressed'], 'true');
+  assert.equal(app.refs.drawer.scrollTop, 0);
+  await click(fullscreen);
+  assert.equal(original.open, false, 'exit restores the previous collapsed state');
+  assert.equal(app.refs.drawer.classList.contains('source-reading-fullscreen'), false);
+  assert.equal(fullscreen.textContent, '全屏阅读');
+  assert.equal(fullscreen.attributes['aria-pressed'], 'false');
+  assert.equal(app.refs.drawer.scrollTop, 180, 'exit restores the previous drawer position');
 });
 
 test('capture research requires AI processing and clears on deselection, clear, and successful save', async () => {
