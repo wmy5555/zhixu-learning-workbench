@@ -1,3 +1,4 @@
+import { conversationOrigin } from './chatgpt-source-metadata.mjs';
 import { createHash } from 'node:crypto';
 import { planHistoryBatch, verifyHistoryBatchReceipts } from './chatgpt-history-batch.mjs';
 import { literalBlock } from './chatgpt-sync.mjs';
@@ -27,6 +28,8 @@ function parseInput(input) {
 }
 function sourceSpec(state, part) {
   const noteId = sourceId(part);
+  const origin = state.sourceMetadataVersion === 2
+    ? conversationOrigin({ ...part.global.sourceMetadata, title: part.title }, state.savedAt) : null;
   const body = ['## 保存范围', '已授权当前可见分支的独立原文分片；隐藏分支、隐藏推理及附件字节未读取。',
     `本分片 ${part.partIndex + 1}/${part.partCount}；消息编号和字符偏移保留原始身份，不是新的会话分支。`,
     '## 整理摘要（模型生成，未经独立核验）', literalBlock(part.summary),
@@ -38,6 +41,7 @@ function sourceSpec(state, part) {
   return { id: noteId, kind: 'source', title: `${part.title.slice(0, 165)} · 原文 ${part.partIndex + 1}/${part.partCount}`,
     body, meta: { privacy: 'local', stage: 'reference', platform: 'ChatGPT',
       url: `https://chatgpt.com/c/${part.global.conversationId}`, acquiredAt: state.savedAt,
+      ...(origin ? { ...origin, origins: [origin] } : {}),
       fingerprint: digest(body.trim()), chatgptHistoryBatchPart: { version: 1, noteId, requestHash: state.requestHash,
         binding: state.binding, batchId: part.batchId, partSha256: jsonHash(part), savedAt: state.savedAt, part } } };
 }
@@ -290,7 +294,7 @@ export function createHistoryBatchStore({ getStore, enabled }) {
           .filter(at => Number.isFinite(at) && at <= timestamp && timestamp - at < 60000);
         if (recent.length >= 30) fail('一分钟内保存过于频繁，请稍后继续。', 'CHATGPT_RATE_LIMIT', 429);
         guard(store); store.put('chatgptCaptureRate', 'recent', [...recent, timestamp]);
-        const state = { version: 1, requestHash: requested.requestHash, binding: copy(binding), inputDigest: binding.inputDigest,
+        const state = { version: 1, sourceMetadataVersion: 2, requestHash: requested.requestHash, binding: copy(binding), inputDigest: binding.inputDigest,
           plan: copy(plan), planSha256: jsonHash(plan), pending: true, savedAt: new Date(timestamp).toISOString(),
           partWrites: Object.fromEntries(plan.parts.map(part => [part.partId, { phase: 'prepared', noteId: sourceId(part) }])),
           candidateWrites: Object.fromEntries(plan.deferredStructured.map(deferred => [deferred.item.id,
