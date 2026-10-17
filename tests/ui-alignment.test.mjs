@@ -1266,6 +1266,35 @@ test('ChatGPT-shaped sources render text envelopes as prose and keep the floatin
   assert.equal(app.document.body.querySelector('.source-reader-dialog'), null);
 });
 
+test('floating source reader Escape closes only the top reader and retains drawer state and focus', async () => {
+  const app = browser();
+  const source = { id: 'escape-source', kind: 'source', title: '合成原文', body: '完整正文', meta: {}, children: [], jobs: [] };
+  app.renderSourceGroupDrawer(source);
+  app.refs.drawer.classList.add('is-open');
+  app.refs.drawer.scrollTop = 123;
+  const original = app.refs.drawerBody.querySelector('[data-tour="note-original"]');
+  original.open = true;
+  const launcher = findButton(original, '全屏阅读');
+  launcher.isConnected = true;
+  app.document.activeElement = launcher;
+  await click(launcher);
+  const backdrop = app.document.body.querySelector('.source-reader-backdrop');
+  const panel = app.refs.drawerBody.children[0];
+  const event = { key: 'Escape', prevented: false, stopped: false,
+    preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; } };
+  backdrop.events.keydown(event);
+  if (!event.stopped) await app.document.events.keydown(event);
+  assert.equal(app.document.body.querySelector('.source-reader-backdrop'), null);
+  assert.equal(app.refs.drawer.classList.contains('is-open'), true, 'the same Escape must not reach the drawer handler');
+  assert.equal(app.refs.drawerBody.children[0], panel);
+  assert.equal(app.refs.drawer.scrollTop, 123);
+  assert.equal(original.open, true);
+  assert.equal(launcher.focused, true);
+  assert.equal(event.prevented, true);
+  await app.document.events.keydown({ key: 'Escape' });
+  assert.equal(app.refs.drawer.classList.contains('is-open'), false, 'a later Escape may close the drawer normally');
+});
+
 test('capture research requires AI processing and clears on deselection, clear, and successful save', async () => {
   const writes = [];
   const app = browser({ import: async payload => { writes.push(plain(payload)); return { notes: [{}] }; }, bootstrap: async () => ({}) });

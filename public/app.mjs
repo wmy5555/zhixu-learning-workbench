@@ -976,7 +976,7 @@ function openSourceReader(source) {
     el('div', { class: 'source-reader-body' }, sourceReadingBody(source.body, '', '暂无原文', source)),
   );
   backdrop.addEventListener('click', event => { if (event.target === backdrop) close(); });
-  backdrop.addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); close(); } });
+  backdrop.addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); } });
   backdrop.append(dialog);
   document.body.append(backdrop);
   closeButton.focus();
