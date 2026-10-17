@@ -3,6 +3,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID, createHash } from 'node:crypto';
 import YAML from 'yaml';
+import { SearchIndex } from './search-index.mjs';
 import { assertBackupSize, backupObject, validBackupId, validateBackupPath, validateBackupMarkdown, validateBackupRecord, BACKUP_ITEM_MAX_BYTES, BACKUP_MAX_BYTES } from './backup-contract.mjs';
 import { includeAttachments, validateAttachments, installAttachments } from './attachment-backup.mjs';
 
@@ -89,7 +90,8 @@ export class Store {
       CREATE TABLE IF NOT EXISTS index_chunks (id TEXT PRIMARY KEY,noteId TEXT NOT NULL,body TEXT NOT NULL,vector TEXT,model TEXT);
       CREATE TABLE IF NOT EXISTS restore_transactions (id TEXT PRIMARY KEY,digest TEXT NOT NULL,committed INTEGER NOT NULL DEFAULT 0);`);
     this.conflicts = [];
-    try { this.recoverInterruptedRestore(); this.scan(); }
+    this.scanCache = new Map(); this.lastFullScan = 0;
+    try { this.recoverInterruptedRestore(); this.searchIndex = new SearchIndex(this.db); this.scan(); this.searchIndex.sync(); }
     catch (error) { this.db.close(); throw error; }
   }
   recoverInterruptedRestore() {
@@ -244,6 +246,7 @@ export class Store {
     const cleanMeta = Object.fromEntries(Object.entries(meta).filter(([key]) => !reserved.has(key)));
     const note = { id, kind: meta.kind || 'knowledge', title: String(meta.title || path.basename(file, '.md')), body, meta: cleanMeta, hash: digest, path: path.relative(this.vaultDir, file).replaceAll('\\', '/'), updatedAt: meta.updatedAt || fs.statSync(file).mtime.toISOString() };
     if (!folders[note.kind]) note.kind = 'knowledge';
+    if (existing?.hash === digest && existing.path === note.path && existing.raw === raw && existing.json === JSON.stringify(note)) return note;
     // A controlled write already saved this exact before-image. Scans and any
     // different indexed version must still retain their own history event.
     if (existing && existing.hash !== digest && existing.hash !== versionedHash) this.version(existing, '外部修改或历史版本');
@@ -251,29 +254,45 @@ export class Store {
     if (!existing || existing.hash !== digest) { this.index(id, `${note.title}\n${body}`); this.put('changed', id, { id, hash: digest, at: now() }); }
     return note;
   }
-  scan({ dryRun = false } = {}) {
+  ensureFresh() {
+    // Metadata is checked on every search, independent of lossy/asynchronous OS
+    // watch delivery. A full hash reconciliation also catches preserved stamps.
+    return this.scan({ incremental: Date.now() - this.lastFullScan < 60_000 });
+  }
+  scan({ dryRun = false, incremental = false } = {}) {
     this.assertAvailable();
     if (!fs.existsSync(this.vaultDir) || fs.lstatSync(this.vaultDir).isSymbolicLink()) fail('Vault 根目录不存在或已被替换为链接。', 'SYMLINK', 403);
-    const files = [], conflicts = [], seen = new Map(), valid = [];
+    const files = [], conflicts = [], seen = new Map(), valid = [], cache = new Map();
+    let readFiles = 0;
     const walk = dir => {
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         if (entry.name.startsWith('.') || entry.isSymbolicLink()) continue;
         const file = path.join(dir, entry.name);
         if (entry.isDirectory()) walk(file);
-        else if (entry.name.toLowerCase().endsWith('.md') && fs.statSync(file).size <= 5_000_000) files.push(file);
+        else if (entry.name.toLowerCase().endsWith('.md')) {
+          const stat = fs.statSync(file, { bigint: true });
+          if (stat.size <= 5_000_000n) files.push({ file, fingerprint: [stat.dev,stat.ino,stat.size,stat.mtimeNs,stat.ctimeNs].join(':') });
+        }
       }
     };
     walk(this.vaultDir);
-    const previous = this.db.prepare('SELECT * FROM notes').all();
-    for (const file of files) {
+    const previous = this.db.prepare('SELECT id,path,hash FROM notes').all();
+    const byPath = new Map(previous.map(row => [row.path, row])), byHash = new Map();
+    for (const row of previous) { const matches=byHash.get(row.hash)||[];matches.push(row);byHash.set(row.hash,matches); }
+    for (const { file, fingerprint } of files) {
       const rel = path.relative(this.vaultDir, file).replaceAll('\\', '/');
       try {
-        const raw = fs.readFileSync(assertTree(file, this.vaultDir), 'utf8'), parsed = parse(raw);
+        const cached = incremental && this.scanCache.get(file), unchanged = cached?.fingerprint === fingerprint;
+        let raw, parsed;
+        if (unchanged) ({ raw, parsed } = cached);
+        else { raw = fs.readFileSync(assertTree(file, this.vaultDir), 'utf8'); readFiles++; parsed = parse(raw); }
         let id = parsed.meta.id;
         if (id !== undefined && (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(id))) fail('id 必须为短字符串。');
-        id ||= previous.find(r => r.path === rel)?.id || previous.find(r => r.hash === hash(raw) && !fs.existsSync(path.join(this.vaultDir, r.path)))?.id || randomUUID();
+        const missing = !id && !byPath.has(rel) ? (byHash.get(hash(raw))||[]).filter(row=>!fs.existsSync(path.join(this.vaultDir,row.path))) : [];
+        id ||= byPath.get(rel)?.id || (missing.length===1 ? missing[0].id : null) || cached?.id || randomUUID();
         if (seen.has(id)) conflicts.push({ path: rel, id, error: '重复稳定 id；两个文件暂时从检索中隔离。', other: seen.get(id) });
-        seen.set(id, rel); valid.push({ id, file, raw, parsed });
+        seen.set(id, rel); valid.push({ id, file, raw, parsed, unchanged });
+        cache.set(file, { fingerprint, raw, parsed, id });
       } catch (error) { conflicts.push({ path: rel, error: error.message }); }
     }
     const duplicates = new Set(conflicts.filter(c => c.id).map(c => c.id));
@@ -286,23 +305,36 @@ export class Store {
       return { count: accepted.length, conflicts, paths: accepted.map(entry => path.relative(this.vaultDir, entry.file).replaceAll('\\', '/')) };
     }
     const currentIds = new Set(accepted.map(v => v.id));
+    const acceptedById = new Map(accepted.map(v => [v.id, v]));
+    const previousById = new Map(previous.map(row => [row.id, row]));
+    let changed = false;
     // Remove stale paths first so external moves/swaps do not hit path uniqueness.
     this.db.exec('SAVEPOINT vault_scan');
     try {
       for (const row of previous) {
-        const current = accepted.find(v => v.id === row.id);
+        const current = acceptedById.get(row.id);
         if (!currentIds.has(row.id) || row.path !== path.relative(this.vaultDir, current.file).replaceAll('\\', '/')) {
-          if (!currentIds.has(row.id)) this.version(row, '文件移除或冲突隔离');
+          changed = true;
+          if (!currentIds.has(row.id)) this.version(this.row(row.id), '文件移除或冲突隔离');
           this.db.prepare('DELETE FROM notes WHERE id=?').run(row.id);
           if (!currentIds.has(row.id)) this.db.prepare('DELETE FROM index_chunks WHERE noteId=?').run(row.id);
         }
       }
-      for (const entry of accepted) this.upsert(entry.file, entry.raw, entry.id, entry.parsed);
+      for (const entry of accepted) {
+        const prior = previousById.get(entry.id);
+        if (!entry.unchanged || !prior || prior.path !== path.relative(this.vaultDir, entry.file).replaceAll('\\', '/')) {
+          const before = this.searchIndex?.revision();
+          this.upsert(entry.file, entry.raw, entry.id, entry.parsed);
+          changed ||= before !== this.searchIndex?.revision();
+        }
+      }
       const blocked = new Set(previous.filter(row => conflicts.some(c => c.id === row.id || c.path === row.path || c.other === row.path)).map(row => row.id));
-      this.syncMirrors(conflicts, blocked);
+      if (!incremental || changed || JSON.stringify(conflicts) !== JSON.stringify(this.conflicts.filter(c => c.type !== 'mirror'))) this.syncMirrors(conflicts, blocked);
       this.db.exec('RELEASE vault_scan');
     } catch (error) { this.db.exec('ROLLBACK TO vault_scan; RELEASE vault_scan'); throw error; }
-    return { count: accepted.length, conflicts: this.conflicts };
+    this.scanCache = cache;
+    if (!incremental) this.lastFullScan = Date.now();
+    return { count: accepted.length, conflicts: this.conflicts, mode: incremental ? 'incremental' : 'full', checkedFiles: files.length, readFiles };
   }
   syncMirrors(conflicts = this.conflicts.filter(item => item.type !== 'mirror'), blocked = new Set()) {
     const notes = this.list(), byId = new Map(notes.map(note => [note.id, note])), claims = new Map();

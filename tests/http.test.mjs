@@ -16,6 +16,33 @@ const tempRoot = path.join(projectDir, '.tmp');
 const mcpServerPath = path.join(projectDir, 'src', 'mcp.mjs');
 await mkdir(tempRoot, { recursive: true });
 
+test('HTTP search retains tail context, provides stable pages and fetches full bodies only on detail', async t => {
+  const app=await startApp(t), session=await webSession(app);
+  const body='# 前言\n'+'普通合成段。\n'.repeat(2000)+'## 目标\n尾部朱雀定位。';
+  const n=app.service.store.create({id:'tail-http',kind:'source',title:'HTTP合成定位',body});
+  app.service.store.create({id:'tail-http-2',kind:'source',title:'另一个',body:'尾部朱雀定位。'});
+  assert.equal((await request(app.baseUrl,'/api/search?q=尾部朱雀')).status,401);
+  const first=await request(app.baseUrl,'/api/search?q=尾部朱雀&limit=1',{headers:session.headers});
+  assert.equal(first.status,200);assert.equal(first.body.total,2);assert.ok(first.body.nextCursor);
+  const second=await request(app.baseUrl,'/api/search?q=尾部朱雀&limit=1&cursor='+encodeURIComponent(first.body.nextCursor),{headers:session.headers});
+  assert.equal(second.status,200);assert.notEqual(first.body.results[0].id,second.body.results[0].id);
+  const hit=[...first.body.results,...second.body.results].find(item=>item.id===n.id);
+  assert.ok(hit.snippet.includes('尾部朱雀'));assert.ok(hit.body.length<=600);
+  assert.equal(hit.location.line,2003);assert.equal(hit.location.heading,'目标');
+  assert.ok(first.body.diagnostics.httpPrepareMs>=first.body.diagnostics.elapsedMs);
+  const detail=await request(app.baseUrl,'/api/notes/'+n.id,{headers:session.headers});assert.equal(detail.body.body,body);
+  assert.equal((await request(app.baseUrl,'/api/index/local',{method:'POST',body:{}})).status,401);
+  const noCsrf={...session.headers};delete noCsrf['X-CSRF-Token'];delete noCsrf['x-csrf-token'];
+  assert.equal((await request(app.baseUrl,'/api/index/local',{method:'POST',headers:noCsrf,body:{}})).status,403);
+  const before=app.service.store.db.prepare('SELECT * FROM index_chunks').all();
+  const rebuild=await request(app.baseUrl,'/api/index/local',{method:'POST',headers:session.headers,body:{}});
+  assert.equal(rebuild.status,200);assert.equal(rebuild.body.count,2);
+  assert.deepEqual(app.service.store.db.prepare('SELECT * FROM index_chunks').all(),before);
+  app.service.store.update(n.id,{expectedHash:n.hash,body:body+'\n明确改动'});
+  const stale=await request(app.baseUrl,'/api/search?q=尾部朱雀&limit=1&cursor='+encodeURIComponent(first.body.nextCursor),{headers:session.headers});
+  assert.equal(stale.status,409);assert.equal(stale.body.code,'SEARCH_CURSOR_STALE');
+});
+
 test('only the public guide allows same-origin framing; help assets need no API session', async (t) => {
   const app = await startApp(t);
   for (const [asset, type] of [['/', 'text/html'], ['/guide.html', 'text/html'], ['/guide.css', 'text/css'], ['/help.mjs', 'text/javascript']]) {

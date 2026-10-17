@@ -66,6 +66,7 @@ const state = {
 };
 
 let libraryRenderSequence = 0;
+let searchRenderSequence = 0;
 let libraryRegionSequence = 0;
 
 function libraryFoldControl(key, title, content) {
@@ -827,7 +828,7 @@ function sourceGroupCard(group) {
   ]);
 }
 
-async function openNote(id) {
+async function openNote(id, searchHit = null) {
   openDrawer("正在读取…", "知识详情", el("div", { class: "loading-panel" }, el("span", { class: "spinner" })));
   try {
     const note = await api.note(id);
@@ -838,6 +839,19 @@ async function openNote(id) {
     }
     if (note.kind === "source") renderSourceGroupDrawer(note);
     else renderNoteDrawer(note);
+    if (searchHit?.location) {
+      if (searchHit.location.hash !== note.hash) toast('内容已更新，请重新检索以定位当前版本。', 'info');
+      else {
+        const where = searchHit.location;
+        const target = where.heading && [...refs.drawerBody.querySelectorAll('h1,h2,h3,h4,h5,h6')].find(node => node.textContent === where.heading);
+        const locator = el('section', { class: 'notice', dataset: { tour: 'search-location' } }, [
+          el('strong', { text: where.field === 'title' ? '命中标题' : `命中正文第 ${where.line} 行${where.heading ? ' · '+where.heading : ''}` }),
+          el('p', { text: searchHit.snippet }),
+        ]);
+        refs.drawerBody.prepend(locator);
+        (target || locator).scrollIntoView({ block: 'center' });
+      }
+    }
   } catch (error) {
     refs.drawerTitle.textContent = "读取失败";
     clear(refs.drawerBody).append(emptyState("无法打开这条内容", errorMessage(error), button("重试", { onClick: () => openNote(id) })));
@@ -1909,20 +1923,39 @@ async function renderDiscover() {
   else resultArea.append(emptyState("输入一次真实查询", "没有命中时会明确显示空结果，不补写知识库中不存在的内容。"));
 }
 
-async function runSearch(container) {
+async function runSearch(container, paging = {}) {
+  if (paging.button?.disabled || paging.sequence && paging.sequence !== searchRenderSequence) return;
+  const sequence = paging.sequence || ++searchRenderSequence, context = api.getContext(), view = state.view;
+  const filters = { ...state.searchFilters }, started = Date.now();
+  const current = () => { const latest = api.getContext(); return sequence === searchRenderSequence && latest.version === context.version && latest.practiceId === context.practiceId && state.view === view; };
   container.dataset.tour = "discover-results";
-  clear(container).append(el("div", { class: "loading-panel" }, [el("span", { class: "spinner" }), el("p", { text: "正在检索本地索引…" })]));
+  if (!paging.cursor) clear(container).append(el("div", { class: "loading-panel" }, [el("span", { class: "spinner" }), el("p", { text: "正在检索本地索引…" })]));
+  paging.button && (paging.button.disabled = true);
   try {
-    const data = await api.search(state.searchFilters);
+    const data = await api.search({ ...filters, ...(paging.cursor ? { cursor: paging.cursor } : {}) });
+    if (!current()) return;
     const results = asArray(data.results);
     const diagnostics = asObject(data.diagnostics);
-    clear(container).append(
-      sectionHeading("检索结果", results.length ? `找到 ${results.length} 条候选，排序方式来自实际索引` : "没有找到匹配材料"),
-      results.length ? el("div", { class: "list" }, results.map(searchResultRow)) : emptyState("没有命中", "可以尝试切换检索方式、减少筛选，或先补充相关资料。"),
-      Object.keys(diagnostics).length ? el("details", { class: "panel soft" }, [el("summary", { text: "查看这次检索怎样工作" }), el("pre", { class: "mono-block", text: JSON.stringify(diagnostics, null, 2) })]) : null,
-    );
+    const rows = paging.rows || el("div", { class: "list" });
+    rows.append(...results.map(searchResultRow));
+    container.querySelector('[data-tour="search-error"]')?.remove();
+    if (!paging.cursor) clear(container).append(sectionHeading("检索结果", results.length ? `找到 ${data.total ?? results.length} 条候选，排序方式来自实际索引` : "没有找到匹配材料"), results.length ? rows : emptyState("没有命中", "可以尝试切换检索方式、减少筛选，或先补充相关资料。"));
+    container.querySelector('[data-tour="search-more"]')?.remove();
+    if (data.nextCursor) {
+      const more = button('加载下一页', { onClick: () => runSearch(container, { cursor: data.nextCursor, sequence, rows, button: more }) });
+      more.dataset.tour = 'search-more'; container.append(more);
+    }
+    container.querySelector('[data-tour="search-diagnostics"]')?.remove();
+    diagnostics.clientToDomMs = Date.now()-started;
+    container.append(el("details", { class: "panel soft", dataset: { tour: 'search-diagnostics' } }, [el("summary", { text: "查看这次检索怎样工作" }), el("pre", { class: "mono-block", text: JSON.stringify(diagnostics, null, 2) })]));
   } catch (error) {
-    clear(container).append(emptyState("检索暂时失败", errorMessage(error), button("重试", { onClick: () => runSearch(container) })));
+    if (!current()) return;
+    if (!paging.cursor) clear(container);
+    container.querySelector('[data-tour="search-error"]')?.remove();
+    const errorPanel = emptyState("检索暂时失败", errorMessage(error), button("重新检索", { onClick: () => runSearch(container) }));
+    errorPanel.dataset.tour = 'search-error'; container.append(errorPanel);
+  } finally {
+    if (paging.button) paging.button.disabled = false;
   }
 }
 
@@ -1933,11 +1966,12 @@ function searchResultRow(result) {
     el("div", { class: "item-symbol", text: note.kind === "source" ? "源" : note.kind === "mistake" ? "错" : "知" }),
     el("div", { class: "item-copy" }, [
       el("h3", { text: note.title || "未命名" }),
-      note.kind === 'source' ? sourceReadingBody(sourceBodyPreview(result.excerpt || note.body), 'markdown-preview', '暂无摘要') : el("p", { text: truncate(readableBody(result.excerpt || note.body), 180) || "暂无摘要" }),
-      reasons ? el("p", { text: Array.isArray(reasons) ? reasons.join(" · ") : String(reasons) }) : null,
+      result.snippet ? el('p', { text: result.snippet }) : note.kind === 'source' ? sourceReadingBody(sourceBodyPreview(result.excerpt || note.body), 'markdown-preview', '暂无摘要') : el("p", { text: truncate(readableBody(result.excerpt || note.body), 180) || "暂无摘要" }),
+      reasons && reasons !== result.snippet ? el("p", { text: Array.isArray(reasons) ? reasons.join(" · ") : String(reasons) }) : null,
+      result.location ? el('p', { class: 'fine-print', text: result.location.field === 'title' ? '命中标题' : `${result.location.heading ? result.location.heading+' · ' : ''}正文第 ${result.location.line} 行${result.location.type === 'semantic' ? ' · 语义片段' : ''}` }) : null,
       el("div", { class: "item-meta" }, [badge(labels.kind(note.kind)), note.meta?.stage ? badge(labels.stage(note.meta.stage), stateTone(note.meta.stage)) : null, result.score !== undefined ? badge(`相关度 ${Number(result.score).toFixed(2)}`) : null]),
     ]),
-    el("div", { class: "item-actions" }, button("打开", { kind: "quiet compact", onClick: () => openNote(note.id || result.noteId) })),
+    el("div", { class: "item-actions" }, button("打开", { kind: "quiet compact", onClick: () => openNote(note.id || result.noteId, result) })),
   ]);
 }
 
@@ -2639,6 +2673,8 @@ async function diagnosticsPanel() {
     el("div", { class: "two-column" }, [
       el("section", { class: "panel", dataset: { tour: "system-index" } }, [sectionHeading("存储与索引", "Vault 内容是知识权威，索引可重建"), keyValueObject(storage),
         el("p", { text: `检索片段 ${number(index.count)} 条，已有向量 ${number(index.vectors)} 条，待补建 ${number(index.pending)} 条。` }),
+        el('p', { class: 'fine-print', text: '本地全文检索自动同步保存和外部文件变化。重建全文索引会全量校对 Markdown，不调用模型，也不清除已有向量。' }),
+        button('重建本地全文索引', { onClick: async () => { try { const result=await api.rebuildLocalSearch(); toast(`本地全文索引已重建：${result.count} 条资料，${result.conflicts} 项冲突。`, 'success'); } catch(error) { handleError(error); } } }),
         el("p", { class: "fine-print", text: "保存知识只更新本地索引。点击补建后，本次所需且缺少向量的片段会发送给已配置的嵌入服务，可能产生费用。" }),
         el("div", { class: "form-actions" }, [button("只补建缺失向量", { kind: "primary", disabled: !number(index.pending), onClick: async () => { try { const result = await api.updateIndex(); toast(`补建任务已${labels.state(result.state)}`, "success"); } catch (error) { handleError(error); } } }), button("全量重建索引", { onClick: async () => { try { const result = await api.rebuildIndex(); toast(`索引任务已${labels.state(result.state)}`, "success"); } catch (error) { handleError(error); } } })]),
         asArray(storage.pendingLinks).length ? el("section", {}, [sectionHeading("待更新的 Obsidian 链接", "文件改名后，先核对预览再更新引用"), el("div", { class: "list" }, storage.pendingLinks.map(note => el("div", { class: "list-item no-icon" }, [el("strong", { text: note.title }), button("核对链接", { kind: "text compact", onClick: () => previewNoteLinks(note.id) })])))]) : null]),

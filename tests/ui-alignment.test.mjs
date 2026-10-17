@@ -360,6 +360,8 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat, savedSession = 
   context.app.renderLibrary = vm.runInContext('renderLibrary', context);
   context.app.historyReadingBody = vm.runInContext('historyReadingBody', context);
   context.app.searchResultRow = vm.runInContext('searchResultRow', context);
+  context.app.runSearch = vm.runInContext('runSearch', context);
+  context.app.openNote = vm.runInContext('openNote', context);
   context.app.prepareContextChange = vm.runInContext('prepareContextChange', context);
   context.app.finishContextChange = vm.runInContext('finishContextChange', context);
   context.app.navigate = vm.runInContext('navigate', context);
@@ -497,6 +499,39 @@ test('library folding cannot hide content during an unsaved source edit and reta
   assert.equal(textarea.value, body + '\n尚未保存');
   textarea.value = body; await click(findButton(section, '折叠原始资料'));
   assert.equal(section.querySelector('.library-section-body').hidden, true);
+});
+
+test('search pagination preserves rows on failure, blocks double clicks and rejects late query/context responses', async () => {
+  const calls=[], pending=[]; let context={practiceId:'',version:0};
+  const app=browser({getContext:()=>context,search:input=>{calls.push(input);return new Promise((resolve,reject)=>pending.push({resolve,reject}));}});
+  app.state.view='discover'; app.state.searchFilters.q='朱雀';
+  const container=new Element();
+  const hit=id=>({id,kind:'knowledge',title:id,body:'前言',snippet:'尾部朱雀',meta:{},location:{field:'body',line:300,heading:'目标段'}});
+  const first=app.runSearch(container);pending.shift().resolve({results:[hit('first')],total:3,nextCursor:'c1'});await first;
+  assert.ok(container.textContent.includes('正文第 300 行'));
+  const more=findButton(container,'加载下一页'), page=click(more), duplicate=click(more);
+  await duplicate;assert.equal(calls.length,2);assert.equal(more.disabled,true);
+  pending.shift().reject(new Error('synthetic failure'));await page;
+  assert.ok(container.textContent.includes('first'));assert.equal(more.disabled,false);
+  const retry=click(more);pending.shift().resolve({results:[hit('second')],total:3,nextCursor:null});await retry;
+  assert.ok(container.textContent.includes('second'));assert.equal(container.querySelector('[data-tour="search-more"]'),null);
+  assert.ok(!container.textContent.includes('检索暂时失败'));
+  app.state.searchFilters.q='旧查询';const old=app.runSearch(container);
+  app.state.searchFilters.q='新查询';const fresh=app.runSearch(container);
+  pending[1].resolve({results:[hit('new-result')]});await fresh;pending[0].resolve({results:[hit('old-result')]});await old;pending.length=0;
+  assert.ok(container.textContent.includes('new-result'));assert.ok(!container.textContent.includes('old-result'));
+  const foreign=app.runSearch(container);context={practiceId:'practice',version:1};pending.shift().resolve({results:[hit('foreign-result')]});await foreign;
+  assert.ok(!container.textContent.includes('foreign-result'));
+});
+
+test('opening a search hit locates the matching version and refuses a stale location', async () => {
+  const n={id:'hit',hash:'current',kind:'source',title:'定位原文',body:'## 目标段\n尾部朱雀',meta:{},children:[],jobs:[]};
+  const app=browser({note:async()=>n});
+  await app.openNote(n.id,{snippet:'尾部朱雀',location:{hash:'current',field:'body',line:2,heading:'目标段'}});
+  assert.ok(app.refs.drawerBody.querySelector('[data-tour="search-location"]').textContent.includes('第 2 行'));
+  await app.openNote(n.id,{snippet:'旧版本内容',location:{hash:'old',field:'body',line:100}});
+  assert.equal(app.refs.drawerBody.querySelector('[data-tour="search-location"]'),null);
+  assert.ok(app.toasts.textContent.includes('内容已更新'));
 });
 
 test('source reading, search excerpts and historical body use Markdown while metadata and fenced code stay literal', () => {

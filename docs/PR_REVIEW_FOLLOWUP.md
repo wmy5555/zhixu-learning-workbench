@@ -1,5 +1,33 @@
 # PR 审阅核对与后续事项
 
+## 2026-10-17 PR #81 与 API/历史主线兼容
+
+在原任务 worktree 正常合并已交付 main `32e86b24d2f0686fa69b731e3df08a0c60256cb2`，父提交为原 PR81 `8d90269d96035fa1278771ce82fd14da6c205d30`。已重读当前规则、PR81 评论/行内意见/总结及主线 PR87、PR90 评论；PR81 原三项行内线程均已解决，未发现新增待处理意见。只出现四个预期冲突：CHANGELOG、测试结果、服务导出、存储 upsert；保留双方文档、测试、两个服务入口、无变化提前返回及精确旧版本去重。39 项相关合成回归全通过，范围及日志见 [测试结果](TEST_RESULTS.md)。不引入未合并功能分支，不重跑不受影响的完整套件或容量基准。
+
+复用原代码审查已覆盖且未变范围，本轮不发送新代码/安全请求。原安全请求 `6209237529` 带附加说明，公开摘要独立 security 字段仍为空，只取得普通代码回执；不再把它计为完成的独立安全初审。现行维护规则要求纯单行触发，范围与去重上下文单独留档；本轮尚未触发。新提交 CI 仍须按精确 SHA 核对，PR 保持 Draft，未合并 main 或部署。
+
+## 2026-10-17 PR #81 与 main 衔接
+
+在原检索 worktree 接续：本地及远端头均为 `d17678e66cba918d9dadea5b7883f4d688dd8f97`，工作区干净、无索引锁，未发现指向该路径的其他执行进程；获取 main `e4b7eff045534b9b056441a432baf75e93a809d6` 后正常 merge，不改写历史。真实文本冲突仅 `CHANGELOG.md` 顶部并列条目，已同时保留检索、审查频率、本地标题及收集回执说明。`public/app.mjs`、`src/service.mjs`、`tests/ui-alignment.test.mjs` 自动合并，主线的临时标题/嵌套围栏和保存回执、检索的计时/定位/分页及双方测试均保留，未增加产品范围。
+
+修改前已重读 #81 全部普通评论、行内意见与总结，三项初审线程仍已解决，代码复审覆盖原行为提交。另读 main 新合并的 #82、#84、#86：#82 容器内围栏意见已有修复，保留相应六条回归；#84 无重大问题，#86 为审查规则调整。当前 main 已采用重大功能一次代码审查规则，本次仅正常合并，不新增代码或安全审阅请求，不以合并 SHA 变化重开审查。
+
+本轮实际读取安全请求 `6209237529` 的 reactions 返回空数组，安全摘要的提交与状态仍为 null，未找到新增可读报告。此前 👀 只作为历史记录，不能当作当前运行、完成或通过证据；CI 与代码审阅均不替代独立安全结论。PR 保持 Draft，本轮不合并 main、不更新正式 4318，不使用其他任务的工作树、预览端口或数据。
+
+2026-10-16 检索优化开始前获取最新 main `4a5f90b`，独立 worktree 保留主工作区其他任务的全部未提交改动。增量读取 #80、#71、#77、#70 的普通评论、行内意见及 Code/Security 总结：#71 的文件竞争/持久续跑、#77 的本地图片外发过滤及逐引用附件校验已有后续修复，保留这些实现；#70/#80 无未处理的新检索问题。旧独立安全报告不可得的边界不因本次检索改动解除。当前任务的代码/安全审查与四项 CI 将按实际回执继续登记，不把已有 PR 完成状态当作本次已审查。
+
+检索 [PR #81](https://github.com/wmy5555/zhixu-learning-workbench/pull/81) 候选 `2a6f18671d4a4da8fd41e5576318917b14865d3e`：发送前已读取当前全部评论，无已有请求/自动总结；分别成功提交一次[代码初审](https://github.com/wmy5555/zhixu-learning-workbench/pull/81#issuecomment-6209236673)和一次[安全初审](https://github.com/wmy5555/zhixu-learning-workbench/pull/81#issuecomment-6209237529)。范围分别为召回/排序/分页/定位与不可信 Markdown/文件边界/索引事务一致性，不请求代改。连接工具不提供自动审查开关实时读取，未修改开关；代码审查已显示 running，安全请求仅确认评论创建，不能等同运行或通过。当前候选 [CI 38859273928](https://github.com/wmy5555/zhixu-learning-workbench/actions/runs/38859273928) 继续逐项核对。
+
+已实际读回上述候选的 Windows Quality、Linux Quality、Secrets、Dependencies **四项 completed/success**。代码总结仍为 running；安全请求有连接机器人 👀 回执，但 summary 的 security 状态与提交仍为空，未取得可读报告，不能记为安全通过。不重复发送请求，不合并或更新正式服务；后续只补说明不构成新的代码初审理由，最终说明提交 CI 另核。
+
+代码初审于 2026-10-16 返回三项具体问题，均采纳并先复现：[高熵长文内存](https://github.com/wmy5555/zhixu-learning-workbench/pull/81#discussion_r4291466625)、[相同哈希的无 ID 文件改名](https://github.com/wmy5555/zhixu-learning-workbench/pull/81#discussion_r4291466636)、[异常 sources 筛选](https://github.com/wmy5555/zhixu-learning-workbench/pull/81#discussion_r4291466644)。原实现分别出现 128 MiB V8 old-space 子进程 OOM、改名后原 ID NOT_FOUND、malformed JSON。修复为有界重叠全文片段与逐条脏索引读取、保留同哈希全部路径后选择唯一消失路径、按 JSON 元素类型安全提取 id。新三项及检索专项实际 13/13 通过；不把 V8 old-space 限制称为总 RSS 上限。旧投影布局重建和跨块长型号召回另纳入完整回归；容量重新测量，不继续把旧全文布局耗时当新布局结果。
+
+复审判断：默认不复审，但本次 P1 修复将全文投影从每笔记一行调整为有界重叠片段，并增加布局版本重建，实际扩大派生数据影响。已有堆限制、跨片段召回、事务回滚/重开与原向量保留证据；仍需定向静态核对分段候选完整性和旧布局升级，不扩大为全仓审阅。必要完整验证、容量对照和候选推送后只请求一次代码复审，安全初审未给可读结果前不重发或另启审阅者。
+
+修复行为提交 `ba7d4b4780e8ccfcc49c98aa5af28ef0100d04be` 已推送，完整本地 **1090/1090** 与新布局容量复测通过。三条初审已[逐项说明](https://github.com/wmy5555/zhixu-learning-workbench/pull/81#issuecomment-6209474983)并解决线程；[唯一代码复审请求](https://github.com/wmy5555/zhixu-learning-workbench/pull/81#issuecomment-6209479076)已[完成且未发现重大问题](https://github.com/wmy5555/zhixu-learning-workbench/pull/81#issuecomment-6209536256)。该提交 [CI 38860895406](https://github.com/wmy5555/zhixu-learning-workbench/actions/runs/38860895406) 的 Windows/Linux Quality、Secrets、Dependencies 四项均实际读回 completed/success。请求计数：代码初审 1、定向复审 1、安全初审 1；不再自动追加。
+
+合并阻塞仍为完整独立安全结论不可读：安全请求有 👀 回执，但公开 summary 的 security 提交/状态为空，未返回可核对报告，没有被明确拒绝，不能记为通过或猜测收益。PR 保持 Draft，未合并、未更新正式 4318，不操作真实资料。当前合成后台预览保留用于验收，旧版合成服务已按 PID/监听归属确认后停止；浏览器任务会话组在阻塞期间保留。后续仅说明提交不触发新审查，其最新 CI 另核；不将说明变化视为重新测试未变产品的理由。
+
 ## 2026-10-16 PR #71 接入最新主线
 
 将历史增强候选 `b8fe8dc622adf288a038d9acae04228db5a682a9` 正常合并 main `47bcb63611e41edd8ca11895b61ff3173897af97`，保留双方提交历史。八份冲突文件逐块融合：本机撤销路由与附件/恢复请求读取同时保留，Store 同时保留磁盘核验、独占恢复及主线的持久恢复阻塞保护，服务同时导出会话撤销、附件与调用恢复。说明记录并列保留。主线主动 AI 取材快照与图片外发过滤、50 MB 附件、100 MB 备份、调用账本与凭据事务、Markdown 编辑器及 #78–#80 网页修复保留；未同步 Android。
