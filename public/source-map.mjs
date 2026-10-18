@@ -114,7 +114,7 @@ export function layoutSourceMap(nodes, edges, hierarchy, mode = 'logic', collaps
       d = 'M'+start+','+a.y+' L'+start+','+(a.y-12)+' L'+rail+','+(a.y-12)+' L'+rail+','+ty+' L'+end+','+ty+' L'+end+','+b.y;
       tx = (rail+end)/2;
     }
-    return { edge, d, tx, ty, label: { x: tx-(edge.label ? 46 : 22), y: ty-15, width: edge.label ? 92 : 44, height: 24 } };
+    return { edge, d, tx, ty, label: { x: Math.max(4, Math.min(width - 116, tx - 56)), y: ty-15, width: 112, height: 26 } };
   });
   return { positions, width, height: Math.max(320, y), cardWidth, cardHeight, levelStep, routes };
 
@@ -169,7 +169,7 @@ export function createSourceMap({ source, children, view = {}, renderDetail, ana
   const notes = new Map(children.map(note => [note.id, note]));
   view.mode ||= 'logic'; view.collapsed ||= new Set(); view.zoom ||= 1;
   for (const id of view.collapsed) if (!notes.has(id)) view.collapsed.delete(id);
-  if (!notes.has(view.selected)) {
+  if (view.selected !== null && !notes.has(view.selected)) {
     const degree = id => edges.filter(edge => edge.from === id || edge.to === id).length;
     view.selected = children.reduce((best, note) => degree(note.id) > degree(best?.id) ? note : best, children[0])?.id;
   }
@@ -181,6 +181,9 @@ export function createSourceMap({ source, children, view = {}, renderDetail, ana
   const detail = el('div', { class: 'map-detail', 'aria-live': 'polite' });
   const relationDetail = el('div', { class: 'map-relations' });
   const nodeButtons = new Map(), modeButtons = new Map();
+  const edgeKey = edge => edge.id || JSON.stringify([edge.from, edge.to, edge.type, edge.label]);
+  const edgeTitle = edge => `${notes.get(edge.from)?.title} → ${edge.label || sourceMapLabels[edge.type] || '关联'} → ${notes.get(edge.to)?.title}`;
+  if (!edges.some(edge => edgeKey(edge) === view.selectedEdge)) view.selectedEdge = null;
   const svgElement = (tag, attrs = {}, content = '') => {
     const element = document.createElementNS('http://www.w3.org/2000/svg', tag);
     for (const [key, value] of Object.entries(attrs)) element.setAttribute(key, String(value));
@@ -205,7 +208,20 @@ export function createSourceMap({ source, children, view = {}, renderDetail, ana
     viewport.scrollLeft = Math.max(0, (position.x + layout.cardWidth / 2) * view.zoom - viewport.clientWidth / 2);
     viewport.scrollTop = Math.max(0, (position.y + layout.cardHeight / 2) * view.zoom - viewport.clientHeight / 2);
   }
-  function select(id, focus = false) { view.selected = id; draw(); if (focus) nodeButtons.get(id)?.focus({ preventScroll: true }); }
+  function select(id, focus = false) { view.selected = id; view.selectedEdge = null; draw(); if (focus) nodeButtons.get(id)?.focus(); }
+  function selectEdge(edge, focusDetail = true) {
+    view.selectedEdge = edgeKey(edge); view.selected = edge.from; draw(); centerSelected();
+    if (focusDetail) {
+      const summary = relationDetail.querySelector('.is-selected summary');
+      summary?.focus({ preventScroll: true }); summary?.scrollIntoView({ block: 'nearest' });
+    }
+  }
+  function clearSelection() { view.selected = null; view.selectedEdge = null; draw(); viewport.focus({ preventScroll: true }); }
+  root.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && (view.selected || view.selectedEdge !== null)) {
+      event.preventDefault(); event.stopPropagation(); clearSelection();
+    }
+  });
   function scaleCanvas(frame, canvas, width, height) {
     frame.style.width = `${width * view.zoom}px`; frame.style.height = `${height * view.zoom}px`;
     canvas.style.transform = `scale(${view.zoom})`;
@@ -238,16 +254,16 @@ export function createSourceMap({ source, children, view = {}, renderDetail, ana
   function drawDetail() {
     clear(detail); clear(relationDetail);
     const note = notes.get(view.selected);
-    if (!note) return;
-    detail.append(renderDetail(note, children.indexOf(note)));
-    const relevant = edges.filter(e => e.from === note.id || e.to === note.id);
-    relationDetail.append(el('h3', { text: '与这条内容的联系' }));
+    if (note) detail.append(el('h3', { class: 'map-selected-title', text: `已选条目：${note.title}` }), renderDetail(note, children.indexOf(note)));
+    const relevant = note ? edges.filter(e => e.from === note.id || e.to === note.id) : edges;
+    relationDetail.append(el('h3', { text: note ? '与这条内容的联系（点击展开完整关系）' : '全部关系（点击展开完整关系）' }));
     if (!relevant.length) relationDetail.append(el('p', { class: 'muted', text: '尚无有依据的逻辑连线；同一来源只表示资料归属。' }));
     for (const edge of relevant) {
       if (!notes.has(edge.from) || !notes.has(edge.to)) continue;
-      const other = edge.from === note.id ? edge.to : edge.from;
-      relationDetail.append(el('details', { class: 'map-edge-detail', dataset: { edgeId: edge.id } }, [
-        el('summary', { text: `${notes.get(edge.from).title} → ${edge.label || sourceMapLabels[edge.type] || '关联'} → ${notes.get(edge.to).title}` }),
+      const other = edge.from === note?.id ? edge.to : edge.from;
+      const selected = view.selectedEdge === edgeKey(edge);
+      relationDetail.append(el('details', { class: `map-edge-detail${selected ? ' is-selected' : ''}`, open: selected, dataset: { edgeId: edge.id } }, [
+        el('summary', { text: `${selected ? '已选关系 · ' : ''}${edgeTitle(edge)}`, on: { click: event => { if (!selected) { event.preventDefault(); selectEdge(edge); } } } }),
         el('p', { text: edge.explanation }), el('p', { text: [edge.status && ({explicit:'原文明说',inferred:'AI 推断',user:'用户补充',pending:'待核'})[edge.status], edge.condition && '条件：'+edge.condition, edge.exceptions && '例外：'+edge.exceptions].filter(Boolean).join(' · ') }), ...(edge.sourceRefs?.length ? edge.sourceRefs.map(ref => el('blockquote', { text: `${ref.quote}（原文位置 ${ref.start}–${ref.end}）` })) : [el('blockquote', { text: edge.sourceExcerpt }), el('blockquote', { text: edge.targetExcerpt })]),
         button('查看关联条目', { kind: 'text compact', onClick: () => select(other, true) }),
       ]));
@@ -257,6 +273,7 @@ export function createSourceMap({ source, children, view = {}, renderDetail, ana
     finishPan();
     const left = viewport.scrollLeft || 0, top = viewport.scrollTop || 0;
     clear(viewport); nodeButtons.clear();
+    cancelSelection.disabled = view.selected === null && view.selectedEdge === null;
     viewport.dataset.mode = view.mode;
     viewport.dataset.reading = String(listMode);
     zoomReset.textContent = `${Math.round(view.zoom * 100)}%`;
@@ -276,10 +293,10 @@ export function createSourceMap({ source, children, view = {}, renderDetail, ana
     const markerId = `map-arrow-${++mapSerial}`, defs = svgElement('defs'), marker = svgElement('marker', { id: markerId, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 6, markerHeight: 6, orient: 'auto-start-reverse' });
     marker.append(svgElement('path', { d: 'M 0 0 L 10 5 L 0 10 z', fill: 'context-stroke' })); defs.append(marker); svg.append(defs);
     const painted = view.mode === 'mind' ? children.map(n => ({ from: hierarchy.find(h => h.child === n.id)?.parent || '__source__', to: n.id, type: 'contains' })) : edges;
-    const captions = svgElement('g');
     for (const edge of painted) {
       const a = layout.positions.get(edge.from), b = layout.positions.get(edge.to); if (!a || !b) continue;
-      const related = edge.from === view.selected || edge.to === view.selected;
+      const selected = view.selectedEdge === edgeKey(edge);
+      const related = view.selectedEdge !== null ? selected : edge.from === view.selected || edge.to === view.selected;
       let d, tx, ty;
       if (view.mode === 'mind') {
         const x1 = a.x + layout.cardWidth, x2 = b.x, y1 = a.y + layout.cardHeight / 2, y2 = b.y + layout.cardHeight / 2;
@@ -289,16 +306,19 @@ export function createSourceMap({ source, children, view = {}, renderDetail, ana
         if (!route) continue;
         ({ d, tx, ty } = route);
       }
-      svg.append(svgElement('path', { d, 'data-type': edge.type, 'data-tone': toneFor(edge.to), class: `map-line${related ? ' is-related' : ''}`, ...(view.mode === 'logic' ? { 'marker-end': `url(#${markerId})` } : {}) }));
+      svg.append(svgElement('path', { d, 'data-type': edge.type, 'data-tone': toneFor(edge.to), class: `map-line${related ? ' is-related' : ''}${selected ? ' is-selected' : ''}${view.selectedEdge !== null && !selected ? ' is-muted' : ''}`, ...(view.mode === 'logic' ? { 'marker-end': `url(#${markerId})` } : {}) }));
       if (view.mode === 'logic') {
         const caption = visualKind === 'flow' && edge.type === 'condition' ? edge.condition : edge.label || sourceMapLabels[edge.type] || '关联';
-        const label = svgElement('g', { 'data-type': edge.type, class: `map-edge-caption${related ? ' is-related' : ''}` });
-        label.append(svgElement('rect', { x: tx - (edge.label ? 46 : 22), y: ty - 15, width: edge.label ? 92 : 44, height: 24, rx: 8 }),
-          svgElement('text', { x: tx, y: ty + 2, 'text-anchor': 'middle', class: 'map-edge-label' }, (caption.length > 6 ? caption.slice(0, 5)+'…' : caption)));
-        captions.append(label);
+        const label = button(caption, { kind: 'map-edge-caption', onClick: () => selectEdge(edge) });
+        label.classList.add('map-edge-control'); label.dataset.type = edge.type;
+        if (related) label.classList.add('is-related');
+        label.setAttribute('aria-label', `查看完整关系：${edgeTitle(edge)}`);
+        label.setAttribute('aria-pressed', String(selected));
+        label.style.left = `${layout.routes.find(route => route.edge === edge).label.x}px`;
+        label.style.top = `${ty - 15}px`;
+        canvas.append(label);
       }
     }
-    svg.append(captions);
     canvas.append(svg);
     for (const [id, position] of layout.positions) {
       const note = notes.get(id), isRoot = id === '__source__';
@@ -307,7 +327,10 @@ export function createSourceMap({ source, children, view = {}, renderDetail, ana
       card.classList.add('map-node');
       if (note?.visualRole === '判断 · 条件分支') card.classList.add('is-decision');
       card.dataset.tone = isRoot ? 'blue' : toneFor(id); card.title = title;
-      card.append(el('span', { class: 'map-node-kicker', text: isRoot ? '原始资料' : note.visualRole || `拆解 ${String(children.indexOf(note) + 1).padStart(2, '0')}` }), el('span', { class: 'map-node-title', text: title }));
+      const selectedEdge = edges.find(edge => edgeKey(edge) === view.selectedEdge);
+      const endpoint = selectedEdge?.from === id ? '起点 · ' : selectedEdge?.to === id ? '终点 · ' : '';
+      if (endpoint) card.classList.add('is-endpoint');
+      card.append(el('span', { class: 'map-node-kicker', text: endpoint + (isRoot ? '原始资料' : id === view.selected && !selectedEdge ? '已选 · ' + (note.visualRole || '条目') : note.visualRole || `拆解 ${String(children.indexOf(note) + 1).padStart(2, '0')}`) }), el('span', { class: 'map-node-title', text: title }));
       card.style.left = `${position.x}px`; card.style.top = `${position.y}px`; card.style.width = `${layout.cardWidth}px`; card.style.height = `${layout.cardHeight}px`;
       if (!isRoot) {
         card.dataset.noteId = id; card.setAttribute('aria-label', title); card.setAttribute('aria-pressed', String(id === view.selected)); nodeButtons.set(id, card);
@@ -339,14 +362,15 @@ export function createSourceMap({ source, children, view = {}, renderDetail, ana
   zoomReset.setAttribute('aria-label', '恢复原始比例');
   const fitButton = button('适应窗口', { kind: 'quiet compact', title: '缩放整张图，使其尽量完整显示', onClick: fit });
   const readAll = button('阅读全部条目', { kind: 'text compact', onClick: () => { view.reading = listMode = !listMode; draw(); } });
-  toolbar.append(tabs, readAll, el('div', { class: 'map-tools' }, [el('div', { class: 'map-zoom-controls', role: 'group', 'aria-label': '图形缩放' }, [zoomOut, zoomReset, zoomIn]), fitButton, expand]));
+  const cancelSelection = button('取消选择', { kind: 'quiet compact', onClick: clearSelection });
+  toolbar.append(tabs, readAll, cancelSelection, el('div', { class: 'map-tools' }, [el('div', { class: 'map-zoom-controls', role: 'group', 'aria-label': '图形缩放' }, [zoomOut, zoomReset, zoomIn]), fitButton, expand]));
   const analyzeButton = button('重新分析结构', { kind: 'quiet compact', onClick: analyze });
   analyzeButton.dataset.structureSubmit = source.id;
   root.append(el('div', { class: 'map-heading' }, [el('h2', { text: `拆解条目（${children.length}）` }), el('span', { class: 'badge badge-warn', text: 'AI 结构建议' }), analyzeButton]),
     el('p', { class: 'fine-print', text: '新资料在 AI 拆解时一并分析结构。重新分析会发送获准的原文与当前条目，可能产生费用。' }),
     el('p', { class: 'map-status', role: 'status', text: data.message || (edges.length ? `${children.length} 条拆解 · ${edges.length} 条逻辑联系 · 点击条目查看正文与依据` : '没有可靠的逻辑连线；思维导图显示资料归属与已分析层级。') }),
     el('p', { class: 'structure-job-status notice info', role: 'status', hidden: true, dataset: { sourceId: source.id } }), toolbar, viewport,
-    el('div', { class: 'map-reading-bar' }, [el('span', { class: 'fine-print', text: '按住鼠标拖动 · 滚轮向上放大、向下缩小 · AI 建议尚未确认' })]), relationDetail, detail);
+    el('div', { class: 'map-reading-bar' }, [el('span', { class: 'fine-print', text: '点击节点阅读完整标题与正文；点击关系标签或下方关系展开完整依据 · Esc 取消选择 · 拖动平移 / 滚轮缩放' })]), relationDetail, detail);
   if (embedded) { root.querySelector('.map-heading')?.remove(); root.querySelector('.fine-print')?.remove(); }
   draw();
   queueMicrotask(() => { if (root.isConnected) centerSelected(); });
