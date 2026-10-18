@@ -179,7 +179,7 @@ export function createSourceMap({ source, children, view = {}, renderDetail, ana
     if (content) element.textContent = content;
     return element;
   };
-  let listMode = false;
+  let listMode = view.reading ?? true;
   view.expanded ||= false;
   onExpand(view.expanded);
   const layoutForView = () => layoutSourceMap(children, edges, hierarchy, view.mode, view.collapsed, source.title);
@@ -256,7 +256,7 @@ export function createSourceMap({ source, children, view = {}, renderDetail, ana
     zoomOut.disabled ||= view.zoom <= .15; zoomIn.disabled ||= view.zoom >= 1.8;
     readAll.textContent = listMode ? '返回结构图' : '阅读全部条目';
     for (const [mode, control] of modeButtons) control.setAttribute('aria-pressed', String(!listMode && view.mode === mode));
-    if (listMode) { children.forEach((note, i) => viewport.append(renderDetail(note, i))); detail.hidden = true; relationDetail.hidden = true; return; }
+    if (listMode) { clear(detail); clear(relationDetail); children.forEach((note, i) => viewport.append(renderDetail(note, i))); detail.hidden = true; relationDetail.hidden = true; return; }
     detail.hidden = false; relationDetail.hidden = false;
     const layout = layoutForView();
     const frame = el('div', { class: 'map-frame' });
@@ -313,7 +313,7 @@ export function createSourceMap({ source, children, view = {}, renderDetail, ana
     frame.append(canvas); viewport.append(frame); viewport.scrollLeft = left; viewport.scrollTop = top; drawDetail();
   }
   for (const [mode, label] of [['logic','逻辑图'], ['mind','思维导图']]) {
-    const control = button(label, { kind: 'quiet compact', onClick: () => { view.mode = mode; listMode = false; draw(); centerSelected(); control.focus({ preventScroll: true }); } }); modeButtons.set(mode, control); tabs.append(control);
+    const control = button(label, { kind: 'quiet compact', onClick: () => { view.mode = mode; view.reading = listMode = false; draw(); centerSelected(); control.focus({ preventScroll: true }); } }); modeButtons.set(mode, control); tabs.append(control);
   }
   const fit = () => {
     const layout = layoutForView();
@@ -328,15 +328,15 @@ export function createSourceMap({ source, children, view = {}, renderDetail, ana
   const zoomReset = button('100%', { kind: 'text compact map-zoom-value', title: '恢复原始比例', onClick: () => { view.zoom = 1; draw(); } });
   zoomReset.setAttribute('aria-label', '恢复原始比例');
   const fitButton = button('适应窗口', { kind: 'quiet compact', title: '缩放整张图，使其尽量完整显示', onClick: fit });
-  const readAll = button('阅读全部条目', { kind: 'text compact', onClick: () => { listMode = !listMode; draw(); } });
-  toolbar.append(tabs, el('div', { class: 'map-tools' }, [el('div', { class: 'map-zoom-controls', role: 'group', 'aria-label': '图形缩放' }, [zoomOut, zoomReset, zoomIn]), fitButton, expand]));
+  const readAll = button('阅读全部条目', { kind: 'text compact', onClick: () => { view.reading = listMode = !listMode; draw(); } });
+  toolbar.append(tabs, readAll, el('div', { class: 'map-tools' }, [el('div', { class: 'map-zoom-controls', role: 'group', 'aria-label': '图形缩放' }, [zoomOut, zoomReset, zoomIn]), fitButton, expand]));
   const analyzeButton = button('重新分析结构', { kind: 'quiet compact', onClick: analyze });
   analyzeButton.dataset.structureSubmit = source.id;
-  root.append(el('div', { class: 'map-heading' }, [el('h2', { text: '资料结构' }), el('span', { class: 'badge badge-warn', text: 'AI 结构建议' }), analyzeButton]),
+  root.append(el('div', { class: 'map-heading' }, [el('h2', { text: `拆解条目（${children.length}）` }), el('span', { class: 'badge badge-warn', text: 'AI 结构建议' }), analyzeButton]),
     el('p', { class: 'fine-print', text: '新资料在 AI 拆解时一并分析结构。重新分析会发送获准的原文与当前条目，可能产生费用。' }),
     el('p', { class: 'map-status', role: 'status', text: data.message || (edges.length ? `${children.length} 条拆解 · ${edges.length} 条逻辑联系 · 点击条目查看正文与依据` : '没有可靠的逻辑连线；思维导图显示资料归属与已分析层级。') }),
     el('p', { class: 'structure-job-status notice info', role: 'status', hidden: true, dataset: { sourceId: source.id } }), toolbar, viewport,
-    el('div', { class: 'map-reading-bar' }, [el('span', { class: 'fine-print', text: '按住鼠标拖动 · 滚轮向上放大、向下缩小 · AI 建议尚未确认' }), readAll]), relationDetail, detail);
+    el('div', { class: 'map-reading-bar' }, [el('span', { class: 'fine-print', text: '按住鼠标拖动 · 滚轮向上放大、向下缩小 · AI 建议尚未确认' })]), relationDetail, detail);
   draw();
   queueMicrotask(() => { if (root.isConnected) centerSelected(); });
   return root;

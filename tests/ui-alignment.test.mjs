@@ -313,6 +313,27 @@ test('finishing context preparation never restores another library or replaces a
 });
 
 let browserRequestSequence = 0;
+test('call purpose history filters reset pagination and preserve model/service details', async () => {
+  const app = browser();
+  const calls = Array.from({ length: 12 }, (_, index) => ({ createdAt: '2026-10-17T00:00:00Z', capability: 'model', model: `synthetic-model-${index}`, purpose: 'structure', purposeLabel: '单资料逻辑图', ok: true }));
+  calls.push({ createdAt: '2026-10-17T00:00:00Z', capability: 'model', model: 'legacy-model', ok: false });
+  const panel = app.callHistoryPanel(calls);
+  assert.match(panel.textContent, /单资料逻辑图synthetic-model-0 · 文本生成/);
+  await click(findButton(panel, '下一页'));
+  const purpose = control(panel, 'callPurpose');
+  purpose.value = 'unrecorded'; await purpose.events.change();
+  assert.match(panel.textContent, /共 1 条 · 第 1 \/ 1 页/);
+  assert.match(panel.textContent, /历史用途未记录legacy-model · 文本生成/);
+  assert.equal(panel.textContent.includes('synthetic-model-'), false);
+  purpose.value = 'structure'; await purpose.events.change();
+  control(panel, 'callOutcome').value = 'failure'; await control(panel, 'callOutcome').events.change();
+  assert.match(panel.textContent, /没有匹配的调用记录/);
+  const css = await readFile(new URL('../public/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\.call-history\s*\{[^}]*min-width:\s*0/);
+  assert.match(css, /\.call-purpose-cell\s*\{[^}]*overflow-wrap:\s*anywhere/);
+  assert.match(css, /\.call-table-scroll\s*\{[^}]*overflow-x:\s*auto/);
+});
+
 function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat, savedSession = new Map()) {
   api = { getContext: () => ({ practiceId: '', version: 0 }), ...api };
   const roots = new Map();
@@ -341,8 +362,9 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat, savedSession = 
   // is covered by the separate browser flow, not the minimal DOM fixture.
   vm.runInContext(fileUiSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') +
     '\ncreateFilePicker = async (_input, options) => { api.onImagePicker?.(options); return { getFiles: () => [] }; };\nthis.attachmentUrl = (id, asset, download = false) => "/api/notes/" + id + "/attachments?asset=" + asset + (download ? "&download=1" : "");', context);
-  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + discoverySource + '\n' + ('const renderMarkdown = (() => {\n' + markdownSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn renderMarkdown;\n})();') + '\nconst createMarkdownEditor = (() => {\n' + editorSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn createMarkdownEditor;\n})();\n' + sourceMapSource + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { attachModelDiscovery, renderSourceGroupDrawer, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
+  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + discoverySource + '\n' + ('const renderMarkdown = (() => {\n' + markdownSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn renderMarkdown;\n})();') + '\nconst createMarkdownEditor = (() => {\n' + editorSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn createMarkdownEditor;\n})();\n' + sourceMapSource + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { attachModelDiscovery, renderSourceGroupDrawer, conversationReading, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
   context.app.beginStudy = vm.runInContext('beginStudy', context);
+  context.app.callHistoryPanel = vm.runInContext('callHistoryPanel', context);
   context.app.manualExtract = vm.runInContext('manualExtract', context);
   context.app.serializeForm = vm.runInContext('serializeForm', context);
   context.app.processControls = vm.runInContext('processControls', context);
@@ -667,6 +689,8 @@ test('source maps switch layouts and selection locally, collapse branches, keep 
   app.renderSourceGroupDrawer(source);
   let panel = app.refs.drawerBody;
   const node = id => descendants(panel).find(n => n.dataset.noteId === id);
+  assert.equal(panel.querySelectorAll('.child-note').length, 3);
+  await click(findButton(panel, '逻辑图'));
   await click(node('b'));
   assert.equal(node('b').attributes['aria-pressed'], 'true');
   assert.match(panel.querySelector('.map-detail').textContent, /正文b/);
@@ -677,11 +701,13 @@ test('source maps switch layouts and selection locally, collapse branches, keep 
   assert.equal(node('b'), undefined);
   await click(findButton(panel, '逻辑图')); assert.ok(node('b'));
   await click(findButton(panel, '阅读全部条目'));
-  assert.equal(panel.querySelectorAll('.child-note').length, 4, 'all three reading cards plus hidden selected detail preserve existing operations');
+  assert.equal(panel.querySelectorAll('.child-note').length, 3, 'all three reading cards preserve existing operations without a duplicate selected detail');
   assert.equal(external, 0, 'layout and reading interactions never submit model requests');
   await click(findButton(panel, '逻辑图')); await click(node('c'));
   app.renderSourceGroupDrawer(source); assert.equal(node('c').attributes['aria-pressed'], 'true');
   practiceId = 'practice-only'; app.renderSourceGroupDrawer(source);
+  assert.equal(panel.querySelectorAll('.child-note').length, 3);
+  await click(findButton(panel, '逻辑图'));
   assert.equal(node('a').attributes['aria-pressed'], 'true');
 });
 
@@ -790,6 +816,7 @@ test('structure submission retains its lock after read failure and completion re
     note: async () => ({ ...source, structure: { state: 'ready', message: '新结构已保存', edges: [], hierarchy: [] } }),
   });
   app.renderSourceGroupDrawer(source); app.refs.drawer.classList.add('is-open');
+  await click(findButton(app.refs.drawerBody, '逻辑图'));
   await click(descendants(app.refs.drawerBody).find(n => n.dataset.noteId === 'b'));
   const submit = findButton(app.refs.drawerBody, '重新分析结构');
   const submitting = click(submit);
@@ -815,6 +842,7 @@ test('source-map expansion preserves zoom, fit uses the visible canvas, and repl
   assert.equal(findButton(panel, '补充逻辑关系'), undefined);
   assert.ok(findButton(panel, '重新分析结构'));
   assert.equal(view.zoom, 1, 'opening preserves readable original scale');
+  await click(findButton(panel, '逻辑图'));
   await click(findButton(panel, '+'));
   const zoom = view.zoom, viewport = panel.querySelector('.map-viewport');
   viewport.clientWidth = 630; viewport.clientHeight = 340; viewport.scrollLeft = 55;
@@ -946,6 +974,9 @@ test('wheel zoom anchors both maps under the pointer, retains selection and leav
   }
   await click(findButton(panel, '阅读全部条目'));
   const zoom = view.zoom; assert.equal(wheel(), false); assert.equal(view.zoom, zoom);
+  const css = await readFile(new URL('../public/styles.css', import.meta.url), 'utf8');
+  const readingRule = css.match(/\.source-map \.map-viewport\[data-reading="true"\]\s*\{([^}]+)\}/)?.[1];
+  assert.match(readingRule, /overflow:\s*visible\s*;/, 'expanded reading must not create a scroll container that traps the drawer wheel chain');
 });
 
 test('task failures explain stored error codes and retain original diagnostics behind a separate disclosure', async () => {
@@ -1209,6 +1240,59 @@ test('core step seven navigates to its saved source and locates the rendered ori
   assert.equal(target.tagName, 'details', 'locate the expander instead of the entire drawer');
   assert.match(target.querySelector('summary').textContent, /查看原始资料全文/);
   assert.ok(target.textContent.includes(source.body));
+});
+
+test('ChatGPT-shaped sources render text envelopes as prose and keep the floating reader when the summary button moves', async () => {
+  const body = '## 收集范围\n\n```text\n范围正文\n```\n\n## 会话原文（按收到的顺序保留）\n\n### 1. ChatGPT\n\n```text\n## 回答标题\n\n回答正文\n```';
+  const source = { id: 'chatgpt-shaped', kind: 'source', title: '合成 ChatGPT 资料', body, meta: {}, children: [], jobs: [] };
+  const app = browser();
+  assert.equal(app.conversationReading(source), true);
+  app.renderSourceGroupDrawer(source);
+  const original = app.refs.drawerBody.querySelector('[data-tour="note-original"]');
+  assert.equal(descendants(original).filter(node => node.tagName === 'pre').length, 0);
+  assert.ok(descendants(original).some(node => node.tagName === 'h2' && node.textContent === '回答标题'));
+  const fullscreen = findButton(original, '全屏阅读');
+  const summaryActions = original.querySelector('.original-summary-actions');
+  assert.ok(summaryActions);
+  assert.equal(summaryActions.children[0].textContent, `${body.length} 字`);
+  assert.equal(summaryActions.children[1], fullscreen);
+  await click(fullscreen);
+  const dialog = app.document.body.querySelector('.source-reader-dialog');
+  assert.ok(dialog);
+  assert.match(dialog.textContent, /合成 ChatGPT 资料/);
+  assert.match(dialog.textContent, /回答正文/);
+  assert.equal(app.refs.drawer.classList.contains('source-reading-fullscreen'), false);
+  await click(findButton(dialog, '关闭全屏阅读'));
+  assert.equal(app.document.body.querySelector('.source-reader-dialog'), null);
+});
+
+test('floating source reader Escape closes only the top reader and retains drawer state and focus', async () => {
+  const app = browser();
+  const source = { id: 'escape-source', kind: 'source', title: '合成原文', body: '完整正文', meta: {}, children: [], jobs: [] };
+  app.renderSourceGroupDrawer(source);
+  app.refs.drawer.classList.add('is-open');
+  app.refs.drawer.scrollTop = 123;
+  const original = app.refs.drawerBody.querySelector('[data-tour="note-original"]');
+  original.open = true;
+  const launcher = findButton(original, '全屏阅读');
+  launcher.isConnected = true;
+  app.document.activeElement = launcher;
+  await click(launcher);
+  const backdrop = app.document.body.querySelector('.source-reader-backdrop');
+  const panel = app.refs.drawerBody.children[0];
+  const event = { key: 'Escape', prevented: false, stopped: false,
+    preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; } };
+  backdrop.events.keydown(event);
+  if (!event.stopped) await app.document.events.keydown(event);
+  assert.equal(app.document.body.querySelector('.source-reader-backdrop'), null);
+  assert.equal(app.refs.drawer.classList.contains('is-open'), true, 'the same Escape must not reach the drawer handler');
+  assert.equal(app.refs.drawerBody.children[0], panel);
+  assert.equal(app.refs.drawer.scrollTop, 123);
+  assert.equal(original.open, true);
+  assert.equal(launcher.focused, true);
+  assert.equal(event.prevented, true);
+  await app.document.events.keydown({ key: 'Escape' });
+  assert.equal(app.refs.drawer.classList.contains('is-open'), false, 'a later Escape may close the drawer normally');
 });
 
 test('capture research requires AI processing and clears on deselection, clear, and successful save', async () => {
@@ -2632,4 +2716,68 @@ test('same endpoint with a newly typed model and empty key sends the model bindi
   const discovery = app.attachModelDiscovery({ panel, address, key, model, capability: 'model', connected: () => true, interval: 0,
     discover: async (_cap, config) => { assert.deepEqual(plain(config), { baseUrl: address.value, model: 'new-model', apiKey: '' }); return { status: 'missing_key', models: [], message: '地址或模型已变化，请重新填写密钥后获取目录。' }; } });
   await discovery.run(); assert.match(panel.textContent, /重新填写密钥/); assert.equal(model.disabled, false); assert.equal(model.value, 'new-model'); discovery.dispose();
+});
+
+test('source group reading shows every current child once and keeps original text first', async t => {
+  const tempRoot = path.resolve(import.meta.dirname, '..', '.tmp');
+  await mkdir(tempRoot, { recursive: true });
+  const root = await mkdtemp(path.join(tempRoot, 'source-group-reading-'));
+  const backend = createApp({ dataDir: path.join(root, 'data'), vaultDir: path.join(root, 'vault'), scheduler: false });
+  t.after(async () => { await backend.close(); assert.ok(root.startsWith(tempRoot + path.sep)); await rm(root, { recursive: true, force: true }); });
+  const store = backend.service.store;
+  const source = store.create({ kind: 'source', title: '合成同名资料', body: '## 完整原文\n\n唯一原文结尾 ORIGINAL-END', meta: { privacy: 'local' } });
+  const other = store.create({ kind: 'source', title: source.title, body: '其他来源正文 OTHER-SOURCE', meta: { privacy: 'local' } });
+  const children = ['甲', '乙', '丙'].map((label, i) => store.create({ kind: 'knowledge', title: `合成拆解${label}`, body: `拆解正文${label}`, meta: { privacy: 'local', stage: 'candidate', sources: [{ id: source.id, role: 'input' }], processKey: `${source.id}:batch-${i}:0` } }));
+  store.update(children[0].id, { expectedHash: children[0].hash, body: '人工修订拆解甲 CURRENT-CHILD' });
+  store.create({ kind: 'knowledge', title: '其他来源拆解', body: '不应混入', meta: { sources: [{ id: other.id, role: 'input' }] } });
+  const group = backend.service.library().groups.find(g => g.source.id === source.id);
+  const detail = backend.service.readPublicNote(source.id);
+  assert.equal(group.children.length, 3);
+  assert.deepEqual(detail.children.map(n => n.id).sort(), group.children.map(n => n.id).sort());
+  const app = browser({ library: async () => backend.service.library(), recommendations: async () => ({ suggestions: [] }), note: async id => backend.service.readPublicNote(id) });
+  app.renderSourceGroupDrawer(detail);
+  assert.equal(app.refs.drawerBody.querySelectorAll('.child-note').length, 3, 'opening a source shows all three current breakdowns');
+  app.state.view = 'library'; await app.renderLibrary();
+  const card = app.refs.main.querySelectorAll('.source-group-card').find(n => n.textContent.includes('合成拆解甲'));
+  assert.match(card.textContent, /3 条拆解/);
+  const reader = findButton(card, '阅读原始资料全文');
+  assert.ok(card.children.indexOf(reader) < card.children.indexOf(card.querySelector('.group-child-preview')));
+  await click(findButton(card, '查看整组'));
+  const panel = app.refs.drawerBody.querySelector('.source-group-drawer');
+  assert.equal(panel.children[0].dataset.tour, 'note-original');
+  assert.match(panel.children[0].textContent, /ORIGINAL-END/);
+  assert.equal(panel.querySelectorAll('.child-note').length, 3);
+  assert.match(panel.textContent, /CURRENT-CHILD/);
+  assert.doesNotMatch(panel.textContent, /其他来源拆解|OTHER-SOURCE|拆解正文甲/);
+  await click(findButton(panel, '逻辑图'));
+  assert.equal(panel.querySelectorAll('.map-node').length, 3);
+  await click(findButton(panel, '阅读全部条目'));
+  assert.equal(panel.querySelectorAll('.child-note').length, 3);
+});
+
+test('source card full-text reader ignores retained cards and late replies after library switches', async () => {
+  let context = { practiceId: '', version: 0 }, release, reads = 0;
+  const data = libraryFixture(['source']);
+  const app = browser({ getContext: () => context, library: async () => data, recommendations: async () => ({ suggestions: [] }), note: () => { reads++; return new Promise(resolve => { release = resolve; }); } });
+  app.state.view = 'library'; await app.renderLibrary();
+  const reader = findButton(app.refs.main, '阅读原始资料全文');
+  const pending = click(reader);
+  context = { practiceId: 'practice', version: 1 };
+  release({ ...data.groups[0].source, body: '旧库迟到原文' }); await pending;
+  assert.equal(app.dialogs.querySelectorAll('.source-reader-dialog').length, 0);
+  await click(reader); assert.equal(reads, 1);
+});
+
+test('captured source cards use the same conversation prose display as full reading', async () => {
+  for (const marker of ['chatgptCapture', 'chatgptSync']) {
+    const data = libraryFixture(['source']);
+    data.groups[0].source.meta = { [marker]: { version: 1 } };
+    data.groups[0].source.body = '## 整理摘要（ChatGPT 生成，未经独立核验）\n\n```text\n**摘要**\n```\n\n## 会话原文（按收到的顺序保留）\n\n### 1. ChatGPT\n\n```text\n**解释**\n```';
+    const app = browser({ library: async () => data, recommendations: async () => ({ suggestions: [] }) });
+    app.state.view = 'library';
+    await app.renderLibrary();
+    const preview = app.refs.main.querySelector('.markdown-preview');
+    assert.equal(preview.querySelectorAll('pre').length, 0, marker);
+    assert.deepEqual(preview.querySelectorAll('strong').map(n => n.textContent), ['摘要', '解释']);
+  }
 });

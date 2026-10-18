@@ -1,5 +1,6 @@
 import http from 'node:http';
 import fs from 'node:fs';
+import { createRecycleBin } from './recycle-bin.mjs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
@@ -31,7 +32,10 @@ async function readBinary(req) {
   for await (const chunk of req) { size += chunk.length; if (size > MAX_FILE_BYTES) fail('每个文件最多 50 MB（50,000,000 字节）。', 'TOO_LARGE', 413); chunks.push(chunk); }
   return Buffer.concat(chunks);
 }
-export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR || '.data'), vaultDir = process.env.LEARNING_VAULT_DIR ? path.resolve(process.env.LEARNING_VAULT_DIR) : undefined, scheduler = true, service: supplied } = {}) {
+export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR || '.data'), vaultDir = process.env.LEARNING_VAULT_DIR ? path.resolve(process.env.LEARNING_VAULT_DIR) : undefined, scheduler = true, service: supplied, purgeToken = '' } = {}) {
+  // Owner-held capability: never minted by session or stored in API-readable settings.
+  // Missing configuration disables irreversible purge, including pending-file cleanup.
+  if (typeof purgeToken !== 'string' || purgeToken !== '' && !/^[A-Za-z0-9_-]{43,128}$/.test(purgeToken)) throw new Error('LEARNING_PURGE_TOKEN must be an independent random token (43–128 URL-safe characters).');
   const service = supplied || createService({ dataDir, vaultDir });
   const mainService = service;
   const onboarding = createOnboarding({ dataDir, mainService });
@@ -160,7 +164,14 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
       try {
       const service = lease?.service || mainService;
       let result;
-      if(resource==='uploads'&&!id&&method==='POST') result=service.uploadFile({ name: query.name, mime: req.headers['content-type'] || '', uploadId: query.uploadId, bytes: await readBinary(req) });
+      if(resource==='recycle-bin'&&!id&&method==='GET')result={...createRecycleBin(service.store).list(),purgeEnabled:!!purgeToken};
+      else if(resource==='recycle-bin'&&id&&action==='restore'&&method==='POST')result=createRecycleBin(service.store).restore(id,body.versionId);
+      else if(resource==='recycle-bin'&&!id&&method==='DELETE'){
+        if(!purgeToken)fail('永久清空尚未启用，请由所有者单独配置清空凭据。恢复功能仍可使用。','RECYCLE_PURGE_DISABLED',403);
+        if(!safeEqual(req.headers['x-zhixu-purge-token'],purgeToken))fail('永久清空需要独立的所有者凭据。','RECYCLE_PURGE_UNAUTHORIZED',403);
+        result=createRecycleBin(service.store).clear(body);
+      }
+      else if(resource==='uploads'&&!id&&method==='POST') result=service.uploadFile({ name: query.name, mime: req.headers['content-type'] || '', uploadId: query.uploadId, bytes: await readBinary(req) });
       else if(resource==='uploads'&&!id&&method==='GET') result={uploads:service.pendingUploads()};
       else if(resource==='uploads'&&id&&method==='DELETE') result=service.revertUpload(id);
       else if(resource==='file-import'&&method==='POST') result=await service.commitFile(body);
@@ -176,7 +187,7 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
       else if(resource==='notes'&&id==='merge'&&method==='POST')result=service.merge(body);
       else if(resource==='notes'&&id&&!action&&method==='GET')result=service.readPublicNote(id);
       else if(resource==='notes'&&id&&!action&&method==='PUT')result=service.editNote(id,body);
-      else if(resource==='notes'&&id&&!action&&method==='DELETE'){result=service.store.delete(id,body.expectedHash);for(const j of service.store.records('jobs'))if(j.payload.noteId===id&&['queued','waiting','running'].includes(j.state))service.jobAction(j.id,{action:'cancel'});service.store.db.prepare("DELETE FROM records WHERE namespace='research'").run();}
+      else if(resource==='notes'&&id&&!action&&method==='DELETE'){result=service.store.delete(id,body.expectedHash);for(const j of service.store.records('jobs'))if(j.payload.noteId===id&&['queued','waiting','running'].includes(j.state))service.jobAction(j.id,{action:'cancel'});}
       else if(resource==='notes'&&action==='extract'&&method==='POST')result=service.extractNote(id,body);
       else if(resource==='notes'&&action==='process'&&method==='POST')result=service.processNote(id,body);
       else if(resource==='notes'&&action==='structure'&&method==='POST')result=service.requestSourceStructure(id);
@@ -276,7 +287,7 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
   return {server,service,onboarding,async close(){clearInterval(timer);clearInterval(practiceTimer);await new Promise(resolve=>server.close(resolve));await onboarding.close();await service.close();}};
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href){
-  const app=createApp();const port=Number(process.env.PORT||4318);
+  const app=createApp({purgeToken:process.env.LEARNING_PURGE_TOKEN||''});const port=Number(process.env.PORT||4318);
   app.server.listen(port,'127.0.0.1',()=>console.log(`知序 · 个人学习工作台已启动：http://127.0.0.1:${port}\n数据保存在本机。关闭本进程将停止后台调度。`));
   app.server.on('error',error=>{console.error(error.code==='EADDRINUSE'?'端口已被使用，应用可能已经启动。':error.message);process.exitCode=1;});
   for(const signal of ['SIGINT','SIGTERM'])process.on(signal,async()=>{await app.close();process.exit(0);});

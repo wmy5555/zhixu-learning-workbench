@@ -181,17 +181,46 @@ export function confirmAction({ title, message, confirmText = "确认", danger =
   });
 }
 
-export function promptAction({ title, message = "", label = "说明", initialValue = "", placeholder = "", submitText = "提交", danger = false, required = false }) {
+// A native modal makes the underlying drawer inert and keeps its reading position.
+export function showReadingDialog({ title, content }) {
+  const returnFocus = document.activeElement;
+  const previousOverflow = document.body.style.overflow;
+  const dialog = el('dialog', { class: 'source-reader-dialog', ariaLabel: `原始资料全文：${title}` });
+  const close = () => dialog.close();
+  const exit = button('退出全屏', { onClick: close });
+  dialog.append(
+    el('header', { class: 'source-reader-header' }, [
+      el('div', {}, [el('small', { text: '原始资料全文' }), el('h2', { text: title })]), exit,
+    ]),
+    el('div', { class: 'source-reader-scroll', tabIndex: 0, ariaLabel: '原始资料全文阅读区' }, content),
+  );
+  containDialogKeyboard(dialog, close);
+  dialog.addEventListener('cancel', event => { event.preventDefault(); close(); });
+  dialog.addEventListener('close', () => {
+    document.body.style.overflow = previousOverflow;
+    dialog.remove();
+    if (returnFocus?.isConnected) returnFocus.focus();
+  });
+  document.body.append(dialog);
+  dialog.showModal();
+  document.body.style.overflow = 'hidden';
+  exit.focus();
+  return dialog;
+}
+
+export function promptAction({ title, message = "", label = "说明", initialValue = "", placeholder = "", submitText = "提交", danger = false, required = false, secret = false }) {
   return new Promise((resolve) => {
     const returnFocus = document.activeElement;
     const overlay = el("div", { class: "dialog-backdrop" });
-    const textarea = el("textarea", { rows: 5, value: initialValue, placeholder, required, ariaLabel: label });
+    const textarea = secret
+      ? el("input", { type: "password", value: "", autocomplete: "off", spellcheck: false, placeholder, required, ariaLabel: label })
+      : el("textarea", { rows: 5, value: initialValue, placeholder, required, ariaLabel: label });
     const form = el("form", { class: "dialog", role: "dialog", ariaModal: "true" }, [
       el("h2", { text: title }),
       message ? el("p", { text: message }) : null,
       el("label", { class: "field" }, [el("span", { class: "field-label", text: label }), textarea]),
     ]);
-    const finish = (value) => { overlay.remove(); if (returnFocus?.isConnected) returnFocus.focus(); resolve(value); };
+    const finish = (value) => { if (secret) textarea.value = ""; overlay.remove(); if (returnFocus?.isConnected) returnFocus.focus(); resolve(value); };
     form.append(el("div", { class: "dialog-actions" }, [
       button("取消", { onClick: () => finish(null) }),
       button(submitText, { kind: danger ? "danger" : "primary", type: "submit" }),
@@ -199,7 +228,7 @@ export function promptAction({ title, message = "", label = "说明", initialVal
     containDialogKeyboard(form, () => finish(null));
     form.addEventListener("submit", (event) => {
       event.preventDefault();
-      const value = textarea.value.trim();
+      const value = secret ? textarea.value : textarea.value.trim();
       if (required && !value) { textarea.focus(); return; }
       finish(value);
     });

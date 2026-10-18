@@ -8,6 +8,7 @@ import { renderPrompt, validatePromptOverrides } from './prompts.mjs';
 import { readTokenUsage, tokenCost, tokenCount } from './token-usage.mjs';
 import { outboundText } from './outbound-text.mjs';
 import { credentialBinding } from './settings-validation.mjs';
+import { knownPurpose } from './call-purpose.mjs';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const PAGE_TIMEOUT_MS = 20_000;
@@ -452,6 +453,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
   const embeddingCache = makeCache(64);
   const sourceBudget = new AsyncLocalStorage();
   const callContext = new AsyncLocalStorage();
+  const operationPurpose = new AsyncLocalStorage();
   const testContext = new AsyncLocalStorage();
   let budgetTail = Promise.resolve();
   let reservedCalls = 0;
@@ -537,7 +539,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     if (!context || typeof context.key !== 'string' || !context.key.trim() || context.key.length > 2000 || typeof fn !== 'function') throw fail('INVALID_INPUT', '调用上下文需要稳定 key 和任务函数。');
     if (context.singleRequest !== undefined && typeof context.singleRequest !== 'boolean') throw fail('INVALID_INPUT', 'singleRequest 必须为开关值。');
     for (const field of ['jobId', 'turnId']) if (context[field] !== undefined && (typeof context[field] !== 'string' || context[field].length > 300)) throw fail('INVALID_INPUT', '调用上下文身份无效。');
-    return callContext.run({ key: context.key, jobId: context.jobId, turnId: context.turnId, singleRequest: context.singleRequest === true, occurrences: new Map() }, fn);
+    return callContext.run({ key: context.key, jobId: context.jobId, turnId: context.turnId, purpose: context.purpose, singleRequest: context.singleRequest === true, occurrences: new Map() }, fn);
   }
 
   async function withBudget({ limit, sourceId } = {}, fn) {
@@ -654,7 +656,8 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     }
     if (combinedSignal.aborted) throw classifyAbort(combinedSignal.reason, signal, timeoutSignal);
     const sourceId = sourceBudget.getStore()?.sourceId;
-    const reservation = await reserveBudget(allSettings, { capability, model, sourceId, key, contextKey, singleRequest: context?.singleRequest, jobId: context?.jobId, turnId: context?.turnId,
+    const purpose = knownPurpose(operationPurpose.getStore()) || knownPurpose(context?.purpose);
+    const reservation = await reserveBudget(allSettings, { capability, model, sourceId, key, contextKey, singleRequest: context?.singleRequest, jobId: context?.jobId, turnId: context?.turnId, purpose,
       reservedCost: capability === 'fetch' ? 0 : capability === 'search' ? safeNumber(allSettings.search?.requestPrice) : null });
     const callId = reservation.row?.id;
     let started = Date.now();
@@ -688,7 +691,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
       if (typeof accounting === 'function' && response.status >= 200 && response.status < 300) {
         try { measured = { ...measured, ...accounting(response) }; } catch { /* invalid data is handled by the response parser */ }
       }
-      const entry = { capability, model, ...measured, durationMs: Date.now() - started, ok: !operationError,
+      const entry = { capability, model, ...(purpose ? { purpose } : {}), ...measured, durationMs: Date.now() - started, ok: !operationError,
         error: operationError ? sanitizeError(operationError, secrets) : undefined, ...(sourceId ? { sourceId } : {}) };
       if (callLedger) {
         // The bounded response is committed before accounting. Only response headers
@@ -720,7 +723,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
         catch (saveError) { throw Object.assign(fail('CALL_PERSISTENCE_FAILED', '调用结果未知且状态保存失败，请先处理调用记录；不会自动重发。', saveError), { callId }); }
       } else if (!callLedger && sent && !response) {
         accountingBlocked = true;
-        await safeRecord({ capability, model, ...measured, durationMs: Date.now() - started, ok: false, error: operationError, ...(sourceId ? { sourceId } : {}) }, secrets);
+        await safeRecord({ capability, model, ...(purpose ? { purpose } : {}), ...measured, durationMs: Date.now() - started, ok: false, error: operationError, ...(sourceId ? { sourceId } : {}) }, secrets);
       }
       throw operationError;
     } finally {
@@ -1325,6 +1328,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
   }
 
   async function test(capability, draft) {
+    if (operationPurpose.getStore() !== 'connection_test') return operationPurpose.run('connection_test', () => test(capability, draft));
     if (draft) return testContext.run(draft, () => test(capability));
     if (capability === 'model') {
       const result = await generate({ system: 'Return only OK.', prompt: 'Connection test.', privacy: 'cloud' });
@@ -1347,7 +1351,7 @@ export function createAI({ getSettings, getSecret, recordCall, getUsage, fetchIm
     throw fail('INVALID_CAPABILITY', '未知的外部能力。');
   }
 
-  return { generate, embed, search, readPage, research, researchBatch, withBudget, withCallContext, test, discoverModels,
+  return { generate, embed, search, readPage, research, researchBatch, withBudget, withCallContext, withPurpose: (purpose, fn) => operationPurpose.run(knownPurpose(callContext.getStore()?.purpose) || knownPurpose(purpose), fn), test, discoverModels,
     ...(typeof callLedger?.evidence === 'function' ? { getCallEvidence: jobId => callLedger.evidence(jobId) } : {}),
   };
 }
