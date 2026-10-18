@@ -2782,7 +2782,7 @@ test('all source full-text entries retain the reviewed floating reader and retur
   original.open = true;
   app.refs.drawer.scrollTop = 123;
   app.state.view = 'library'; await app.renderLibrary();
-  const launchers = [findButton(app.refs.main, '阅读原始资料全文'), findButton(panel, '全屏阅读原文'), findButton(original, '全屏阅读'), findButton(panel.querySelector('[data-tour="note-evidence"]'), '查看原始资料全文')];
+  const launchers = [findButton(app.refs.main, '阅读原始资料全文'), findButton(panel, '全屏阅读原文'), findButton(original, '全屏阅读')];
   for (const [i, launcher] of launchers.entries()) {
     launcher.isConnected = true; launcher.focused = false; app.document.activeElement = launcher;
     await click(launcher);

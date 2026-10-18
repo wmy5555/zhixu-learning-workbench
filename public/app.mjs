@@ -1055,7 +1055,7 @@ function childSection(note, source, index) {
       el("div", { class: "item-meta" }, [badge(labels.stage(meta.stage), stateTone(meta.stage)), meta.topic ? badge(meta.topic, "accent") : null]),
     ]),
     sourceReadingBody(readableBody(note.body), 'child-note-body', '暂无正文'),
-    relatedSourceDetails(note, source, openSourceReader),
+    relatedSourceDetails(note, source),
     limitations.length ? el("div", { class: "notice danger child-limitations" }, [
       el("strong", { text: "尚需补充研究" }),
       el("p", { text: "这些事实仍需进一步核验，暂不用于学习计划或有据回答。" }),

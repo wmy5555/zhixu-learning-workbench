@@ -29,10 +29,6 @@ export function createKnowledgeView({ source, children, view, renderDetail, anal
     const unit = data.units.find(u => u.id === note.id), box = el('section');
     if (unit) {
       box.append(el('p', { class: 'fine-print', text: `${unit.dimensions.map(v => dimensionLabels[v]).join(' · ')} / ${unit.roles.map(v => roleLabels[v]).join(' · ')}` }));
-      const evidence = el('details', {}, [el('summary', { text: '原文定位与分类依据' })]);
-      for (const ref of unit.sourceRefs) evidence.append(el('blockquote', { text: ref.quote }), el('small', { text: `原文位置 ${ref.start}–${ref.end}` }));
-      if (!unit.sourceRefs.length) evidence.append(el('p', { text: '缺少原文定位，待回查。' }));
-      box.append(evidence);
     }
     box.append(renderDetail(note, index)); return box;
   }
