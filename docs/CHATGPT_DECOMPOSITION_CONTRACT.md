@@ -26,8 +26,4 @@
 
 ## v1 与 v2 的准确边界
 
-v1 item 只有 `id/title/body/type/sourceMessageIds/uncertainties`。`type` 为 knowledge/conclusion/unverified_fact，不等于 v2 的知识维度或内容角色。它没有独立 sourceRefs 字符定位、units 分类、topics 父子层级或 edges 关系字段；strict schema 会拒绝额外字段，不会自动完成 v2 映射。
-
-现有 v2 `knowledge-structure.mjs`、`source-structure.mjs` 校验原文精确引用、分类、主题导航、带条件和例外的关系。它们用于现有资料加工路径，当前 ChatGPT v1 导入没有接入。可在 v1 body 保留这些语义供阅读，但不得声称高亮、分类筛选或图谱已获得机器映射。不为来源不支持的语义伪造定位，也不以运行一次后台 AI 补全作为导入前提。
-
-本次仅修调用引导。若以后明确要求 ChatGPT 拆解直接驱动 v2 图谱，需要另行定义消息内引用到保存原文的可靠映射、批次跨片关系、结构修订与人工编辑保护契约；这不是现有 v1 流程的必要迁移。
+v1 保持 `items` 原契约，只导入候选正文，不自动生成图谱。v2 已接入共用 schema、校验、来源映射、`sourceStructures`、现有图谱与结构读回。准确字段和云侧技能更新文本见 [v2 导入契约](CHATGPT_STRUCTURED_V2.md)。

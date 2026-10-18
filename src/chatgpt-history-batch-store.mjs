@@ -1,3 +1,4 @@
+import { batchSegments, importedRecord, saveImportedRecord, verifyImportedRecord } from './chatgpt-structure.mjs';
 import { conversationOrigin } from './chatgpt-source-metadata.mjs';
 import { createHash } from 'node:crypto';
 import { planHistoryBatch, verifyHistoryBatchReceipts } from './chatgpt-history-batch.mjs';
@@ -203,6 +204,12 @@ export function createHistoryBatchStore({ getStore, enabled }) {
       }
     }
     const structuredComplete = candidates.length === state.plan.deferredStructured.length && !problems.some(problem => problem.type === 'candidate');
+    let structure;
+    if (state.plan.structureInput) {
+      try { if (!state.structureWrite) fail('结构尚未保存。','CHATGPT_STRUCTURE_UNAVAILABLE'); structure = verifyImportedRecord(store,state);
+        if (structure.status !== 'verified') problems.push({type:'structure',code:'CHATGPT_STRUCTURE_EDITED'});
+      } catch(error) { problems.push({type:'structure',code:errorCode(error)}); }
+    }
     const complete = text.textComplete && structuredComplete && !problems.length;
     return { version: 1, status: complete ? 'verified' : 'partial', method: 'fresh_disk_and_sqlite_readback',
       complete, textComplete: text.textComplete, reader: { evidence: 'authenticated_local_snapshot',
@@ -210,7 +217,7 @@ export function createHistoryBatchStore({ getStore, enabled }) {
         pagesSha256: state.plan.global.pagesSha256, scope: 'authorized_visible_branch_text_only' },
       text: { status: text.textComplete ? 'verified' : 'incomplete', expectedParts: text.expectedParts, verifiedParts: text.verifiedParts,
         missingParts: text.missingParts, issues: text.issues, transcriptSha256: text.transcriptSha256 },
-      sources, candidates, structured: { expectedItems: state.plan.deferredStructured.length, verifiedItems: candidates.length,
+      ...(structure ? { structure } : {}), sources, candidates, structured: { expectedItems: state.plan.deferredStructured.length, verifiedItems: candidates.length,
         complete: structuredComplete, typeCounts, manifestSha256: jsonHash(candidates) }, problems,
       notice: '读回核验只证明收到的可见分支正文和候选来源已保存；候选事实未核验，附件字节、隐藏分支和推理未读取。' };
   }
@@ -224,7 +231,7 @@ export function createHistoryBatchStore({ getStore, enabled }) {
       messageCount: state.plan.global.messageCount, textCharacters: state.plan.global.textCharacters,
       expectedSources: state.plan.parts.length, verifiedSources: proof.sources.length,
       expectedCandidates: state.plan.deferredStructured.length, verifiedCandidates: proof.candidates.length,
-      verification: proof, undo: { supported: false, leafUndoAllowed: false, reason: 'whole_batch_undo_not_implemented' },
+      ...(proof.structure ? { structure:proof.structure } : {}), verification: proof, undo: { supported: false, leafUndoAllowed: false, reason: 'whole_batch_undo_not_implemented' },
       notice: complete ? '分片正文和全部候选已实际落库并读回；候选仍未经事实核验，也不代表个人掌握。'
         : '本批次未全部完成；保留已写内容和待恢复记录，不把部分成功当作完整入库。' };
   }
@@ -244,6 +251,12 @@ export function createHistoryBatchStore({ getStore, enabled }) {
         // never get repaired by overwrite, even during a partial retry.
         for (const entry of specs) readLeaf(store, state, entry, { allowMissing: true });
         for (const entry of specs) writeLeaf(store, state, entry);
+      }
+      if (state.plan.structureInput && state.pending) {
+        const sources=state.plan.parts.map(p=>store.read(sourceId(p))), notes=state.plan.deferredStructured.map(d=>store.read(candidateId(state.plan,d)));
+        const keys=new Map(state.plan.deferredStructured.map((d,i)=>[d.item.id,notes[i].id]));
+        const record=importedRecord(state.plan.structureInput,sources[0],notes,keys,batchSegments(sources,state.plan),sources,state.savedAt,state.plan.batchId);
+        saveImportedRecord(store,state,record,()=>persist(store,state));
       }
       const proof = await verification(store, state);
       if (!proof.complete) return reply(state, proof, { duplicate, code: proof.problems[0]?.code || 'CHATGPT_BATCH_INCOMPLETE' });

@@ -1,0 +1,336 @@
+{
+  "$ref": "#/definitions/ZhixuStructuredImport",
+  "definitions": {
+    "ZhixuStructuredImport": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "number",
+              "const": 1
+            },
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200,
+                    "pattern": "^[A-Za-z0-9_-]+$"
+                  },
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "body": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 30000
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "knowledge",
+                      "conclusion",
+                      "unverified_fact"
+                    ]
+                  },
+                  "sourceMessageIds": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/definitions/ZhixuStructuredImport/anyOf/0/properties/items/items/properties/id"
+                    },
+                    "minItems": 1,
+                    "maxItems": 200
+                  },
+                  "uncertainties": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2000
+                    },
+                    "maxItems": 20
+                  }
+                },
+                "required": [
+                  "id",
+                  "title",
+                  "body",
+                  "type",
+                  "sourceMessageIds",
+                  "uncertainties"
+                ],
+                "additionalProperties": false
+              },
+              "maxItems": 100
+            }
+          },
+          "required": [
+            "version",
+            "items"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "number",
+              "const": 2
+            },
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/ZhixuStructuredImport/anyOf/0/properties/items/items"
+              },
+              "minItems": 1,
+              "maxItems": 100
+            },
+            "units": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "$ref": "#/definitions/ZhixuStructuredImport/anyOf/0/properties/items/items/properties/id"
+                  },
+                  "shortTitle": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 36
+                  },
+                  "dimensions": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "factual",
+                        "conceptual",
+                        "procedural",
+                        "metacognitive",
+                        "unknown"
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 5
+                  },
+                  "roles": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "definition",
+                        "claim",
+                        "evidence",
+                        "reason",
+                        "step",
+                        "event",
+                        "example",
+                        "personal",
+                        "unknown"
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 9
+                  },
+                  "sourceRefs": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "messageId": {
+                          "$ref": "#/definitions/ZhixuStructuredImport/anyOf/0/properties/items/items/properties/id"
+                        },
+                        "quote": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 700
+                        },
+                        "start": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "end": {
+                          "type": "integer",
+                          "minimum": 1
+                        }
+                      },
+                      "required": [
+                        "messageId",
+                        "quote"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "maxItems": 20
+                  },
+                  "eventTime": {
+                    "type": "string",
+                    "maxLength": 80
+                  }
+                },
+                "required": [
+                  "id",
+                  "shortTitle",
+                  "dimensions",
+                  "roles",
+                  "sourceRefs"
+                ],
+                "additionalProperties": false
+              },
+              "minItems": 1,
+              "maxItems": 100
+            },
+            "topics": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80
+                  },
+                  "parent": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 100
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "origin": {
+                    "type": "string",
+                    "enum": [
+                      "original",
+                      "ai"
+                    ]
+                  },
+                  "members": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/definitions/ZhixuStructuredImport/anyOf/0/properties/items/items/properties/id"
+                    },
+                    "maxItems": 100
+                  },
+                  "sourceRefs": {
+                    "$ref": "#/definitions/ZhixuStructuredImport/anyOf/1/properties/units/items/properties/sourceRefs"
+                  }
+                },
+                "required": [
+                  "id",
+                  "title",
+                  "parent",
+                  "origin",
+                  "members",
+                  "sourceRefs"
+                ],
+                "additionalProperties": false
+              },
+              "maxItems": 200
+            },
+            "edges": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "$ref": "#/definitions/ZhixuStructuredImport/anyOf/0/properties/items/items/properties/id"
+                  },
+                  "to": {
+                    "$ref": "#/definitions/ZhixuStructuredImport/anyOf/0/properties/items/items/properties/id"
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "support",
+                      "oppose",
+                      "explain",
+                      "prerequisite",
+                      "example",
+                      "counterexample",
+                      "limit",
+                      "application",
+                      "sequence",
+                      "is-a",
+                      "cause",
+                      "condition"
+                    ]
+                  },
+                  "label": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 24
+                  },
+                  "direction": {
+                    "type": "string",
+                    "const": "from-to"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "explicit",
+                      "inferred",
+                      "pending"
+                    ]
+                  },
+                  "condition": {
+                    "type": "string",
+                    "maxLength": 700
+                  },
+                  "exceptions": {
+                    "type": "string",
+                    "maxLength": 700
+                  },
+                  "explanation": {
+                    "type": "string",
+                    "maxLength": 700
+                  },
+                  "sourceRefs": {
+                    "$ref": "#/definitions/ZhixuStructuredImport/anyOf/1/properties/units/items/properties/sourceRefs"
+                  }
+                },
+                "required": [
+                  "from",
+                  "to",
+                  "type",
+                  "label",
+                  "direction",
+                  "status",
+                  "condition",
+                  "exceptions",
+                  "explanation",
+                  "sourceRefs"
+                ],
+                "additionalProperties": false
+              },
+              "maxItems": 2000
+            }
+          },
+          "required": [
+            "version",
+            "items",
+            "units",
+            "topics",
+            "edges"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}
