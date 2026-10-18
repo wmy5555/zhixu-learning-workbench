@@ -2768,6 +2768,45 @@ test('source card full-text reader ignores retained cards and late replies after
   await click(reader); assert.equal(reads, 1);
 });
 
+test('all source full-text entries retain the reviewed floating reader and return to unchanged drawer state', async () => {
+  const data = libraryFixture(['source']);
+  const source = { ...data.groups[0].source, body: '## 合成完整原文\n\nORIGINAL-END', children: data.groups[0].children, jobs: [] };
+  const app = browser({ library: async () => data, recommendations: async () => ({ suggestions: [] }), note: async () => source });
+  app.renderSourceGroupDrawer(source);
+  app.refs.drawer.classList.add('is-open');
+  const panel = app.refs.drawerBody.children[0];
+  const original = panel.querySelector('[data-tour="note-original"]');
+  original.open = true;
+  app.refs.drawer.scrollTop = 123;
+  app.state.view = 'library'; await app.renderLibrary();
+  const launchers = [findButton(app.refs.main, '阅读原始资料全文'), findButton(panel, '全屏阅读原文'), findButton(original, '全屏阅读')];
+  for (const [i, launcher] of launchers.entries()) {
+    launcher.isConnected = true; launcher.focused = false; app.document.activeElement = launcher;
+    await click(launcher);
+    const backdrop = app.document.body.querySelector('.source-reader-backdrop');
+    const dialog = backdrop?.querySelector('.source-reader-dialog');
+    assert.ok(backdrop && dialog, 'every entry must use the C floating reader');
+    assert.equal(dialog.tagName, 'section');
+    assert.match(dialog.textContent, /ORIGINAL-END/);
+    if (i === 0) await click(findButton(dialog, '关闭全屏阅读'));
+    else if (i === 1) backdrop.events.click({ target: backdrop });
+    else {
+      const event = { key: 'Escape', stopped: false, preventDefault() {}, stopPropagation() { this.stopped = true; } };
+      backdrop.events.keydown(event);
+      if (!event.stopped) await app.document.events.keydown(event);
+    }
+    assert.equal(app.document.body.querySelector('.source-reader-backdrop'), null);
+    assert.equal(app.refs.drawer.classList.contains('is-open'), true);
+    assert.equal(app.refs.drawerBody.children[0], panel);
+    assert.equal(app.refs.drawer.scrollTop, 123);
+    assert.equal(original.open, true);
+    assert.equal(launcher.focused, true);
+  }
+  assert.equal(app.refs.drawer.classList.contains('source-reading-fullscreen'), false);
+  const css = await readFile(new URL('../public/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\.source-reader-dialog\s*\{[^}]*border-radius:\s*18px/);
+});
+
 test('captured source cards use the same conversation prose display as full reading', async () => {
   for (const marker of ['chatgptCapture', 'chatgptSync']) {
     const data = libraryFixture(['source']);

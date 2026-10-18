@@ -12,7 +12,7 @@ import { createSourceMap } from "./source-map.mjs";
 import { initSidebar } from "./sidebar.mjs";
 import {
   el, clear, button, badge, emptyState, formatDate, formatCalendarDate, truncate, safeExternalUrl,
-  labels, stateTone, field, toast, confirmAction, promptAction, serializeForm, describeJobError, showReadingDialog,
+  labels, stateTone, field, toast, confirmAction, promptAction, serializeForm, describeJobError,
 } from "./ui.mjs";
 
 const refs = {
@@ -833,7 +833,7 @@ function sourceGroupCard(group) {
         const current = await api.note(source.id);
         const latest = api.getContext();
         if (latest.practiceId !== context.practiceId || latest.version !== context.version) return;
-        showReadingDialog({ title: current.title || '未命名原始资料', content: sourceReadingBody(current.body, 'original-body', '暂无原文', current) });
+        openSourceReader(current);
       } catch (error) { handleError(error); }
     } }) : null,
     sourceReadingBody(sourceBodyPreview(source.body), 'markdown-preview', '暂无原文', source),
@@ -886,10 +886,7 @@ function renderSourceGroupDrawer(source) {
   refs.drawerEyebrow.textContent = "原始资料与拆解";
   const content = el("div", { class: "page-stack source-group-drawer", dataset: { sourceId: source.id } });
   const headActions = el("div", { class: "form-actions" }, [
-    button("全屏阅读原文", { onClick: () => showReadingDialog({
-      title: source.title || '未命名原始资料',
-      content: sourceReadingBody(source.body, 'original-body', '暂无原文', source),
-    }) }),
+    button("全屏阅读原文", { onClick: () => openSourceReader(source) }),
     button("编辑原始资料", { kind: "primary", onClick: () => renderNoteEditor(source, { returnToSourceId: source.id }) }),
     button("查看版本", { disabled: isMobilePrototype(), title: isMobilePrototype() ? "样机暂不支持查看版本" : "", onClick: () => renderHistory(source, { returnToSourceId: source.id }) }),
     button("移入回收站", { kind: "danger", disabled: isMobilePrototype(), title: isMobilePrototype() ? "样机暂不支持删除" : "", onClick: () => deleteNote(source) }),
