@@ -171,6 +171,7 @@ export const api = {
   library: (filters) => request(`/api/library${toQuery(filters)}`),
   notes: (filters) => request(`/api/notes${toQuery(filters)}`),
   note: (id, options = {}) => request(`/api/notes/${encodeURIComponent(id)}`, { background: options.background === true }),
+  saveSourceStructure: (id, body) => request(`/api/notes/${encodeURIComponent(id)}/structure`, { method: 'PUT', body }),
   sourceStructure: (id) => request(`/api/notes/${encodeURIComponent(id)}/structure`, { method: 'POST', body: {} }),
   evidence: (id) => request(`/api/notes/${encodeURIComponent(id)}/evidence`),
   linksPreview: (id) => request(`/api/notes/${encodeURIComponent(id)}/links-preview`),

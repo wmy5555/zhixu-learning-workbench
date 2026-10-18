@@ -712,3 +712,12 @@ dialog.source-reader-dialog .source-reader-header button { flex: none; }
   .diagnostic-action .form-actions { width: 100%; }
   .diagnostic-action .form-actions > button { flex: 1 1 140px; }
 }
+
+/* Knowledge views share existing panel, typography and accent colors. */
+.knowledge-views > div > details { margin: .6rem 0; padding: .6rem; border-left: 2px solid var(--border); }
+.knowledge-views summary { cursor: pointer; line-height: 1.7; }
+.knowledge-event { border-left: 3px solid var(--accent); padding: .7rem 1rem; margin-left: .5rem; }
+.knowledge-field { display: grid; gap: .35rem; margin: .65rem 0; }
+.knowledge-views fieldset { display: flex; flex-wrap: wrap; gap: .7rem; margin: .7rem 0; }
+.knowledge-views fieldset label { display: inline-flex; gap: .3rem; align-items: center; }
+.knowledge-views input[type=checkbox] { width: auto; }

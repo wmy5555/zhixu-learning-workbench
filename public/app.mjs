@@ -900,6 +900,7 @@ function renderSourceGroupDrawer(source) {
     content.append(createSourceMap({ source, children, view: state.sourceMaps.get(key),
       renderDetail: (note, index) => childSection(note, source, index),
       analyze: () => analyzeStructure(source),
+      saveStructure: body => api.saveSourceStructure(source.id, body),
       onExpand: value => refs.drawer.classList.toggle('map-expanded', value),
     }));
   }

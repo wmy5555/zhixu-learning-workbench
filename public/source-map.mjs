@@ -1,6 +1,7 @@
+import { createKnowledgeView } from './knowledge-view.mjs';
 import { el, button, clear } from './ui.mjs';
 
-export const sourceMapLabels = { support: '支持', explain: '解释', prerequisite: '前提', example: '实例', counterexample: '反例', limit: '限定', application: '应用', sequence: '先后' };
+export const sourceMapLabels = { support: '支持', explain: '解释', prerequisite: '前提', example: '实例', counterexample: '反例', limit: '限定', application: '应用', sequence: '先后', oppose: '反驳', 'is-a': '是一种', cause: '导致', condition: '条件' };
 let mapSerial = 0;
 
 // Collapse strongly connected components before ranking, keeping cyclic edges visible.
@@ -108,7 +109,7 @@ export function layoutSourceMap(nodes, edges, hierarchy, mode = 'logic', collaps
       d = 'M'+start+','+a.y+' L'+start+','+(a.y-12)+' L'+rail+','+(a.y-12)+' L'+rail+','+ty+' L'+end+','+ty+' L'+end+','+b.y;
       tx = (rail+end)/2;
     }
-    return { edge, d, tx, ty, label: { x: tx-22, y: ty-15, width: 44, height: 24 } };
+    return { edge, d, tx, ty, label: { x: tx-(edge.label ? 46 : 22), y: ty-15, width: edge.label ? 92 : 44, height: 24 } };
   });
   return { positions, width, height: Math.max(320, y), cardWidth, cardHeight, levelStep, routes };
 
@@ -155,7 +156,9 @@ export function enableMapPanning(viewport) {
   return finish;
 }
 
-export function createSourceMap({ source, children, view = {}, renderDetail, analyze, onExpand = () => {} }) {
+export function createSourceMap({ source, children, view = {}, renderDetail, analyze, saveStructure, onExpand = () => {}, embedded = false }) {
+  if (source.structure?.version === 2) return createKnowledgeView({ source, children, view, renderDetail, analyze, saveStructure, onExpand,
+    renderGraph: options => createSourceMap({ ...options, embedded: true }) });
   const data = source.structure || { state: 'missing', hierarchy: [], edges: [], message: '这份旧资料尚无结构建议，可重新分析；当前仅显示来源归属。' };
   const edges = Array.isArray(data.edges) ? data.edges : [], hierarchy = Array.isArray(data.hierarchy) ? data.hierarchy : [];
   const notes = new Map(children.map(note => [note.id, note]));
@@ -239,8 +242,8 @@ export function createSourceMap({ source, children, view = {}, renderDetail, ana
       if (!notes.has(edge.from) || !notes.has(edge.to)) continue;
       const other = edge.from === note.id ? edge.to : edge.from;
       relationDetail.append(el('details', { class: 'map-edge-detail', dataset: { edgeId: edge.id } }, [
-        el('summary', { text: `${notes.get(edge.from).title} → ${sourceMapLabels[edge.type] || '关联'} → ${notes.get(edge.to).title}` }),
-        el('p', { text: edge.explanation }), el('blockquote', { text: edge.sourceExcerpt }), el('blockquote', { text: edge.targetExcerpt }),
+        el('summary', { text: `${notes.get(edge.from).title} → ${edge.label || sourceMapLabels[edge.type] || '关联'} → ${notes.get(edge.to).title}` }),
+        el('p', { text: edge.explanation }), el('p', { text: [edge.status && ({explicit:'原文明说',inferred:'AI 推断',user:'用户补充',pending:'待核'})[edge.status], edge.condition && '条件：'+edge.condition, edge.exceptions && '例外：'+edge.exceptions].filter(Boolean).join(' · ') }), ...(edge.sourceRefs?.length ? edge.sourceRefs.map(ref => el('blockquote', { text: `${ref.quote}（原文位置 ${ref.start}–${ref.end}）` })) : [el('blockquote', { text: edge.sourceExcerpt }), el('blockquote', { text: edge.targetExcerpt })]),
         button('查看关联条目', { kind: 'text compact', onClick: () => select(other, true) }),
       ]));
     }
@@ -284,8 +287,8 @@ export function createSourceMap({ source, children, view = {}, renderDetail, ana
       svg.append(svgElement('path', { d, 'data-tone': toneFor(edge.to), class: `map-line${related ? ' is-related' : ''}`, ...(view.mode === 'logic' ? { 'marker-end': `url(#${markerId})` } : {}) }));
       if (view.mode === 'logic') {
         const label = svgElement('g', { class: `map-edge-caption${related ? ' is-related' : ''}` });
-        label.append(svgElement('rect', { x: tx - 22, y: ty - 15, width: 44, height: 24, rx: 8 }),
-          svgElement('text', { x: tx, y: ty + 2, 'text-anchor': 'middle', class: 'map-edge-label' }, sourceMapLabels[edge.type] || '关联'));
+        label.append(svgElement('rect', { x: tx - (edge.label ? 46 : 22), y: ty - 15, width: edge.label ? 92 : 44, height: 24, rx: 8 }),
+          svgElement('text', { x: tx, y: ty + 2, 'text-anchor': 'middle', class: 'map-edge-label' }, (edge.label?.length > 6 ? edge.label.slice(0, 5)+'…' : edge.label || sourceMapLabels[edge.type] || '关联')));
         captions.append(label);
       }
     }
@@ -312,7 +315,7 @@ export function createSourceMap({ source, children, view = {}, renderDetail, ana
     }
     frame.append(canvas); viewport.append(frame); viewport.scrollLeft = left; viewport.scrollTop = top; drawDetail();
   }
-  for (const [mode, label] of [['logic','逻辑图'], ['mind','思维导图']]) {
+  for (const [mode, label] of (embedded ? [] : [['logic','逻辑图'], ['mind','思维导图']])) {
     const control = button(label, { kind: 'quiet compact', onClick: () => { view.mode = mode; view.reading = listMode = false; draw(); centerSelected(); control.focus({ preventScroll: true }); } }); modeButtons.set(mode, control); tabs.append(control);
   }
   const fit = () => {
@@ -337,6 +340,7 @@ export function createSourceMap({ source, children, view = {}, renderDetail, ana
     el('p', { class: 'map-status', role: 'status', text: data.message || (edges.length ? `${children.length} 条拆解 · ${edges.length} 条逻辑联系 · 点击条目查看正文与依据` : '没有可靠的逻辑连线；思维导图显示资料归属与已分析层级。') }),
     el('p', { class: 'structure-job-status notice info', role: 'status', hidden: true, dataset: { sourceId: source.id } }), toolbar, viewport,
     el('div', { class: 'map-reading-bar' }, [el('span', { class: 'fine-print', text: '按住鼠标拖动 · 滚轮向上放大、向下缩小 · AI 建议尚未确认' })]), relationDetail, detail);
+  if (embedded) { root.querySelector('.map-heading')?.remove(); root.querySelector('.fine-print')?.remove(); }
   draw();
   queueMicrotask(() => { if (root.isConnected) centerSelected(); });
   return root;
