@@ -208,17 +208,19 @@ export function showReadingDialog({ title, content }) {
   return dialog;
 }
 
-export function promptAction({ title, message = "", label = "说明", initialValue = "", placeholder = "", submitText = "提交", danger = false, required = false }) {
+export function promptAction({ title, message = "", label = "说明", initialValue = "", placeholder = "", submitText = "提交", danger = false, required = false, secret = false }) {
   return new Promise((resolve) => {
     const returnFocus = document.activeElement;
     const overlay = el("div", { class: "dialog-backdrop" });
-    const textarea = el("textarea", { rows: 5, value: initialValue, placeholder, required, ariaLabel: label });
+    const textarea = secret
+      ? el("input", { type: "password", value: "", autocomplete: "off", spellcheck: false, placeholder, required, ariaLabel: label })
+      : el("textarea", { rows: 5, value: initialValue, placeholder, required, ariaLabel: label });
     const form = el("form", { class: "dialog", role: "dialog", ariaModal: "true" }, [
       el("h2", { text: title }),
       message ? el("p", { text: message }) : null,
       el("label", { class: "field" }, [el("span", { class: "field-label", text: label }), textarea]),
     ]);
-    const finish = (value) => { overlay.remove(); if (returnFocus?.isConnected) returnFocus.focus(); resolve(value); };
+    const finish = (value) => { if (secret) textarea.value = ""; overlay.remove(); if (returnFocus?.isConnected) returnFocus.focus(); resolve(value); };
     form.append(el("div", { class: "dialog-actions" }, [
       button("取消", { onClick: () => finish(null) }),
       button(submitText, { kind: danger ? "danger" : "primary", type: "submit" }),
@@ -226,7 +228,7 @@ export function promptAction({ title, message = "", label = "说明", initialVal
     containDialogKeyboard(form, () => finish(null));
     form.addEventListener("submit", (event) => {
       event.preventDefault();
-      const value = textarea.value.trim();
+      const value = secret ? textarea.value : textarea.value.trim();
       if (required && !value) { textarea.focus(); return; }
       finish(value);
     });

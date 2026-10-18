@@ -65,6 +65,27 @@ test('text prompt keeps keyboard focus inside and Escape preserves cancellation 
   assert.equal(ui.document.activeElement, ui.launcher);
 });
 
+test('owner secret prompt masks input, does not prefill, clears DOM and retains focus/cancel behavior', async () => {
+  const ui = browser();
+  const result = ui.promptAction({ title: 'Owner credential', secret: true, initialValue: 'must-not-prefill', required: true });
+  const dialog = ui.dialog(), input = dialog.querySelector('input');
+  assert.equal(input.getAttribute('type'), 'password');
+  assert.equal(input.getAttribute('autocomplete'), 'off');
+  assert.equal(input.value, '');
+  assert.equal(ui.document.activeElement, input);
+  input.value = ' synthetic test only ';
+  dialog.events.submit({ preventDefault() {} });
+  assert.equal(await result, ' synthetic test only ', 'credentials must not be silently trimmed');
+  assert.equal(input.value, '');
+  assert.equal(dialog.isConnected, false);
+  assert.equal(ui.document.activeElement, ui.launcher);
+  const cancelled = ui.promptAction({ title: 'Owner credential', secret: true });
+  const cancelledDialog = ui.dialog(), cancelledInput = cancelledDialog.querySelector('input');
+  cancelledInput.value = 'synthetic cancelled';
+  assert.equal(ui.key(cancelledDialog, 'Escape').stopped, true);
+  assert.equal(await cancelled, null); assert.equal(cancelledInput.value, '');
+});
+
 test('fullscreen reading restores focus and scrolling on Escape and repeated open/close', () => {
   const ui = browser();
   ui.document.body.style.overflow = 'auto';

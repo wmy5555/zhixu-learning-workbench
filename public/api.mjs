@@ -182,7 +182,7 @@ export const api = {
   updateNote: (id, body) => request(`/api/notes/${encodeURIComponent(id)}`, { method: "PUT", body }),
   recycleBin: () => request('/api/recycle-bin'),
   restoreRecycled: (id, versionId) => request(`/api/recycle-bin/${encodeURIComponent(id)}/restore`, { method: 'POST', body: { versionId } }),
-  clearRecycleBin: revision => request('/api/recycle-bin', { method: 'DELETE', body: { confirmed: true, revision } }),
+  clearRecycleBin: (revision, ownerToken) => request('/api/recycle-bin', { method: 'DELETE', headers: ownerToken ? { 'X-Zhixu-Purge-Token': ownerToken } : {}, body: { confirmed: true, revision } }),
   deleteNote: (id, expectedHash) => request(`/api/notes/${encodeURIComponent(id)}`, { method: "DELETE", body: { expectedHash } }),
   processNote: (id, options = {}) => request(`/api/notes/${encodeURIComponent(id)}/process`, { method: "POST", body: options }),
   extractSource: (id, body) => request(`/api/notes/${encodeURIComponent(id)}/extract`, { method: "POST", body }),
