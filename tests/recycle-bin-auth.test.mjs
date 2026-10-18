@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { once } from 'node:events';
-import http from 'node:http';
+import { randomBytes } from 'node:crypto';
 import test from 'node:test';
 import { createApp } from '../src/server.mjs';
 import { createRecycleBin } from '../src/recycle-bin.mjs';
@@ -10,9 +10,9 @@ import { decodeFile, writeAttachment, attachmentPath } from '../src/attachments.
 
 const tempRoot = path.resolve(import.meta.dirname, '../.tmp');
 fs.mkdirSync(tempRoot, { recursive: true });
-async function fixture(t) {
+async function fixture(t, purgeToken = '') {
   const root = fs.mkdtempSync(path.join(tempRoot, 'purge-auth-'));
-  const app = createApp({ dataDir: path.join(root, 'data'), vaultDir: path.join(root, 'vault'), scheduler: false });
+  const app = createApp({ dataDir: path.join(root, 'data'), vaultDir: path.join(root, 'vault'), scheduler: false, purgeToken });
   t.after(async () => { await app.close(); fs.rmSync(root, { recursive: true, force: true }); });
   app.server.listen(0, '127.0.0.1'); await once(app.server, 'listening');
   const base = 'http://127.0.0.1:' + app.server.address().port;
@@ -22,7 +22,7 @@ async function fixture(t) {
     const response = await fetch(base + url, { method, headers: { ...headers, ...(token ? { 'X-Zhixu-Purge-Token': token } : {}), ...extra }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     return { status: response.status, body: await response.json() };
   };
-  return { app, root, req, sessionBody, base, headers };
+  return { app, root, req, sessionBody };
 }
 function recycled(store) {
   const file = decodeFile({ name: 'synthetic.png', mime: 'image/png', bytes: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jGZkAAAAASUVORK5CYII=', 'base64') });
@@ -37,49 +37,112 @@ function snapshot(store) {
     claims: ['deleted', 'fileRecovery', 'recyclePurge', 'attachmentUploads'].map(namespace => [namespace, store.records(namespace)]), files: files(store.vaultDir) };
 }
 
-
-test('local webpage purge needs session, CSRF, same origin, confirmation and current scope; no separate credential',async t=>{
- const {app,req,base,headers}=await fixture(t),store=app.service.store;const {note}=recycled(store);
- const preview=(await req('/api/recycle-bin')).body,before=snapshot(store),body={confirmed:true,revision:preview.revision,versionId:preview.items[0].versionId};
- for(const url of ['/api/recycle-bin','/api/recycle-bin/'+note.id]){
-  const noSession=await fetch(base+url,{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});assert.equal(noSession.status,401);
-  for(const extra of [{'X-CSRF-Token':''},{Origin:'https://example.invalid'}]){
-   assert.equal((await req(url,'DELETE',body,undefined,extra)).status,403);assert.deepEqual(snapshot(store),before);
+test('purge defaults disabled even with a self-issued session, CSRF, confirmation and current revision', async t => {
+  const { app, req } = await fixture(t), store = app.service.store;
+  const { note } = recycled(store), before = snapshot(store), preview = (await req('/api/recycle-bin')).body;
+  for(const url of ['/api/recycle-bin','/api/recycle-bin/'+note.id]) {
+    const denied = await req(url, 'DELETE', { confirmed: true, revision: preview.revision, versionId:preview.items[0].versionId }, randomBytes(32).toString('base64url'));
+    assert.equal(denied.status, 403); assert.equal(denied.body.code, 'RECYCLE_PURGE_DISABLED'); assert.deepEqual(snapshot(store), before);
   }
-  assert.equal((await req(url,'DELETE',{...body,confirmed:false})).status,409);
-  assert.equal((await req(url,'DELETE',{...body,revision:'stale'})).status,409);
- }
- const hostDenied=await new Promise((resolve,reject)=>{const request=http.request(base+'/api/recycle-bin',{method:'DELETE',headers:{...headers,Host:'example.invalid'}},response=>{response.resume();response.on('end',()=>resolve(response.statusCode));});request.on('error',reject);request.end(JSON.stringify(body));});assert.equal(hostDenied,403);
- assert.equal((await req('/api/recycle-bin/'+note.id,'DELETE',{...body,versionId:'wrong'})).status,409);
- assert.equal((await req('/api/recycle-bin/'+note.id+'/unknown/extra','DELETE',body)).status,404);
- assert.deepEqual(snapshot(store),before);
- const removed=await req('/api/recycle-bin/'+note.id,'DELETE',body);assert.equal(removed.status,200);assert.equal(removed.body.cleared,1);
- assert.equal(store.history(note.id).length,0);assert.equal((await req('/api/recycle-bin/'+note.id,'DELETE',body)).status,409);
- const next=recycled(store);const clear=await req('/api/recycle-bin','DELETE',{confirmed:true,revision:(await req('/api/recycle-bin')).body.revision});assert.equal(clear.status,200);assert.equal(store.history(next.note.id).length,0);
-});
-test('MCP and ChatGPT credentials cannot invoke permanent-delete routes',async t=>{
- const {app,root,base}=await fixture(t),store=app.service.store;recycled(store);const before=snapshot(store);
- app.service.updateSettings({mcp:{enabled:true,chatgptEnabled:true}});
- for(const [prefix,file] of [['mcp','mcp-token'],['chatgpt','chatgpt-mcp-token']]){
-  const token=fs.readFileSync(path.join(root,'data',file),'utf8').trim();
-  for(const suffix of ['', '/some-id']){
-   const res=await fetch(base+'/api/'+prefix+'/recycle-bin'+suffix,{method:'DELETE',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({confirmed:true,revision:before.list.revision})});assert.equal(res.status,404);
-  }
-  const res=await fetch(base+'/api/recycle-bin',{method:'DELETE',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({confirmed:true,revision:before.list.revision})});assert.equal(res.status,401);
- }
- assert.deepEqual(snapshot(store),before);
+  assert.equal(preview.purgeEnabled, false);
+  // Ordinary settings cannot enable or replace the separate runtime capability.
+  await req('/api/settings', 'PUT', { purgeToken: randomBytes(32).toString('base64url'), purgeEnabled: true });
+  assert.equal((await req('/api/recycle-bin')).body.purgeEnabled, false);
+  assert.equal((await req('/api/recycle-bin/' + note.id + '/restore', 'POST', { versionId: preview.items[0].versionId })).status, 200);
 });
 
-test('practice single purge uses only its own current revision and leaves main library untouched',async t=>{
- const {app,req}=await fixture(t);recycled(app.service.store);const before=snapshot(app.service.store);
+test('owner capability protects normalized main and practice purge, retains scope checks and does not leak', async t => {
+  const token = randomBytes(32).toString('base64url'), { app, root, req, sessionBody } = await fixture(t, token), store = app.service.store;
+  const { note, filePath } = recycled(store), before = snapshot(store), preview = (await req('/api/recycle-bin')).body;
+  assert.equal(preview.purgeEnabled, true);
+  for (const url of ['/api/recycle-bin', '/api//recycle-bin/', '/api/%72ecycle-bin', '/api/recycle-bin/'+note.id, '/api//%72ecycle-bin//'+note.id+'/']) {
+    for (const wrong of [undefined, randomBytes(32).toString('base64url')]) {
+      const denied = await req(url, 'DELETE', { confirmed: true, revision: preview.revision, versionId:preview.items[0].versionId }, wrong);
+      assert.equal(denied.status, 403); assert.equal(denied.body.code, 'RECYCLE_PURGE_UNAUTHORIZED'); assert.deepEqual(snapshot(store), before);
+    }
+  }
+  for (const file of ['mcp-token', 'chatgpt-mcp-token']) {
+    const otherCapability = fs.readFileSync(path.join(root, 'data', file), 'utf8').trim();
+    assert.equal((await req('/api/recycle-bin', 'DELETE', { confirmed: true, revision: preview.revision }, otherCapability)).status, 403);
+  }
+  const leaked = JSON.stringify([sessionBody, preview, (await req('/api/settings')).body, (await req('/api/bootstrap')).body]);
+  assert.equal(leaked.includes(token), false);
+  assert.equal((await req('/api/recycle-bin', 'DELETE', { confirmed: true, revision: preview.revision }, token, { 'X-CSRF-Token': '' })).status, 403);
+  assert.equal((await req('/api/recycle-bin', 'DELETE', { confirmed: true, revision: 'stale' }, token)).status, 409);
+  assert.equal((await req('/api/recycle-bin', 'DELETE', { revision: preview.revision }, token)).body.code, 'RECYCLE_CONFIRM_REQUIRED');
+  const practice = (await req('/api/onboarding/start', 'POST', {})).body;
+  app.service.updateSettings({ ai: { enabled: true } }); app.onboarding.tested('model');
+  const prefix = '/api/practice/' + practice.practiceId;
+  const lease = app.onboarding.acquire(practice.practiceId, { resource: 'recycle-bin', method: 'GET', query: {} });
+  try {
+    const entry = recycled(lease.service.store), pBefore = snapshot(lease.service.store), pList = (await req(prefix + '/recycle-bin')).body;
+    assert.equal((await req(prefix + '//%72ecycle-bin/', 'DELETE', { confirmed: true, revision: pList.revision })).status, 403);
+    assert.deepEqual(snapshot(lease.service.store), pBefore);
+    assert.equal((await req(prefix + '/recycle-bin', 'DELETE', { confirmed: true, revision: pList.revision }, token)).status, 200);
+    assert.equal(lease.service.store.history(entry.note.id).length, 0); assert.equal(fs.existsSync(entry.filePath), false);
+    assert.deepEqual(snapshot(store), before);
+  } finally { lease.release(); }
+  const cleared = await req('/api/recycle-bin', 'DELETE', { confirmed: true, revision: preview.revision }, token);
+  assert.equal(cleared.status, 200); assert.equal(cleared.body.cleared, 1); assert.equal(store.history(note.id).length, 0); assert.equal(fs.existsSync(filePath), false);
+});
+
+test('pending physical cleanup still requires owner authorization', async t => {
+  const token = randomBytes(32).toString('base64url'), { app, req } = await fixture(t, token), store = app.service.store;
+  recycled(store); const bin = createRecycleBin(store), unlink = fs.unlinkSync;
+  fs.unlinkSync = file => { if (file.endsWith('.raw')) throw Object.assign(new Error('synthetic busy'), { code: 'EBUSY' }); return unlink(file); };
+  try { assert.throws(() => bin.clear({ confirmed: true, revision: bin.list().revision }), { code: 'EBUSY' }); } finally { fs.unlinkSync = unlink; }
+  const before = snapshot(store); assert.equal(before.list.pendingCleanup, 1);
+  assert.equal((await req('/api/recycle-bin', 'DELETE', { confirmed: true, revision: before.list.revision })).status, 403);
+  assert.deepEqual(snapshot(store), before);
+  assert.equal((await req('/api/recycle-bin', 'DELETE', { confirmed: true, revision: before.list.revision }, token)).status, 200);
+  assert.equal(bin.list().pendingCleanup, 0);
+});
+
+test('invalid owner configuration fails before creating data or starting a server', () => {
+  for (const purgeToken of [null, 'short', ' '.repeat(43), 'x'.repeat(129)]) assert.throws(() => createApp({ purgeToken }), /LEARNING_PURGE_TOKEN/);
+});
+
+test('browser API sends owner credential only in the request header, never body or request events', async t => {
+  const originalFetch = globalThis.fetch, originalWindow = globalThis.window, originalEvent = globalThis.CustomEvent;
+  t.after(() => { globalThis.fetch = originalFetch; globalThis.window = originalWindow; globalThis.CustomEvent = originalEvent; });
+  const sent = [], events = [], token = randomBytes(32).toString('base64url');
+  globalThis.window = { dispatchEvent: event => events.push(event.detail) };
+  globalThis.CustomEvent = class { constructor(type, { detail }) { this.detail = detail; } };
+  globalThis.fetch = async (url, options = {}) => {
+    sent.push({ url, options });
+    return new Response(JSON.stringify(url === '/api/session' ? { csrf: 'synthetic-csrf' } : { cleared: 1 }), { headers: { 'Content-Type': 'application/json' } });
+  };
+  const { api } = await import('../public/api.mjs?purge-owner-test');
+  await api.clearRecycleBin('synthetic-revision', token);
+  assert.equal(sent.length, 2);
+  const call = sent[1]; assert.equal(call.url, '/api/recycle-bin'); assert.equal(call.options.headers.get('X-Zhixu-Purge-Token'), token);
+  assert.deepEqual(JSON.parse(call.options.body), { confirmed: true, revision: 'synthetic-revision' });
+  assert.equal(JSON.stringify(events).includes(token), false);
+});
+
+test('single owner purge rejects self-issued session, session CSRF and unrelated capabilities in main and practice',async t=>{
+ const token=randomBytes(32).toString('base64url'), {app,root,req,sessionBody}=await fixture(t,token);
+ const main=app.service.store; const retained=recycled(main);
  const practice=(await req('/api/onboarding/start','POST',{})).body;
  app.service.updateSettings({ai:{enabled:true}});app.onboarding.tested('model');
- const prefix='/api/practice/'+practice.practiceId;
  const lease=app.onboarding.acquire(practice.practiceId,{resource:'recycle-bin',method:'GET',query:{}});
  try {
-  const {note}=recycled(lease.service.store),preview=(await req(prefix+'/recycle-bin')).body,entry=preview.items.find(x=>x.id===note.id);
-  assert.equal((await req(prefix+'/recycle-bin/'+note.id,'DELETE',{confirmed:true,versionId:entry.versionId,revision:before.list.revision})).status,409);
-  assert.equal((await req(prefix+'/recycle-bin/'+note.id,'DELETE',{confirmed:true,versionId:entry.versionId,revision:preview.revision})).status,200);
-  assert.equal(lease.service.store.history(note.id).length,0);assert.deepEqual(snapshot(app.service.store),before);
+  for(const [prefix,store] of [['/api',main],['/api/practice/'+practice.practiceId,lease.service.store]]){
+   const {note}=recycled(store),before=snapshot(store),preview=(await req(prefix+'/recycle-bin')).body,entry=preview.items.find(x=>x.id===note.id);
+   const body={confirmed:true,revision:preview.revision,versionId:entry.versionId};
+   for(const url of [prefix+'/recycle-bin',prefix+'/recycle-bin/'+note.id,prefix+'//%72ecycle-bin//'+note.id+'/']){
+    for(const wrong of [undefined,sessionBody.csrf,fs.readFileSync(path.join(root,'data','mcp-token'),'utf8').trim(),fs.readFileSync(path.join(root,'data','chatgpt-mcp-token'),'utf8').trim()]){
+     assert.equal((await req(url,'DELETE',body,wrong)).body.code,'RECYCLE_PURGE_UNAUTHORIZED');assert.deepEqual(snapshot(store),before);
+    }
+   }
+   assert.equal((await req(prefix+'/recycle-bin/'+note.id,'DELETE',body,token,{'X-CSRF-Token':''})).status,403);
+   assert.equal((await req(prefix+'/recycle-bin/'+note.id,'DELETE',body,token,{Origin:'https://example.invalid'})).status,403);
+   assert.equal((await req(prefix+'/recycle-bin/'+note.id,'DELETE',{...body,versionId:'stale'},token)).status,409);
+   assert.equal((await req(prefix+'/recycle-bin/'+note.id,'DELETE',{...body,revision:'stale'},token)).status,409);
+   assert.equal((await req(prefix+'/recycle-bin/'+note.id,'DELETE',{...body,confirmed:false},token)).status,409);
+   assert.deepEqual(snapshot(store),before);
+   assert.equal((await req(prefix+'/recycle-bin/'+note.id,'DELETE',body,token)).status,200);assert.equal(store.history(note.id).length,0);
+   assert.ok(main.history(retained.note.id).length);
+  }
  } finally {lease.release();}
 });

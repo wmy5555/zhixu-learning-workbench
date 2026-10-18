@@ -32,7 +32,10 @@ async function readBinary(req) {
   for await (const chunk of req) { size += chunk.length; if (size > MAX_FILE_BYTES) fail('每个文件最多 50 MB（50,000,000 字节）。', 'TOO_LARGE', 413); chunks.push(chunk); }
   return Buffer.concat(chunks);
 }
-export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR || '.data'), vaultDir = process.env.LEARNING_VAULT_DIR ? path.resolve(process.env.LEARNING_VAULT_DIR) : undefined, scheduler = true, service: supplied } = {}) {
+export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR || '.data'), vaultDir = process.env.LEARNING_VAULT_DIR ? path.resolve(process.env.LEARNING_VAULT_DIR) : undefined, scheduler = true, service: supplied, purgeToken = '' } = {}) {
+  // Owner-held capability: never minted by session or stored in API-readable settings.
+  // Missing configuration disables irreversible purge, including pending-file cleanup.
+  if (typeof purgeToken !== 'string' || purgeToken !== '' && !/^[A-Za-z0-9_-]{43,128}$/.test(purgeToken)) throw new Error('LEARNING_PURGE_TOKEN must be an independent random token (43–128 URL-safe characters).');
   const service = supplied || createService({ dataDir, vaultDir });
   const mainService = service;
   const onboarding = createOnboarding({ dataDir, mainService });
@@ -162,10 +165,12 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
       try {
       const service = lease?.service || mainService;
       let result;
-      if(resource==='recycle-bin'&&!id&&method==='GET')result={...createRecycleBin(service.store).list(),purgeEnabled:true};
+      if(resource==='recycle-bin'&&!id&&method==='GET')result={...createRecycleBin(service.store).list(),purgeEnabled:!!purgeToken};
       else if(resource==='recycle-bin'&&id&&action==='restore'&&method==='POST')result=createRecycleBin(service.store).restore(id,body.versionId);
       else if(resource==='recycle-bin'&&!action&&method==='DELETE'){
-        // Local web session and CSRF were checked above. MCP routes cannot reach this branch.
+        // Both single-item purge and clear require the same independent owner capability.
+        if(!purgeToken)fail('永久删除未启用。恢复功能仍可使用。','RECYCLE_PURGE_DISABLED',403);
+        if(!safeEqual(req.headers['x-zhixu-purge-token'],purgeToken))fail('永久删除需要独立的所有者凭据。','RECYCLE_PURGE_UNAUTHORIZED',403);
         if(route.length > 2) fail('回收站接口不存在。','NOT_FOUND',404);
         const bin=createRecycleBin(service.store);
         result=id?bin.purge(id,body.versionId,body):bin.clear(body);
@@ -287,7 +292,7 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
   return {server,service,onboarding,async close(){clearInterval(timer);clearInterval(practiceTimer);await new Promise(resolve=>server.close(resolve));await onboarding.close();await service.close();}};
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href){
-  const app=createApp();const port=Number(process.env.PORT||4318);
+  const app=createApp({purgeToken:process.env.LEARNING_PURGE_TOKEN||''});const port=Number(process.env.PORT||4318);
   app.server.listen(port,'127.0.0.1',()=>console.log(`知序 · 个人学习工作台已启动：http://127.0.0.1:${port}\n数据保存在本机。关闭本进程将停止后台调度。`));
   app.server.on('error',error=>{console.error(error.code==='EADDRINUSE'?'端口已被使用，应用可能已经启动。':error.message);process.exitCode=1;});
   for(const signal of ['SIGINT','SIGTERM'])process.on(signal,async()=>{await app.close();process.exit(0);});

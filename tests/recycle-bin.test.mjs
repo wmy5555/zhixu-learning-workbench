@@ -65,7 +65,7 @@ test('HTTP recycle routes keep session/CSRF and practice library boundaries',asy
  const practice=(await req('/api/onboarding/start','POST',{})).body;app.service.updateSettings({ai:{enabled:true}});app.onboarding.tested('model');
  const prefix='/api/practice/'+practice.practiceId;assert.deepEqual((await req(prefix+'/recycle-bin')).body.items,[]);
  assert.equal((await req(prefix+'/recycle-bin/'+note.id+'/restore','POST',{versionId:list.items[0].versionId})).status,409);
- assert.equal((await req(prefix+'/recycle-bin','DELETE',{confirmed:true,revision:list.revision})).status,409);assert.equal((await req('/api/recycle-bin')).body.items.length,1);
+ assert.equal((await req(prefix+'/recycle-bin','DELETE',{confirmed:true,revision:list.revision})).status,403);assert.equal((await req('/api/recycle-bin')).body.items.length,1);
  assert.equal((await req('/api/recycle-bin/'+note.id+'/restore','POST',{versionId:list.items[0].versionId})).status,200);assert.equal(app.service.store.read(note.id).hash,note.hash);
 });
 

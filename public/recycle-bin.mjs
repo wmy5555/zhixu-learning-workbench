@@ -1,5 +1,5 @@
 import { api } from './api.mjs';
-import { el, button, emptyState, formatDate, confirmAction, toast } from './ui.mjs';
+import { el, button, emptyState, formatDate, confirmAction, promptAction, toast } from './ui.mjs';
 
 let renderSequence = 0;
 export async function renderRecycleBin({ main, refresh, onError, isActive = () => true, snapshot, notice = '' }) {
@@ -37,10 +37,10 @@ export async function renderRecycleBin({ main, refresh, onError, isActive = () =
     }
   }
   async function permanentlyDelete(item = null) {
-    if (!current() || busy || !verified) return;
+    if (!current() || busy || !verified || result.purgeEnabled !== true) return;
     busy = true;
     updateControls();
-    let requested = false;
+    let requested = false, ownerToken = '';
     try {
       const ok = await confirmAction({ title: item ? '永久删除这份原始资料？' : '永久清空当前资料库的回收站？',
         message: item
@@ -48,14 +48,17 @@ export async function renderRecycleBin({ main, refresh, onError, isActive = () =
           : `将永久删除当前资料库回收站中的 ${items.length} 份原始资料（以及上次未完成清理的文件）、其版本和未被其他内容引用的附件，无法从回收站恢复。已生成的知识、学习记录、共享附件和独立备份会保留。`,
         confirmText: item ? '确认永久删除' : '确认永久清空', danger: true });
       if (!ok || !current()) return;
+      ownerToken = await promptAction({ title: '验证永久删除凭据', label: '独立所有者凭据', message: '仅用于本次永久删除，不会保存在页面或浏览器存储中。', secret: true, required: true, submitText: '验证并永久删除', danger: true });
+      if (!ownerToken || !current()) return;
       requested = true;
-      const value = item ? await api.purgeRecycled(item.id, item.versionId, result.revision) : await api.clearRecycleBin(result.revision);
+      const value = item ? await api.purgeRecycled(item.id, item.versionId, result.revision, ownerToken) : await api.clearRecycleBin(result.revision, ownerToken);
       if (current()) toast(item ? '已永久删除这份原始资料' : value.cleared ? `已永久清空 ${value.cleared} 份原始资料` : '已完成回收站文件清理', 'success');
     } catch (error) {
       if (!current()) return;
       onError(new Error(`${item ? '永久删除资料' : '清空回收站'}失败，正在刷新列表（不会自动再次永久删除资料）：${error.message}`));
       if (requested) notice = '操作未全部完成，或暂时无法确认结果。请核对刷新后的列表；再次永久删除需要重新确认。';
     } finally {
+      ownerToken = '';
       if (current()) {
         if (requested) await reconcile(notice);
         busy = false;
@@ -66,10 +69,11 @@ export async function renderRecycleBin({ main, refresh, onError, isActive = () =
   const clear = button('一键清空回收站', { kind: 'danger', onClick: () => {
     if (items.length || result.pendingCleanup) return permanentlyDelete();
   } });
-  controls.push({ control: clear, unavailable: !items.length && !result.pendingCleanup });
+  controls.push({ control: clear, unavailable: result.purgeEnabled !== true || !items.length && !result.pendingCleanup });
   const body = el('div', { class: 'page-stack recycle-bin' }, [
     el('div', { class: 'actions' }, [clear, el('a', { href: '/guide.html#recycle-bin', target: '_blank', rel: 'noopener', text: '回收站帮助' })]), status, retry,
   ]);
+  if (result.purgeEnabled !== true) body.append(el('p', { class: 'fine-print', text: '永久删除未启用，仍可恢复资料。详见回收站帮助。' }));
   if (result.pendingCleanup) body.append(el('p', { class: 'notice', text: '部分文件尚未清理完成。核对回收站帮助后，可重新确认清空以重试。' }));
   if (!items.length) body.append(emptyState('回收站为空', '移入回收站的原始资料会显示在这里。'));
   for (const item of items) {
@@ -87,7 +91,7 @@ export async function renderRecycleBin({ main, refresh, onError, isActive = () =
       finally { if (current()) { busy = false; updateControls(); } }
     } });
     const purge = button('永久删除', { kind: 'danger', onClick: () => permanentlyDelete(item) });
-    controls.push({ control: restore, unavailable: false }, { control: purge, unavailable: false });
+    controls.push({ control: restore, unavailable: false }, { control: purge, unavailable: result.purgeEnabled !== true });
     body.append(el('section', { class: 'list-item no-icon' }, [
       el('div', { class: 'item-copy' }, [el('h3', { text: item.title }), el('p', { text: `移入时间：${formatDate(item.deletedAt)} · ${item.attachmentCount} 个附件` })]),
       el('div', { class: 'actions' }, [restore, purge]),
