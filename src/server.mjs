@@ -183,6 +183,7 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
       else if(resource==='notes'&&id&&!action&&method==='DELETE'){result=service.store.delete(id,body.expectedHash);for(const j of service.store.records('jobs'))if(j.payload.noteId===id&&['queued','waiting','running'].includes(j.state))service.jobAction(j.id,{action:'cancel'});}
       else if(resource==='notes'&&action==='extract'&&method==='POST')result=service.extractNote(id,body);
       else if(resource==='notes'&&action==='process'&&method==='POST')result=service.processNote(id,body);
+      else if(resource==='notes'&&action==='structure'&&method==='PUT')result=service.editSourceStructure(id,body);
       else if(resource==='notes'&&action==='structure'&&method==='POST')result=service.requestSourceStructure(id);
       else if(resource==='notes'&&action==='promote'&&method==='POST')result=service.promote(id,body);
       else if(resource==='notes'&&action==='confirm'&&method==='POST')result=service.confirmNote(id,body);

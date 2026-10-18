@@ -473,7 +473,32 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     assertCurrent();
     const record = structureRecord(source, notes, parseJSON(result.text).structure);
     if (record.state === 'missing') fail(record.message, 'MODEL_FORMAT');
-    store.put('sourceStructures', source.id, record);
+    const previous = store.get('sourceStructures', source.id);
+    if (previous?.userEdited && record.version !== 2) fail('新结果缺少可核对的知识结构；已有人工修订保留。', 'MODEL_FORMAT');
+    store.put('sourceStructures', source.id, previous?.userEdited ? { ...previous, pendingCandidate: record } : record);
+  }
+  function editSourceStructure(id, { structure, revision } = {}) {
+    const source = getNote(id), notes = sourceChildren(id), previous = store.get('sourceStructures', id);
+    if (source.kind !== 'source' || !previous || hash(JSON.stringify(previous)) !== revision) fail('结构已变化，请重新打开后修改。', 'CONFLICT', 409);
+    const currentView = structureView(source, notes, previous);
+    const content = value => JSON.stringify([value?.units, value?.topics, value?.edges]);
+    if (currentView.state === 'stale' && (!currentView.pendingCandidate || content(structure) !== content(currentView.pendingCandidate))) fail('原文或条目已变化，请先核对新结构候选。', 'CONFLICT', 409);
+    if (structure?.version !== 2 || ![structure.units, structure.topics, structure.edges].every(Array.isArray) || [...structure.units, ...structure.topics, ...structure.edges].some(value => !value || typeof value !== 'object' || Array.isArray(value))) fail('结构格式无效。', 'MODEL_FORMAT');
+    const adoptingCandidate = currentView.pendingCandidate && content(structure) === content(currentView.pendingCandidate);
+    const edited = structuredClone(structure);
+    for (const edge of edited.edges || []) {
+      const old = previous.edges?.find(e => e.id === edge.id);
+      if (!adoptingCandidate && (!old || ['from','to','label','condition','exceptions','type','explanation','sourceRefs'].some(key => JSON.stringify(old[key]) !== JSON.stringify(edge[key])))) edge.status = 'user';
+    }
+    for (const topic of edited.topics || []) {
+      const old = previous.topics?.find(t => t.id === topic.id);
+      if (!adoptingCandidate && (!old || JSON.stringify(old) !== JSON.stringify(topic))) topic.origin = 'user';
+    }
+    const record = structureRecord(source, notes, edited, undefined, { user: true });
+    if (record.state === 'missing') fail(record.message, 'MODEL_FORMAT');
+    // Validation preserves unknowns and reports gaps; retain the previous revision for recovery.
+    store.put('sourceStructures', id, { ...record, userEdited: true, previousRevision: { ...previous, previousRevision: undefined, pendingCandidate: undefined } });
+    return readPublicNote(id);
   }
   function library(filters = {}) {
     const all = listNotes().filter(n=>!n.meta.excerptOnly).map(publicNote), matching = new Set(listNotes(filters).filter(n=>!n.meta.excerptOnly).map(n => n.id)), grouped = new Set();
@@ -962,7 +987,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
           return note && note.body.includes(candidate.body) ? [[String(index), note.id]] : [];
         }));
         const previous = store.get('sourceStructures', source.id);
-        if (!previous || structureView(source, children, previous).state === 'stale') {
+        if (!previous || !previous.userEdited && structureView(source, children, previous).state === 'stale') {
           store.put('sourceStructures', source.id, structureRecord(source, children, extracted.structure, keys));
         }
       }
@@ -1257,7 +1282,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   const commitFile = tracked(input => sourceFiles.commit(input));
   const readFile = (id, assetId) => sourceFiles.read(id, assetId);
   const pendingUploads = () => sourceFiles.pending();
-  return { get store(){return store;}, get processing(){return processing;}, get hasPendingOperations(){return processing||activeOperations>0||pausing;}, chatgpt, chatgptUndo, learningNow, settings, updateSettings, capabilityTests, getPrompts, updatePrompts, usage, usageReport, updateUsageSettings, callRecovery, recoverCall, ai, importItems, processNote, requestSourceStructure, listNotes, publicNote, publicJob, library, readPublicNote, noteEvidence, linksPreview, syncLinks, getNote, editNote, extractNote, promote, confirmNote, merge, search:tracked(search), today, planAction, startStudy, session, answerStudy, hintStudy, confirmStudy, finishStudy, mistakeAction, topics, createTopic, updateTopic, topicAction, recommendations, recommendationAction, requestRelations, relationReview, relationAction, related, ask:tracked(ask), updateDraft, propose, proposalAction, queue, runJobs, pauseJobs, jobAction, tick, demo, diagnostics, backup, restore,
+  return { get store(){return store;}, get processing(){return processing;}, get hasPendingOperations(){return processing||activeOperations>0||pausing;}, chatgpt, chatgptUndo, learningNow, settings, updateSettings, capabilityTests, getPrompts, updatePrompts, usage, usageReport, updateUsageSettings, callRecovery, recoverCall, ai, importItems, processNote, requestSourceStructure, editSourceStructure, listNotes, publicNote, publicJob, library, readPublicNote, noteEvidence, linksPreview, syncLinks, getNote, editNote, extractNote, promote, confirmNote, merge, search:tracked(search), today, planAction, startStudy, session, answerStudy, hintStudy, confirmStudy, finishStudy, mistakeAction, topics, createTopic, updateTopic, topicAction, recommendations, recommendationAction, requestRelations, relationReview, relationAction, related, ask:tracked(ask), updateDraft, propose, proposalAction, queue, runJobs, pauseJobs, jobAction, tick, demo, diagnostics, backup, restore,
     jobStatuses, rebuildLocalSearch,
     bootstrap(){return{settings:settings(),stats:{notes:store.list().filter(n=>!n.meta.excerptOnly).length,sources:store.list().filter(n=>n.kind==='source'&&!n.meta.excerptOnly).length,knowledge:store.list().filter(n=>n.kind==='knowledge').length,pending:store.records('jobs').filter(j=>['waiting','failed'].includes(j.state)).length},today:today(),notes:listNotes().filter(n=>!n.meta.excerptOnly).map(publicNote),jobs:store.records('jobs').map(publicJob),jobRevision,jobSnapshot:++jobSnapshot,conflicts:store.conflicts,capabilities:{offline:true,model:settings().ai.enabled,embedding:settings().embedding.enabled,search:settings().search.enabled}};},
     uploadFile, revertUpload, commitFile, readFile, pendingUploads,
