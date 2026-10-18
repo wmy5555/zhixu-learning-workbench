@@ -7,7 +7,7 @@
   <style>body{display:block;overflow:auto}main{max-width:880px;margin:0 auto;padding:32px 24px 64px}h1{font-size:2rem}h2{margin-top:32px}p,li{line-height:1.8}pre{overflow:auto;padding:16px;border:1px solid var(--line);border-radius:12px}code{overflow-wrap:anywhere}a{color:var(--accent)}.guide-note{padding:16px;border-left:3px solid var(--accent);background:var(--panel);margin:20px 0}ol{padding-left:24px}@media(max-width:600px){main{padding:20px 16px}h1{font-size:1.5rem}}</style>
 </head>
 <body><main>
-  <a href="/#system/settings">← 返回知序设置</a>
+  <a href="/#system/diagnostics">← 返回 MCP 接入与诊断</a>
   <h1>在 ChatGPT 里，把会话收进知序</h1>
   <p>连接完成后，在选用了知序插件的对话中说：<strong>“将该会话内容整理进知序”</strong>。ChatGPT 会整理摘要，并把当前可见的角色原文一起送入第一层原始资料。</p>
   <div class="guide-note"><strong>保存什么，什么时候算成功？</strong><p>保存的是本次传入的消息，不保证包含完整历史或附件。摘要会明确标注为 ChatGPT 生成。只有返回资料编号和“已保存”回执，才算知序完成写入；在知识库中打开记录是最后的核对步骤。</p></div>
@@ -31,7 +31,11 @@ tunnel-client run --profile zhixu-chatgpt</code></pre>
     <li>连接方式选 <strong>Tunnel</strong>，选择刚才创建的隧道或填入其 ID，完成创建。若看不到隧道，请检查工作区关联和账户权限。</li>
     <li>进入一段对话并选用知序。先说“检查知序连接”，应返回可收集以及当前是否允许读取。工具能列出来不等于已经成功存储。</li>
   </ol>
-  <h2>4. 用一段无敏感信息的会话验收</h2>
+  <h2 id="connection-check">4. 先做只读连接检查</h2>
+  <p>在 ChatGPT 网页中选用知序，发送：<strong>“仅检查知序连接，告诉我当前能否收集会话、能否读取知识库；不要读取资料，不要保存会话。”</strong></p>
+  <p>看到实际工具检查返回可收集及读取权限，说明这次网页请求已到达知序；仅列出工具或回答“已连接”不算检查结果。若没有实际结果或报错，请按下方提示排查，再执行同一个只读检查，无需开启额外权限。</p>
+  <p>请以此次 ChatGPT 工具结果和检查时间判断连接。知序目前无法自动识别这次请求是否来自网页，因而本机仍显示“网页尚未检查”；这不否定你刚在网页中完成的实际检查。本机刷新只更新本地权限状态，不会替你调用 ChatGPT。</p>
+  <h2>5. 如需验收会话保存，再使用无敏感信息的测试内容</h2>
   <p>先聊一句“这是知序连接测试，请记下今天学习要保留出处”，再说“将该会话内容整理进知序”。ChatGPT 可能要求确认写入；按页面提示确认。看到保存回执后，打开知序「知识库 → 原始资料」，按回执中的资料编号和标题核对原文、摘要与范围说明。</p>
   <p>再次发送相同请求，应返回已有回执；新增聊天后的收集会保存新快照。知序不会自动联网核验、调用付费模型、覆盖旧笔记或把资料晋级为个人理解。之后可在知序主动选择加工。</p>
   <h2>如果没有成功</h2>
