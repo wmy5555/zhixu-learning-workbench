@@ -22,7 +22,7 @@ v2 必须包含 `version:2,items,units,topics,edges`。items 沿用 v1 的 id、
 
 - items：1–100 个，每项 id/title/body/type/sourceMessageIds/uncertainties 沿用 v1；type 为 knowledge/conclusion/unverified_fact，表示候选类别，不是核验结论。
 - units：每个 item 恰好一个，id 对应 item.id；shortTitle 不超过36字符；dimensions 从 factual/conceptual/procedural/metacognitive/unknown 多选；roles 从 definition/claim/evidence/reason/step/event/example/personal/unknown 多选；sourceRefs 至多20条；eventTime 可省略，若填写必须有引用支持。
-- topics：至多200个，id/title/parent/origin/members/sourceRefs 必填。parent 为 null 或现存主题 ID，不允许循环；members 对应 item.id。origin 只允许 original 或 ai，original 必须有原文引用。主题是导航容器，不替代 typed edges。
+- topics：至多200个，id/title/parent/origin/members/sourceRefs 必填。parent 为 null 或现存主题 ID，主题 id/parent 不允许外围空白，不允许循环；members 对应 item.id。origin 只允许 original 或 ai，original 必须有原文引用。主题是导航容器，不替代 typed edges。
 - edges：至多2000条，from/to 对应不同 item.id；type 为 support/oppose/explain/prerequisite/example/counterexample/limit/application/sequence/is-a/cause/condition；label≤24字符，direction 固定 from-to；status 为 explicit/inferred/pending，禁止模型声称 user；condition/exceptions/explanation 必填字符串、≤700字符，无内容留空。condition 类型必须有非空 condition；sourceRefs 至少1条且来自端点条目的来源消息。逻辑关系允许循环，主题父子层级不允许循环。
 - sourceRefs：每组≤20条，quote≤700字符。跨片引用由服务拆成实际来源笔记 ID 和正文偏移；拆分后仍须≤20条，超出会拒绝，不静默截断。
 
@@ -44,12 +44,21 @@ v2 必须包含 `version:2,items,units,topics,edges`。items 沿用 v1 的 id、
 
 写结构前持久化精确前后映像，重试复用写入记录。写入已开始而目标缺失、未知内容变化或人工编辑时不猜测重建。后续导入遇到人工结构会保留其内容并提供 pendingCandidate；用户可通过现有结构编辑入口核对采用。新增 read_source_structure 使用现有 ChatGPT 专用认证与独立读取权限，不改变授权设置。
 
-当前 v2 整组撤销未实现，回执明确 undo.supported=false，旧撤销入口拒绝执行，避免遗漏结构记录；v1 原有撤销能力保持。回退程序版本不能当作撤销已导入数据；旧版不认识 v2 sync 载荷及跨片结构，部署者需保留与数据匹配的备份/版本。
+当前 v2 整组撤销未实现，回执明确 undo.supported=false，旧撤销入口拒绝执行，避免遗漏结构记录；v1 原有撤销能力保持。若同一来源先以 v2 保存再以 v1 更新，既有 v2 结构仍保留，通用撤销路径会因该结构依赖返回 CHATGPT_UNDO_CONFLICT，不能把 v1 更新当作可绕过 v2 撤销限制的办法。回退程序版本不能当作撤销已导入数据；旧版不认识 v2 sync 载荷及跨片结构，部署者需保留与数据匹配的备份/版本。
 
-## 编码与旧资料限制
+## 编码与旧资料保护
 
 合成验证覆盖 UTF-8 中文、emoji、组合字符、反斜杠、字面\n、字面\u、CRLF 和代码，JSON、SQLite、Markdown 往返保持原文。不能递归 JSON.parse、全局 unescape 或对原文做转码猜测；这些会破坏合法代码和来源偏移。
 
 本次可复现的乱码出现在 Windows PowerShell 对原生进程 stdout 重定向的解码环节；测试日志现以 Python subprocess 的二进制 stdout 直接写文件。该事实不证明旧知识内容的损坏发生在同一环节。未读取真实资料，未运行任何旧资料迁移。
 
-仍需一份低敏、可授权样例：原本预期文字、实际乱码片段、它位于原文/摘要/拆解/标题哪个字段，以及规范化读取结果与网页展示是否一致。若原意只能猜测，不提供自动修复；能确定的修复也需逐项预览、期望哈希、原始字节备份和保留人工编辑，不能全库替换。
+后续提供的截图已明确显示私有引用标记，采用下述显示层兼容修复，无需改写旧资料。若另有真正发生字符转码损坏的字段，仍须核对预期文字与原始字节；不提供基于猜测的全库替换。
+
+
+## 私有引用标记的旧记录展示兼容
+
+截图样例的方框和 cite/turn 编号属于 ChatGPT 私有引用标记，不是普通字符编码损坏。阅读层只识别完整 `U+E200 cite U+E202 turn… U+E201` 引用序列，在正文和表格中将缺失映射显示为“来源信息未随原文导入”。不修改保存正文、原始引用编号或偏移，不迁移真实资料。代码跨度、围栏代码及普通的 turn/cite 字符串保持原样。
+
+若笔记已经具有明确的 `meta.citationSources:[{id,url,title?}]` 元数据，来源阅读器按完全相同的 id 使用安全 HTTP(S) 链接；重复且不同的 URL、带凭据的 URL 或不安全协议均回退为缺失提示。版本阅读不套用当前笔记的映射，以免把新来源错误套到旧文本。此显示选项不意味着当前 ChatGPT 导入 schema 已能传入这份元数据；现有截图记录没有可核对映射时只能提示缺失，不能从 turn 编号、来源会话地址或标题反推 URL。
+
+截图经 Library read 返回了身份、OCR 与图片指针，Library 下载助手两次均报 download failed，未进入 Windows 元数据写入步骤，也未取得可供本地像素查看的文件。实现以父会话已查看的截图说明及其明确文字复现为依据，未宣称本任务完成像素验收。
