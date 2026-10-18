@@ -3042,7 +3042,8 @@ async function navigateTutorial(step, tutorial) {
     closeDrawer();
     if (["library", "topics"].includes(step.view)) await renderCurrent();
   }
-  if (api.getContext?.().practiceId && ["settings-model", "settings-capabilities", "settings-mcp"].includes(step.target)) return { target: "settings-api-link", message: "API 配置集中在正式库，请点击框选入口配置共用能力。" };
+  if (api.getContext?.().practiceId && step.target === "settings-mcp") return { target: "system-diagnostics", message: "MCP 权限只能在正式库修改；当前仅查看接入诊断，请返回正式库再配置。" };
+  if (api.getContext?.().practiceId && ["settings-model", "settings-capabilities"].includes(step.target)) return { target: "settings-api-link", message: "API 配置集中在正式库，请点击框选入口配置共用能力。" };
   if (step.action === "create-topic") return createTopicDrawer();
   if (step.view === "study" && state.studyTab === "session") {
     const sessions = asArray((await api.studySessions()).sessions);

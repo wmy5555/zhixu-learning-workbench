@@ -137,7 +137,7 @@ export function verifyImportedRecord(store,state) {
 // Reuse the existing graph reader; only bound batch siblings are added to its context.
 export function importedContext(store, source, stored=store.get('sourceStructures',source.id)) {
   const marker=stored?.pendingCandidate?.chatgptStructure||stored?.chatgptStructure;
-  let notes=store.list().filter(n=>n.kind==='knowledge'&&!n.meta.excerptOnly&&(n.meta.sources||[]).some(r=>r.id===source.id&&r.role==='input'));
+  let notes=store.list().filter(n=>n.kind==='knowledge'&&!n.meta.excerptOnly&&((n.meta.sources||[]).some(r=>r.id===source.id&&r.role==='input')||n.meta.processKey?.split(':')[0]===source.id));
   notes.sort((a,b)=>(Number(a.meta.processKey?.split(':').at(-1))||0)-(Number(b.meta.processKey?.split(':').at(-1))||0));
   if(!marker)return{source,notes,stored};
   notes=notes.filter(n=>marker.noteIds.includes(n.id)||!(n.meta.chatgptImport?.sessionHash===marker.owner||n.meta.chatgptHistoryBatchImport?.batchId===marker.owner));
