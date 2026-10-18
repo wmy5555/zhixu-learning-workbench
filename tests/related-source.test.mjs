@@ -30,32 +30,52 @@ test('legacy sources remain readable; a unique exact stored quote can locate a p
 });
 
 class Element {
-  constructor(tag) { this.tagName = tag; this.children = []; this.events = {}; this.dataset = {}; this.textContent = ''; }
+  constructor(tag) { this.tagName = tag; this.children = []; this.events = {}; this.dataset = {}; this.textContent = ''; this.scrollTop = 0; this.top = 0; }
   append(...children) { this.children.push(...children); }
   setAttribute(key, value) { this[key] = value; }
   addEventListener(name, handler) { this.events[name] = handler; }
+  getBoundingClientRect() { return { top: this.top }; }
 }
-test('details show passage or explicit empty state, and full text uses the C reader without writes', async () => {
+test('inline full source highlights references, locates within its own scroll window, and has no duplicate entry', async () => {
   globalThis.Node = Element;
   globalThis.document = { createElement: tag => new Element(tag), createTextNode: text => Object.assign(new Element('text'), { textContent: text }) };
   const descendants = node => [node, ...node.children.flatMap(descendants)];
-  for (const refs of [[ref('合成引用')], []]) {
-    const input = source(refs), saved = JSON.stringify(input), calls = [];
-    const details = relatedSourceDetails(note, input, value => calls.push(value));
+  const fullText = node => node.textContent + node.children.map(fullText).join('');
+  for (const refs of [[ref('合成引用')], [ref('合成引用'), ref('前后语境'), ref('合成引用')], []]) {
+    const input = source(refs), saved = JSON.stringify(input);
+    const details = relatedSourceDetails(note, input);
     const nodes = descendants(details);
     assert.equal(nodes[1].textContent, '查看关联原文段落');
-    assert.equal(nodes.filter(n => n.tagName === 'blockquote').length, refs.length);
-    if (!refs.length) assert.ok(nodes.some(n => n.textContent === '暂未定位到关联段落'));
+    const marks = nodes.filter(n => n.tagName === 'mark');
+    assert.equal(marks.length, refs.length > 1 ? 2 : refs.length);
+    const viewport = nodes.find(n => n.className === 'original-body related-source-scroll');
+    assert.equal(fullText(viewport), body, 'all source text and whitespace retained exactly once');
+    if (!refs.length) assert.ok(nodes.some(n => n.textContent.includes('暂未定位到关联段落')));
     assert.ok(nodes.every(n => !n.textContent.includes(note.body)));
-    nodes.find(n => n.tagName === 'button').events.click();
-    assert.deepEqual(calls, [input]);
+    assert.ok(nodes.every(n => n.textContent !== '查看原始资料全文'));
+    viewport.top = 100;
+    if (marks.length) marks[0].top = 3000;
+    details.open = true; details.events.toggle();
+    assert.equal(viewport.scrollTop, marks.length ? 2876 : 0);
+    const buttons = nodes.filter(n => n.tagName === 'button');
+    assert.equal(buttons.length, marks.length > 1 ? 2 : 0);
+    if (buttons.length) {
+      marks[1].top = 500;
+      buttons[1].events.click();
+      assert.equal(viewport.scrollTop, 3252);
+    }
+    const beforeClose = viewport.scrollTop;
+    details.open = false; details.events.toggle();
+    assert.equal(viewport.scrollTop, beforeClose, 'closing does not reset scroll or move an ancestor');
     assert.equal(JSON.stringify(input), saved);
   }
   const app = await readFile(new URL('../public/app.mjs', import.meta.url), 'utf8');
   const child = app.slice(app.indexOf('function childSection('), app.indexOf('async function refreshSourceGroup('));
-  assert.match(child, /relatedSourceDetails\(note, source, openSourceReader\)/);
+  assert.match(child, /relatedSourceDetails\(note, source\)/);
   assert.doesNotMatch(child, /evidenceDetails\(note.id\)/);
   assert.match(child, /查看条目详情与其他核验依据.*openNote\(note.id\)/);
   assert.match(app, /note.kind === "knowledge"\) content.append\(evidenceDetails\(note.id\)/);
+  const view = await readFile(new URL('../public/knowledge-view.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(view, /原文定位与分类依据/);
   delete globalThis.Node; delete globalThis.document;
 });

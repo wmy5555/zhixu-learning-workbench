@@ -28,17 +28,34 @@ export function relatedSourceParagraphs(note, source) {
   return merged.map(range => ({ ...range, text: body.slice(range.start, range.end), line: body.slice(0, range.start).split('\n').length }));
 }
 
-export function relatedSourceDetails(note, source, openFullText) {
+export function relatedSourceDetails(note, source) {
   const passages = relatedSourceParagraphs(note, source);
-  return el('details', { class: 'original-material', dataset: { tour: 'note-evidence' } }, [
+  const body = typeof source.body === 'string' ? source.body : '';
+  const text = el('div', { class: 'related-source-text' });
+  const highlights = [];
+  let cursor = 0;
+  for (const passage of passages) {
+    text.append(document.createTextNode(body.slice(cursor, passage.start)));
+    const highlight = el('mark', { class: 'related-source-highlight', text: passage.text });
+    text.append(highlight); highlights.push(highlight); cursor = passage.end;
+  }
+  text.append(document.createTextNode(body.slice(cursor)));
+  const viewport = el('div', { class: 'original-body related-source-scroll', tabIndex: 0, role: 'region', ariaLabel: '完整原文，关联段落已高亮' }, [text]);
+  // Scroll only this inline window; leave the source drawer and page untouched.
+  const locate = index => {
+    const target = highlights[index];
+    if (target) viewport.scrollTop += target.getBoundingClientRect().top - viewport.getBoundingClientRect().top - 24;
+  };
+  const details = el('details', { class: 'original-material related-source', dataset: { tour: 'note-evidence' } }, [
     el('summary', { text: '查看关联原文段落' }),
-    el('div', { class: 'page-stack original-body' }, [
+    el('div', { class: 'related-source-heading' }, [
       el('strong', { text: source.title || '未命名原始资料' }),
-      ...(passages.length ? passages.map(passage => el('section', { class: 'citation' }, [
-        el('p', { class: 'fine-print', text: `原文第 ${passage.line} 行 · 位置 ${passage.start}–${passage.end}` }),
-        el('blockquote', { text: passage.text, style: 'white-space: pre-wrap' }),
-      ])) : [el('p', { text: '暂未定位到关联段落' })]),
-      button('查看原始资料全文', { kind: 'text', onClick: () => openFullText(source) }),
+      el('p', { class: 'fine-print', text: passages.length ? `完整原文 · ${passages.length} 处关联段落已高亮` : '暂未定位到关联段落；以下为完整原文。' }),
+      passages.length === 1 ? el('p', { class: 'fine-print', text: `原文第 ${passages[0].line} 行 · 位置 ${passages[0].start}–${passages[0].end}` }) : null,
+      passages.length > 1 ? el('div', { class: 'form-actions' }, passages.map((passage, index) => button(`关联 ${index + 1} · 第 ${passage.line} 行`, { kind: 'text compact', onClick: () => locate(index), title: `原文位置 ${passage.start}–${passage.end}` }))) : null,
     ]),
+    viewport,
   ]);
+  details.addEventListener('toggle', () => { if (details.open) locate(0); });
+  return details;
 }
