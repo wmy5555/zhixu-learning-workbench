@@ -7,6 +7,7 @@ const array = value => Array.isArray(value) ? value : [];
 const missingMessage = '本次拆解未提供可用结构，可点击「重新分析结构」重试；已保存的条目保留。';
 export const structureBasis = (source, notes) => ({
   sourceHash: source.hash,
+  ...(source.structureSources ? { referenceSources: source.structureSources.map(s => [s.id, s.hash]).sort(([a],[b]) => a.localeCompare(b)) } : {}),
   notes: notes.map(n => [n.id, hash(JSON.stringify([n.title, n.body]))]).sort(([a], [b]) => a.localeCompare(b)),
 });
 

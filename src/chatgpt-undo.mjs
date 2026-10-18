@@ -116,6 +116,7 @@ function planFor(store, selector) {
   const sessionKey = capture.sessionKey || null, current = sessionKey ? store.get('chatgptSyncSessions', sessionKey) : null;
   if (current && (current.pending || current.requestHash !== requestHash || current.revision !== receipt.syncRevision || current.noteHash !== source.hash)) conflict();
   if (!current && (receipt.syncRevision !== null && receipt.syncRevision !== undefined || capture.requestHash !== requestHash)) conflict();
+  if (receipt.structure?.version === 2) fail('此导入含新版结构，暂不支持整组撤销；现有内容已保留。','CHATGPT_UNDO_UNAVAILABLE',409);
   const revision = receipt.syncRevision ?? null, steps = [], guards = [{ noteId: source.id, hash: source.hash, path: source.path }];
   const priorCandidateIds = [], reusedCandidates = [];
   for (const noteId of receipt.importedNoteIds || []) {

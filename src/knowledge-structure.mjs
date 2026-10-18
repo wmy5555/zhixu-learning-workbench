@@ -11,15 +11,17 @@ export function validateKnowledgeStructure(raw, source, notes, keys = new Map(no
   function refs(values, owner) {
     return list(values).slice(0, 20).flatMap(ref => {
       const quote = typeof ref?.quote === 'string' ? ref.quote : '';
+      const target = ref?.sourceId && ref.sourceId !== source.id ? (source.structureSources || []).find(s => s.id === ref.sourceId) : source;
+      if (!target) { gaps.push(`${owner}：来源不存在`); return []; }
       let start = ref?.start, end = ref?.end;
       // A unique exact quote can be located without asking the model to count characters.
-      if (start == null && quote && source.body.indexOf(quote) === source.body.lastIndexOf(quote)) {
-        start = source.body.indexOf(quote); end = start + quote.length;
+      if (start == null && quote && target.body.indexOf(quote) === target.body.lastIndexOf(quote)) {
+        start = target.body.indexOf(quote); end = start + quote.length;
       }
-      if (!quote || !Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end <= start || source.body.slice(start, end) !== quote || ref.sourceId && ref.sourceId !== source.id) {
+      if (!quote || !Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end <= start || target.body.slice(start, end) !== quote) {
         gaps.push(`${owner}：原文定位无效或有歧义`); return [];
       }
-      return [{ sourceId: source.id, start, end, quote }];
+      return [{ sourceId: target.id, start, end, quote }];
     });
   }
   const inputUnits = new Map();

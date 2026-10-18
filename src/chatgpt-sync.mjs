@@ -1,3 +1,5 @@
+import { structuredSchema, validateImportedStructure, conversationSegments, importedRecord, saveImportedRecord, verifyImportedRecord } from './chatgpt-structure.mjs';
+export { structuredSchema };
 import { z } from 'zod';
 import { fail, hash, now } from './store.mjs';
 import { readCapturePersisted, assertCaptureRecord, captureVerification, historicalVerification } from './chatgpt-integrity.mjs';
@@ -13,15 +15,7 @@ export const syncSchema = z.object({
     pages: z.array(z.object({ range: z.object({ start: cursor, end: cursor }).strict(), hasMore: z.boolean() }).strict()).min(1).max(1000),
   }).strict().optional(),
 }).strict();
-export const structuredSchema = z.object({
-  version: z.literal(1),
-  items: z.array(z.object({
-    id: identifier, title: z.string().trim().min(1).max(200), body: z.string().trim().min(1).max(30000),
-    type: z.enum(['knowledge', 'conclusion', 'unverified_fact']),
-    sourceMessageIds: z.array(identifier).min(1).max(200),
-    uncertainties: z.array(z.string().trim().min(1).max(2000)).max(20),
-  }).strict()).max(100),
-}).strict();
+
 
 export function validateSync(value) {
   if (!value.sync && (value.structured || value.coverage === 'visible_history' || value.messages.some(m => m.id))) fail('消息编号和结构化导入需要显式提供 sync；旧保存方式仍可使用。', 'CHATGPT_SYNC_INVALID');
@@ -171,7 +165,13 @@ export function verifySyncCapture(store, state, render, acceptedRenderers = []) 
       sourceMessageIds: item.sourceMessageIds, rawSha256: note.hash, bodySha256: hash(note.body),
       provenanceVerified: status === 'verified', status };
   });
-  return captureVerification(state.snapshot, source, candidates, { revision: state.revision, historyVerified: Boolean(state.historyHandoff) });
+  const proof = captureVerification(state.snapshot, source, candidates, { revision: state.revision, historyVerified: Boolean(state.historyHandoff) });
+  if (state.snapshot.structured?.version === 2) {
+    if (!state.structureWrite) fail('结构尚未保存。','CHATGPT_STRUCTURE_UNAVAILABLE',409);
+    proof.structure = verifyImportedRecord(store,state);
+    if (proof.structure.status !== 'verified') proof.status = 'preserved_edits';
+  }
+  return proof;
 }
 
 export function verifySyncReceipt(store, receipt, state, render, acceptedRenderers = []) {
@@ -248,7 +248,7 @@ export function captureIncremental(store, value, render, { acceptedRenderers = [
       checkSource(store.read(priorReceipt.noteId), pending, render, acceptedRenderers);
       store.put('chatgptSyncSessions', key, { ...pending, pending: false, noteHash: store.read(priorReceipt.noteId).hash, receipt: priorReceipt.receipt });
     }
-    return { ...priorReceipt.receipt, verification, status: 'already_saved', duplicate: true };
+    return { ...priorReceipt.receipt, verification, ...(priorReceipt.receipt.structure ? { structure:verification.structure || {...priorReceipt.receipt.structure,status:'historical_receipt'} } : {}), status: 'already_saved', duplicate: true };
   }
   let state = store.get('chatgptSyncSessions', key);
   const recoveringPending = state?.pending === true;
@@ -265,7 +265,8 @@ export function captureIncremental(store, value, render, { acceptedRenderers = [
   if (state?.pending && (state.requestHash !== requestHash || state.payloadHash !== payloadHash)) fail('上次导入尚未完成，请先使用原请求重试。', 'CHATGPT_IMPORT_PENDING', 409);
   if (state && !state.pending && state.payloadHash === payloadHash) {
     checkSource(store.read(noteId), state, render, acceptedRenderers);
-    const saved = { ...state.receipt, verification: verifySyncCapture(store, state, render, acceptedRenderers), status: 'already_saved', duplicate: true };
+    const verification = verifySyncCapture(store, state, render, acceptedRenderers);
+    const saved = { ...state.receipt, verification, ...(verification.structure ? {structure:verification.structure} : {}), status: 'already_saved', duplicate: true };
     store.put('chatgptCaptures', requestHash, { noteId, payloadHash, receipt: saved, sessionKey: key,
       ...(historyHandoff ? { historyHandoff } : {}) });
     return saved;
@@ -273,6 +274,7 @@ export function captureIncremental(store, value, render, { acceptedRenderers = [
   if (!state?.pending) {
     if (state) checkSource(store.read(noteId), state, render, acceptedRenderers);
     const merged = mergeSnapshot(state, value);
+    validateImportedStructure(merged.snapshot.structured, merged.snapshot.messages);
     const ids = new Set(merged.snapshot.messages.map(m => m.id));
     for (const item of value.structured?.items || []) if (item.sourceMessageIds.some(id => !ids.has(id))) fail('结构化条目引用了未保存的消息，不能导入。', 'CHATGPT_SOURCE_MESSAGE_MISSING');
     if (state && value.sync.baseRevision !== state.revision) fail('原资料已更新；请使用最近一次回执的版本，不会覆盖新内容。', 'CHATGPT_REVISION_CONFLICT', 409);
@@ -289,6 +291,7 @@ export function captureIncremental(store, value, render, { acceptedRenderers = [
     }
     state = { key, requestHash, payloadHash, pending: true, revision: (state?.revision || 0) + 1, snapshot: merged.snapshot,
       candidateSourceRevisions, candidateWrites,
+      ...(state?.structureWrite ? { previousStructureHash: hash(JSON.stringify(state.structureWrite.target)) } : {}),
       ...(historyHandoff ? { historyHandoff } : {}),
       previousHash: state?.noteHash || null, sourceWritePhase: 'prepared', added: merged.added, modified: merged.modified, savedAt: now() };
     store.put('chatgptSyncSessions', key, state);
@@ -331,11 +334,17 @@ export function captureIncremental(store, value, render, { acceptedRenderers = [
     store.put('chatgptSyncSessions', key, state);
     importedNoteIds.push(id);
   }
+  if (state.snapshot.structured?.version === 2) {
+    const items = state.snapshot.structured.items, notes = items.map(item => store.read(candidateIdFor(key,state.snapshot,item)));
+    const source = store.read(noteId), keys = new Map(items.map((item,i) => [item.id,notes[i].id]));
+    const record = importedRecord(state.snapshot.structured,source,notes,keys,conversationSegments(source,state.snapshot.messages),[source],state.savedAt,key);
+    saveImportedRecord(store,state,record,()=>store.put('chatgptSyncSessions',key,state));
+  }
   const verification = verifySyncCapture(store, state, render, acceptedRenderers);
   const receipt = { status: state.revision === 1 ? 'saved' : 'updated', duplicate: false, noteId, layer: 1, kind: 'source', verification,
     savedAt: state.savedAt, messageCount: state.snapshot.messages.length, coverage: state.snapshot.coverage,
     syncRevision: state.revision, addedMessages: state.added, modifiedMessages: state.modified,
-    complete: state.snapshot.sync.complete, importedNoteIds, importedItems: importedNoteIds.length,
+    complete: state.snapshot.sync.complete, ...(verification.structure ? { structure: verification.structure, undo: {supported:false,reason:'v2_structure_undo_not_implemented'} } : {}), importedNoteIds, importedItems: importedNoteIds.length,
     notice: '完整性仅指调用方声明的当前可见分支；未独立核对网页、隐藏分支或附件。结构化条目未经核验，未加入学习。', location: '知序 → 知识库 → 原始资料' };
   const captureRecord = { noteId, payloadHash, receipt, sessionKey: key, previousHash: state.previousHash ?? null, ...(historyHandoff ? { historyHandoff } : {}) };
   store.put('chatgptCaptures', requestHash, captureRecord);

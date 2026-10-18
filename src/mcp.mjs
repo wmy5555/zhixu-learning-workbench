@@ -146,6 +146,9 @@ export function createKnowledgeClient({
     readNote(id, { offset = 0, limit = 12000 } = {}) {
       return request(`${apiPrefix}/notes/${encodeURIComponent(id)}?offset=${offset}&limit=${limit}`);
     },
+    readSourceStructure(id, { offset = 0, limit = 12000 } = {}) {
+      return request(`${apiPrefix}/structures/${encodeURIComponent(id)}?offset=${offset}&limit=${limit}`);
+    },
     readSource(id, { offset = 0, limit = 12000 } = {}) {
       return request(`${apiPrefix}/sources/${encodeURIComponent(id)}?offset=${offset}&limit=${limit}`);
     },

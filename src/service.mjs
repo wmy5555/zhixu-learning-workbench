@@ -1,3 +1,4 @@
+import { importedContext, readImportedView } from './chatgpt-structure.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -478,7 +479,8 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     store.put('sourceStructures', source.id, previous?.userEdited ? { ...previous, pendingCandidate: record } : record);
   }
   function editSourceStructure(id, { structure, revision } = {}) {
-    const source = getNote(id), notes = sourceChildren(id), previous = store.get('sourceStructures', id);
+    const context = importedContext(store,getNote(id));
+    const source = context.source, notes = context.notes, previous = context.stored;
     if (source.kind !== 'source' || !previous || hash(JSON.stringify(previous)) !== revision) fail('结构已变化，请重新打开后修改。', 'CONFLICT', 409);
     const currentView = structureView(source, notes, previous);
     const content = value => JSON.stringify([value?.units, value?.topics, value?.edges]);
@@ -495,6 +497,8 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
       if (!adoptingCandidate && (!old || JSON.stringify(old) !== JSON.stringify(topic))) topic.origin = 'user';
     }
     const record = structureRecord(source, notes, edited, undefined, { user: true });
+    const importedMarker = (adoptingCandidate ? previous.pendingCandidate : previous)?.chatgptStructure;
+    if (importedMarker) record.chatgptStructure = importedMarker;
     if (record.state === 'missing') fail(record.message, 'MODEL_FORMAT');
     // Validation preserves unknowns and reports gaps; retain the previous revision for recovery.
     store.put('sourceStructures', id, { ...record, userEdited: true, previousRevision: { ...previous, previousRevision: undefined, pendingCandidate: undefined } });
@@ -513,8 +517,8 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     const note = getNote(id);
     if (note.meta.excerptOnly) fail('内部核验资料不作为知识条目展示。', 'NOT_FOUND', 404);
     if (note.kind !== 'source') return publicNote(note);
-    const children = sourceChildren(id);
-    return { ...publicNote(note), children: children.map(publicNote), structure: structureView(note, children, store.get('sourceStructures', id)) };
+    const context = importedContext(store,note), children = context.notes;
+    return { ...publicNote(note), children: children.map(publicNote), structure: structureView(context.source, children, context.stored) };
   }
   function noteEvidence(id) {
     const note = getNote(id);
@@ -1275,7 +1279,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     confirmUndo(input) { requireCapture(); return undoController.confirmUndo(input, undoAuthority); },
     confirmRestore(input) { requireCapture(); return undoController.confirmRestore(input, undoAuthority); },
   };
-  const chatgpt = createChatgptBridge({ getStore: () => store, settings, search: tracked(search), getNote, related, undo: chatgptUndo, receiveSnapshot: receiveHistorySnapshot });
+  const chatgpt = createChatgptBridge({ getStore: () => store, settings, search: tracked(search), getNote, readStructure: id => readImportedView(store,getNote(id)), related, undo: chatgptUndo, receiveSnapshot: receiveHistorySnapshot });
   sourceFiles = createSourceFiles({ store, getNote });
   const uploadFile = input => sourceFiles.receive(input);
   const revertUpload = id => sourceFiles.revert(id);

@@ -1,5 +1,7 @@
 # ChatGPT 增量保存与结构化导入
 
+候选已支持普通/快照/分批共用的 structured v2 及分页结构读回；字段、回执、人工编辑保护和兼容限制见 [v2 导入契约](CHATGPT_STRUCTURED_V2.md)。后文旧 v1 验证记录仍仅代表其原始执行范围。
+
 网页 ChatGPT 先拆解、再把原文与拆解一起导入的调用要求，以及 v1 与 v2 的边界，见[拆解导入契约](CHATGPT_DECOMPOSITION_CONTRACT.md)。
 
 ## 读回、独立分批与撤销候选
