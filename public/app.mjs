@@ -10,6 +10,7 @@ import { createFileImportPanel, attachmentPanel, canProcessFile, sourceFileNotic
 import { attachmentUrl } from "./api.mjs";
 import { createProcessFeedback } from "./process-feedback.mjs";
 import { createSourceMap } from "./source-map.mjs";
+import { relatedSourceDetails } from "./related-source.mjs";
 import { initSidebar } from "./sidebar.mjs";
 import {
   el, clear, button, badge, emptyState, formatDate, formatCalendarDate, truncate, safeExternalUrl,
@@ -1040,6 +1041,7 @@ function childSection(note, source, index) {
   const more = el("details", { class: "child-more-actions" }, [
     el("summary", { text: "更多操作" }),
     el("div", { class: "form-actions" }, [
+      button("查看条目详情与其他核验依据", { onClick: () => openNote(note.id) }),
       button("确认个人理解", { onClick: () => confirmDirect(note, source.id) }),
       button("标记已整理个人理解", { onClick: () => promoteNote(note, "integrated", source.id) }),
       button("设为重点知识", { onClick: () => promoteNote(note, "core", source.id) }),
@@ -1054,7 +1056,7 @@ function childSection(note, source, index) {
       el("div", { class: "item-meta" }, [badge(labels.stage(meta.stage), stateTone(meta.stage)), meta.topic ? badge(meta.topic, "accent") : null]),
     ]),
     sourceReadingBody(readableBody(note.body), 'child-note-body', '暂无正文'),
-    evidenceDetails(note.id),
+    relatedSourceDetails(note, source, openSourceReader),
     limitations.length ? el("div", { class: "notice danger child-limitations" }, [
       el("strong", { text: "尚需补充研究" }),
       el("p", { text: "这些事实仍需进一步核验，暂不用于学习计划或有据回答。" }),
