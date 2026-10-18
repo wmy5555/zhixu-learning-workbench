@@ -9,6 +9,7 @@ import { initSidebar } from '../public/sidebar.mjs';
 import { parseSourceFile } from '../public/source-exchange.mjs';
 import { describeJobError } from '../public/ui.mjs';
 import { testAndSaveCapability } from '../public/capability-test.mjs';
+import { localCheckStatus, callFailureReason } from '../public/mcp-status.mjs';
 import { chapters, coreSteps, flatSteps, getCurriculum } from '../public/onboarding-curriculum.mjs';
 import { materials, customMaterial, customSample, getMaterial, materialSample } from '../public/onboarding-materials.mjs';
 
@@ -352,7 +353,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat, savedSession = 
   };
   document.createTextNode = value => { const node = new Element('text'); node.textContent = value; return node; };
   const context = vm.createContext({
-    testAndSaveCapability, AbortController, setTimeout, clearTimeout, api, document, request: async () => ({ uploads: [] }), uploadAttachment: (...args) => api.uploadAttachment(...args), initSidebar, createProcessFeedback, parseSourceFile, TextDecoder, Node: Element, URL, Intl: Object.assign(Object.create(Intl), { DateTimeFormat: dateTimeFormat }), Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => `request-ui-${++browserRequestSequence}` },
+    testAndSaveCapability, localCheckStatus, callFailureReason, AbortController, setTimeout, clearTimeout, setInterval() {}, clearInterval() {}, api, document, request: async () => ({ uploads: [] }), uploadAttachment: (...args) => api.uploadAttachment(...args), initSidebar, createProcessFeedback, parseSourceFile, TextDecoder, Node: Element, URL, Intl: Object.assign(Object.create(Intl), { DateTimeFormat: dateTimeFormat }), Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => `request-ui-${++browserRequestSequence}` },
     FormData: class {
       constructor(form) { this.form = form; }
       entries() { return descendants(this.form).filter(node => node.name && !node.disabled && ['input', 'textarea', 'select'].includes(node.tagName)).map(node => [node.name, String(node.tagName === 'select' ? node.children.find(option => option.selected)?.value || '' : node.value)]); }
@@ -367,6 +368,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat, savedSession = 
     '\ncreateFilePicker = async (_input, options) => { api.onImagePicker?.(options); return { getFiles: () => [] }; };\nthis.attachmentUrl = (id, asset, download = false) => "/api/notes/" + id + "/attachments?asset=" + asset + (download ? "&download=1" : "");', context);
   vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + discoverySource + '\n' + ('const renderMarkdown = (() => {\n' + markdownSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn renderMarkdown;\n})();') + '\nconst createMarkdownEditor = (() => {\n' + editorSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn createMarkdownEditor;\n})();\n' + knowledgeViewSource + '\n' + sourceMapSource + '\n' + relatedSourceUi + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { attachModelDiscovery, renderSourceGroupDrawer, conversationReading, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
   context.app.beginStudy = vm.runInContext('beginStudy', context);
+  context.app.mcpSettingsPanel = vm.runInContext('mcpSettingsPanel', context);
   context.app.callHistoryPanel = vm.runInContext('callHistoryPanel', context);
   context.app.manualExtract = vm.runInContext('manualExtract', context);
   context.app.serializeForm = vm.runInContext('serializeForm', context);
@@ -1192,15 +1194,15 @@ test('ChatGPT capture and read controls persist independently and disclose the l
   const writes = [];
   let settings = { mcp: { enabled: false, allowProposals: false, chatgptEnabled: false, chatgptAllowRead: false } };
   const app = browser({ settings: async () => settings, prompts: async () => ({ prompts: [] }), updateSettings: async payload => { writes.push(plain(payload)); settings = plain(payload); }, bootstrap: async () => ({ settings }) });
-  let panel = await app.settingsPanel();
+  let panel = app.mcpSettingsPanel(settings.mcp);
   assert.equal(control(panel, 'chatgptEnabled').checked, false);
   assert.equal(control(panel, 'chatgptAllowRead').checked, false);
-  assert.match(panel.textContent, /允许 ChatGPT 检索和读取知识库/); assert.match(panel.textContent, /不会自动建立网页端连接/);
+  assert.match(panel.textContent, /允许 ChatGPT 检索和读取知识库/); assert.match(panel.textContent, /保存权限不会自动连接网页/);
   control(panel, 'chatgptEnabled').checked = true;
   const form = descendants(panel).find(node => node.tagName === 'form');
   await form.events.submit({ preventDefault() {} });
   assert.deepEqual(writes[0].mcp, { enabled: false, allowProposals: false, chatgptEnabled: true, chatgptAllowRead: false });
-  panel = await app.settingsPanel(); control(panel, 'chatgptAllowRead').checked = true;
+  panel = app.mcpSettingsPanel(settings.mcp); control(panel, 'chatgptAllowRead').checked = true;
   await descendants(panel).find(node => node.tagName === 'form').events.submit({ preventDefault() {} });
   assert.equal(writes[1].mcp.chatgptAllowRead, true); assert.equal(writes[1].mcp.enabled, false);
   app.state.bootstrap = { settings: { mcp: writes[1].mcp } };
@@ -1212,17 +1214,22 @@ test('ChatGPT capture and read controls persist independently and disclose the l
 test('MCP dependent grants clear when their parent is disabled and cannot reappear on re-enabling or saving', async () => {
   const writes = [];
   const app = browser({ settings: async () => ({ mcp: { enabled: false, allowProposals: true, chatgptEnabled: false, chatgptAllowRead: true } }), prompts: async () => ({ prompts: [] }), updateSettings: async payload => writes.push(plain(payload)), bootstrap: async () => ({}) });
-  const panel = await app.settingsPanel();
+  const panel = app.mcpSettingsPanel({ enabled: false, allowProposals: true, chatgptEnabled: false, chatgptAllowRead: true });
+  for (const childName of ['allowProposals', 'chatgptAllowRead']) {
+    assert.equal(control(panel, childName).disabled, true);
+    assert.equal(control(panel, childName).checked, true, 'loaded values stay visible until explicit user action');
+  }
   for (const [parentName, childName] of [['mcpEnabled', 'allowProposals'], ['chatgptEnabled', 'chatgptAllowRead']]) {
     const parent = control(panel, parentName), child = control(panel, childName);
-    assert.equal(child.disabled, true); assert.equal(child.checked, false);
+    parent.events.change();
+    assert.equal(child.checked, false, 'an explicit disabled-parent change clears its dependent grant');
     parent.checked = true; parent.events.change();
     assert.equal(child.disabled, false); assert.equal(child.checked, false);
     child.checked = true; parent.checked = false; parent.events.change();
     assert.equal(child.disabled, true); assert.equal(child.checked, false);
     parent.checked = true; parent.events.change();
     assert.equal(child.checked, false);
-    parent.checked = false; child.checked = true;
+    parent.checked = false; parent.events.change(); child.checked = true;
   }
   await descendants(panel).find(node => node.tagName === 'form').events.submit({ preventDefault() {} });
   assert.deepEqual(writes[0].mcp, { enabled: false, allowProposals: false, chatgptEnabled: false, chatgptAllowRead: false });
@@ -1993,6 +2000,11 @@ for (const step of flatSteps) test('tutorial target is rendered for ' + step.id,
   app.state.bootstrap = fixture.bootstrap;
   app.state.view = 'unrendered';
   const result = await app.navigateTutorial(step, { roles: fixture.roles });
+  if (step.id === 'mcp-config') {
+    assert.equal(result.target, 'system-diagnostics');
+    assert.match(result.message, /权限只能在正式库修改/);
+    assert.equal(control(app.refs.main, 'chatgptEnabled'), undefined, 'practice keeps MCP permissions read-only');
+  }
   if (step.target.startsWith('nav-') || step.focusTarget?.startsWith('onboarding-')) return; // Static index.html navigation is covered by sidebar tests.
   const targets = [...descendants(app.refs.main), ...(app.refs.drawer.classList.contains('is-open') ? descendants(app.refs.drawerBody) : [])].filter(node => node.dataset.tour === (result?.target || step.focusTarget || step.target));
   assert.ok(targets.length, step.id + ' has no rendered target: ' + (step.focusTarget || step.target) + '\n' + app.refs.main.textContent.slice(0, 180));
@@ -2576,7 +2588,10 @@ test('connection settings test current draft, save only tested capability, and r
   control(panel, 'aiEnabled').checked = true;
   control(panel, 'aiBaseUrl').value = 'https://example.invalid/v1';
   control(panel, 'aiModel').value = 'new-model'; control(panel, 'aiKey').value = 'synthetic-only';
-  control(panel, 'vaultDir').value = '/synthetic/unsaved'; control(panel, 'chatgptEnabled').checked = true;
+  control(panel, 'vaultDir').value = '/synthetic/unsaved';
+  assert.equal(control(panel, 'chatgptEnabled'), undefined, 'MCP permissions have their own page');
+  const mcpPanel = app.mcpSettingsPanel({ enabled: false, allowProposals: false, chatgptEnabled: false, chatgptAllowRead: false });
+  control(mcpPanel, 'chatgptEnabled').checked = true;
   await click(findButton(panel, '测试连接'));
   assert.equal(calls.length, 1); assert.equal(calls[0][1].model, 'new-model');
   assert.deepEqual(saves[0], ['model', calls[0][1], 'mock-receipt']);
@@ -2585,8 +2600,8 @@ test('connection settings test current draft, save only tested capability, and r
   assert.equal(app.state.bootstrap.settings.ai.enabled, true);
   assert.equal(form, panel.querySelector('form'));
   assert.equal(control(panel, 'vaultDir').value, '/synthetic/unsaved');
-  assert.equal(control(panel, 'chatgptEnabled').checked, true);
-  assert.equal(control(panel, 'allowProposals').disabled, true);
+  assert.equal(control(mcpPanel, 'chatgptEnabled').checked, true);
+  assert.equal(control(mcpPanel, 'allowProposals').disabled, true);
   assert.match(app.toasts.textContent, /本项配置已自动保存/);
 });
 

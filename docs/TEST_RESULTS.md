@@ -1,5 +1,17 @@
 # 测试结果与当前边界
 
+## PR94 精确 CI 失败定向修复（2026-10-19）
+
+读回原始 Linux CI `39153527931` / job `117751890606`，对应提交 `ab8b54ae060c35ae26224dc652f3c29151d88b43`：1240项中1226通过、10失败、4跳过。失败为1项分组读取、3项已搬迁MCP控件查找及6项教程目标，不将这些归为main无关旧故障。该运行Secrets、Dependencies通过，不等于Quality通过。
+
+产品真实回归：v2的 importedContext 只按sources/input选子项，漏掉旧processKey关联；补回与既有sourceChildren一致的source-id前缀兜底，保留knowledge/内部证据过滤及导入marker筛选。原grouped-processing分组/过滤/不删除用例现在通过；普通v2、人工修改、跨片图谱及旧候选排除4项也通过，共5项直接相关验证，未改该旧测试的预期。
+
+六项教程的localCheckStatus未定义发生在VM测试装载器：产品app已正确导入mcp-status，测试却剥离import而未注入函数。补齐真实模块函数和受控计时器；不添加产品兜底。随后练习库mcp-config确实暴露搬迁后的目标缺失：仍返回只在API页存在的settings-api-link。仅将练习库MCP教程定位到现有只读system-diagnostics并说明返回正式库配置，保留练习库不渲染权限表单的边界。该教程断言检查目标、提示及无权限控件。
+
+三个设置用例改为实际mcpSettingsPanel组件，保留明确提交、独立授权和父子依赖的行为断言；初始加载按已批准UI保留已有值，模拟用户切换时实际派发change，再检查禁用清除、重新开启不恢复及禁用子项不提交。API测试检查搬迁后的独立MCP草稿不被API保存改写，不把控件搬回旧页面。原失败对应的9项UI已定向通过；中间7项通过后只重跑仍失败的依赖和练习定位用例，最终新增断言再定向1项通过，未重复已有效7项。
+
+本轮共14项独立用例通过；没有全量或组合回归。日志ci-ui-followup.log、ci-ui-followup-final.log、ci-mcp-grant-final.log、ci-practice-mcp-final.log、ci-import-followup.log留在独立任务目录。相关语法与diff检查通过。运行代码仅public/app.mjs的练习导航分支和src/chatgpt-structure.mjs的旧关联兜底，依赖/权限/真实数据路径不变；此前同字节组件证据继续复用。这两处相对原ab8候选已有变化，不能再称其与a72完全同字节。正式4318保持37227aa，本轮不部署、不重启、不触发额外审查评论。新提交CI须重新读回，不能继承原提交结果。
+
 ## 2026-10-19 日批定向整合验证
 
 以 main `6082b6a14f2e6c5494a49b48ea6ef5624ec841f3` 为基线，仅归集已完成且没有独立 PR 的候选。没有重跑全量或组合回归。README、CHANGELOG 和本页的并列记录冲突保留双方；PR91 所有者授权和 Escape 修复保留。v2 导入与尚属独立 PR89 的元数据代码有上下文交叠，整合时保留 v2，排除元数据导入、日期和标题改动，并清除其两个无效 import。
