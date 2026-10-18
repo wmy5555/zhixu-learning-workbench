@@ -1,3 +1,4 @@
+import { localCheckStatus, callFailureReason } from "./mcp-status.mjs";
 import { renderRecycleBin } from './recycle-bin.mjs';
 import { attachModelDiscovery } from "./model-discovery.mjs";
 import { testAndSaveCapability } from "./capability-test.mjs";
@@ -805,7 +806,7 @@ async function previewNoteLinks(noteId) {
   try {
     const preview = await api.linksPreview(noteId);
     openDrawer("核对 Obsidian 链接", "稳定身份与可读链接", el("div", { class: "page-stack" }, [
-      el("p", { text: "请核对来源、主题和关系链接。确认后仅更新应用维护的链接区块。" }),
+      el("p", { text: "这里只是预览，尚未修改链接。来源、主题或关联笔记改名后，旧链接可能无法打开。确认后仅更新应用维护的链接区块，不改写其他正文。" }),
       preview.conflict ? el("div", { class: "notice danger", text: "链接区块已被手动修改，请先处理冲突；本次不会覆盖。" }) : null,
       el("div", { class: "two-column" }, [el("section", {}, [el("h3", { text: "更新前" }), sourceReadingBody(preview.before, '', '无')]), el("section", {}, [el("h3", { text: "更新后" }), sourceReadingBody(preview.body, '', '无')])]),
       button(preview.changed ? "确认更新链接" : "链接已是最新", { kind: "primary", disabled: !preview.changed || Boolean(preview.conflict), onClick: async () => {
@@ -2239,7 +2240,7 @@ async function renderSystem() {
   const wrapper = el("div", { class: "page-stack" });
   wrapper.append(el("div", { class: "tabs" }, [
     systemTabButton("settings", "API 与能力设置"), systemTabButton("usage", "用量与费用"), systemTabButton("appearance", "外观"), systemTabButton("jobs", "任务"), systemTabButton("data", "备份与恢复"),
-    systemTabButton("diagnostics", "诊断与 MCP"), systemTabButton("proposals", "写入提案"), systemTabButton("conflicts", "冲突"),
+    systemTabButton("diagnostics", "MCP 接入与诊断"), systemTabButton("proposals", "写入提案"), systemTabButton("conflicts", "冲突"),
   ]));
   if (state.systemTab === "appearance") wrapper.append(appearancePanel());
   else if (state.systemTab === "usage") {
@@ -2320,7 +2321,6 @@ async function settingsPanel() {
   const embedding = asObject(settings.embedding);
   const search = asObject(settings.search);
   const fetchSettings = asObject(settings.fetch);
-  const mcp = asObject(settings.mcp);
   const form = el("form", { class: "page-stack" });
   const notesFolder = field("笔记存储位置", el("input", { name: "vaultDir", value: settings.vaultDir || "", placeholder: "保存笔记的本地文件夹路径" }), "原始资料和知识笔记保存在这个文件夹中，也可用 Obsidian 打开。已有资料时请保持此位置；更换知识库需先备份，再单独创建。");
   notesFolder.classList.add("span-2");
@@ -2461,41 +2461,19 @@ async function settingsPanel() {
     sectionHeading("API 配置中心", "文本生成、语义嵌入、联网搜索和网页读取在这里分别配置。测试成功只自动保存对应卡片。"),
     modelPanel, capabilities,
   ]);
-  const mcpEnabled = el("input", { name: "mcpEnabled", type: "checkbox", checked: Boolean(mcp.enabled) });
-  const proposals = el("input", { name: "allowProposals", type: "checkbox", checked: Boolean(mcp.allowProposals) });
-  const chatgptEnabled = el("input", { name: "chatgptEnabled", type: "checkbox", checked: mcp.chatgptEnabled === true });
-  const chatgptAllowRead = el("input", { name: "chatgptAllowRead", type: "checkbox", checked: mcp.chatgptAllowRead === true });
-  function syncMcpChoices() {
-    for (const [parent, child] of [[mcpEnabled, proposals], [chatgptEnabled, chatgptAllowRead]]) {
-      child.disabled = !parent.checked;
-      if (child.disabled) child.checked = false;
-    }
-  }
-  mcpEnabled.addEventListener("change", syncMcpChoices);
-  chatgptEnabled.addEventListener("change", syncMcpChoices);
-  syncMcpChoices();
-  const mcpPanel = el("section", { class: "panel" }, [sectionHeading("MCP 接入", "本机客户端与 ChatGPT 网页端分别授权"), el("label", { class: "check-field" }, [mcpEnabled, "启用本地 MCP 服务"]), el("label", { class: "check-field" }, [proposals, "允许本机客户端提交写入提案"]),
-    el("hr"), el("h3", { text: "ChatGPT 会话收集与知识库读取" }),
-    el("label", { class: "check-field" }, [chatgptEnabled, "启用 ChatGPT 接入，允许新增第一层会话资料"]),
-    el("label", { class: "check-field" }, [chatgptAllowRead, "允许 ChatGPT 检索和读取知识库"]),
-    el("p", { class: "fine-print", text: "读取许可独立授予 ChatGPT：读到的原文会进入 ChatGPT 上下文，其他模型与搜索服务仍只按各自的主动操作使用所需内容。保存后生效：取消读取仍可收集会话；关闭接入后两项能力都停止，再开启需重新勾选读取。保存设置不会自动建立网页端连接。" }),
-    el("p", { class: "fine-print", text: "连接后说“将该会话内容整理进知序”。保存角色原文与独立摘要，缺失历史会如实标注；不会自动覆盖、核验或晋级。电脑、知序和私有隧道都需保持运行。" }),
-    el("a", { href: "/chatgpt-setup.html", target: "_blank", rel: "noopener", text: "打开 ChatGPT 连接指南" }),
-    el("p", { class: "fine-print", text: "连接状态与实际操作记录可在“诊断与 MCP”中查看；已启用不代表网页端已接通。" })]);
-  tour(modelPanel, "settings-model"); tour(capabilities, "settings-capabilities"); tour(mcpPanel, "settings-mcp");
+  tour(modelPanel, "settings-model"); tour(capabilities, "settings-capabilities");
   if (practice) {
     notesFolder.querySelector("input").disabled = true;
     form.append(el("div", { class: "notice info practice-settings-note" }, [el("strong", { text: "练习库共用正式 API 配置" }), el("p", { text: "这里仅修改练习学习偏好和提示词。API 密钥、能力开关及地址需返回正式设置修改，对两边共同生效。" }), tour(button("前往正式 API 配置", { onClick: () => onboarding?.openSettings() }), "settings-api-link")]), general, el("section", { class: "panel practice-api-summary" }, [sectionHeading("共用 API 状态", "连接字段只在正式 API 配置中心维护。"), ...[["文本生成", ai], ["语义嵌入", embedding], ["联网搜索", search], ["网页读取", fetchSettings]].map(([title, config]) => el("p", { text: `${title}：${config.enabled ? "已启用" : "未启用"}${config.model ? ` · ${config.model}` : ""}` }))]));
   } else {
     if (onboarding?.state?.practiceId) form.append(el("div", { class: "notice info" }, [el("strong", { text: "正在配置两边共用的 AI 能力" }), el("p", { text: "此处保存的 API 配置同时用于正式库和练习库。点击测试连接使用当前表单，成功后自动保存对应能力；测试会发起真实请求并可能产生费用。密钥不会进入教程进度或练习备份。" })]));
-    form.append(general, apiCenter, mcpPanel);
+    form.append(general, apiCenter);
   }
   form.append(tour(button(practice ? "保存练习偏好" : "保存能力设置", { kind: "primary", type: "submit" }), "settings-save"));
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (testing) return;
     formRevision += 1;
-    syncMcpChoices();
     const data = serializeForm(form);
     const payload = {
       dailyMinutes: number(data.dailyMinutes), timezone: data.timezone, scheduleTime: data.scheduleTime, vaultDir: data.vaultDir,
@@ -2503,7 +2481,7 @@ async function settingsPanel() {
       ai: { enabled: aiEnabled.checked, baseUrl: data.aiBaseUrl, model: data.aiModel, apiKey: data.aiKey, timeoutMs:number(data.modelTimeoutSeconds)*1000, sourceCallLimit: number(ai.sourceCallLimit ?? 120) },
       embedding: { enabled: embeddingEnabled.checked, baseUrl: data.embeddingBaseUrl, model: data.embeddingModel, apiKey: data.embeddingKey },
       search: { enabled: searchEnabled.checked, baseUrl: data.searchBaseUrl, apiKey: data.searchKey },
-      fetch: { enabled: fetchEnabled.checked }, mcp: { enabled: mcpEnabled.checked, allowProposals: proposals.checked, chatgptEnabled: chatgptEnabled.checked, chatgptAllowRead: chatgptAllowRead.checked },
+      fetch: { enabled: fetchEnabled.checked },
     };
     if (practice) { for (const key of ["vaultDir", "ai", "embedding", "search", "fetch", "mcp"]) delete payload[key]; }
     try { await (practice ? api.updateSettings(payload) : api.updateMainSettings ? api.updateMainSettings(payload) : api.updateSettings(payload)); toast(practice ? "练习偏好已保存" : "能力设置已保存，密钥不会在页面回显", "success"); await refreshBootstrap(); }
@@ -2751,6 +2729,63 @@ function storageSummary(storage, index) {
   ]);
 }
 
+function mcpSettingsPanel(mcp) {
+  const mcpEnabled = el("input", { name: "mcpEnabled", type: "checkbox", checked: Boolean(mcp.enabled) });
+  const proposals = el("input", { name: "allowProposals", type: "checkbox", checked: Boolean(mcp.allowProposals) });
+  const chatgptEnabled = el("input", { name: "chatgptEnabled", type: "checkbox", checked: mcp.chatgptEnabled === true });
+  const chatgptAllowRead = el("input", { name: "chatgptAllowRead", type: "checkbox", checked: mcp.chatgptAllowRead === true });
+  function syncMcpChoices() {
+    for (const [parent, child] of [[mcpEnabled, proposals], [chatgptEnabled, chatgptAllowRead]]) {
+      child.disabled = !parent.checked;
+      if (child.disabled) child.checked = false;
+    }
+  }
+  mcpEnabled.addEventListener("change", syncMcpChoices);
+  chatgptEnabled.addEventListener("change", syncMcpChoices);
+  proposals.disabled = !mcpEnabled.checked;
+  chatgptAllowRead.disabled = !chatgptEnabled.checked;
+  const mcpPanel = el("section", { class: "panel" }, [sectionHeading("MCP 接入", "本机客户端与 ChatGPT 网页端分别授权"), el("label", { class: "check-field" }, [mcpEnabled, "启用本地 MCP 服务"]), el("label", { class: "check-field" }, [proposals, "允许本机客户端提交写入提案"]),
+    el("hr"), el("h3", { text: "ChatGPT 会话收集与知识库读取" }),
+    el("label", { class: "check-field" }, [chatgptEnabled, "启用 ChatGPT 接入，允许新增第一层会话资料"]),
+    el("label", { class: "check-field" }, [chatgptAllowRead, "允许 ChatGPT 检索和读取知识库"]),
+    el("p", { class: "fine-print", text: "允许读取后，包括仅本地资料在内的原文可能进入 ChatGPT 上下文。取消读取仍可收集会话；关闭接入后两项都停止，再开启需重新授权读取。保存权限不会自动连接网页。" }),
+    el("p", { class: "fine-print", text: "连接后说“将该会话内容整理进知序”。保存角色原文与独立摘要，缺失历史会如实标注；不会自动覆盖、核验或晋级。电脑、知序和私有隧道都需保持运行。" }),
+    el("a", { href: "/chatgpt-setup.html", target: "_blank", rel: "noopener", text: "打开 ChatGPT 连接指南" }),
+    el("p", { class: "fine-print", text: "下方状态与权限在同一页。勾选不会立即生效，点击保存后才更改权限。" })]);
+
+  const form = el("form", { class: "page-stack", dataset: { tour: "settings-mcp" } }, [mcpPanel]);
+  const save = button("保存 MCP 权限", { type: "submit", kind: "primary" });
+  form.append(save);
+  form.addEventListener("submit", async event => {
+    event.preventDefault();
+    if (save.disabled) return;
+    save.disabled = true;
+    try {
+      await api.updateSettings({ mcp: { enabled: mcpEnabled.checked, allowProposals: proposals.disabled ? false : proposals.checked, chatgptEnabled: chatgptEnabled.checked, chatgptAllowRead: chatgptAllowRead.disabled ? false : chatgptAllowRead.checked } });
+    } catch (error) { toast("未能确认权限保存结果。请保留当前输入，刷新核对后再重试。", "error"); return; }
+    finally { save.disabled = false; }
+    toast("MCP 权限已保存", "success");
+    try { await refreshBootstrap(); await renderSystem(); }
+    catch { toast("权限已保存，但状态刷新失败。请稍后刷新核对。", "info"); }
+  });
+  return form;
+}
+
+function localMcpCheck(mcp) {
+  const message = el("p", { role: "status", class: "fine-print" });
+  let checkedAt = typeof mcp.enabled === "boolean" && typeof mcp.chatgptEnabled === "boolean" ? Date.now() : null, failed = false;
+  const paint = () => { message.textContent = localCheckStatus({ enabled: mcp.enabled === true || mcp.chatgptEnabled === true, checkedAt, failed }).text; };
+  const check = button("刷新本地就绪状态", { onClick: async () => {
+    check.disabled = true;
+    try { const data = await api.diagnostics(); mcp = asObject(data.mcp); checkedAt = typeof mcp.enabled === "boolean" && typeof mcp.chatgptEnabled === "boolean" ? Date.now() : null; failed = false; }
+    catch { failed = true; }
+    finally { check.disabled = false; paint(); }
+  } });
+  paint();
+  const timer = setInterval(() => { if (!message.isConnected) clearInterval(timer); else paint(); }, 30000);
+  return el("div", {}, [message, check]);
+}
+
 function mcpSummary(mcp) {
   const setting = (value, yes, no) => value === true ? yes : value === false ? no : "未知，请到接入设置核对。";
   const label = (value, yes, no) => value === true ? yes : value === false ? no : "未知";
@@ -2766,16 +2801,17 @@ function mcpSummary(mcp) {
       diagnosticStatus("ChatGPT 读取知识库", mcp.chatgptEnabled === false ? "当前不可用" : label(mcp.chatgptAllowRead, "已授权", "未授权"), mcp.chatgptEnabled === false ? "接入入口已关闭，当前不能读取。" : setting(mcp.chatgptAllowRead, "包含仅本地资料；读取内容会进入 ChatGPT 上下文。", "开启会话收集本身不授予读取权限。"), mcp.chatgptEnabled !== false && mcp.chatgptAllowRead === true ? "attention" : "neutral"),
     ]),
     el("section", { class: "diagnostic-connection", "aria-label": "实际连接验证" }, [
-      el("div", { class: "diagnostic-status-heading" }, [el("h3", { text: "实际连接" }), el("span", { class: "diagnostic-pill", dataset: { tone: "attention" }, text: "尚未验证" })]),
-      el("p", { text: "客户端是否已配置：未知。开关状态和本机调用记录都不能证明网页已连通。" }),
-      el("a", { href: "/chatgpt-setup.html", target: "_blank", rel: "noopener", text: "按指南完成实际收集验证 →" }),
+      el("div", { class: "diagnostic-status-heading" }, [el("h3", { text: "实际连接" }), el("span", { class: "diagnostic-pill", dataset: { tone: "attention" }, text: mcp.chatgptEnabled === false ? "未开启" : "网页尚未检查" })]),
+      el("p", { text: "网页是否已配置：尚未检查。这里可刷新本地权限状态；网页连接需在 ChatGPT 端按指南核对，知序目前无法自动确认该结果。" }),
+      localMcpCheck(mcp),
+      el("a", { href: "/chatgpt-setup.html", target: "_blank", rel: "noopener", text: "打开连接指南，在 ChatGPT 端核对连接 →" }),
     ]),
-    el("p", { class: "diagnostic-caption", text: events === null ? "本机调用记录未知。" : events ? "当前返回 " + events + " 条本机调用记录，详情可展开查看；这不是 ChatGPT 网页连接证明。" : "暂无本机调用记录；这不能判断是否配置过客户端。" }),
+    el("p", { class: "diagnostic-caption", text: events === null ? "本机调用记录未知。" : events ? "已记录本机操作；这不是 ChatGPT 网页连接证明。" : "暂无本机调用记录；这不能判断是否配置过客户端。" }),
     el("details", { class: "diagnostic-details" }, [el("summary", { text: "工具功能与使用说明" }),
-      el("p", { class: "diagnostic-caption", text: Array.isArray(mcp.tools) ? mcp.tools.length ? "本机工具功能（能否使用取决于上方权限）：" + mcp.tools.map(name => tools[name] || "其他功能（见技术详情）").join("、") + "。" : "当前未列出本机工具功能。" : "本机工具功能未知。" }),
+      el("p", { class: "diagnostic-caption", text: Array.isArray(mcp.tools) ? mcp.tools.length ? "本机工具功能（能否使用取决于上方权限）：" + mcp.tools.map(name => tools[name] || "其他知识工具").join("、") + "。" : "当前未列出本机工具功能。" : "本机工具功能未知。" }),
       el("p", { class: "diagnostic-caption", text: "MCP 是外部应用使用知识工具的入口，模型 API 需单独配置。会话导入不覆盖已有资料；修改已有笔记仍须确认。" }),
     ]),
-    diagnosticDetails("查看 MCP 技术详情与调用记录", mcp),
+
   ]);
 }
 
@@ -2786,9 +2822,10 @@ async function diagnosticsPanel() {
   const index = asObject(data.index);
   const mcp = asObject(data.mcp);
   const storage = asObject(data.storage);
+  const mcpSettings = api.getContext?.().practiceId ? null : mcpSettingsPanel(asObject((await api.settings()).mcp));
   return el("div", { class: "page-stack" }, [
     data.usageNotice ? el("p", { class: "notice info", text: data.usageNotice }) : null,
-    el("section", { class: "stats" }, [statCard("今日调用", usage.callsToday ?? calls.length, "实际记录"), statCard("本月费用", usage.costMonth === null || usage.costMonth === undefined ? "未知" : usage.costMonth, "供应商价格未知时不估算"), statCard("索引片段", diagnosticCount(index.count), "按内容片段计数"), statCard("MCP", "待实际验证", "开关不代表网页已连通")]),
+    el("section", { class: "stats" }, [statCard("今日调用", usage.callsToday ?? calls.length, "实际记录"), statCard("本月费用", usage.costMonth === null || usage.costMonth === undefined ? "未知" : usage.costMonth, "供应商价格未知时不估算"), statCard("索引片段", diagnosticCount(index.count), "按内容片段计数"), statCard("MCP", mcp.chatgptEnabled === false && mcp.enabled === false ? "未开启" : "网页尚未检查", "本地与网页连接分开核对")]),
     el("section", { class: "panel soft", dataset: { tour: "system-diagnostics" } }, [sectionHeading("系统怎样工作", "只展示可核对的输入、工具调用与结果，不展示模型隐藏推理"), el("div", { class: "step-list" }, [step("1. 切分与索引", "本地资料被拆成检索片段；关键词索引可离线使用，向量索引需由你主动补建。", true), step("2. 召回候选", "关键词与可选语义结果分别返回，再合并为有限候选。", true), step("3. 形成回答", "只有实际召回且可用的材料进入回答，并返回引用与限制。", true), step("4. MCP 调用", "外部客户端共用知识服务。ChatGPT 可按独立许可读取或新增会话资料；修改已有笔记仍需确认。", true)])]),
     el("div", { class: "two-column diagnostic-grid" }, [
       el("section", { class: "panel diagnostic-panel", dataset: { tour: "system-index" } }, [sectionHeading("存储与索引", "原文保存在本机文件夹，搜索索引可重建"), storageSummary(storage, index),
@@ -2799,11 +2836,11 @@ async function diagnosticsPanel() {
         el("p", { class: "fine-print diagnostic-risk", text: "保存知识只更新本地索引。点击补建后，本次所需且缺少向量的片段会发送给已配置的嵌入服务，可能产生费用。" }),
         el("div", { class: "form-actions" }, [button("只补建缺失向量", { kind: "primary", disabled: !number(index.pending), onClick: async () => { try { const result = await api.updateIndex(); toast(`补建任务已${labels.state(result.state)}`, "success"); } catch (error) { handleError(error); } } }), button("全量重建索引", { onClick: async () => { try { const result = await api.rebuildIndex(); toast(`索引任务已${labels.state(result.state)}`, "success"); } catch (error) { handleError(error); } } })]),
         ]),
-        asArray(storage.pendingLinks).length ? el("section", { class: "diagnostic-links" }, [sectionHeading("待更新的 Obsidian 链接", "文件改名后，先核对预览再更新引用"), el("div", { class: "list" }, storage.pendingLinks.map(note => el("div", { class: "list-item no-icon" }, [el("strong", { text: note.title }), button("核对链接", { kind: "text compact", onClick: () => previewNoteLinks(note.id) })])))]) : null,
+        asArray(storage.pendingLinks).length ? el("section", { class: "diagnostic-links" }, [sectionHeading("检查改名后的笔记链接", "来源、主题或关联笔记改名后，这些笔记中的旧链接可能失效。点击先看更新前后对照；再次确认才会修改应用维护的链接区块。"), el("div", { class: "list" }, storage.pendingLinks.map(note => el("div", { class: "list-item no-icon" }, [el("strong", { text: note.title }), button("预览链接更新", { kind: "text compact", onClick: () => previewNoteLinks(note.id) })])))]) : null,
         el("p", { class: "diagnostic-caption diagnostic-retention", text: storage.retention || "删除和备份保留范围未知；操作前请先核对备份与恢复说明。" }),
-        diagnosticDetails("查看存储与索引技术详情", { storage, index }),
+
       ]),
-      el("section", { class: "panel diagnostic-panel" }, [sectionHeading("外部应用接入（MCP）", "接入许可与实际连接分开查看"), mcpSummary(mcp)]),
+      el("section", { class: "panel diagnostic-panel" }, [sectionHeading("外部应用接入（MCP）", "先设置权限，再按指南检查连接"), mcpSettings, mcpSummary(mcp)]),
     ]),
     callHistoryPanel(calls),
   ]);
@@ -2834,7 +2871,7 @@ function callHistoryPanel(calls) {
     for(const c of rows.slice((page-1)*limit,page*limit)) {
       const state=status(c), error=typeof c.error==="object" ? c.error?.message || JSON.stringify(c.error) : String(c.error||"");
       const result=el("td",{},badge(state==="success"?"成功":state==="failure"?"失败":"未知",state==="success"?"good":state==="failure"?"danger":"neutral"));
-      if(error) result.append(el("details",{class:"call-error"},[el("summary",{text:"查看详情"}),el("pre",{text:error})]));
+      if(error) result.append(el("p",{class:"fine-print",text:callFailureReason(c.error)}));
       body.append(el("tr",{},[
         el("td",{text:formatDate(c.createdAt,true)}),
         el("td",{class:"call-purpose-cell"},[el("strong",{text:c.purposeLabel||"历史用途未记录"}),el("small",{text:[c.model,names[c.capability]||"其他调用"].filter(Boolean).join(" · ")})]),

@@ -2,10 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import { localCheckStatus } from '../public/mcp-status.mjs';
 
 const source = fs.readFileSync(new URL('../public/app.mjs', import.meta.url), 'utf8');
 function summaries(practiceId = '') {
-  const context = vm.createContext({ api: { getContext: () => ({ practiceId }) }, el: (tag, props = {}, children = []) => ({ tag, ...props, children }) });
+  const context = vm.createContext({ localCheckStatus, setInterval: () => 0, button: (text) => ({ text }), api: { getContext: () => ({ practiceId }) }, el: (tag, props = {}, children = []) => ({ tag, ...props, children }) });
   vm.runInContext(source.slice(source.indexOf('function diagnosticCount('), source.indexOf('async function diagnosticsPanel(')) + '\nthis.summary = { storageSummary, mcpSummary, diagnosticDetails };', context);
   return context.summary;
 }
@@ -31,8 +32,8 @@ test('enabled grants never imply configured or connected clients and retain read
   const panel = mcpSummary({ enabled: true, connected: true, allowProposals: true, chatgptEnabled: true, chatgptAllowRead: true, tools: ['search_knowledge', 'propose_change', 'future_tool'], events: [{}] });
   const result = visible(panel);
   assert.match(result, /本机应用接入\s+已开启.*修改仍须你确认.*ChatGPT 会话收集\s+入口已开启.*包含仅本地资料.*进入 ChatGPT 上下文/);
-  assert.match(result, /实际连接\s+尚未验证.*是否已配置：未知/);
-  assert.match(text(panel), /搜索知识.*提交待确认的修改建议.*其他功能/);
+  assert.match(result, /实际连接\s+网页尚未检查.*网页是否已配置：尚未检查/);
+  assert.match(text(panel), /搜索知识.*提交待确认的修改建议.*其他知识工具/);
   assert.doesNotMatch(result, /已连接|future_tool/);
   assert.match(visible(mcpSummary({ enabled: false, allowProposals: true, chatgptEnabled: false, chatgptAllowRead: true })), /当前不能提交建议.*当前不能读取/);
 });
