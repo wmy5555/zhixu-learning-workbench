@@ -65,7 +65,7 @@ test('HTTP recycle routes keep session/CSRF and practice library boundaries',asy
  const practice=(await req('/api/onboarding/start','POST',{})).body;app.service.updateSettings({ai:{enabled:true}});app.onboarding.tested('model');
  const prefix='/api/practice/'+practice.practiceId;assert.deepEqual((await req(prefix+'/recycle-bin')).body.items,[]);
  assert.equal((await req(prefix+'/recycle-bin/'+note.id+'/restore','POST',{versionId:list.items[0].versionId})).status,409);
- assert.equal((await req(prefix+'/recycle-bin','DELETE',{confirmed:true,revision:list.revision})).status,403);assert.equal((await req('/api/recycle-bin')).body.items.length,1);
+ assert.equal((await req(prefix+'/recycle-bin','DELETE',{confirmed:true,revision:list.revision})).status,409);assert.equal((await req('/api/recycle-bin')).body.items.length,1);
  assert.equal((await req('/api/recycle-bin/'+note.id+'/restore','POST',{versionId:list.items[0].versionId})).status,200);assert.equal(app.service.store.read(note.id).hash,note.hash);
 });
 
@@ -82,4 +82,19 @@ test('legacy explicit user deletion is recoverable; ChatGPT undo and external di
  const {store,bin}=setup(t);const a=source(store);store.delete(a.id,a.hash);store.put('deleted',a.id,{id:a.id,deletedAt:new Date().toISOString()});assert.equal(bin.list().items[0].id,a.id);bin.restore(a.id,bin.list().items[0].versionId);assert.equal(store.read(a.id).hash,a.hash);
  const b=source(store);store.delete(b.id,b.hash,{undoId:'separate-owner'});assert.equal(bin.list().items.length,0);
  const c=source(store);fs.unlinkSync(path.join(store.vaultDir,c.path));store.scan();assert.equal(bin.list().items.length,0);
+});
+
+test('single purge isolates other recycled history, shared attachments, knowledge and prior pending cleanup',t=>{
+ const {store,bin}=setup(t),file=png();writeAttachment(store.vaultDir,file);
+ let a=source(store);a=store.update(a.id,{expectedHash:a.hash,meta:{attachments:[file.descriptor]}});
+ let b=source(store);b=store.update(b.id,{expectedHash:b.hash,meta:{attachments:[file.descriptor]}});
+ const knowledge=store.create({kind:'knowledge',title:'retained knowledge',body:'synthetic',meta:{sources:[{id:a.id}]}});
+ store.delete(a.id,a.hash);store.delete(b.id,b.hash);const before=bin.list(),entry=before.items.find(x=>x.id===a.id),bHistory=store.history(b.id);
+ store.put('recyclePurge','prior',{id:'prior',files:[]});const revision=bin.list().revision;
+ assert.throws(()=>bin.purge(a.id,entry.versionId,{confirmed:true,revision:before.revision}),{code:'RECYCLE_CONFLICT'});
+ assert.throws(()=>bin.purge(a.id,'wrong',{confirmed:true,revision}),{code:'RECYCLE_CONFLICT'});
+ assert.deepEqual(bin.purge(a.id,entry.versionId,{confirmed:true,revision}),{cleared:1});
+ assert.equal(store.history(a.id).length,0);assert.deepEqual(store.history(b.id),bHistory);assert.equal(bin.list().items[0].id,b.id);
+ assert.ok(store.read(knowledge.id));assert.ok(fs.existsSync(attachmentPath(store.vaultDir,file.descriptor.id)));assert.ok(store.get('recyclePurge','prior'));
+ bin.restore(b.id,bin.list().items[0].versionId);assert.ok(store.read(b.id));
 });

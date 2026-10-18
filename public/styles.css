@@ -111,6 +111,12 @@ main { padding: 30px clamp(24px, 4vw, 58px) 64px; width: 100%; }
 .list-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 13px; align-items: center; padding: 14px 15px; background: var(--panel); border: 1px solid var(--line); border-radius: 13px; transition: .15s ease; }
 .list-item:hover { border-color: #cbd3cf; }
 .list-item.no-icon { grid-template-columns: minmax(0, 1fr) auto; }
+.recycle-bin [hidden] { display: none !important; }
+.recycle-bin .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+@media (max-width: 600px) {
+  .recycle-bin .list-item.no-icon { grid-template-columns: minmax(0, 1fr); }
+  .recycle-bin .list-item .actions { justify-content: flex-end; }
+}
 .item-symbol { display: grid; place-items: center; width: 37px; height: 37px; color: var(--accent); background: var(--accent-soft); border-radius: 11px; font-weight: 800; }
 .item-copy { min-width: 0; }
 .item-copy h3, .card h3 { margin: 0; font-size: 14px; }

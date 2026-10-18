@@ -36,11 +36,14 @@ export function createRecycleBin(store) {
     for (const descriptor of attachments(item.meta)) readAttachment(store.vaultDir, descriptor);
     return store.restoreVersionExact(id, versionId, { expectMissing: true });
   }
-  function clear({ confirmed, revision } = {}) {
+  function clear({ confirmed, revision } = {}, selected = null) {
     if (confirmed !== true) fail('永久清空需要明确确认。', 'RECYCLE_CONFIRM_REQUIRED', 409);
     const preview = list();
     if (revision !== preview.revision) fail('回收站已变化，请重新确认清空范围。', 'RECYCLE_CONFLICT', 409);
-    const items = entries(), ids = new Set(items.map(item => item.id));
+    const all = entries();
+    const items = selected ? all.filter(item => item.id === selected.id && item.versionId === selected.versionId) : all;
+    if (selected && items.length !== 1) fail('回收站项目已变化，请刷新后重新确认。', 'RECYCLE_CONFLICT', 409);
+    const ids = new Set(items.map(item => item.id));
     const claims = store.records('fileRecovery').filter(item => ids.has(item.noteId));
     if (claims.some(item => item.state !== 'complete')) fail('存在未完成的文件恢复操作，暂不能清空。', 'RECYCLE_CONFLICT', 409);
     // Validate every claimed file before removing anything. Never delete a path
@@ -91,7 +94,8 @@ export function createRecycleBin(store) {
     } catch (error) { store.db.exec('ROLLBACK TO recycle_clear; RELEASE recycle_clear'); throw error; }
     // Commit the permanent removal first. Interrupted physical cleanup retains
     // a journal, retried only after another explicit clear confirmation.
-    for (const pending of store.records('recyclePurge')) {
+    // A single-item confirmation never authorizes cleanup from earlier operations.
+    for (const pending of selected ? (purge.files.length ? [purge] : []) : store.records('recyclePurge')) {
       for (const entry of pending.files) {
         const file = path.resolve(store.vaultDir, entry.path), relative = path.relative(store.vaultDir, file);
         if (relative.startsWith('..') || path.isAbsolute(relative) || !/^([.]zhixu-attachments[\\/][a-f0-9]{64}[.](png|jpg|gif|webp|pdf|doc|docx)|.+[\\/][.]zhixu-recovery-[a-f0-9-]+[.]raw)$/.test(relative)) fail('清理日志路径无效。', 'RECYCLE_CONFLICT', 409);
@@ -116,5 +120,8 @@ export function createRecycleBin(store) {
     }
     return { cleared: ids.size };
   }
-  return { list, restore, clear };
+  function purge(id, versionId, confirmation) {
+    return clear(confirmation, { id, versionId });
+  }
+  return { list, restore, clear, purge };
 }
