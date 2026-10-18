@@ -8,6 +8,7 @@ let mapSerial = 0;
 export function layoutSourceMap(nodes, edges, hierarchy, mode = 'logic', collapsed = new Set(), sourceTitle = '') {
   const ids = nodes.map(n => n.id), allowed = new Set(ids), ranks = new Map(), visible = [];
   const links = edges.filter(e => allowed.has(e.from) && allowed.has(e.to));
+  const rankingLinks = mode === 'concept' ? links.map(e => e.type === 'is-a' ? { ...e, from: e.to, to: e.from } : e) : links;
   const parents = new Map(hierarchy.filter(h => allowed.has(h.child) && (h.parent === null || allowed.has(h.parent))).map(h => [h.child, h.parent]));
   if (mode === 'mind') {
     for (const id of ids) {
@@ -20,7 +21,7 @@ export function layoutSourceMap(nodes, edges, hierarchy, mode = 'logic', collaps
     let index = 0;
     const indices = new Map(), low = new Map(), stack = [], active = new Set(), components = [], group = new Map();
     const adjacency = new Map(ids.map(id => [id, []]));
-    for (const e of links) adjacency.get(e.from).push(e.to);
+    for (const e of rankingLinks) adjacency.get(e.from).push(e.to);
     function visit(id) {
       indices.set(id, index); low.set(id, index++); stack.push(id); active.add(id);
       for (const to of adjacency.get(id)) {
@@ -35,7 +36,7 @@ export function layoutSourceMap(nodes, edges, hierarchy, mode = 'logic', collaps
     }
     ids.forEach(id => { if (!indices.has(id)) visit(id); });
     const incoming = components.map(() => new Set()), outgoing = components.map(() => new Set()), rank = components.map(() => 0);
-    for (const e of links) { const a = group.get(e.from), b = group.get(e.to); if (a !== b) { outgoing[a].add(b); incoming[b].add(a); } }
+    for (const e of rankingLinks) { const a = group.get(e.from), b = group.get(e.to); if (a !== b) { outgoing[a].add(b); incoming[b].add(a); } }
     const ready = incoming.flatMap((set, i) => set.size ? [] : [i]);
     for (let i = 0; i < ready.length; i++) for (const next of outgoing[ready[i]]) {
       rank[next] = Math.max(rank[next], rank[ready[i]] + 1); incoming[next].delete(ready[i]); if (!incoming[next].size) ready.push(next);
@@ -78,7 +79,7 @@ export function layoutSourceMap(nodes, edges, hierarchy, mode = 'logic', collaps
   for (const [rank, members] of levels) members.forEach((id, i) => positions.set(id, { x: gutter + (i + .5) * (width - gutter * 2) / members.length - cardWidth / 2, y: 0 }));
   const bands = new Map();
   for (const edge of links) {
-    const a = ranks.get(edge.from), b = ranks.get(edge.to), band = b > a ? a : Math.min(a,b) - 1;
+    const a = ranks.get(edge.from), b = ranks.get(edge.to), band = b > a ? a : mode === 'concept' && edge.type === 'is-a' && a > b ? b : Math.min(a,b) - 1;
     if (!bands.has(band)) bands.set(band, []);
     bands.get(band).push(edge);
   }
@@ -92,13 +93,17 @@ export function layoutSourceMap(nodes, edges, hierarchy, mode = 'logic', collaps
   }
   const routes = links.map((edge, index) => {
     const a = positions.get(edge.from), b = positions.get(edge.to);
-    const forward = b.y > a.y, band = forward ? ranks.get(edge.from) : Math.min(ranks.get(edge.from),ranks.get(edge.to)) - 1;
+    const forward = b.y > a.y, upwardConcept = mode === 'concept' && edge.type === 'is-a' && a.y > b.y;
+    const band = forward ? ranks.get(edge.from) : upwardConcept ? ranks.get(edge.to) : Math.min(ranks.get(edge.from),ranks.get(edge.to)) - 1;
     const floor = band < 0 ? 0 : rowY.get(band) + cardHeight;
     const ty = floor + 24 + bands.get(band).indexOf(edge) * 32;
     const x1 = a.x + cardWidth / 2, x2 = b.x + cardWidth / 2;
     const rail = index % 2 ? width - 20 - index * 8 : 20 + index * 8;
     let d, tx;
-    if (forward && ranks.get(edge.to) === ranks.get(edge.from) + 1) {
+    if (upwardConcept && ranks.get(edge.from) === ranks.get(edge.to) + 1) {
+      d = 'M'+x1+','+a.y+' L'+x1+','+ty+' L'+x2+','+ty+' L'+x2+','+(b.y+cardHeight);
+      tx = (x1+x2)/2;
+    } else if (forward && ranks.get(edge.to) === ranks.get(edge.from) + 1) {
       d = 'M'+x1+','+(a.y+cardHeight)+' L'+x1+','+ty+' L'+x2+','+ty+' L'+x2+','+b.y;
       tx = (x1+x2)/2;
     } else if (forward) {
@@ -156,7 +161,7 @@ export function enableMapPanning(viewport) {
   return finish;
 }
 
-export function createSourceMap({ source, children, view = {}, renderDetail, analyze, saveStructure, onExpand = () => {}, embedded = false }) {
+export function createSourceMap({ source, children, view = {}, renderDetail, analyze, saveStructure, onExpand = () => {}, embedded = false, visualKind = '' }) {
   if (source.structure?.version === 2) return createKnowledgeView({ source, children, view, renderDetail, analyze, saveStructure, onExpand,
     renderGraph: options => createSourceMap({ ...options, embedded: true }) });
   const data = source.structure || { state: 'missing', hierarchy: [], edges: [], message: '这份旧资料尚无结构建议，可重新分析；当前仅显示来源归属。' };
@@ -185,7 +190,7 @@ export function createSourceMap({ source, children, view = {}, renderDetail, ana
   let listMode = view.reading ?? true;
   view.expanded ||= false;
   onExpand(view.expanded);
-  const layoutForView = () => layoutSourceMap(children, edges, hierarchy, view.mode, view.collapsed, source.title);
+  const layoutForView = () => layoutSourceMap(children, edges, hierarchy, visualKind || view.mode, view.collapsed, source.title);
   const parentById = new Map(hierarchy.map(h => [h.child, h.parent]));
   const branchRoots = children.filter(note => !notes.has(parentById.get(note.id))).map(note => note.id);
   const branches = children.filter(note => branchRoots.includes(parentById.get(note.id)) || branchRoots.includes(note.id) && !hierarchy.some(h => h.parent === note.id)).map(note => note.id);
@@ -263,7 +268,7 @@ export function createSourceMap({ source, children, view = {}, renderDetail, ana
     detail.hidden = false; relationDetail.hidden = false;
     const layout = layoutForView();
     const frame = el('div', { class: 'map-frame' });
-    const canvas = el('div', { class: 'map-canvas' });
+    const canvas = el('div', { class: 'map-canvas', dataset: { kind: visualKind } });
     canvas.style.width = `${layout.width}px`; canvas.style.height = `${layout.height}px`;
     // CSS recenters after a drawer/viewport resize without changing the user's zoom.
     scaleCanvas(frame, canvas, layout.width, layout.height);
@@ -284,11 +289,12 @@ export function createSourceMap({ source, children, view = {}, renderDetail, ana
         if (!route) continue;
         ({ d, tx, ty } = route);
       }
-      svg.append(svgElement('path', { d, 'data-tone': toneFor(edge.to), class: `map-line${related ? ' is-related' : ''}`, ...(view.mode === 'logic' ? { 'marker-end': `url(#${markerId})` } : {}) }));
+      svg.append(svgElement('path', { d, 'data-type': edge.type, 'data-tone': toneFor(edge.to), class: `map-line${related ? ' is-related' : ''}`, ...(view.mode === 'logic' ? { 'marker-end': `url(#${markerId})` } : {}) }));
       if (view.mode === 'logic') {
-        const label = svgElement('g', { class: `map-edge-caption${related ? ' is-related' : ''}` });
+        const caption = visualKind === 'flow' && edge.type === 'condition' ? edge.condition : edge.label || sourceMapLabels[edge.type] || '关联';
+        const label = svgElement('g', { 'data-type': edge.type, class: `map-edge-caption${related ? ' is-related' : ''}` });
         label.append(svgElement('rect', { x: tx - (edge.label ? 46 : 22), y: ty - 15, width: edge.label ? 92 : 44, height: 24, rx: 8 }),
-          svgElement('text', { x: tx, y: ty + 2, 'text-anchor': 'middle', class: 'map-edge-label' }, (edge.label?.length > 6 ? edge.label.slice(0, 5)+'…' : edge.label || sourceMapLabels[edge.type] || '关联')));
+          svgElement('text', { x: tx, y: ty + 2, 'text-anchor': 'middle', class: 'map-edge-label' }, (caption.length > 6 ? caption.slice(0, 5)+'…' : caption)));
         captions.append(label);
       }
     }
@@ -299,8 +305,9 @@ export function createSourceMap({ source, children, view = {}, renderDetail, ana
       const title = isRoot ? source.title : note.title;
       const card = isRoot ? el('div', { class: 'map-node is-root' }) : button('', { kind: 'map-node', onClick: () => select(id, true) });
       card.classList.add('map-node');
+      if (note?.visualRole === '判断 · 条件分支') card.classList.add('is-decision');
       card.dataset.tone = isRoot ? 'blue' : toneFor(id); card.title = title;
-      card.append(el('span', { class: 'map-node-kicker', text: isRoot ? '原始资料' : `拆解 ${String(children.indexOf(note) + 1).padStart(2, '0')}` }), el('span', { class: 'map-node-title', text: title }));
+      card.append(el('span', { class: 'map-node-kicker', text: isRoot ? '原始资料' : note.visualRole || `拆解 ${String(children.indexOf(note) + 1).padStart(2, '0')}` }), el('span', { class: 'map-node-title', text: title }));
       card.style.left = `${position.x}px`; card.style.top = `${position.y}px`; card.style.width = `${layout.cardWidth}px`; card.style.height = `${layout.cardHeight}px`;
       if (!isRoot) {
         card.dataset.noteId = id; card.setAttribute('aria-label', title); card.setAttribute('aria-pressed', String(id === view.selected)); nodeButtons.set(id, card);

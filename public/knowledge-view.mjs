@@ -3,7 +3,7 @@ import { el, button, clear } from './ui.mjs';
 export const dimensionLabels = { factual: '事实性（未必已证实）', conceptual: '概念性', procedural: '程序性', metacognitive: '元认知', unknown: '待判断' };
 export const roleLabels = { definition: '定义', claim: '主张', evidence: '证据', reason: '理由', step: '步骤', event: '事件', example: '例子', personal: '个人理解', unknown: '待判断' };
 const statusLabels = { explicit: '原文明说', inferred: 'AI 推断', user: '用户补充', pending: '待核' };
-const modes = { overview: '目录总览', concept: '分层概念图', argument: '论证图', flow: '流程图', timeline: '时间线', list: '原文与列表' };
+const modes = { overview: '目录总览', concept: '分层概念图', argument: '论证图', flow: '流程图', timeline: '事件顺序（原文）', list: '原文与列表' };
 const families = { concept: ['is-a', 'explain', 'example', 'application', 'prerequisite', 'cause'], argument: ['support', 'oppose', 'counterexample', 'limit'], flow: ['sequence', 'condition'] };
 export function selectKnowledgeView(data, purpose = 'auto') {
   if (purpose !== 'auto' && modes[purpose]) return purpose;
@@ -74,10 +74,18 @@ export function createKnowledgeView({ source, children, view, renderDetail, anal
     const edges = data.edges.filter(e => families[mode].includes(e.type)).slice(0, 24);
     if (!edges.length) { body.append(el('p', { text: '此目的下没有有依据的关系，保留列表，不补造连线。' }), ...children.map(n => entry(n.id))); return; }
     const memberIds = new Set(edges.flatMap(e => [e.from, e.to]));
-    const nodes = children.filter(n => memberIds.has(n.id)).map(n => ({ ...n, title: data.units.find(u => u.id === n.id)?.shortTitle || n.title }));
+    const nodes = children.filter(n => memberIds.has(n.id)).map(n => {
+      const unit = data.units.find(u => u.id === n.id);
+      const visualRole = mode === 'flow' ? (edges.some(e => e.from === n.id && e.type === 'condition') ? '判断 · 条件分支' : '步骤')
+        : mode === 'argument' ? (unit?.roles.map(role => roleLabels[role]).join(' / ') || '论证内容')
+        : edges.some(e => e.to === n.id && e.type === 'is-a') ? '上位概念' : edges.some(e => e.from === n.id && e.type === 'is-a') ? '下位概念' : '概念联系';
+      return { ...n, title: unit?.shortTitle || n.title, visualRole };
+    });
+    body.append(el('p', { class: 'knowledge-legend', text: mode === 'flow' ? '从判断节点沿条件分支前进；每条分支保留明确条件。' : mode === 'argument' ? '支持：实线 / 支持关系词；反驳与反例：虚线 / 对应关系词。颜色只作辅助。' : '上位概念置于上层；箭头仍从下位概念指向上位概念，读作“是一种”。其他关系按箭头与关系词阅读。' }));
+    if (mode === 'flow') body.append(el('ul', { class: 'knowledge-branches' }, edges.filter(e => e.type === 'condition').map(e => el('li', { text: `${nodes.find(n => n.id === e.from)?.title} → [${e.condition}] → ${nodes.find(n => n.id === e.to)?.title}` }))));
     view.graphs ||= {};
     view.graphs[mode] ||= { mode: 'logic', reading: false };
-    body.append(renderGraph({ source: { ...source, structure: { version: 1, edges, hierarchy: [], message: `${modes[mode]} · 局部关系；全部内容保留在总览与列表。` } }, children: nodes, view: view.graphs[mode], renderDetail: unitDetail, analyze, onExpand }));
+    body.append(renderGraph({ source: { ...source, structure: { version: 1, edges, hierarchy: [], message: `${modes[mode]} · 局部关系；全部内容保留在总览与列表。` } }, children: nodes, view: view.graphs[mode], visualKind: mode, renderDetail: unitDetail, analyze, onExpand }));
     if (data.edges.filter(e => families[mode].includes(e.type)).length > 24) body.append(el('p', { text: '当前展示前24条关系，其余保留在修订与依据中。' }));
     const other = children.filter(n => !memberIds.has(n.id));
     if (other.length) body.append(el('details', {}, [el('summary', { text: '未连接内容' }), ...other.map(n => entry(n.id))]));

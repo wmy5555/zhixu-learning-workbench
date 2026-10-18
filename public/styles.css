@@ -721,3 +721,12 @@ dialog.source-reader-dialog .source-reader-header button { flex: none; }
 .knowledge-views fieldset { display: flex; flex-wrap: wrap; gap: .7rem; margin: .7rem 0; }
 .knowledge-views fieldset label { display: inline-flex; gap: .3rem; align-items: center; }
 .knowledge-views input[type=checkbox] { width: auto; }
+
+.knowledge-legend, .knowledge-branches { line-height: 1.8; }
+.knowledge-views .map-node.is-decision { border: 2px dashed currentColor; border-radius: 24px; }
+.knowledge-views [data-kind=argument] .map-line[data-type=support] { stroke: #267454; stroke-dasharray: none; }
+.knowledge-views [data-kind=argument] .map-line[data-type=oppose],
+.knowledge-views [data-kind=argument] .map-line[data-type=counterexample] { stroke: #aa4452; stroke-dasharray: 7 5; }
+.knowledge-views [data-kind=argument] .map-edge-caption[data-type=support] text { fill: #267454; }
+.knowledge-views [data-kind=argument] .map-edge-caption[data-type=oppose] text,
+.knowledge-views [data-kind=argument] .map-edge-caption[data-type=counterexample] text { fill: #aa4452; }
