@@ -2744,7 +2744,9 @@ test('source group reading shows every current child once and keeps original tex
   const card = app.refs.main.querySelectorAll('.source-group-card').find(n => n.textContent.includes('合成拆解甲'));
   assert.match(card.textContent, /3 条拆解/);
   const reader = findButton(card, '阅读原始资料全文');
-  assert.ok(card.children.indexOf(reader) < card.children.indexOf(card.querySelector('.group-child-preview')));
+  const actions = card.querySelector('.source-card-actions');
+  assert.equal(card.querySelector('.card-foot').children[1], actions);
+  assert.deepEqual(actions.children.map(n => n.textContent), ['阅读原始资料全文', '查看整组']);
   await click(findButton(card, '查看整组'));
   const panel = app.refs.drawerBody.querySelector('.source-group-drawer');
   assert.equal(panel.children[0].dataset.tour, 'note-original');
@@ -2756,6 +2758,35 @@ test('source group reading shows every current child once and keeps original tex
   assert.equal(panel.querySelectorAll('.map-node').length, 3);
   await click(findButton(panel, '阅读全部条目'));
   assert.equal(panel.querySelectorAll('.child-note').length, 3);
+});
+
+test('source cards with and without breakdowns read full text from footer without bubbling', async () => {
+  for (const withChildren of [true, false]) {
+    const data = libraryFixture(['source']);
+    if (!withChildren) data.groups[0].children = [];
+    data.groups[0].source.updatedAt = '2026-10-01T08:00:00Z';
+    let reads = 0;
+    const app = browser({ library: async () => data, recommendations: async () => ({ suggestions: [] }), note: async id => {
+      assert.equal(id, 'source'); reads++;
+      return { ...data.groups[0].source, body: '完整合成原文 FULL-END' };
+    } });
+    app.state.view = 'library'; await app.renderLibrary();
+    const card = app.refs.main.querySelector('.source-group-card');
+    const footer = card.querySelector('.card-foot');
+    const actions = card.querySelector('.source-card-actions');
+    assert.equal(footer.children[1], actions);
+    assert.deepEqual(actions.children.map(n => n.textContent), ['阅读原始资料全文', '查看整组']);
+    assert.equal(card.children.includes(actions.children[0]), false);
+    const event = { prevented: false, stopped: false, preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; } };
+    await actions.children[0].events.click(event);
+    assert.equal(event.prevented, true);
+    assert.equal(event.stopped, true);
+    assert.equal(reads, 1);
+    assert.match(app.document.body.querySelector('.source-reader-dialog').textContent, /FULL-END/);
+    assert.equal(app.refs.drawerBody.querySelector('.source-group-drawer'), null);
+    assert.equal(data.groups[0].source.updatedAt, '2026-10-01T08:00:00Z');
+    assert.equal(data.groups[0].source.body, '## 阅读标题\n\n**原文**');
+  }
 });
 
 test('source card full-text reader ignores retained cards and late replies after library switches', async () => {
