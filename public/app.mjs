@@ -825,7 +825,7 @@ function sourceGroupCard(group) {
   const jobs = asArray(group.jobs);
   const activeJob = jobs.find((job) => ["queued", "running", "waiting", "failed"].includes(job.state));
   const childPreview = children.slice(0, 4);
-  const readSource = button("阅读原始资料全文", { kind: "text", onClick: async (event) => {
+  const readSource = button("阅读全文", { kind: "text", onClick: async (event) => {
     event.preventDefault();
     event.stopPropagation?.();
     const active = api.getContext();
