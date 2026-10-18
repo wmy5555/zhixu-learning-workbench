@@ -1,5 +1,4 @@
 import { validateImportedStructure } from './chatgpt-structure.mjs';
-import { historySourceMetadata } from './chatgpt-source-metadata.mjs';
 import { createHash } from 'node:crypto';
 
 export const historyBatchLimits = Object.freeze({ maxCharacters: 500000, maxMessages: 200,

@@ -2743,10 +2743,10 @@ test('source group reading shows every current child once and keeps original tex
   app.state.view = 'library'; await app.renderLibrary();
   const card = app.refs.main.querySelectorAll('.source-group-card').find(n => n.textContent.includes('合成拆解甲'));
   assert.match(card.textContent, /3 条拆解/);
-  const reader = findButton(card, '阅读原始资料全文');
+  const reader = findButton(card, '阅读全文');
   const actions = card.querySelector('.source-card-actions');
   assert.equal(card.querySelector('.card-foot').children[1], actions);
-  assert.deepEqual(actions.children.map(n => n.textContent), ['阅读原始资料全文', '查看整组']);
+  assert.deepEqual(actions.children.map(n => n.textContent), ['阅读全文', '查看整组']);
   await click(findButton(card, '查看整组'));
   const panel = app.refs.drawerBody.querySelector('.source-group-drawer');
   assert.equal(panel.children[0].dataset.tour, 'note-original');
@@ -2775,7 +2775,7 @@ test('source cards with and without breakdowns read full text from footer withou
     const footer = card.querySelector('.card-foot');
     const actions = card.querySelector('.source-card-actions');
     assert.equal(footer.children[1], actions);
-    assert.deepEqual(actions.children.map(n => n.textContent), ['阅读原始资料全文', '查看整组']);
+    assert.deepEqual(actions.children.map(n => n.textContent), ['阅读全文', '查看整组']);
     assert.equal(card.children.includes(actions.children[0]), false);
     const event = { prevented: false, stopped: false, preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; } };
     await actions.children[0].events.click(event);
@@ -2794,7 +2794,7 @@ test('source card full-text reader ignores retained cards and late replies after
   const data = libraryFixture(['source']);
   const app = browser({ getContext: () => context, library: async () => data, recommendations: async () => ({ suggestions: [] }), note: () => { reads++; return new Promise(resolve => { release = resolve; }); } });
   app.state.view = 'library'; await app.renderLibrary();
-  const reader = findButton(app.refs.main, '阅读原始资料全文');
+  const reader = findButton(app.refs.main, '阅读全文');
   const pending = click(reader);
   context = { practiceId: 'practice', version: 1 };
   release({ ...data.groups[0].source, body: '旧库迟到原文' }); await pending;
@@ -2813,7 +2813,7 @@ test('all source full-text entries retain the reviewed floating reader and retur
   original.open = true;
   app.refs.drawer.scrollTop = 123;
   app.state.view = 'library'; await app.renderLibrary();
-  const launchers = [findButton(app.refs.main, '阅读原始资料全文'), findButton(panel, '全屏阅读原文'), findButton(original, '全屏阅读')];
+  const launchers = [findButton(app.refs.main, '阅读全文'), findButton(panel, '全屏阅读原文'), findButton(original, '全屏阅读')];
   for (const [i, launcher] of launchers.entries()) {
     launcher.isConnected = true; launcher.focused = false; app.document.activeElement = launcher;
     await click(launcher);

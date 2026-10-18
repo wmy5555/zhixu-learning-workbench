@@ -1,5 +1,4 @@
 import { batchSegments, importedRecord, saveImportedRecord, verifyImportedRecord } from './chatgpt-structure.mjs';
-import { conversationOrigin } from './chatgpt-source-metadata.mjs';
 import { createHash } from 'node:crypto';
 import { planHistoryBatch, verifyHistoryBatchReceipts } from './chatgpt-history-batch.mjs';
 import { literalBlock } from './chatgpt-sync.mjs';
