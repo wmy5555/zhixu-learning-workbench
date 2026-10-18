@@ -193,7 +193,8 @@
                   "id": {
                     "type": "string",
                     "minLength": 1,
-                    "maxLength": 100
+                    "maxLength": 100,
+                    "pattern": "^\\S(?:[\\s\\S]*\\S)?$"
                   },
                   "title": {
                     "type": "string",
@@ -203,9 +204,7 @@
                   "parent": {
                     "anyOf": [
                       {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 100
+                        "$ref": "#/definitions/ZhixuStructuredImport/anyOf/1/properties/topics/items/properties/id"
                       },
                       {
                         "type": "null"

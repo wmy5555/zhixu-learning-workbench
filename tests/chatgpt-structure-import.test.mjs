@@ -114,3 +114,21 @@ test('an interrupted structure checkpoint recovers exact writes without duplicat
   const recovered=s.chatgpt.capture(value);assert.equal(recovered.structure.status,'verified');assert.equal(s.listNotes().length,count);
   s.store.remove('sourceStructures',recovered.noteId);assert.throws(()=>s.chatgpt.capture(value),{code:'CHATGPT_STRUCTURE_UNAVAILABLE'});assert.equal(s.store.get('sourceStructures',recovered.noteId),null);
 });
+
+test('source quote end must remain within the original message even when slice would clamp it',t=>{
+  const s=fixture(t),value=request(),body=value.messages[1].content,quote='不适用于冰泡。';
+  value.structured.edges[0].sourceRefs=[{messageId:'m_b',quote,start:body.indexOf(quote),end:body.length+1}];
+  assert.throws(()=>s.chatgpt.capture(value),{code:'CHATGPT_STRUCTURE_INVALID'});assert.equal(s.listNotes().length,0);
+  value.structured.edges[0].sourceRefs[0].end=body.length;assert.equal(s.chatgpt.capture(value).structure.status,'verified');
+});
+test('topic identifiers cannot collide after downstream trimming',t=>{
+  const s=fixture(t),value=request();value.structured.topics.push({...value.structured.topics[0],id:' tea '});
+  assert.throws(()=>s.chatgpt.capture(value));assert.equal(s.listNotes().length,0);
+  value.structured.topics.pop();value.structured.topics[1].parent=' tea ';assert.throws(()=>s.chatgpt.capture(value));assert.equal(s.listNotes().length,0);
+});
+test('a v2 to v1 update cannot undo away the retained v2 structure through the generic undo path',t=>{
+  const s=fixture(t),value=request(),first=s.chatgpt.capture(value),before=s.store.get('sourceStructures',first.noteId);
+  const next=copy(value);next.requestId=randomUUID();next.sync.snapshotId='legacy_after_v2';next.sync.baseRevision=1;next.structured={version:1,items:next.structured.items};
+  const saved=s.chatgpt.capture(next);assert.throws(()=>s.chatgpt.previewUndo({requestId:next.requestId,noteId:saved.noteId,syncRevision:saved.syncRevision}),{code:'CHATGPT_UNDO_CONFLICT'});
+  assert.deepEqual(s.store.get('sourceStructures',first.noteId),before);assert.equal(s.getNote(first.noteId).meta.chatgptSync.revision,2);
+});

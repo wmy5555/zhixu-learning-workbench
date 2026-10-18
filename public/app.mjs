@@ -124,7 +124,7 @@ function conversationReading(note) {
 function sourceReadingBody(value, className = '', emptyText = '暂无原文', note = null) {
   const images = [note?.meta?.sourceFile, ...(note?.meta?.attachments || [])].filter(file => file?.kind === 'image');
   return renderMarkdown(value, { className: `prose ${className}`.trim(), emptyText,
-    conversation: conversationReading(note), imageResolver: target => {
+    conversation: conversationReading(note), citationSources: note?.meta?.citationSources, imageResolver: target => {
     const file = images.find(item => target === '../.zhixu-attachments/' + item.id);
     return file ? attachmentUrl(note.id, file.id) : '';
   } });

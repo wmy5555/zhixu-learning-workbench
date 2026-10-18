@@ -10,12 +10,13 @@ const item = z.object({ id, title: z.string().trim().min(1).max(200), body: z.st
   uncertainties: z.array(z.string().trim().min(1).max(2000)).max(20) }).strict();
 const ref = z.object({ messageId: id, quote: text(700), start: z.number().int().min(0).optional(), end: z.number().int().min(1).optional() }).strict();
 const refs = z.array(ref).max(20);
+const topicId = z.string().min(1).max(100).regex(/^\S(?:[\s\S]*\S)?$/, '主题编号不能包含外围空白');
 export const structuredSchema = z.discriminatedUnion('version', [
   z.object({ version:z.literal(1), items:z.array(item).max(100) }).strict(),
   z.object({ version:z.literal(2), items:z.array(item).min(1).max(100),
     units:z.array(z.object({ id, shortTitle:text(36), dimensions:z.array(z.enum(dimensions)).min(1).max(5),
       roles:z.array(z.enum(roles)).min(1).max(9), sourceRefs:refs, eventTime:z.string().max(80).optional() }).strict()).min(1).max(100),
-    topics:z.array(z.object({ id:z.string().min(1).max(100), title:text(80), parent:z.string().min(1).max(100).nullable(),
+    topics:z.array(z.object({ id:topicId, title:text(80), parent:topicId.nullable(),
       origin:z.enum(['original','ai']), members:z.array(id).max(100), sourceRefs:refs }).strict()).max(200),
     edges:z.array(z.object({ from:id, to:id, type:z.enum(relationTypes), label:text(24), direction:z.literal('from-to'),
       status:z.enum(['explicit','inferred','pending']), condition:z.string().max(700), exceptions:z.string().max(700),
@@ -36,7 +37,7 @@ export function validateImportedStructure(input, messages) {
     const body=source.get(r.messageId);
     if (typeof body!=='string' || allowed && !allowed.includes(r.messageId)) invalid('原文引用的消息不在授权来源内。');
     const start=r.start ?? body.indexOf(r.quote), end=r.end ?? start+r.quote.length;
-    if ((r.start===undefined)!==(r.end===undefined) || r.start===undefined && body.indexOf(r.quote)!==body.lastIndexOf(r.quote) || start<0 || body.slice(start,end)!==r.quote) invalid('原文引用不存在、偏移错误或存在歧义。');
+    if ((r.start===undefined)!==(r.end===undefined) || r.start===undefined && body.indexOf(r.quote)!==body.lastIndexOf(r.quote) || start<0 || end>body.length || end<=start || body.slice(start,end)!==r.quote) invalid('原文引用不存在、偏移错误或存在歧义。');
   } }
   for (const u of input.units) {
     if (!items.has(u.id)||seen.has(u.id)) invalid('分类单元必须唯一对应真实条目。');
