@@ -139,6 +139,8 @@ main { padding: 30px clamp(24px, 4vw, 58px) 64px; width: 100%; }
 .card .text-button { align-self: flex-start; }
 .library-sections { display: grid; gap: 28px; }
 .source-group-card { min-height: 290px; border-top: 3px solid var(--accent); }
+.source-group-card .card-foot { flex-wrap: wrap; }
+.source-card-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 9px; margin-left: auto; }
 .group-grid { grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); }
 .group-child-preview { display: grid; gap: 6px; margin: 4px 0 12px; }
 .group-child-preview-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; padding: 8px 9px; background: var(--panel-soft); border-radius: 9px; font-size: 12px; }

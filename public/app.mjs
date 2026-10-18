@@ -825,19 +825,21 @@ function sourceGroupCard(group) {
   const jobs = asArray(group.jobs);
   const activeJob = jobs.find((job) => ["queued", "running", "waiting", "failed"].includes(job.state));
   const childPreview = children.slice(0, 4);
+  const readSource = button("阅读原始资料全文", { kind: "text", onClick: async (event) => {
+    event.preventDefault();
+    event.stopPropagation?.();
+    const active = api.getContext();
+    if (active.practiceId !== context.practiceId || active.version !== context.version) return;
+    try {
+      const current = await api.note(source.id);
+      const latest = api.getContext();
+      if (latest.practiceId !== context.practiceId || latest.version !== context.version) return;
+      openSourceReader(current);
+    } catch (error) { handleError(error); }
+  } });
   return el("article", { class: "card source-group-card" }, [
     el("div", { class: "card-head" }, [badge("原始资料", "accent"), badge(`${children.length} 条拆解`, children.length ? "good" : "neutral")]),
     el("h3", { text: source.title || "未命名原始资料" }),
-    children.length ? button("阅读原始资料全文", { kind: "text", onClick: async () => {
-      const active = api.getContext();
-      if (active.practiceId !== context.practiceId || active.version !== context.version) return;
-      try {
-        const current = await api.note(source.id);
-        const latest = api.getContext();
-        if (latest.practiceId !== context.practiceId || latest.version !== context.version) return;
-        openSourceReader(current);
-      } catch (error) { handleError(error); }
-    } }) : null,
     sourceReadingBody(sourceBodyPreview(source.body), 'markdown-preview', '暂无原文', source),
     childPreview.length ? el("div", { class: "group-child-preview" }, childPreview.map((child) => el("div", { class: "group-child-preview-item" }, [
       el("span", { text: child.title || "未命名拆解" }),
@@ -845,7 +847,10 @@ function sourceGroupCard(group) {
     ]))) : el("p", { class: "group-empty", text: "尚未形成拆解" }),
     children.length > childPreview.length ? el("p", { class: "fine-print", text: `另有 ${children.length - childPreview.length} 条拆解` }) : null,
     activeJob ? el("div", { class: "group-job" }, [badge(labels.state(activeJob.state), stateTone(activeJob.state)), el("span", { text: groupJobSummary(activeJob) })]) : null,
-    el("div", { class: "card-foot" }, [el("span", { text: formatDate(source.updatedAt, true) }), button("查看整组", { kind: "text", onClick: () => openNote(source.id) })]),
+    el("div", { class: "card-foot" }, [
+      el("span", { text: formatDate(source.updatedAt, true) }),
+      el("div", { class: "source-card-actions" }, [readSource, button("查看整组", { kind: "text", onClick: () => openNote(source.id) })]),
+    ]),
   ]);
 }
 
