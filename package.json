@@ -20,9 +20,9 @@
     "android:test-device": "node scripts/test-android-device.mjs"
   },
   "dependencies": {
-    "@capacitor/android": "8.5.2",
-    "@capacitor/core": "8.5.2",
-    "@modelcontextprotocol/sdk": "1.31.0",
+    "@capacitor/android": "8.5.3",
+    "@capacitor/core": "8.5.3",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "vditor": "4.0.0",
 
     "filepond": "4.32.12",
@@ -35,6 +35,6 @@
     "zod": "3.25.76"
   },
   "devDependencies": {
-    "@capacitor/cli": "8.5.2"
+    "@capacitor/cli": "8.5.3"
   }
 }
