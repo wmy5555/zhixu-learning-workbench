@@ -2807,7 +2807,7 @@ function mcpSummary(mcp) {
       el("div", { class: "diagnostic-status-heading" }, [el("h3", { text: "实际连接" }), el("span", { class: "diagnostic-pill", dataset: { tone: "attention" }, text: mcp.chatgptEnabled === false ? "未开启" : "网页尚未检查" })]),
       el("p", { text: "网页是否已配置：尚未检查。这里可刷新本地权限状态；网页连接需在 ChatGPT 端按指南核对，知序目前无法自动确认该结果。" }),
       localMcpCheck(mcp),
-      el("a", { href: "/chatgpt-setup.html", target: "_blank", rel: "noopener", text: "打开连接指南，在 ChatGPT 端核对连接 →" }),
+      el("a", { href: "/chatgpt-setup.html#connection-check", target: "_blank", rel: "noopener", text: "查看只读连接检查步骤 →" }),
     ]),
     el("p", { class: "diagnostic-caption", text: events === null ? "本机调用记录未知。" : events ? "已记录本机操作；这不是 ChatGPT 网页连接证明。" : "暂无本机调用记录；这不能判断是否配置过客户端。" }),
     el("details", { class: "diagnostic-details" }, [el("summary", { text: "工具功能与使用说明" }),
