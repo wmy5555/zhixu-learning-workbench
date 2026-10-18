@@ -156,7 +156,7 @@ export const chapters = [
     step('backup-boundary', '记住附件的备份范围', '阅读备份说明：JSON 备份包含 Markdown 与运行记录；图片、其他附件和 .obsidian 配置需要另外备份整个 Vault。', '避免恢复时才发现附件未在文件里。', '能区分应用备份与整个文件夹备份。', 'system', 'system-backup', { tab: 'data' }),
   ] },
   { id: 'external', title: '12. 外部工具与文件协作', steps: [
-    external('mcp-config', '了解并配置正式 MCP 通道', '在能力设置阅读 MCP 接入说明。如需使用，点击“前往正式 API 配置”，在正式设置主动启用，再按文档配置外部客户端的 stdio 服务。外部 MCP 连接的是正式库。', '配置后，外部客户端可以按你授予的权限查找和读取知识。', '能力设置中可以查看 MCP 的启用状态和接入方法；暂未连接时保留待配置。', 'system', 'settings-mcp', { tab: 'settings', needs: ['mcp'] }),
+    external('mcp-config', '了解并配置正式 MCP 通道', '在“系统 → MCP 接入与诊断”阅读说明。如需使用，在正式库主动启用并保存权限，再按连接指南配置外部客户端。外部 MCP 连接的是正式库。', '配置后，外部客户端可以按你授予的权限查找和读取知识。', 'MCP 接入与诊断中可以查看权限状态与连接指南；网页连接须按指南另行核对。', 'system', 'settings-mcp', { tab: 'diagnostics', needs: ['mcp'] }),
     external('mcp-read', '在外部客户端读取知识', '连接后，在客户端试试只读查找、读取知识、读取来源和关联查询。查看返回结果，再回诊断页查看调用记录。', '可以从外部客户端查找材料，并回到知序追踪它的出处。', '客户端显示查询结果，诊断页可以查看 MCP 调用记录。', 'system', 'system-diagnostics', { tab: 'diagnostics', needs: ['mcp'] }),
     preset('proposal-accept', '审阅并接受预设写入提案', '加载“写入提案”案例，在写入提案页比较修改前后，对“待接受”提案点击接受。它是练习用记录，没有开启 MCP 权限。', '外部建议先审阅，才可写入。', '案例提案被接受，专用知识正文改变。', 'system', 'system-proposals', 'proposal-accept', 'proposals', { tab: 'proposals', noteRole: 'proposal' }),
     preset('proposal-reject', '拒绝另一份预设提案', '对“待拒绝”提案检查理由后点击拒绝。', '不适合的建议不必写入。', '提案变为已拒绝，专用知识保持原文。', 'system', 'system-proposals', 'proposal-reject', 'proposals', { tab: 'proposals', noteRole: 'proposalReject' }),
