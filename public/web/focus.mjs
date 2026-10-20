@@ -1,7 +1,8 @@
 import {freshClock,readClock,transition,elapsed,clampPosition,dailyFocus} from './focus-model.mjs';
 import {escape as e} from './markdown.mjs';
-import {button as btn,routeButton as link,heading,field,modal,notify} from './ui.mjs';
+import {button as btn,routeButton as link,heading,modal,notify} from './ui.mjs';
 import {paginate} from './parity.mjs';
+import {dialMarkup,bindDial} from './focus-dial.mjs';
 
 const display=ms=>`${String(Math.floor(Math.max(0,ms)/60000)).padStart(2,'0')}:${String(Math.floor(Math.max(0,ms)/1000)%60).padStart(2,'0')}`;
 export function createFocus({state,go}) {
@@ -153,8 +154,22 @@ export function createFocus({state,go}) {
     const a=control.dataset.action;if(!a.startsWith('focus-'))return false;
     if(a==='focus-start'){
       if(clock.active?.status==='running'||clock.active?.status==='paused'){expanded=true;render();return true;}
-      const d=modal('留一段完整的时间',`<form id="focus-start-form">${field('本轮专注（分钟）','minutes',{type:'number',value:25,required:true,extra:'min="1" max="120"'})}<p class="form-note">默认 25 分钟专注、5 分钟休息。网页内轻提醒，不播放声音。</p><button class="primary" type="submit">开始番茄钟</button></form>`);
-      d.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const b=ev.target.querySelector('button');if(b.disabled)return;b.disabled=true;try{await start('focus',Number(ev.target.elements.minutes.value));d.close();}catch{}finally{b.disabled=false;}};
+      const d=modal('留一段完整的时间',`<form id="focus-start-form">${dialMarkup()}<button class="primary dial-start" type="submit">开始番茄钟</button></form>`);
+      d.classList.add('focus-setup');const form=d.querySelector('form');bindDial(form);
+      let starting=false;d.beforeClose=()=>!starting;
+      form.onsubmit=async ev=>{
+        ev.preventDefault();if(starting||!form.reportValidity())return;starting=true;form.inert=true;
+        try{
+          await start('focus',Number(form.elements.minutes.value));
+          d.getAnimations().forEach(a=>a.cancel());
+          const target=node?.querySelector('.focus-face')||node,from=d.getBoundingClientRect(),to=target?.getBoundingClientRect();
+          if(to&&!reduced()){
+            const animation=d.animate([{transform:'translate(0,0) scale(1)',opacity:1},{transform:`translate(${to.x+to.width/2-from.x-from.width/2}px,${to.y+to.height/2-from.y-from.height/2}px) scale(${to.width/from.width})`,opacity:0}],{duration:420,easing:'cubic-bezier(.22,1,.36,1)',fill:'forwards'});
+            animation.id='focus-setup-return';await animation.finished.catch(()=>{});
+          }
+          d.close();
+        }catch{}finally{starting=false;form.inert=false;}
+      };
     }
     else if(a==='focus-break')await start('break',5);
     else if(a==='focus-end'){

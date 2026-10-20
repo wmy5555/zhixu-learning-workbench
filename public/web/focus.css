@@ -18,4 +18,23 @@
 .focus-floating:not(.focus-mini){width:280px;min-width:min(280px,calc(100vw - 32px));max-height:calc(100dvh - 24px);overflow:auto}
 .focus-dock-preview{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 12%,transparent)}
 .focus-expiry-ripple{position:absolute;inset:6%;border:2px solid var(--accent);border-radius:50%;pointer-events:none;opacity:0}
+.focus-setup{width:min(420px,calc(100vw - 32px));--dial-lap-0:var(--accent);--dial-lap-1:#b18b50;--dial-lap-2:#688b80;--dial-lap-3:#a27b91}
+.focus-dial{width:min(280px,100%);aspect-ratio:1;margin:4px auto 0;touch-action:none;user-select:none;cursor:grab;border-radius:50%}
+.focus-dial.is-dragging{cursor:grabbing}
+.focus-dial svg{width:100%;height:100%;display:block;overflow:visible}
+.dial-rings circle{fill:none;stroke:var(--lap-color);stroke-width:3;stroke-linecap:round}
+.dial-ring-track{opacity:.12}
+.dial-rings [data-dial-ring]{transition:stroke 180ms ease}
+.dial-ticks{stroke:var(--line);stroke-width:1}.dial-ticks .major{stroke:var(--secondary);stroke-width:1.5}
+.dial-labels text{fill:var(--secondary);stroke:none;font-size:12px;text-anchor:middle;dominant-baseline:central}
+.dial-hand{transform-origin:140px 140px;stroke:currentColor;stroke-width:2;transition:color 180ms ease}
+.dial-hand circle{fill:currentColor;stroke:var(--canvas);stroke-width:2}
+.focus-setup .dial-value{text-align:center;margin:6px 0}.focus-setup .dial-value label{font-size:12px;color:var(--secondary);margin:0}
+.dial-value>div{display:flex;justify-content:center;align-items:baseline;gap:6px}
+.focus-setup .dial-value input{width:90px;padding:0;border:0;background:transparent;font-size:38px;line-height:1.5;font-variant-numeric:tabular-nums;text-align:center;appearance:textfield}
+.dial-value input::-webkit-inner-spin-button,.dial-value input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+.dial-value span{font-size:13px;color:var(--secondary)}.focus-setup .dial-caption{text-align:center;font-size:13px;margin:0;color:var(--secondary)}
+.focus-setup .form-note{text-align:center;font-size:12px;line-height:1.8;margin:10px 0 20px}
+.dial-start{width:100%}
+@media(prefers-reduced-motion:reduce){.focus-setup *{transition:none!important}}
 @media(max-width:700px){.focus-floating:not(.focus-mini){width:260px;min-width:min(260px,calc(100vw - 32px))}}
