@@ -73,6 +73,9 @@
     });
     transition.finished.catch(() => {}).finally(() => {
       if (request !== revision) return;
+      // A filled animation must not survive and clip the next transition's
+      // pseudo-element when the browser reuses the same snapshot name.
+      activeReveal?.cancel();
       activeTransition = activeReveal = undefined;
       root.classList.remove('theme-reveal');
     });

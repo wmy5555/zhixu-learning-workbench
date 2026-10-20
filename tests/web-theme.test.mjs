@@ -102,6 +102,7 @@ test('night surrounds daylight towards the toggle; daylight expands from the tog
   app.transitions[1].finish();
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(app.classes.has('theme-reveal'),false);
+  assert.equal(daylight.cancelled,true,'filled snapshot animations must not clip the next transition');
 });
 test('rapid clicks supersede pending snapshots and reduced motion cancels the reveal', async () => {
   const app=setup({viewTransitions:true});
