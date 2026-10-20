@@ -5,7 +5,7 @@ import {paginate} from './parity.mjs';
 
 const display=ms=>`${String(Math.floor(Math.max(0,ms)/60000)).padStart(2,'0')}:${String(Math.floor(Math.max(0,ms)/1000)%60).padStart(2,'0')}`;
 export function createFocus({state,go}) {
-  let key='',clock=freshClock(),node=null,shape='',expanded=false,dragged=false,pointerDragging=false,previousRect=null,errorShown=false,queue=Promise.resolve(),closed=false,recordsRender=null,view='clock',frame=0,manualMini=false;
+  let key='',clock=freshClock(),node=null,shape='',expanded=false,dragged=false,pointerDragging=false,previousRect=null,errorShown=false,queue=Promise.resolve(),closed=false,recordsRender=null,view='clock',frame=0,manualMini=false,pendingPulse=null;
   const reduced=()=>matchMedia('(prefers-reduced-motion: reduce)').matches;
   function scope(){
     const path=state.boot?.settings?.vaultDir||'default';
@@ -23,7 +23,7 @@ export function createFocus({state,go}) {
         if(key===taskKey&&after.active?.pendingNotice&&!document.hidden){announce=true;after.active.pendingNotice=false;}
         if(JSON.stringify(before)!==JSON.stringify(after))localStorage.setItem(taskKey,JSON.stringify(after));
         if(key===taskKey)clock=after;
-        if(announce){expanded=true;manualMini=false;view='clock';notify(clock.active.kind==='focus'?'这一轮已到时间，休息一下吧。':'休息结束，可以按自己的节奏继续。');}
+        if(announce){expanded=true;manualMini=false;view='clock';pendingPulse={id:clock.active.id,key};notify(clock.active.kind==='focus'?'这一轮已到时间，休息一下吧。':'休息结束，可以按自己的节奏继续。');}
       });
       if(key===taskKey)render();
     };
@@ -44,6 +44,20 @@ export function createFocus({state,go}) {
     if(reduced()||!from?.width)return;
     const to=node.getBoundingClientRect();
     node.animate([{transform:`translate(${from.x-to.x}px,${from.y-to.y}px) scale(${from.width/to.width},${from.height/to.height})`,opacity:.8},{transform:'translate(0,0) scale(1,1)',opacity:1}],{duration,easing:'cubic-bezier(.22,1,.36,1)'});
+  }
+  function finishPulse(){
+    if(!pendingPulse||pointerDragging||node?.classList.contains('focus-mini'))return;
+    const notice=pendingPulse,target=node;pendingPulse=null;
+    if(reduced())return;
+    Promise.allSettled(target.getAnimations().map(a=>a.finished)).then(()=>{
+      if(closed||node!==target||key!==notice.key||clock.active?.id!==notice.id||clock.active?.status!=='finished'||document.hidden||reduced())return;
+      const face=target.querySelector('.focus-face'),ring=face?.querySelector('svg');if(!ring)return;
+      const contraction=ring.animate([{transform:'rotate(-90deg) scale(1)'},{transform:'rotate(-90deg) scale(.94)',offset:.55},{transform:'rotate(-90deg) scale(1)'}],{duration:360,easing:'ease-in-out'});
+      contraction.id='focus-expiry-ring';
+      const ripple=document.createElement('span');ripple.className='focus-expiry-ripple';ripple.setAttribute('aria-hidden','true');face.append(ripple);
+      const wave=ripple.animate([{transform:'scale(.94)',opacity:0},{transform:'scale(.98)',opacity:.4,offset:.12},{transform:'scale(1.38)',opacity:0}],{delay:190,duration:800,easing:'cubic-bezier(.2,.6,.3,1)',fill:'both'});
+      wave.id='focus-expiry-ripple';wave.finished.catch(()=>{}).finally(()=>ripple.remove());
+    });
   }
   function paintProgress(){
     const a=clock.active;if(!a||!node)return;
@@ -85,6 +99,7 @@ export function createFocus({state,go}) {
         morph(from,360);
       }
     }
+    finishPulse();
   }
   function bindDrag() {
     let drag=null;
