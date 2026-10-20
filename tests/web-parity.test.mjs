@@ -41,6 +41,23 @@ test('assistance is scoped to each round and survives a page refresh',()=>{
   const next={id:'s1',turns:[{id:'t1'}],hintCount:0};assert.equal(aidUsed(next,storage),false);
   assert.equal(aidUsed({...next,hintCount:1},storage),true);clearAid(first,storage);assert.equal(map.size,0);
 });
+test('focus docking resets only on a new focus round; discard is scoped and idempotent',()=>{
+  let s=transition(start('focus',1),{type:'move',x:300,y:200},1100);
+  s=transition(s,{type:'end'},2000);
+  s=transition(s,{type:'start',kind:'break',minutes:5,id:'break'},2100);
+  assert.deepEqual(s.position,{x:300,y:200});
+  s=transition(s,{type:'discard',id:'round-1'},2200);
+  assert.equal(s.records.length,0);assert.equal(s.active.id,'break');
+  s=transition(s,{type:'discard',id:'break'},2300);
+  assert.equal(s.active,null);assert.equal(s.records.length,0);
+  s=transition(s,{type:'start',kind:'focus',minutes:1,id:'next'},2400);
+  assert.equal(s.position,null);
+  s=transition(s,{type:'move',x:400,y:100},2500);
+  s=transition(s,{type:'dock'},2600);assert.equal(s.position,null);
+  s=transition(s,{type:'discard',id:'next'},70000);
+  assert.equal(s.active,null);assert.equal(s.records.length,0);
+  assert.deepEqual(transition(s,{type:'discard',id:'next'},71000),s);
+});
 test('complete evidence and feedback escape unsafe content without truncating provenance',()=>{
   const excerpt='完整摘录。'.repeat(1000),html=evidenceHTML([{title:'<script>',excerpt,locator:'第3页',role:'support',rationale:'支持条件',fetchedAt:'读取时间',researchedAt:'核验时间',url:'javascript:alert(1)'}]);
   assert.ok(html.includes(excerpt));assert.ok(html.includes('支持条件'));assert.ok(html.includes('核验时间'));assert.ok(!html.includes('href="javascript'));assert.ok(!html.includes('<script>'));

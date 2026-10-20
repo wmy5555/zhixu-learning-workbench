@@ -23,11 +23,16 @@ export function transition(value,action,at=Date.now()) {
     case 'start':
       if(state.active&&state.active.status!=='finished')throw Error('请先暂停并结束当前计时。');
       if(!['focus','break'].includes(action.kind)||!Number.isFinite(action.minutes)||action.minutes<1||action.minutes>120||!action.id)throw Error('计时范围为 1–120 分钟。');
+      if(action.kind==='focus')state.position=null;
       state.active={id:action.id,kind:action.kind,status:'running',createdAt:at,startedAt:at,elapsedMs:0,durationMs:Math.round(action.minutes*60000),pendingNotice:false};
       break;
     case 'pause':if(state.active?.status==='running')state.active={...state.active,elapsedMs:elapsed(state.active,at),startedAt:null,status:'paused'};break;
     case 'resume':if(state.active?.status==='paused')state.active={...state.active,startedAt:at,status:'running'};break;
-    case 'end':if(state.active&&state.active.status!=='finished')finish(state,at,'ended');break;
+    case 'end':if(state.active&&state.active.status!=='finished'&&(!action.id||state.active.id===action.id))finish(state,at,'ended');break;
+    case 'discard':
+      if(action.id){state.records=state.records.filter(r=>r.id!==action.id);if(state.active?.id===action.id)state.active=null;}
+      break;
+    case 'dock':state.position=null;break;
     case 'dismiss':if(state.active?.status==='finished')state.active=null;break;
     case 'claim':if(state.active?.pendingNotice)state.active.pendingNotice=false;break;
     case 'move':state.position={x:action.x,y:action.y};break;
