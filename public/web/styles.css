@@ -26,6 +26,7 @@
 :root.dark.theme-reveal::view-transition-old(root) { z-index:2; }
 :root.dark.theme-reveal::view-transition-new(root) { z-index:1; }
 #theme .theme-icon { grid-area:1/1; display:flex; pointer-events:none; transition:opacity .24s var(--easing),transform .42s var(--easing); }
+#theme .theme-icon svg { transform-origin:center; transform-box:fill-box; }
 #theme .theme-sun { opacity:1; transform:rotate(0) scale(1); }
 #theme .theme-moon { opacity:0; transform:rotate(75deg) scale(.55); }
 .dark #theme .theme-sun { opacity:0; transform:rotate(-75deg) scale(.55); }
@@ -50,6 +51,22 @@ input::placeholder,textarea::placeholder { color:var(--secondary); opacity:.65; 
 .sidebar { z-index:30; }
 .sidebar .topics button { overflow:hidden; text-overflow:ellipsis; }
 .sidebar .profile small { display:block; margin-top:3px; font-size:11px; }
+/* A short response on the item under the pointer, with no idle animation,
+   layout movement or animated shadow. Keep the snapshot freeze above intact. */
+@media (prefers-reduced-motion:no-preference) {
+  .sidebar :is(.nav-list > button,.search-button,.capture-button,.topics button,.sidebar-bottom > button) {
+    transition:transform .22s var(--easing),background-color .18s var(--easing),color .18s var(--easing);
+  }
+  .sidebar .nav-list > button > svg { transition:transform .24s var(--easing); }
+  .sidebar :is(.nav-list > button,.search-button,.capture-button,.topics button,.sidebar-bottom > button):focus-visible { transform:translate3d(3px,-1px,0); }
+}
+@media (hover:hover) and (pointer:fine) and (prefers-reduced-motion:no-preference) {
+  .sidebar :is(.nav-list > button,.search-button,.capture-button,.topics button,.sidebar-bottom > button):hover:not(:disabled) { transform:translate3d(3px,-2px,0); }
+  .sidebar .nav-list > button:hover:not(:disabled) > svg { transform:rotate(-5deg) scale(1.06); }
+  .sidebar :is(.nav-list > button,.search-button,.capture-button,.topics button,.sidebar-bottom > button):active:not(:disabled) { transform:translate3d(1px,0,0) scale(.985); }
+  .library-note:hover, .theme-option:hover { transform:translateY(-3px); }
+}
+.theme-option { transition:transform .22s var(--easing),background-color .18s var(--easing); }
 .topbar { background:var(--canvas); }
 .top-actions > .text-button { font-size:12px; }
 .page-heading > .primary { flex:none; }

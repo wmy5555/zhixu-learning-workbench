@@ -4,7 +4,21 @@
   const media = matchMedia('(prefers-color-scheme: dark)');
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
   const root = document.documentElement;
-  let cleanup, activeTransition, activeReveal, activeDark, revision = 0;
+  let cleanup, activeTransition, activeReveal, activeDark, iconAnimation, revision = 0;
+  const playIcon = dark => {
+    if (reduced.matches || document.visibilityState === 'hidden') return;
+    const icon = document.getElementById('theme')?.querySelector(dark ? '.theme-moon svg' : '.theme-sun svg');
+    if (!icon?.animate) return;
+    const frames = dark
+      ? [{ transform:'rotate(-18deg) scale(.88)' }, { transform:'rotate(7deg) scale(1.03)', offset:.65 }, { transform:'rotate(0) scale(1)' }]
+      : [{ transform:'rotate(-65deg) scale(.76)', opacity:.35 }, { transform:'rotate(12deg) scale(1.08)', opacity:1, offset:.7 }, { transform:'rotate(0) scale(1)', opacity:1 }];
+    const animation = icon.animate(frames, { duration:dark ? 420 : 560, easing:'cubic-bezier(.16,1,.3,1)', fill:'none' });
+    iconAnimation = animation;
+    animation.finished.catch(() => {}).finally(() => {
+      animation.cancel();
+      if (iconAnimation === animation) iconAnimation = undefined;
+    });
+  };
   const stopMotion = () => {
     clearTimeout(cleanup);
     root.classList.remove('theme-changing');
@@ -32,6 +46,8 @@
   const cancelReveal = () => {
     activeTransition?.skipTransition();
     activeReveal?.cancel();
+    iconAnimation?.cancel();
+    iconAnimation = undefined;
     activeTransition = activeReveal = undefined;
     activeDark = undefined;
   };
@@ -42,7 +58,9 @@
     stopMotion();
     root.classList.remove('theme-reveal');
     if (root.classList.contains('dark') === dark || reduced.matches || !document.startViewTransition || document.visibilityState === 'hidden') {
+      const changed = root.classList.contains('dark') !== dark;
       apply(dark, !reduced.matches);
+      if (changed) playIcon(dark);
       return;
     }
     // Theme colors do not change geometry. Read once before snapshot capture,
@@ -58,6 +76,7 @@
     } catch {
       root.classList.remove('theme-reveal');
       apply(dark, true);
+      playIcon(dark);
       return;
     }
     activeTransition = transition;
@@ -84,6 +103,7 @@
       activeTransition = activeReveal = undefined;
       activeDark = undefined;
       root.classList.remove('theme-reveal');
+      playIcon(dark);
     });
   };
   window.getWebTheme = currentChoice;
