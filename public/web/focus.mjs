@@ -5,7 +5,7 @@ import {paginate} from './parity.mjs';
 
 const display=ms=>`${String(Math.floor(Math.max(0,ms)/60000)).padStart(2,'0')}:${String(Math.floor(Math.max(0,ms)/1000)%60).padStart(2,'0')}`;
 export function createFocus({state,go}) {
-  let key='',clock=freshClock(),node=null,shape='',expanded=false,dragged=false,pointerDragging=false,previousRect=null,errorShown=false,queue=Promise.resolve(),closed=false,recordsRender=null,view='clock',frame=0;
+  let key='',clock=freshClock(),node=null,shape='',expanded=false,dragged=false,pointerDragging=false,previousRect=null,errorShown=false,queue=Promise.resolve(),closed=false,recordsRender=null,view='clock',frame=0,manualMini=false;
   const reduced=()=>matchMedia('(prefers-reduced-motion: reduce)').matches;
   function scope(){
     const path=state.boot?.settings?.vaultDir||'default';
@@ -23,7 +23,7 @@ export function createFocus({state,go}) {
         if(key===taskKey&&after.active?.pendingNotice&&!document.hidden){announce=true;after.active.pendingNotice=false;}
         if(JSON.stringify(before)!==JSON.stringify(after))localStorage.setItem(taskKey,JSON.stringify(after));
         if(key===taskKey)clock=after;
-        if(announce){expanded=true;view='clock';notify(clock.active.kind==='focus'?'这一轮已到时间，休息一下吧。':'休息结束，可以按自己的节奏继续。');}
+        if(announce){expanded=true;manualMini=false;view='clock';notify(clock.active.kind==='focus'?'这一轮已到时间，休息一下吧。':'休息结束，可以按自己的节奏继续。');}
       });
       if(key===taskKey)render();
     };
@@ -39,9 +39,11 @@ export function createFocus({state,go}) {
     const r=dockSlot()?.getBoundingClientRect(),bar=document.querySelector('.topbar')?.getBoundingClientRect();
     return {x:r?.width?r.x:innerWidth-52,y:Math.max(8,((bar?.height||57)-36)/2)};
   }
-  function settlePosition(p){
-    const dock=dockPosition();
-    return Math.hypot(p.x-dock.x,p.y-dock.y)<42?change({type:'dock'}):change({type:'move',...p});
+  const miniPanel=()=>`<button type="button" class="focus-square focus-drag" aria-label="番茄钟：点击展开，拖动或用方向键移动"><svg viewBox="0 0 100 100" aria-hidden="true"><circle class="focus-track" cx="50" cy="50" r="44"/><circle class="focus-progress" cx="50" cy="50" r="44"/></svg><span aria-hidden="true">🍅</span></button>`;
+  function morph(from,duration=300){
+    if(reduced()||!from?.width)return;
+    const to=node.getBoundingClientRect();
+    node.animate([{transform:`translate(${from.x-to.x}px,${from.y-to.y}px) scale(${from.width/to.width},${from.height/to.height})`,opacity:.8},{transform:'translate(0,0) scale(1,1)',opacity:1}],{duration,easing:'cubic-bezier(.22,1,.36,1)'});
   }
   function paintProgress(){
     const a=clock.active;if(!a||!node)return;
@@ -63,38 +65,75 @@ export function createFocus({state,go}) {
     const slot=document.querySelector('#focus-home'),budget=document.querySelector('#budget-summary'),a=clock.active;
     if(budget)budget.hidden=Boolean(a&&!clock.position);
     if(!a){document.querySelector('#focus-top-dock')?.remove();node?.remove();node=null;shape='';if(slot)slot.hidden=true;return;}
-    const home=state.route==='today'&&slot&&!clock.position,mini=!home&&!expanded&&a.status!=='finished',nextShape=`${mini}:${a.status}:${a.kind}:${view}:${view==='recent'?clock.records.length:''}`;
+    const home=state.route==='today'&&slot&&!clock.position,mini=!home&&!expanded&&(a.status!=='finished'||manualMini),nextShape=`${mini}:${a.status}:${a.kind}:${view}:${view==='recent'?clock.records.length:''}`;
     if(!node){node=document.createElement('section');node.className='focus-clock';node.setAttribute('aria-label','网页番茄钟');}
-    const from=previousRect||node.getBoundingClientRect();previousRect=null;
+    const from=previousRect||node.getBoundingClientRect();previousRect=null;node.getAnimations().forEach(a=>a.cancel());
     if(home){document.querySelector('#focus-top-dock')?.remove();slot.hidden=false;if(node.parentElement!==slot)slot.append(node);node.classList.remove('focus-floating');node.style.removeProperty('left');node.style.removeProperty('top');}
     else {if(node.parentElement!==document.body)document.body.append(node);node.classList.add('focus-floating');}
     node.classList.toggle('focus-mini',mini);
-    if(shape!==nextShape){shape=nextShape;node.innerHTML=mini?`<button type="button" class="focus-square focus-drag" aria-label="番茄钟：点击展开，拖动或用方向键移动"><svg viewBox="0 0 100 100" aria-hidden="true"><circle class="focus-track" cx="50" cy="50" r="44"/><circle class="focus-progress" cx="50" cy="50" r="44"/></svg><span aria-hidden="true">🍅</span></button>`:panel();bindDrag();}
+    if(shape!==nextShape){shape=nextShape;node.innerHTML=mini?miniPanel():panel();bindDrag();}
     const spent=elapsed(a,Date.now()),remaining=Math.max(0,a.durationMs-spent);
     paintProgress();
     const time=node.querySelector('[data-clock-time]');if(time)time.textContent=display(remaining);
     const status=node.querySelector('[data-clock-status]');if(status)status.textContent=a.status==='finished'?(a.reason==='elapsed'?'本轮已到时间。':'本轮已结束，已记录计时时长。'):a.status==='paused'?'已暂停，暂停时间不计入。':a.kind==='focus'?'专注计时中':'休息中，不计入学习时长';
     const square=node.querySelector('.focus-square');if(square)square.setAttribute('aria-label',`番茄钟 ${a.status==='paused'?'已暂停':''}，剩余 ${display(remaining)}。点击展开或拖动。`);
     if(!home){
-      const dock=dockPosition(),rect=node.getBoundingClientRect(),anchor=mini?dock:{x:dock.x+36-rect.width,y:dock.y+44};
+      const dock=dockPosition(),rect={width:node.offsetWidth,height:node.offsetHeight},anchor=mini?dock:{x:Math.min(dock.x+36,innerWidth-20)-rect.width,y:dock.y+44};
       const p=clampPosition(clock.position||anchor,rect.width,rect.height,innerWidth,innerHeight);
       node.style.left=`${p.x}px`;node.style.top=`${p.y}px`;
       if(animate&&from.width>0&&from.height>0&&(Math.abs(from.x-p.x)+Math.abs(from.y-p.y)>20||Math.abs(from.width-rect.width)>10)&&!reduced()&&!dragged){
-        node.animate([{transform:`translate(${from.x-p.x}px,${from.y-p.y}px) scale(${Math.min(2,from.width/rect.width)})`,opacity:.65},{transform:'translate(0,0) scale(1)',opacity:1}],{duration:420,easing:'cubic-bezier(.2,.75,.2,1)'});
+        morph(from,360);
       }
     }
   }
   function bindDrag() {
-    const handle=node.querySelector('.focus-drag');if(!handle)return;
-    let start=null,position=null;
-    handle.onpointerdown=ev=>{if(!node.classList.contains('focus-floating')||ev.button!==0)return;const r=node.getBoundingClientRect();start={x:ev.clientX,y:ev.clientY,px:r.x,py:r.y};dragged=false;pointerDragging=true;handle.setPointerCapture(ev.pointerId);};
-    handle.onpointermove=ev=>{if(!start)return;const dx=ev.clientX-start.x,dy=ev.clientY-start.y;if(Math.abs(dx)+Math.abs(dy)>4)dragged=true;if(!dragged)return;position=clampPosition({x:start.px+dx,y:start.py+dy},node.offsetWidth,node.offsetHeight,innerWidth,innerHeight);node.style.left=`${position.x}px`;node.style.top=`${position.y}px`;};
-    handle.onpointerup=ev=>{if(!start)return;start=null;pointerDragging=false;if(handle.hasPointerCapture(ev.pointerId))handle.releasePointerCapture(ev.pointerId);if(dragged&&position){settlePosition(position).catch(()=>{});}};
-    handle.onpointercancel=()=>{start=null;dragged=false;pointerDragging=false;render();};
-    handle.onclick=()=>{if(dragged){dragged=false;return;}if(node.classList.contains('focus-floating')){expanded=!expanded;view='clock';shape='';render();}};
-    handle.onkeydown=ev=>{const delta={ArrowLeft:[-16,0],ArrowRight:[16,0],ArrowUp:[0,-16],ArrowDown:[0,16]}[ev.key];if(!delta||!node.classList.contains('focus-floating'))return;ev.preventDefault();const r=node.getBoundingClientRect(),p=clampPosition({x:r.x+delta[0],y:r.y+delta[1]},r.width,r.height,innerWidth,innerHeight);change({type:'move',...p}).catch(()=>{});};
+    let drag=null;
+    function move(ev){
+      if(!drag)return;
+      if(Math.hypot(ev.clientX-drag.x,ev.clientY-drag.y)>4)dragged=true;
+      if(!dragged)return;
+      const dock=dockPosition(),distance=Math.hypot(ev.clientX-dock.x-18,ev.clientY-dock.y-18);
+      drag.near=distance<(drag.near?58:42);
+      const mini=drag.wasMini||drag.near,changed=node.classList.contains('focus-mini')!==mini;
+      const from=changed?node.getBoundingClientRect():null;
+      if(changed){
+        node.getAnimations().forEach(a=>a.cancel());node.classList.toggle('focus-mini',mini);
+        node.innerHTML=mini?miniPanel():panel();shape='';
+        const time=node.querySelector('[data-clock-time]');if(time)time.textContent=display(clock.active.durationMs-elapsed(clock.active,Date.now()));
+        paintProgress();
+      }
+      const offset=mini?{x:drag.wasMini?drag.ox:18,y:drag.wasMini?drag.oy:18}:{x:drag.ox,y:drag.oy};
+      drag.position=clampPosition({x:ev.clientX-offset.x,y:ev.clientY-offset.y},node.offsetWidth,node.offsetHeight,innerWidth,innerHeight);
+      node.style.left=`${drag.position.x}px`;node.style.top=`${drag.position.y}px`;
+      node.classList.toggle('focus-dock-preview',drag.near);
+      if(changed)morph(from,260);
+    }
+    node.onpointerdown=ev=>{
+      if(!ev.target.closest('.focus-drag')||!node.classList.contains('focus-floating')||ev.button!==0)return;
+      const r=node.getBoundingClientRect();node.getAnimations().forEach(a=>a.cancel());
+      drag={x:ev.clientX,y:ev.clientY,ox:ev.clientX-r.x,oy:ev.clientY-r.y,wasMini:node.classList.contains('focus-mini'),near:false,position:null};
+      dragged=false;pointerDragging=true;node.setPointerCapture(ev.pointerId);
+    };
+    node.onpointermove=move;
+    node.onpointerup=ev=>{
+      if(!drag)return;move(ev);const finished=drag;drag=null;pointerDragging=false;
+      if(node.hasPointerCapture(ev.pointerId))node.releasePointerCapture(ev.pointerId);
+      node.classList.remove('focus-dock-preview');
+      if(dragged&&finished.position){
+        expanded=!finished.wasMini&&!finished.near;manualMini=!expanded;shape='';
+        node.getAnimations().forEach(a=>a.cancel());
+        (finished.near?change({type:'dock'}):change({type:'move',...finished.position})).catch(()=>{render();});
+        setTimeout(()=>{dragged=false;},0);
+      }else if(!dragged){expanded=!expanded;manualMini=!expanded;view='clock';shape='';render();}
+    };
+    node.onpointercancel=()=>{drag=null;dragged=false;pointerDragging=false;node.classList.remove('focus-dock-preview');shape='';render();};
+    node.onclick=ev=>{
+      if(dragged){dragged=false;ev.preventDefault();ev.stopPropagation();return;}
+      if(ev.detail===0&&ev.target.closest('.focus-drag')&&node.classList.contains('focus-floating')){expanded=!expanded;manualMini=!expanded;view='clock';shape='';render();}
+    };
+    node.onkeydown=ev=>{const delta={ArrowLeft:[-16,0],ArrowRight:[16,0],ArrowUp:[0,-16],ArrowDown:[0,16]}[ev.key];if(!delta||!ev.target.closest('.focus-drag')||!node.classList.contains('focus-floating'))return;ev.preventDefault();const r=node.getBoundingClientRect(),p=clampPosition({x:r.x+delta[0],y:r.y+delta[1]},node.offsetWidth,node.offsetHeight,innerWidth,innerHeight);change({type:'move',...p}).catch(()=>{});};
   }
-  async function start(kind='focus',minutes=25){expanded=true;view='clock';await change({type:'start',kind,minutes,id:crypto.randomUUID()});}
+  async function start(kind='focus',minutes=25){expanded=true;manualMini=false;view='clock';await change({type:'start',kind,minutes,id:crypto.randomUUID()});}
   async function handle(control) {
     const a=control.dataset.action;if(!a.startsWith('focus-'))return false;
     if(a==='focus-start'){

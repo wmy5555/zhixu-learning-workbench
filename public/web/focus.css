@@ -12,3 +12,9 @@
 .focus-recent article{padding:10px 0;border-bottom:1px solid var(--line)}
 .focus-recent strong{font-size:13px;font-weight:500}
 .focus-recent small{display:block;color:var(--secondary);font-size:12px}
+
+/* Fixed dimensions are measured independently of the running FLIP transform. */
+.focus-floating{box-sizing:border-box;flex:none;max-width:calc(100vw - 32px)}
+.focus-floating:not(.focus-mini){width:280px;min-width:min(280px,calc(100vw - 32px));max-height:calc(100dvh - 24px);overflow:auto}
+.focus-dock-preview{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 12%,transparent)}
+@media(max-width:700px){.focus-floating:not(.focus-mini){width:260px;min-width:min(260px,calc(100vw - 32px))}}
