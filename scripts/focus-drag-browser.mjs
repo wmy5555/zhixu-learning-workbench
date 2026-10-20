@@ -13,7 +13,7 @@ try{
   p.on('pageerror',e=>errors.push(e.message));p.setDefaultTimeout(10000);
   const state=()=>p.evaluate(()=>JSON.parse(localStorage.getItem(Object.keys(localStorage).find(k=>k.startsWith('zhixu-focus-v1')))));
   await p.goto(meta.candidate+'/#today');await p.locator('[data-action="focus-start"]').click();await p.locator('#focus-start-form [type="submit"]').click();
-  await p.locator('#focus-home .focus-clock').waitFor();await p.goto(meta.candidate+'/#library');await p.locator('.focus-mini').waitFor();await p.waitForTimeout(450);
+  await p.locator('#focus-home .focus-clock').waitFor();await p.locator('#focus-start-form').waitFor({state:'hidden'});await p.goto(meta.candidate+'/#library');await p.locator('.focus-mini').waitFor();await p.waitForTimeout(450);
   await p.locator('.focus-square').click();
   const expansion=await p.locator('.focus-clock').evaluate(async n=>{const values=[];for(let i=0;i<30;i++){await new Promise(requestAnimationFrame);const r=n.getBoundingClientRect();values.push({x:r.x,right:r.right,width:n.offsetWidth});}return values;});
   assert.ok(expansion.every(r=>r.right<=width-7&&r.x>=7),'expanded animation must stay inside viewport');
@@ -25,6 +25,7 @@ try{
   await p.locator('.focus-dock-preview.focus-mini').waitFor();
   assert.equal(await p.locator('.focus-clock').evaluate(n=>n.getAnimations().length)>0,true);
   await p.waitForTimeout(320);
+  assert.equal(await p.locator('.focus-mini').evaluate(n=>getComputedStyle(n).boxShadow),'none','dock preview must not show an orange selection halo');
   let before=await p.locator('.focus-clock').boundingBox();
   await p.mouse.move(dock.x+28,dock.y+25,{steps:3});await p.waitForTimeout(1100);
   let after=await p.locator('.focus-clock').boundingBox();
@@ -37,6 +38,7 @@ try{
   await p.screenshot({path:path.join(out,`held-expanded-${width}.png`)});
   await p.mouse.move(dock.x+18,dock.y+18,{steps:15});await p.waitForTimeout(300);await p.mouse.up();await p.waitForTimeout(150);
   assert.equal(await p.locator('.focus-mini').count(),1);assert.equal((await state()).position,null);
+  assert.equal(await p.locator('.focus-mini').evaluate(n=>getComputedStyle(n).boxShadow),'none','docked square must not retain a selection halo');
   let r=await p.locator('.focus-square').boundingBox();await p.mouse.move(r.x+16,r.y+16);await p.mouse.down();await p.mouse.move(width-85,350,{steps:15});await p.waitForTimeout(320);
   assert.equal(await p.locator('.focus-mini').count(),1,'a new drag of a docked square must remain a square');
   await p.mouse.up();await p.waitForTimeout(150);assert.ok((await state()).position);

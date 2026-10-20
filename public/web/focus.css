@@ -16,7 +16,6 @@
 /* Fixed dimensions are measured independently of the running FLIP transform. */
 .focus-floating{box-sizing:border-box;flex:none;max-width:calc(100vw - 32px)}
 .focus-floating:not(.focus-mini){width:280px;min-width:min(280px,calc(100vw - 32px));max-height:calc(100dvh - 24px);overflow:auto}
-.focus-dock-preview{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 12%,transparent)}
 .focus-expiry-ripple{position:absolute;inset:6%;border:2px solid var(--accent);border-radius:50%;pointer-events:none;opacity:0}
 .focus-setup{width:min(420px,calc(100vw - 32px));--dial-lap-0:var(--accent);--dial-lap-1:#b18b50;--dial-lap-2:#688b80;--dial-lap-3:#a27b91}
 .focus-dial{width:min(280px,100%);aspect-ratio:1;margin:4px auto 0;touch-action:none;user-select:none;cursor:grab;border-radius:50%}
