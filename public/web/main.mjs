@@ -249,7 +249,7 @@ async function actions(control) {
     return go(control.dataset.route);
   }
   if(action==='theme'||action==='set-light'||action==='set-dark') {
-    window.setWebTheme(action==='theme'?!document.documentElement.classList.contains('dark'):action==='set-dark');return;
+    window.setWebTheme(action==='theme'?!window.getWebTheme():action==='set-dark');return;
   }
   if(action==='menu') {const open=document.documentElement.classList.toggle('nav-open');$('#mobile-menu').setAttribute('aria-expanded',String(open));return;}
   if(action==='reload') {if(state.dirty&&!await confirm('刷新前放弃输入？','当前输入还没有保存。','放弃并刷新'))return;state.dirty=false;await refreshBoot();return go(state.route,{replace:true});}
