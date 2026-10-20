@@ -154,8 +154,14 @@ export function createLearning(dependencies) {
   function planAction(id, { action, days = 1 }) {
     const store = storage(), plan = store.get('plans', id);
     if (!plan) fail('找不到学习安排。', 'NOT_FOUND', 404);
-    if (!['skip', 'defer', 'pause'].includes(action)) fail('安排动作无效。');
+    if (!['skip', 'defer', 'pause', 'resume'].includes(action)) fail('安排动作无效。');
     if (plan.state === 'done') fail('已结束的学习安排不能改成跳过或延期。');
+    if (action === 'resume') {
+      if (!['pause','skip','pending'].includes(plan.state)) fail('这项安排不能直接恢复，请重新生成安排。');
+      if (plan.date !== dayAt(new Date(now()), settings().timezone)) fail('安排日期已变化，请刷新今日安排。','PLAN_DAY_CHANGED',409);
+      if (plan.state === 'pause') updateSettings({pausedIds:settings().pausedIds.filter(noteId=>noteId!==plan.noteId)});
+      return store.put('plans',id,{...plan,state:'pending',updatedAt:now()});
+    }
     if (action === 'defer') store.put('reviews', plan.noteId, { ...store.get('reviews', plan.noteId, {}), ...practiceTags(plan, dependencies.practice && store.row(plan.noteId) ? getNote(plan.noteId) : null), noteId: plan.noteId, dueAt: new Date(Date.parse(now()) + Math.min(365, Math.max(1, +days || 1)) * 86400000).toISOString() });
     if (action === 'pause') updateSettings({ pausedIds: [...new Set([...settings().pausedIds, plan.noteId])] });
     return store.put('plans', id, { ...plan, state: action, updatedAt: now() });

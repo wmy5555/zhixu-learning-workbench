@@ -45,6 +45,6 @@ export function pendingPlan(today = {}) {
 }
 export function capturePayload(form) {
   const process = form.process === true;
-  return { items: [{ title: form.title || '', body: form.body, platform: form.platform || '', url: form.url || '', author: form.author || '', topic: form.topic || '' }],
+  return { items: [{ title: form.title || '', body: form.body, platform: form.platform || '', url: form.url || '', author: form.author || '', topic: form.topic || '', date: form.date || '', locator: form.locator || '' }],
     process, research: process && form.research === true };
 }

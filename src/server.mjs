@@ -213,7 +213,12 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
       else if(resource==='today'&&(!id||id==='generate'))result=service.today({regenerate:method==='POST'});
       else if(resource==='today'&&action==='action'&&method==='POST')result=service.planAction(id,body);
       else if(resource==='study'&&id==='start'&&method==='POST')result=service.startStudy(body);
-      else if(resource==='study'&&!id&&method==='GET')result={sessions:service.store.records('sessions').slice(0,50)};
+      else if(resource==='study'&&!id&&method==='GET'){
+        const offset=Number(query.offset??0),limit=Number(query.limit??50);
+        if(!Number.isSafeInteger(offset)||offset<0||!Number.isSafeInteger(limit)||limit<1||limit>100)fail('学习历史分页范围无效。');
+        const sessions=service.store.records('sessions');
+        result={sessions:sessions.slice(offset,offset+limit),total:sessions.length,offset,limit};
+      }
       else if(resource==='study'&&id&&!action&&method==='GET')result=service.session(id);
       else if(resource==='study'&&action==='answer'&&method==='POST')result=service.answerStudy(id,body);
       else if(resource==='study'&&action==='hint'&&method==='POST')result=service.hintStudy(id);
@@ -275,6 +280,7 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
         return json(res,200,result,{'Content-Disposition':`attachment; filename="${practiceId?'practice':'learning'}-backup-${Date.now()}.json"`});
       }
       else if(resource==='restore'&&method==='POST')result=service.restore(body);
+      else if(resource==='deleted-notes'&&!id&&method==='GET')result={items:service.store.deletedNotes()};
       else if(resource==='history'&&id&&!action&&method==='GET')result={versions:service.store.history(id)};
       else if(resource==='history'&&action==='restore'&&method==='POST')result=service.store.restoreVersion(id,body.versionId,body.expectedHash);
       else if(resource==='proposals'&&!id&&method==='GET')result={proposals:service.store.records('proposals')};
