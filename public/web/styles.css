@@ -19,10 +19,10 @@
 :root.dark.theme-reveal::view-transition-old(root) { z-index:2; }
 :root.dark.theme-reveal::view-transition-new(root) { z-index:1; }
 #theme .theme-icon { grid-area:1/1; display:flex; pointer-events:none; transition:opacity .24s var(--easing),transform .42s var(--easing); }
-#theme .theme-sun { opacity:0; transform:rotate(-75deg) scale(.55); }
-#theme .theme-moon { opacity:1; transform:rotate(0) scale(1); }
-.dark #theme .theme-sun { opacity:1; transform:rotate(0) scale(1); }
-.dark #theme .theme-moon { opacity:0; transform:rotate(75deg) scale(.55); }
+#theme .theme-sun { opacity:1; transform:rotate(0) scale(1); }
+#theme .theme-moon { opacity:0; transform:rotate(75deg) scale(.55); }
+.dark #theme .theme-sun { opacity:0; transform:rotate(-75deg) scale(.55); }
+.dark #theme .theme-moon { opacity:1; transform:rotate(0) scale(1); }
 [hidden] { display:none!important; }
 body { min-width:320px; }
 main { padding-bottom:70px; }
