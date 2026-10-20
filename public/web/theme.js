@@ -4,11 +4,14 @@
   const media = matchMedia('(prefers-color-scheme: dark)');
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
   const root = document.documentElement;
-  let cleanup, activeTransition, activeReveal, activeDark, iconAnimation, revision = 0;
+  let cleanup, activeTransition, activeReveal, activeDark, iconAnimation, hoverBounds, hovering = false, revision = 0;
+  const insideButton = event => hoverBounds && event.clientX >= hoverBounds.left && event.clientX <= hoverBounds.left + hoverBounds.width && event.clientY >= hoverBounds.top && event.clientY <= hoverBounds.top + hoverBounds.height;
+  const trackRevealPointer = event => { if (!insideButton(event)) hovering = false; };
   const playIcon = dark => {
     if (reduced.matches || document.visibilityState === 'hidden') return;
     const icon = document.getElementById('theme')?.querySelector(dark ? '.theme-moon svg' : '.theme-sun svg');
     if (!icon?.animate) return;
+    iconAnimation?.cancel();
     const frames = dark
       ? [{ transform:'rotate(-18deg) scale(.88)' }, { transform:'rotate(7deg) scale(1.03)', offset:.65 }, { transform:'rotate(0) scale(1)' }]
       : [{ transform:'rotate(-65deg) scale(.76)', opacity:.35 }, { transform:'rotate(12deg) scale(1.08)', opacity:1, offset:.7 }, { transform:'rotate(0) scale(1)', opacity:1 }];
@@ -44,6 +47,7 @@
   apply(value ? value === 'dark' : media.matches);
   const currentChoice = () => value ? value === 'dark' : media.matches;
   const cancelReveal = () => {
+    document.removeEventListener('pointermove', trackRevealPointer);
     activeTransition?.skipTransition();
     activeReveal?.cancel();
     iconAnimation?.cancel();
@@ -51,7 +55,7 @@
     activeTransition = activeReveal = undefined;
     activeDark = undefined;
   };
-  const change = dark => {
+  const change = (dark, animateIcon = false) => {
     if (activeTransition && activeDark === dark) return;
     const request = ++revision;
     cancelReveal();
@@ -60,12 +64,13 @@
     if (root.classList.contains('dark') === dark || reduced.matches || !document.startViewTransition || document.visibilityState === 'hidden') {
       const changed = root.classList.contains('dark') !== dark;
       apply(dark, !reduced.matches);
-      if (changed) playIcon(dark);
+      if (changed && animateIcon) playIcon(dark);
       return;
     }
     // Theme colors do not change geometry. Read once before snapshot capture,
     // rather than forcing another layout while the new view is rendering.
     const rect = document.getElementById('theme')?.getBoundingClientRect();
+    hoverBounds = rect;
     const x = rect?.width ? rect.left + rect.width / 2 : innerWidth - 32;
     const y = rect?.height ? rect.top + rect.height / 2 : 32;
     const radius = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y)) + 2;
@@ -76,11 +81,12 @@
     } catch {
       root.classList.remove('theme-reveal');
       apply(dark, true);
-      playIcon(dark);
+      if (animateIcon) playIcon(dark);
       return;
     }
     activeTransition = transition;
     activeDark = dark;
+    document.addEventListener('pointermove', trackRevealPointer, { passive:true });
     transition.ready.then(() => {
       if (request !== revision) return;
       const small = `circle(0px at ${x}px ${y}px)`;
@@ -92,6 +98,7 @@
         pseudoElement: dark ? '::view-transition-old(root)' : '::view-transition-new(root)',
       });
       activeReveal.finished.catch(() => {});
+      if (animateIcon) playIcon(dark);
     }).catch(() => {
       if (request === revision) { transition.skipTransition(); apply(dark); }
     });
@@ -103,15 +110,29 @@
       activeTransition = activeReveal = undefined;
       activeDark = undefined;
       root.classList.remove('theme-reveal');
-      playIcon(dark);
+      document.removeEventListener('pointermove', trackRevealPointer);
+      // Ending the reveal must not replay the icon, even if removing the
+      // transition overlay restores hover beneath a stationary pointer.
     });
   };
   window.getWebTheme = currentChoice;
   window.setWebTheme = dark => {
     value = dark ? 'dark' : 'light';
-    change(dark);
+    change(dark, true);
     try { localStorage.setItem('zhixu-web-theme', value); } catch {}
   };
+  document.addEventListener('DOMContentLoaded', () => {
+    const toggle = document.getElementById('theme');
+    toggle?.addEventListener('pointerenter', event => {
+      if (event.pointerType === 'touch') return;
+      const entered = !hovering;
+      hovering = true;
+      if (entered && !activeTransition) playIcon(root.classList.contains('dark'));
+    });
+    toggle?.addEventListener('pointerleave', event => {
+      if (!activeTransition || !insideButton(event)) hovering = false;
+    });
+  });
   media.addEventListener('change', () => { if (!value) change(media.matches); });
   reduced.addEventListener('change', () => {
     if (reduced.matches) { ++revision; cancelReveal(); stopMotion(); root.classList.remove('theme-reveal'); apply(currentChoice()); }

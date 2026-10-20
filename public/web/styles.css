@@ -25,6 +25,12 @@
 :root.theme-reveal::view-transition-new(root) { z-index:2; }
 :root.dark.theme-reveal::view-transition-old(root) { z-index:2; }
 :root.dark.theme-reveal::view-transition-new(root) { z-index:1; }
+/* Keep just this small live control above the page reveal. Its click motion
+   stays visible without repainting the entire root snapshot every frame. */
+:root.theme-reveal #theme { view-transition-name:theme-control; background:var(--canvas); }
+:root.theme-reveal::view-transition-group(theme-control) { animation-duration:0s; }
+:root.theme-reveal::view-transition-old(theme-control) { display:none; }
+:root.theme-reveal::view-transition-new(theme-control) { animation:none; mix-blend-mode:normal; }
 #theme .theme-icon { grid-area:1/1; display:flex; pointer-events:none; transition:opacity .24s var(--easing),transform .42s var(--easing); }
 #theme .theme-icon svg { transform-origin:center; transform-box:fill-box; }
 #theme .theme-sun { opacity:1; transform:rotate(0) scale(1); }
