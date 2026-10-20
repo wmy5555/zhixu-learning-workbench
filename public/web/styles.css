@@ -12,7 +12,7 @@
 #theme { display:grid; place-items:center; }
 /* Preserve the old page as one opaque sheet: a single circular edge avoids
    muddy intermediate text colors. The night reveal peels daylight inward. */
-:root.theme-reveal::view-transition-group(root) { animation:none; }
+:root.theme-reveal::view-transition-group(root) { animation-duration:.82s; }
 :root.theme-reveal::view-transition-old(root), :root.theme-reveal::view-transition-new(root) { animation:none; mix-blend-mode:normal; }
 :root.theme-reveal::view-transition-old(root) { z-index:1; }
 :root.theme-reveal::view-transition-new(root) { z-index:2; }
