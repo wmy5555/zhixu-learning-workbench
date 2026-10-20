@@ -4,7 +4,7 @@
   const media = matchMedia('(prefers-color-scheme: dark)');
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
   const root = document.documentElement;
-  let cleanup, activeTransition, activeReveal, revision = 0;
+  let cleanup, activeTransition, activeReveal, activeDark, revision = 0;
   const stopMotion = () => {
     clearTimeout(cleanup);
     root.classList.remove('theme-changing');
@@ -33,8 +33,10 @@
     activeTransition?.skipTransition();
     activeReveal?.cancel();
     activeTransition = activeReveal = undefined;
+    activeDark = undefined;
   };
   const change = dark => {
+    if (activeTransition && activeDark === dark) return;
     const request = ++revision;
     cancelReveal();
     stopMotion();
@@ -43,6 +45,12 @@
       apply(dark, !reduced.matches);
       return;
     }
+    // Theme colors do not change geometry. Read once before snapshot capture,
+    // rather than forcing another layout while the new view is rendering.
+    const rect = document.getElementById('theme')?.getBoundingClientRect();
+    const x = rect?.width ? rect.left + rect.width / 2 : innerWidth - 32;
+    const y = rect?.height ? rect.top + rect.height / 2 : 32;
+    const radius = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y)) + 2;
     root.classList.add('theme-reveal');
     let transition;
     try {
@@ -53,12 +61,9 @@
       return;
     }
     activeTransition = transition;
+    activeDark = dark;
     transition.ready.then(() => {
       if (request !== revision) return;
-      const rect = document.getElementById('theme')?.getBoundingClientRect();
-      const x = rect?.width ? rect.left + rect.width / 2 : innerWidth - 32;
-      const y = rect?.height ? rect.top + rect.height / 2 : 32;
-      const radius = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y)) + 2;
       const small = `circle(0px at ${x}px ${y}px)`;
       const large = `circle(${radius}px at ${x}px ${y}px)`;
       // Night surrounds the shrinking daylight from the farthest corner
@@ -77,6 +82,7 @@
       // pseudo-element when the browser reuses the same snapshot name.
       activeReveal?.cancel();
       activeTransition = activeReveal = undefined;
+      activeDark = undefined;
       root.classList.remove('theme-reveal');
     });
   };
