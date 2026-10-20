@@ -2,6 +2,19 @@
    not a skin over the previous application. No legacy stylesheet is loaded. */
 :root { --danger:#a24439; --success:#477052; --easing:cubic-bezier(.16,1,.3,1); }
 :root.dark { --danger:#e8a99b; --success:#a1c1a1; }
+/* Reuse CDS EASE_OUT_EXPO from the pinned motion presets. Only theme changes
+   enable surface transitions, so initial paint and normal interactions stay crisp. */
+@media (prefers-reduced-motion:no-preference) {
+  :root.theme-changing, :root.theme-changing :where(*, *::before, *::after) {
+    transition:background-color .38s var(--easing),color .38s var(--easing),border-color .38s var(--easing),box-shadow .38s var(--easing),fill .38s var(--easing),stroke .38s var(--easing);
+  }
+}
+#theme { display:grid; place-items:center; }
+#theme .theme-icon { grid-area:1/1; display:flex; pointer-events:none; transition:opacity .24s var(--easing),transform .42s var(--easing); }
+#theme .theme-sun { opacity:0; transform:rotate(-75deg) scale(.55); }
+#theme .theme-moon { opacity:1; transform:rotate(0) scale(1); }
+.dark #theme .theme-sun { opacity:1; transform:rotate(0) scale(1); }
+.dark #theme .theme-moon { opacity:0; transform:rotate(75deg) scale(.55); }
 [hidden] { display:none!important; }
 body { min-width:320px; }
 main { padding-bottom:70px; }

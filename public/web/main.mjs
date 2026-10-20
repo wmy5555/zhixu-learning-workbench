@@ -16,7 +16,11 @@ function shell() {
   const topics = [...new Set(list(state.boot?.notes).map(note=>note.meta?.topic).filter(Boolean))].slice(0,5);
   $('#sidebar').innerHTML = `<a class="logo" href="#today">${icon('leaf')}<span class="wordmark">知序<small>ZHIXU</small></span></a>${link(`${icon('search')}<span>搜索你的知识</span><kbd>Ctrl K</kbd>`,'search','search-button')}${link(`${icon('plus')}收集新内容`,'capture','capture-button')}<p class="nav-label">工作台</p><nav class="nav-list" aria-label="工作台">${navigation.map(([symbol,label,route])=>btn(`${icon(symbol)}<span>${label}</span>${route==='today'&&pending?`<span class="count">${pending}</span>`:''}`,'navigate','',`data-route="${route}" ${view===route?'aria-current="page"':''}`)).join('')}</nav>${topics.length?`<section class="topics"><div class="nav-label">我的主题</div>${topics.map(topic=>btn(`<span class="dot clay"></span>${e(topic)}`,'topic-search','',`data-topic="${e(topic)}"`)).join('')}</section>`:''}<div class="sidebar-bottom"><p class="sidebar-note">让思考，有迹可循。</p>${link(`${icon('settings')}系统设置`,'settings')}<div class="profile"><span class="avatar">知</span><div>我的知识空间<small>本地保存 · 自己的节奏</small></div></div></div>`;
   $('#page-name').textContent = navigation.find(item=>item[2]===view)?.[1] || ({settings:'系统设置',jobs:'处理动态',edit:'编辑资料',read:'我的书桌'}[view]) || '知序';
-  $('#theme').innerHTML = icon(document.documentElement.classList.contains('dark')?'sun':'moon');
+  const theme = $('#theme'), dark = document.documentElement.classList.contains('dark');
+  if (!theme.firstElementChild) theme.innerHTML = `<span class="theme-icon theme-sun" aria-hidden="true">${icon('sun')}</span><span class="theme-icon theme-moon" aria-hidden="true">${icon('moon')}</span>`;
+  theme.setAttribute('aria-pressed', String(dark));
+  theme.setAttribute('aria-label', dark ? '切换日间模式' : '切换夜间模式');
+  theme.title = dark ? '切换日间模式' : '切换夜间模式';
 }
 async function refreshBoot() { state.boot = await api.get('/api/bootstrap'); return state.boot; }
 async function go(route, { replace = false, force = false } = {}) {
@@ -245,7 +249,7 @@ async function actions(control) {
     return go(control.dataset.route);
   }
   if(action==='theme'||action==='set-light'||action==='set-dark') {
-    window.setWebTheme(action==='theme'?!document.documentElement.classList.contains('dark'):action==='set-dark');shell();return;
+    window.setWebTheme(action==='theme'?!document.documentElement.classList.contains('dark'):action==='set-dark');return;
   }
   if(action==='menu') {const open=document.documentElement.classList.toggle('nav-open');$('#mobile-menu').setAttribute('aria-expanded',String(open));return;}
   if(action==='reload') {if(state.dirty&&!await confirm('刷新前放弃输入？','当前输入还没有保存。','放弃并刷新'))return;state.dirty=false;await refreshBoot();return go(state.route,{replace:true});}
