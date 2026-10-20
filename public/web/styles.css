@@ -144,6 +144,24 @@ input::placeholder,textarea::placeholder { color:var(--secondary); opacity:.65; 
 .library-note .text-button { font-size:12px; padding:0; }
 .writing-page { max-width:850px; margin:0 auto; padding:32px; border:1px solid var(--line); border-radius:10px; display:grid; gap:25px; }
 .writing-page textarea { font-family:ui-monospace,"Microsoft YaHei",monospace; font-size:15px; }
+.writing-page .note-body-field > label { color:var(--secondary); }
+.writing-page .markdown-editor,.writing-page .source-rich-editor { min-width:0; max-width:100%; }
+.writing-page .markdown-mode-switch { display:flex; flex-wrap:wrap; gap:4px; padding:4px; width:fit-content; max-width:100%; margin-bottom:16px; border-radius:10px; background:var(--soft); }
+.writing-page .markdown-mode-switch button { padding:8px 13px; border:0; border-radius:7px; color:var(--secondary); font-size:13px; line-height:1.5; background:transparent; }
+.writing-page .markdown-mode-switch button[aria-pressed="true"] { color:var(--accent); background:var(--canvas); box-shadow:0 1px 3px rgb(0 0 0 / .06); }
+.writing-page .markdown-mode-switch button:disabled { opacity:.55; cursor:wait; }
+.writing-page .markdown-editor > .field-hint { margin:12px 0 0; font-size:12px; line-height:1.8; color:var(--secondary); }
+/* Local Vditor is lazy-loaded after this stylesheet; use scoped specificity. */
+.writing-page .source-rich-editor.vditor { border:1px solid var(--line); border-radius:10px; overflow:visible; --panel-background-color:var(--canvas); --textarea-background-color:var(--canvas); --textarea-text-color:var(--ink); --border-color:var(--line); --toolbar-background-color:var(--soft); --toolbar-icon-color:var(--secondary); --toolbar-icon-hover-color:var(--accent); --toolbar-icon-hover-background-color:var(--active); }
+.writing-page .source-rich-editor .vditor-toolbar { padding:8px!important; flex-wrap:wrap; border-radius:10px 10px 0 0; border-bottom:1px solid var(--line); }
+.writing-page .source-rich-editor .vditor-toolbar__item { padding:0 3px; }
+.writing-page .source-rich-editor .vditor-toolbar button { height:30px; }
+.writing-page .source-rich-editor .vditor-content { min-height:0; border-radius:0 0 10px 10px; overflow:hidden; }
+.writing-page .source-rich-editor .vditor-reset { padding:22px!important; font-family:var(--font-reading); font-size:16px; line-height:1.9; color:var(--ink); background:var(--canvas); overflow-wrap:anywhere; }
+.writing-page .source-rich-editor .vditor-reset h1,.writing-page .source-rich-editor .vditor-reset h2,.writing-page .source-rich-editor .vditor-reset h3 { font-family:var(--font-editorial); color:var(--ink); }
+.writing-page .source-rich-editor .vditor-reset pre { white-space:pre-wrap; overflow-wrap:anywhere; }
+.writing-page .source-rich-editor .vditor-reset img { max-width:100%; }
+.writing-page .source-rich-editor img[src*="#zhixu-image-"] { width:160px; height:64px; border:1px dashed var(--line); border-radius:6px; background:var(--soft); object-fit:contain; }
 .study-overview { display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:55px; }
 .study-overview .section-title { margin-top:0; }
 .study-history { border-left:1px solid var(--line); padding-left:28px; }
