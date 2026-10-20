@@ -43,6 +43,7 @@ function fixture(value, options = {}) {
     getValue() { return this.markdown; }
     setValue(value) { this.values.push(value); this.markdown = this.vditor.lute.VditorDOM2Md(this.vditor.lute.Md2VditorDOM(value)); }
     insertValue(value) { this.setValue(this.markdown + value); }
+    setTheme(...theme) { this.theme = theme; }
     focus() {}
     destroy() { this.destroyed = true; }
   }
@@ -61,6 +62,29 @@ test('real parser normalization cannot rewrite untouched Markdown across repeate
     }
     f.root.destroy();
   }
+});
+
+test('editor follows the new page class theme and disposes its theme observer', async () => {
+  const f = fixture('# 中文标题\n\n正文');
+  let dark = true;
+  document.documentElement = { classList: { contains: () => dark }, dataset: {} };
+  const observers = [];
+  globalThis.MutationObserver = class {
+    constructor(callback) { this.callback = callback; observers.push(this); }
+    observe() {}
+    disconnect() { this.disconnected = true; }
+  };
+  try {
+    f.root.mount({});
+    await f.root.switchMode('rich');
+    assert.equal(f.editor.config.theme, 'dark');
+    assert.deepEqual(f.editor.theme, ['dark', 'dark']);
+    dark = false; observers[1].callback();
+    assert.deepEqual(f.editor.theme, ['classic', 'light']);
+    assert.equal(f.root.getValue(), '# 中文标题\n\n正文');
+    f.root.destroy();
+    assert.ok(observers.every(observer => observer.disconnected));
+  } finally { delete globalThis.MutationObserver; }
 });
 
 test('both modes edit the same draft and immediate read sees rich edits without waiting for debounce', async () => {

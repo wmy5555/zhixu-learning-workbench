@@ -3,6 +3,7 @@ import { escape as e, markdown } from './markdown.mjs';
 import { $, $$, icon, button as btn, routeButton as link, field, area, empty, heading, kind, stage, jobState, calendar, notify, modal, confirm, busy } from './ui.mjs';
 import { reader } from './reader.mjs';
 import { springEnter } from './cds/motion-bridge.mjs';
+import { mountNoteEditor, noteEditSession } from './note-editor.mjs';
 
 const navigation = [['home','今日','today'],['plus','收集与加工','capture'],['book','知识库','library'],['check','学习与错题','study'],['layers','主题学习包','topics'],['network','检索与发现','search'],['chat','问答与输出','output']];
 const state = { boot:null, route:'today', sequence:0, dirty:false, saving:0, readerReturn:'library', note:null, session:null, jobs:[], scroll:new Map() };
@@ -108,8 +109,18 @@ async function readPage(id) { const note=await api.get(endpoint('notes',id));sta
 async function editPage(id) {
   const note=await api.get(endpoint('notes',id));
   return {html:heading('KEEP THE ORIGINAL','把想表达的，写得更清楚。','保存时会核对原版本，其他地方的修改不会被覆盖。',link('回到阅读',`read/${id}`,'text-button'))+
-    `<form id="edit-form" class="writing-page">${field('标题','title',{value:note.title,required:true})}${area('正文 · Markdown','body',{value:note.body,required:true,rows:24})}<div class="paper-footer"><p class="muted small">原始资料与个人理解各自保留。</p><button class="primary" type="submit">保存修改 ${icon('arrow')}</button></div></form>`,
-    bind(){const form=$('#edit-form');watchForm(form);submit(form,async values=>{await api.put(endpoint('notes',id),{title:values.title,body:values.body,expectedHash:note.hash});state.dirty=false;await refreshBoot();await go(`read/${id}`,{replace:true,force:true});notify('修改已保存。');});}};
+    `<form id="edit-form" class="writing-page">${field('标题','title',{value:note.title,required:true})}<div class="field note-body-field"><label for="note-body">正文</label><div id="note-body-editor"><textarea id="note-body" name="body" rows="20" required>${e(note.body||'')}</textarea></div></div><div class="paper-footer"><p class="muted small">原始资料与个人理解各自保留。</p><button class="primary" type="submit">保存修改 ${icon('arrow')}</button></div></form>`,
+    bind(){
+      const form=$('#edit-form');watchForm(form);
+      const editor=mountNoteEditor(form,note,()=>{form.dataset.dirty='true';state.dirty=true;});
+      const session=noteEditSession(note,{read:()=>({title:form.elements.title.value,body:editor.getValue()}),write:(noteId,values)=>api.put(endpoint('notes',noteId),values)});
+      submit(form,async()=>{
+        const {snapshot}=await session.save();
+        await refreshBoot();
+        if(form.elements.title.value!==snapshot.title||editor.getValue()!==snapshot.body){notify('本次修改已保存；保存期间的新输入仍在草稿中，请继续保存。');return;}
+        state.dirty=false;await go(`read/${id}`,{replace:true,force:true});notify('修改已保存。');
+      });
+    }};
 }
 async function studyPage(id) {
   if(id)return sessionPage(id);
