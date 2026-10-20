@@ -178,3 +178,7 @@ Capacitor 生成的默认图标和启动图属于模板资源，其许可范围�
 直接依赖：FilePond 4.32.12、file-validate-type 1.2.9、file-validate-size 2.2.8、image-preview 4.6.12 均MIT；Mammoth 1.13.0为BSD-2-Clause；yauzl 3.4.0为MIT。JSZip采用其MIT选项，pako保留MIT与Zlib附属条件，duck的BSD声明已按随包正文核为BSD-2-Clause，isarray的MIT正文位于README。其余传递依赖见机器清单。代码从已安装包的固定dist路径提供，不复制删改其版权头，不打包node_modules；安装物保留随包许可。未选择或更改本项目许可证。
 
 高危生产审计通过但仍有1项moderate：Mammoth CLI的argparse引入sprintf-js 1.0.3，详见 [附件已知边界](SOURCE_FILES.md#验证与已知边界)。只调用worker内rawText API，未引入CLI执行；不以审计退出码0声称无漏洞。
+
+## 2026-10-20 网页重构参考资产
+
+`public/web/cds/` 来自用户选定的融合原型，主题与动效源自 Caho1/open-claude-ui 固定提交 `4045ce76afdcb7dccef1b7e6417b04c4c6046e9c`。包含 MIT 许可全文与 Copyright (c) 2026 Caho1。原型提供原生动画桥接与图标；没有新增字体、媒体或 npm 依赖，不改变本项目许可证。
