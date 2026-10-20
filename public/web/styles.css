@@ -84,7 +84,7 @@ input::placeholder,textarea::placeholder { color:var(--secondary); opacity:.65; 
 .dark .capture-paper { background:var(--cds-gray-800); }
 .title-input { border:0; border-bottom:1px solid var(--line); border-radius:0; padding:4px 0 18px; background:none; font:500 25px/1.7 var(--font-editorial); }
 .capture-body { border:0; border-radius:0; background:none; min-height:310px; padding:25px 0; font-size:16px; }
-.title-input:focus-visible,.capture-body:focus-visible { outline-offset:8px; }
+.title-input:focus-visible,.capture-body:focus-visible { outline:none; }
 .capture-origin { border-top:1px solid var(--line); padding:17px 0; }
 .capture-origin summary { font-size:13px; color:var(--secondary); cursor:pointer; }
 .capture-origin .form-grid { margin-top:20px; }
