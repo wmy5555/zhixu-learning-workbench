@@ -10,6 +10,14 @@
   }
 }
 #theme { display:grid; place-items:center; }
+/* Preserve the old page as one opaque sheet: a single circular edge avoids
+   muddy intermediate text colors. The night reveal peels daylight inward. */
+:root.theme-reveal::view-transition-group(root) { animation:none; }
+:root.theme-reveal::view-transition-old(root), :root.theme-reveal::view-transition-new(root) { animation:none; mix-blend-mode:normal; }
+:root.theme-reveal::view-transition-old(root) { z-index:1; }
+:root.theme-reveal::view-transition-new(root) { z-index:2; }
+:root.dark.theme-reveal::view-transition-old(root) { z-index:2; }
+:root.dark.theme-reveal::view-transition-new(root) { z-index:1; }
 #theme .theme-icon { grid-area:1/1; display:flex; pointer-events:none; transition:opacity .24s var(--easing),transform .42s var(--easing); }
 #theme .theme-sun { opacity:0; transform:rotate(-75deg) scale(.55); }
 #theme .theme-moon { opacity:1; transform:rotate(0) scale(1); }
