@@ -1,8 +1,8 @@
 // A new web client for the documented HTTP contract. Session tokens stay in memory.
 export function createClient(fetcher = (...args) => fetch(...args)) {
   let csrf = '';
-  let practiceId='', pending=0, version=0;
-  const context=()=>({practiceId,pending,version});
+  let practiceId='', pending=0, version=0, revision=0;
+  const context=()=>({practiceId,pending,version,revision});
   const setContext=(id='')=>{if(id===practiceId)return;if(pending)throw Error('当前操作仍在处理中，请稍后切换知识库。');if(id&&!/^[a-zA-Z0-9-]+$/.test(id))throw Error('练习空间标识无效。');practiceId=id;version++;};
   let starting;
   async function session() {
@@ -42,6 +42,7 @@ export function createClient(fetcher = (...args) => fetch(...args)) {
       throw error;
     }
     if(version!==requestVersion)throw Error('知识空间已经改变，请重新读取。');
+    if(!['GET','HEAD'].includes(method))revision++;
     return data;
     }
     } finally {pending--;}

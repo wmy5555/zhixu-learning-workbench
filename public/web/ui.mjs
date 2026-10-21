@@ -73,5 +73,5 @@ export async function busy(control, work) {
   if (control?.disabled) return;
   if (control) { control.disabled = true; control.setAttribute('aria-busy', 'true'); }
   try { return await work(); } catch (error) { notify(error.message || '操作未完成。', true); }
-  finally { if (control?.isConnected) { control.disabled = false; control.removeAttribute('aria-busy'); } }
+  finally { if (control) { control.disabled = false; control.removeAttribute('aria-busy'); } }
 }

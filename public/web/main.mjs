@@ -46,7 +46,9 @@ function shell() {
   theme.title = dark ? '切换日间模式' : '切换夜间模式';
 }
 let stopStudyFeedback = () => {};
-async function refreshBoot() { state.boot = await api.get('/api/bootstrap'); return state.boot; }
+let librarySnapshot=null;
+const libraryKey=()=>{const {version,revision}=api.getContext();return `${version}:${revision}`;};
+async function refreshBoot() { librarySnapshot=null;state.boot = await api.get('/api/bootstrap'); return state.boot; }
 async function go(route, { replace = false, force = false, guide = false, speed = 1 } = {}) {
   if(onboarding.travelling&&!guide)return false;
   if(state.saving&&!force){notify('正在保存，请等这次操作返回后再切换。');return false;}
@@ -54,6 +56,7 @@ async function go(route, { replace = false, force = false, guide = false, speed 
   if(!force)for(const dialog of [...dialogs].reverse())if(dialog.beforeClose&&!await dialog.beforeClose())return false;
   if (state.dirty && !force && !await confirm('放弃还没保存的输入？','当前输入还没有保存。取消可继续编辑，确认后会放弃这次输入。','放弃输入并离开')) return false;
   await onboarding.prepareRoute(route);
+  const snapshotKey=libraryKey(),cachedLibrary=!guide&&route==='library'&&librarySnapshot?.key===snapshotKey?librarySnapshot:null;
   const main=$('#main'),reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
   let ghost;
   if(guide&&!reduce){ghost=main.cloneNode(true);ghost.removeAttribute('id');ghost.classList.add('onboard-page-ghost');ghost.inert=true;ghost.setAttribute('aria-hidden','true');ghost.querySelectorAll('[id]').forEach(n=>n.removeAttribute('id'));const r=main.getBoundingClientRect();Object.assign(ghost.style,{left:r.x+'px',top:r.y+'px',width:r.width+'px',height:r.height+'px'});document.body.append(ghost);main.style.opacity='0';}
@@ -70,19 +73,20 @@ async function go(route, { replace = false, force = false, guide = false, speed 
   if (replace) history.replaceState(null,'',`#${state.route}`); else history.pushState(null,'',`#${state.route}`);
   shell();
   delete $('#main').dataset.route;
-  $('#main').innerHTML = '<div class="page-loading" role="status"><span></span>正在把内容放到书桌上…</div>';
+  if(!cachedLibrary)$('#main').innerHTML = '<div class="page-loading" role="status"><span></span>正在把内容放到书桌上…</div>';
   try {
     const [view,id] = state.route.split('/');
-    const page = await ({ today:todayPage, capture:capturePage, library:parity.library, read:()=>readPage(id), edit:()=>editPage(id), study:()=>studyPage(id), topics:topicsPage, search:parity.search, output:outputPage, settings:settingsPage, jobs:parity.jobs, relations:parity.relations, history:parity.history, manage:()=>management.page(id), focus:focus.page }[view] || todayPage)();
+    const page = cachedLibrary?null:await ({ today:todayPage, capture:capturePage, library:parity.library, read:()=>readPage(id), edit:()=>editPage(id), study:()=>studyPage(id), topics:topicsPage, search:parity.search, output:outputPage, settings:settingsPage, jobs:parity.jobs, relations:parity.relations, history:parity.history, manage:()=>management.page(id), focus:focus.page }[view] || todayPage)();
     if (sequence !== state.sequence) {ghost?.remove();main.style.opacity='';return false;}
-    $('#main').innerHTML = page.html;
-    page.bind?.();
+    if(cachedLibrary)main.replaceChildren(...cachedLibrary.nodes);
+    else{main.innerHTML=page.html;page.bind?.();}
+    if(view==='library')librarySnapshot={key:snapshotKey,nodes:[...main.childNodes]};
     $('#main').dataset.route=state.route;
     focus.mount();
     $('#main').focus({preventScroll:true});
     window.scrollTo({top:state.scroll.get(route)||0,behavior:'instant'});
     if(ghost){main.style.opacity='';const out=ghost.animate([{opacity:1},{opacity:0}],{duration:460/speed,fill:'forwards',easing:'ease-in-out'}),incoming=main.animate([{opacity:0,transform:'translateY(8px)'},{opacity:1,transform:'none'}],{duration:600/speed,easing:'cubic-bezier(.22,1,.36,1)'});await Promise.allSettled([out.finished,incoming.finished]);ghost.remove();}
-    else if(!reduce)springEnter(main,undefined,6,.998);
+    else if(!reduce&&!cachedLibrary)springEnter(main,undefined,6,.998);
     window.dispatchEvent(new CustomEvent('zhixu:web-page'));
     return true;
   } catch(error) {
