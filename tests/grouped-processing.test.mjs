@@ -367,12 +367,9 @@ test('processing batches unique claims once inside the source budget and leaves 
 
   partialChild = service.promote(partialChild.id, {
     stage: 'learning',
-    reason: '验证部分研究结果不能进入学习计划。',
+    reason: '验证部分研究结果可练习但保留提示。',
     depth: 'apply',
   });
-  assert.equal(service.today().items.some(item => item.noteId === partialChild.id), false);
-  assert.throws(
-    () => service.startStudy({ noteId: partialChild.id }),
-    error => error.code === 'RESEARCH_REQUIRED',
-  );
+  assert.equal(service.today().items.some(item => item.noteId === partialChild.id), true);
+  assert.ok(service.startStudy({ noteId: partialChild.id }).materialWarnings.length);
 });

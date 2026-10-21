@@ -3,7 +3,8 @@ import { api, endpoint, pendingPlan, capturePayload } from './api.mjs';
 import { escape as e, markdown } from './markdown.mjs';
 import { $, $$, icon, button as btn, routeButton as link, field, area, empty, heading, kind, stage, jobState, calendar, notify, modal, confirm, busy } from './ui.mjs';
 import { reader } from './reader.mjs';
-import { learningReadiness, learningHelp, readerMenu } from './reader-actions.mjs';
+import { learningReadiness, learningHelp, readerMenu, credibilityNotice } from './reader-actions.mjs';
+import { processOutcome } from './process-outcome.mjs';
 import { relatedReadingNotes } from './reading-content.mjs';
 import { springEnter } from './cds/motion-bridge.mjs';
 import { mountNoteEditor, noteEditSession } from './note-editor.mjs';
@@ -166,7 +167,7 @@ async function sessionPage(id) {
   const turns=list(session.turns), waiting=session.status==='awaiting_feedback'||session.pendingJobId, completed=session.status==='completed';
   const title=noteTitle(session.noteId), material=markdown(session.material).html;
   return {html:heading('ONE THOUGHT AT A TIME',title,`${e(session.goal||'用自己的话解释')} · ${jobState(session.status)}`,link('回到学习池','study','text-button'))+
-    `<div class="learning-workspace"><section class="learning-page">${!turns.length?`<div class="learning-material" id="learning-material"><p class="eyebrow">先阅读，然后合上材料</p><div class="article-prose">${material}</div><div class="actions">${btn('合上材料，试着解释','hide-material','primary')}${link('在书桌里读',`read/${session.noteId}`,'text-button')}</div></div>`:''}
+    `${credibilityNotice(session.materialWarnings,session.noteId)}<div class="learning-workspace"><section class="learning-page">${!turns.length?`<div class="learning-material" id="learning-material"><p class="eyebrow">先阅读，然后合上材料</p><div class="article-prose">${material}</div><div class="actions">${btn('合上材料，试着解释','hide-material','primary')}${link('在书桌里读',`read/${session.noteId}`,'text-button')}</div></div>`:''}
     <div id="answer-workspace" ${!turns.length?'hidden':''}><div class="learning-question"><p class="eyebrow">这一次，试着回答</p><h2>${e(session.question)}</h2></div>
     ${turns.map((turn,index)=>`<section class="learning-turn"><p class="nav-label">第 ${index+1} 次 · 我的回答 · ${turn.hintUsed?'使用过提示或原文':'独立作答'}</p><div class="answer-prose">${e(turn.answer).replaceAll('\n','<br>')}</div>${feedbackHTML(turn.feedback)}</section>`).join('')}
     ${waiting?`<div class="waiting-note" role="status"><span class="status-pulse"></span><div><strong>你的回答已保存</strong><p>反馈还在等待处理。可以离开，之后从学习记录继续。</p>${btn('查看最新反馈','reload','text-button')} ${link('处理动态 ↗','jobs','text-button')}</div></div>`:completed?`<div class="completion-note"><h2>这一次思考，已经留下来了。</h2><p>${e(session.completion?.reason||'学习记录已保存。')}</p>${completionHTML(session.completion)}${link('回到今天','today','text-button')}</div>`:`<form id="answer-form">${area('我的解释','answer',{placeholder:'不用完美。先写下此刻的理解，再找一个自己的例子。',required:true,rows:9})}<div class="answer-actions">${btn('需要一点提示','hint','text-button',`data-id="${e(id)}"`)}${btn('再看原文','study-material','text-button',`data-id="${e(id)}"`)}<button type="submit" class="primary">保存回答，获取反馈 ${icon('arrow')}</button></div><p class="form-note">回答会保存到本机；AI 反馈使用已配置的服务，可能计费。未配置时保留回答并等待。</p></form>`}</div></section>
@@ -234,7 +235,7 @@ async function startStudy(noteId, planId) {
       startStudy.intents.delete(key);
     } catch(error) {
       if(sequence!==state.sequence)return;
-      if(error.code==='RESEARCH_REQUIRED'){await prepareLearning(noteId);return;}
+      if(error.code==='NOTE_UNAVAILABLE'){await prepareLearning(noteId);return;}
       throw error;
     }
   })();
@@ -249,21 +250,67 @@ async function prepareLearning(id) {
   const sequence=state.sequence;
   const note=await api.get(endpoint('notes',id)),readiness=await readReadiness(note);
   if(sequence!==state.sequence)return;
-  if(readiness.ready){notify('材料条件已满足，可以开始学习。');return go(state.route,{replace:true});}
+  if(readiness.ready){notify('可以开始学习；可信度提示会随材料保留。');return go(state.route,{replace:true});}
   modal(readiness.heading,learningHelp(note,readiness));
 }
 async function processSource(id, { research = false } = {}) {
+  const sequence=state.sequence,returnTo=state.route.startsWith('read/')?state.route:`read/${id}`;
   const note=await api.get(endpoint('notes',id));
-  const dialog=modal(research?'核验这份原始资料？':'把这份原文交给 AI 拆解？',`<p><strong>${e(note.title)}</strong></p><p>将所需原文发送给你配置的 AI 服务，生成可供选择的知识。可能计费，生成结果不会自动成为个人理解。</p><label class="check"><input type="checkbox" name="research" ${research?'checked':''}> 同时联网核验事实、条件与反例</label><p class="form-note">完成后到原文查看拆解知识；已有人工修改时需查看修订建议并决定是否采用。</p><div class="actions"><button class="primary" data-run>确认开始${research?'核验':'拆解'}</button></div>`);
-  dialog.querySelector('[data-run]').onclick=event=>busy(event.currentTarget,async()=>{
-    const result=await api.post(endpoint('notes',id,'process'),{research:dialog.querySelector('input').checked,reuseExtracted:research});
-    dialog.close();await refreshBoot();shell();
-    modal('查看处理进度',`<div class="reader-menu"><p>当前状态：${e(jobState(result.job?.state || result.state)) || '请求已记录'}。如需配置能力或重试，可在处理任务中继续。</p><div class="actions">${link('查看处理任务','jobs','primary')}${link('查看原文与拆解知识',`read/${id}`,'text-button')}</div></div>`);
-  });
+  if(sequence!==state.sequence)return;
+  let timer,job,selectedResearch=research,reading=false,sending=false;
+  const dialog=modal(research?'补充这份资料的核验':'把这份原文交给 AI 拆解？',`<p><strong>${e(note.title)}</strong></p><p>将必要原文发送给已配置的服务，可能计费。已有拆解会复用；核验不会自动确认个人理解。</p><label class="check"><input type="checkbox" name="research" ${research?'checked':''}> 联网核验事实、条件与反例</label><p class="form-note">不勾选也能整理和学习，待核验之处会继续标明。人工修改或进行中的练习会保留，新证据另存为修订建议。</p><div class="actions"><button class="primary" data-run>确认${research?'核验':'拆解'}</button></div>`,{onClose:()=>clearTimeout(timer)});
+  const current=()=>dialog.isConnected&&dialog.open&&sequence===state.sequence;
+  const render=(pendingProposals=0)=>{
+    if(!current())return;
+    const view=processOutcome(job,{research:selectedResearch,sourceId:id,returnTo,pendingProposals});
+    dialog.querySelector('h2').textContent=view.title;dialog.setAttribute('aria-label',view.title);
+    const body=dialog.querySelector('.dialog-body'),hadFocus=body.contains(document.activeElement)||document.activeElement===document.body;
+    body.innerHTML=view.html;
+    const retry=body.querySelector('[data-process-retry]');
+    if(retry)retry.onclick=event=>busy(event.currentTarget,()=>send(job.id));
+    const researchButton=body.querySelector('[data-process-research]');
+    if(researchButton)researchButton.onclick=event=>busy(event.currentTarget,()=>send());
+    body.querySelector('[data-process-refresh]').onclick=event=>busy(event.currentTarget,read);
+    if(hadFocus)(retry||researchButton||body.querySelector('[data-process-refresh]')).focus({preventScroll:true});
+    springEnter(body,undefined,3,1);
+  };
+  const read=async()=>{
+    if(!current()||reading||sending)return;
+    reading=true;clearTimeout(timer);
+    try{
+      const snapshot=await api.get('/api/jobs?view=status');
+      if(!current())return;
+      const latest=list(snapshot.jobs).find(item=>item.id===job.id);
+      if(!latest)throw new Error('任务记录已变化，请重新打开原文确认。');
+      const changed=JSON.stringify(job)!==JSON.stringify({...job,...latest});job={...job,...latest};
+      let pendingProposals=0,boot;
+      if(!['queued','running'].includes(job.state)){
+        const [proposals,latestBoot]=await Promise.all([api.get('/api/proposals'),api.get('/api/bootstrap')]);
+        boot=latestBoot;
+        pendingProposals=list(proposals.proposals).filter(p=>p.state==='pending'&&p.meta?.processKey?.startsWith(`${id}:`)).length;
+      }
+      if(!current())return;
+      if(boot){state.boot=boot;shell();}
+      if(changed||!['queued','running'].includes(job.state))render(pendingProposals);
+      if(['queued','running'].includes(job.state))timer=setTimeout(read,1800);
+    }catch(error){if(current())dialog.querySelector('[data-process-error]').textContent=`状态读取未完成：${error.message}。可点击“刷新状态”，不会重新发起核验。`;}
+    finally{reading=false;}
+  };
+  const send=async retryJobId=>{
+    if(sending||!current())return;
+    sending=true;clearTimeout(timer);
+    try{
+      const result=await api.post(endpoint('notes',id,'process'),{research:selectedResearch,reuseExtracted:selectedResearch,...(retryJobId?{retryJobId}:{})});
+      if(!current())return;
+      job=result.job||result;render();
+    }finally{sending=false;}
+    if(current())await read();
+  };
+  dialog.querySelector('[data-run]').onclick=event=>busy(event.currentTarget,async()=>{selectedResearch=dialog.querySelector('input').checked;await send();});
 }
 async function extract(id) {
   const note=await api.get(endpoint('notes',id));
-  formModal('从这份原文，整理一个想法',`${field('知识标题','title',{required:true})}${area('用自己的话整理','body',{required:true,placeholder:'这条知识回答什么问题？有哪些条件与边界？'})}${field('归属主题','topic',{value:note.meta?.topic||''})}<label class="field"><span>内容性质</span><select name="claimType"><option value="fact">事实性知识（仍需核验）</option><option value="opinion">个人观点或经验</option></select></label>${field('为什么值得留下','reason',{required:true})}<p class="form-note">原文完整保留；新条目先进入待选学，事实性知识仍须满足后端核验条件。</p>`,async values=>{
+  formModal('从这份原文，整理一个想法',`${field('知识标题','title',{required:true})}${area('用自己的话整理','body',{required:true,placeholder:'这条知识回答什么问题？有哪些条件与边界？'})}${field('归属主题','topic',{value:note.meta?.topic||''})}<label class="field"><span>内容性质</span><select name="claimType"><option value="fact">事实性知识（仍需核验）</option><option value="opinion">个人观点或经验</option></select></label>${field('为什么值得留下','reason',{required:true})}<p class="form-note">原文完整保留；新条目先进入待选学，事实性知识保留待核验提示，也可以先加入学习。</p>`,async values=>{
     const saved=await api.post(endpoint('notes',id,'extract'),{...values,depth:'explain'});await refreshBoot();await go(`read/${saved.id}`,{force:true});notify('新想法已留下，原文保持完整。');
   },{wide:true});
 }

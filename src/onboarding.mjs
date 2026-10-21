@@ -288,7 +288,7 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
     if (note.kind !== 'knowledge' || note.meta.presetCase || note.meta.supersededBy || !note.meta.sources?.some(ref => ref.id === p.roles.capturedSource && ref.role === 'input')) fail('请选择当前原文下的实际候选知识，不能使用预设案例。', 'ONBOARDING_KNOWLEDGE', 409);
     if (role === 'explain' ? ['aware', 'find', 'apply'].some(other => p.roles[other] === noteId) : p.roles.explain === noteId) fail('请为扩展目标选择主线以外的知识，保留主线知识的目标与学习记录。', 'ONBOARDING_KNOWLEDGE', 409);
     if (role === 'explain' && p.roles.explain !== noteId && service.store.records('sessions').some(session => session.noteId === p.roles.explain && !session.presetCase)) fail('这条知识已经开始学习，请继续当前知识；换主线需确认重新练习。', 'ONBOARDING_LEARNING_LOCKED', 409);
-    if (service.noteEvidence(noteId).limitations.length) fail('这条知识仍需核验或复查。请先对原文联网加工并审阅依据，再选入主线；不要改成个人观点绕过核验。', 'RESEARCH_REQUIRED', 409);
+    // Selecting material for practice does not certify its claims; study keeps the warnings.
     p.roles[role] = noteId; p.roles.source = p.roles.capturedSource;
     persist(); return state();
   }

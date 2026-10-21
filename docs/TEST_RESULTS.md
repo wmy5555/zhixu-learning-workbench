@@ -673,3 +673,16 @@ Chrome合成静态页面实际展开：第一段完整逐字显示，其他拆�
 定向验证：node --test tests/related-source.test.mjs 5/5；node --test --test-name-pattern "all source full-text entries retain" tests/ui-alignment.test.mjs 1/1；node scripts/check-project.mjs 346文件通过；diff检查通过。覆盖多引用去重/顺序、无定位、原文逐字保留、内部自动定位与跳转、关闭不重置窗口、无重复入口及既有C阅读器关闭/滚动/焦点恢复。没有全量或组合测试。
 
 Chrome真实合成页面：原文全文textContent完全相等，2处mark，窗口scrollHeight5351/clientHeight560，打开后scrollTop3441且第一处可见；第二处跳转scrollTop4791且可见，关闭和未定位展开后pageScroll均为0；未定位0处高亮并保留全文。已核阅改后截图位于本任务.tmp/rework-preview.png（不提交截图）。预览仅验证该真实组件，C阅读器由上述真实app DOM定向回归验证。未外发AI、未写真实资料、未部署4318、未创建PR或推送；由dot协调唯一部署者集成。
+
+## 2026-10-21 学习与核验流程修复
+
+基线为正式源码 8179c36625f21ab1c0ba02126bc2a0474117bcb3。Node 24.21.0；只用临时随机合成库和受控适配器，没有读取真实资料或调用真实供应商。
+
+- pipeline/grouped-processing/research-resume/learning-flow 定向共 47 项：首次 46 通过，剩余为新增批改测试的桩匹配词错误；修正桩并定向执行该项通过。其余生产代码未变，复用这 46 项本轮证据。覆盖默认不联网、带限制学习、RAG 排除、分批核验/缓存/删除保护、旧任务防重和修订保留。
+- web-reader-actions 6 项、process-retry 1 项通过；learning-alignment/learning-reliability 27 项通过；onboarding-curriculum/onboarding-materials 17 项通过；onboarding-clock 的 research expiry 1 项定向通过。没有全套或无关回归，没有依赖变更，不复用历史 CI 作为本提交通过。
+- 内置浏览器实际合成点击：核验等待→窗口继续→自动显示完成→返回原知识仍为 learning；手工事实条目→加入学习→待核验直接开始→保存回答→受控反馈→结算成功，可信度提示持续保留。深浅模式、390×844 窄屏（页面 scrollWidth 375，无横向溢出）、移动端菜单开始入口已核；减少动态效果已模拟为 reduce，对应 CSS 动效仅在 no-preference 启用。继承原 CDS 弹窗与状态反馈。
+- 截图保存在本任务忽略目录 .tmp/learning-mobile.png，仅含合成数据。截图一度超时后用标准截图接口成功保存；Chrome CLI 枚举无返回，实际交互验收采用内置浏览器。
+
+正式同步使用现有稳定启动器，旧源码与配置保留回退；实际切换、进程工作目录和静态资源字节核对结果以本机 formal-4318/running.json 部署回执为准。真实用户那条资料和真实供应商核验质量尚未运行验收。
+
+后续同类入口核对发现旧教程仍把带限制选项置灰，已同步为可选择并保留提醒；只复验 verification help / goal extensions 两项，以及修改文件的语法。新任务状态展示的两项定向检查通过，包含普通拆解中收到核验意图的后续显式入口。仓库检查已实际通过 404 个跟踪文件；保留基线 CRLF 文件，diff 检查使用 cr-at-eol，未做全文件换行格式化。

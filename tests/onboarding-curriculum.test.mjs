@@ -135,13 +135,13 @@ test('preconditions, evidence and expiration cases retain the real learning guar
   const { roles } = seedPractice(service);
   const blocked = loadCase(service, 'prerequisites', roles);
   assert.equal(service.topics().find(topic => topic.id === blocked.roles.topicBlocked).progress.blockedNoteId, blocked.roles.prerequisite);
-  assert.throws(() => service.startStudy({ noteId: blocked.roles.prerequisite }), error => error.code === 'RESEARCH_REQUIRED');
+  assert.throws(() => service.startStudy({ noteId: blocked.roles.prerequisite }), /加入学习/);
   const evidence = loadCase(service, 'evidence', roles);
   assert.deepEqual(new Set(service.noteEvidence(evidence.roles.evidenceKnowledge).evidence.map(item => item.role)), new Set(['support', 'oppose', 'limit', 'input']));
-  assert.throws(() => service.startStudy({ noteId: evidence.roles.evidenceKnowledge }), error => error.code === 'RESEARCH_REQUIRED');
+  assert.throws(() => service.startStudy({ noteId: evidence.roles.evidenceKnowledge }), /加入学习/);
   const expired = loadCase(service, 'expired', roles);
   assert.ok(service.getNote(expired.roles.staleKnowledge).meta.reviewAfter < service.learningNow());
-  assert.throws(() => service.startStudy({ noteId: expired.roles.staleKnowledge }), error => error.code === 'RESEARCH_REQUIRED');
+  assert.throws(() => service.startStudy({ noteId: expired.roles.staleKnowledge }), /加入学习/);
 });
 
 test('preset sessions and lifecycle records can demonstrate actual actions without touching main cards', async t => {

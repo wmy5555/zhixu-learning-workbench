@@ -70,7 +70,7 @@ export const chapters = [
   { id: 'study', title: '5. 完成一次学习', steps: [
     step('study-source-permission', '核对学习知识的原文', '打开当前知识关联的原文，核对出处与内容；无需给原文另设外发分类。', '批改围绕你主动选择的学习知识开展。', '你能回到本场景的原文核对依据。', 'library', 'note-detail', { noteRole: 'source' }),
     step('study-permission', '了解提交回答后的 AI 批改', '查看已选知识；主动提交回答后，AI 使用该知识、本次问题、回答及可用的学习上下文给出反馈，可能计费。', '原始回答和 AI 建议分开保存。', '准备好自己的回答，再主动提交。', 'library', 'note-detail', { noteRole: 'explain' }),
-    action('study-plan', '生成今日清单', '回到今日，点击“生成今日清单”或“重新安排”，找到刚加入学习的解释知识。若没有出现，按“未安排的原因”检查学习状态、核验、暂停与预算，再生成清单。', '清单按学习目标、到期时间和预算安排。', '选中的解释知识出现在今日待学项中，显示预计分钟和安排理由。', 'today', 'today-generate', 'today-generate', { noteRole: 'explain' }),
+    action('study-plan', '生成今日清单', '回到今日，点击“生成今日清单”或“重新安排”，找到刚加入学习的解释知识。若没有出现，按“未安排的原因”检查学习状态、前置知识、暂停与预算，再生成清单。', '清单按学习目标、到期时间和预算安排。', '选中的解释知识出现在今日待学项中，显示预计分钟和安排理由。', 'today', 'today-generate', 'today-generate', { noteRole: 'explain' }),
     step('study-reason', '阅读为什么这样安排', '查看每项的理由、预计时间、超出预算的余量和被前置知识阻塞的提示。', '今日清单不是固定打卡列表。', '能说明一项是新学、到期复习还是错题练习。', 'today', 'today-plan'),
     action('study-defer', '把应用示例延期一天', '在“能够迁移应用”安排上点击延期，按钮会顺延一天。若清单没有该示例，可先在“知识管理进阶”中完成“把应用目标加入学习”，再刷新今日安排。', '忙碌时可主动调整安排。', '该项显示延期，不再占用当前待学时间。', 'today', 'today-plan', 'plan-defer', { noteRole: 'apply' }),
     action('study-start', '开始解释示例', '对“能够解释”点击开始学习，阅读材料和本次目标。', '先理解原文，再独立回答。', '打开学习会话，显示原文和解释型问题。', 'study', 'study-queue', 'study-start', { noteRole: 'explain' }),
@@ -229,7 +229,7 @@ export function getCurriculum(materialId) {
     'process-research': { instruction: `对原文主动运行联网加工，审阅返回正文、依据与限制。${material.verification}` },
     'library-filter': { instruction: `搜索“${keyword}”，切换类型、阶段和分组，找到本场景原文与真实拆解条目。` },
     'library-edit': { instruction: '编辑已选知识，补充你自己的观察并保存；保留 AI 整理与个人补充的身份。' },
-    'library-explain': { instruction: `从这份原文的候选知识中选一条，练习目标：${material.goals[2][1]}。打开编辑页，将“学习目标”设为“讲清原理”并保存，再点击“加入学习”并填写理由。若条目显示“待核验”，先完成联网加工并查看依据，再加入学习。`, why: '接下来的学习和复习会围绕你选中的这条知识展开。', expected: '选中的知识进入正在学习，可以从详情开始练习。' },
+    'library-explain': { instruction: `从这份原文的候选知识中选一条，练习目标：${material.goals[2][1]}。打开编辑页，将“学习目标”设为“讲清原理”并保存，再点击“加入学习”并填写理由。若条目显示“待核验”，可以保留提示先学习，之后按需补充联网核验。`, why: '接下来的学习和复习会围绕你选中的这条知识展开。', expected: '选中的知识进入正在学习，可以从详情开始练习。' },
     'study-source-permission': { instruction: '核对选中知识关联的原文与出处；无需修改外发分类。', expected: '能回到本场景原文核对依据。' },
     'study-permission': { instruction: '核对刚选中的解释知识；主动提交回答时，AI 会使用知识、问题、回答及可用学习上下文批改，无需分别修改原文和知识的外发分类。' },
     'study-start': { instruction: `对已选的解释知识点击开始学习。主线问题：${material.recall}` },
@@ -262,7 +262,7 @@ export function getCurriculum(materialId) {
   }
   ['aware', 'find', 'apply'].forEach((role, index) => {
     const goalIndex = role === 'apply' ? 3 : index;
-    overrides[`library-${role}`] = { title: `设置“${goalNames[role]}”目标`, instruction: `在这份原文下另选一条知识，目标：${material.goals[goalIndex][1]}。将“学习目标”设为“${goalNames[role]}”后保存，再${role === 'apply' ? '加入学习' : '设为仅供查阅'}并写下理由。三个扩展目标可以依次用同一条知识体验；没有其他条目时，先手动整理一项内容。事实条目需完成核验后再学习。`, expected: '这条知识显示所选目标，之后可以继续体验其他目标；核心流程仍围绕之前选中的知识。' };
+    overrides[`library-${role}`] = { title: `设置“${goalNames[role]}”目标`, instruction: `在这份原文下另选一条知识，目标：${material.goals[goalIndex][1]}。将“学习目标”设为“${goalNames[role]}”后保存，再${role === 'apply' ? '加入学习' : '设为仅供查阅'}并写下理由。三个扩展目标可以依次用同一条知识体验；没有其他条目时，先手动整理一项内容。事实条目可保留待核验提示先学习，引用结论前仍需核对依据。`, expected: '这条知识显示所选目标，之后可以继续体验其他目标；核心流程仍围绕之前选中的知识。' };
   });
   const rows = flatSteps.map(item => {
     if (item.caseId) return item;

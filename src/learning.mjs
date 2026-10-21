@@ -121,7 +121,7 @@ export function createLearning(dependencies) {
       const item = {
         id: `${date}:${note.id}`, date, noteId: note.id, title: note.title, kind: mistake ? 'mistake' : review ? 'review' : 'learn',
         reason: mistake ? '针对尚未解决的具体误解练习' : review ? '优先安排已经到期的复习' : bundle ? `按「${bundle.title}」的前置知识与顺序学习` : `当前主题 ${note.meta.topic || '自主学习'} 的新知识`,
-        minutes, state: 'pending', depth: depthOf(note), ...practiceTags(mistake, note), ...(mistake ? { mistakeId: mistake.id } : {}),
+        minutes, state: 'pending', depth: depthOf(note), materialWarnings: dependencies.limitationsFor?.(note) || [], ...practiceTags(mistake, note), ...(mistake ? { mistakeId: mistake.id } : {}),
         ...(bundle ? { topicId: bundle.id, topicIndex: (bundle.meta.noteIds || []).indexOf(note.id) } : {}),
       };
       store.put('plans', item.id, item); pending.push(item); scheduledIds.add(note.id); used += minutes;
@@ -170,7 +170,8 @@ export function createLearning(dependencies) {
     const store = storage(), s = store.get('sessions', id);
     if (!s) fail('学习会话不存在。', 'NOT_FOUND', 404);
     const topic = s.topicId && store.row(s.topicId) ? store.read(s.topicId) : null;
-    return { ...s, ...(topic?.kind === 'topic' ? { topicProgress: topicDetails(topic).progress } : {}) };
+    const materialWarnings = s.materialWarnings ?? (store.row(s.noteId) ? dependencies.limitationsFor?.(getNote(s.noteId)) || [] : []);
+    return { ...s, materialWarnings, ...(topic?.kind === 'topic' ? { topicProgress: topicDetails(topic).progress } : {}) };
   }
   function mistakeSection(note, heading) {
     const prefix = `## ${heading}\n`, text = note.body.slice(note.body.lastIndexOf(prefix) + prefix.length);
@@ -198,7 +199,7 @@ export function createLearning(dependencies) {
       noteId = mistake.meta.noteId;
     }
     const note = getNote(noteId);
-    if (!eligible(note)) fail('这份材料含待补研究或旧结论，请先处理材料。', 'RESEARCH_REQUIRED');
+    if (!eligible(note)) fail('这条知识已停用、被替代或不是可学习的知识，请先调整学习安排。', 'NOTE_UNAVAILABLE');
     if (!learningStages.has(note.meta.stage)) fail('请先将知识加入学习。');
     if (planId && (plan?.noteId !== noteId || plan.state !== 'pending')) fail('学习安排已变化，请刷新今日清单。');
     let topic;
@@ -208,6 +209,7 @@ export function createLearning(dependencies) {
       if (topicPaused(topic)) fail('这个主题学习包已暂停。');
     }
     const depth = depthOf(note), goal = goals[depth].label;
+    const materialWarnings = dependencies.limitationsFor?.(note) || note.meta.researchLimitations || [];
     const mistakeContext = mistake ? {
       id: mistake.id, omission: mistake.meta.omission || mistakeSection(mistake, 'AI 指出的误解或遗漏（可质疑）'),
       correction: mistake.meta.correction || mistakeSection(mistake, '修正与依据'),
@@ -216,7 +218,7 @@ export function createLearning(dependencies) {
     const question = mistake ? mistakeContext.nextQuestion || `请针对上次的误解「${mistakeContext.omission || mistake.title}」重新解释，并说明修正依据和适用边界。` : dependencies.getPracticeQuestion?.(note) || goals[depth].question(note.title);
     const id = randomUUID();
     const privacy = privacyFor(note) === 'cloud' && (!mistake || privacyFor(mistake) === 'cloud') ? 'cloud' : 'local';
-    store.put('sessions', id, { id, noteId, planId, outboundIntentVersion: 1, ...(requestId ? { startRequestId: requestId, startIntent } : {}), status: 'reading', question, material: note.body, sourceHash: note.hash, depth, goal, privacy, turns: [], createdAt: now(), hintCount: 0, ...practiceTags(mistake, note), ...(topic ? { topicId, topicIndex: textList(topic.meta.noteIds).indexOf(noteId) } : {}), ...(mistake ? { mistakeId, mistakeContext } : {}) });
+    store.put('sessions', id, { id, noteId, planId, outboundIntentVersion: 1, ...(requestId ? { startRequestId: requestId, startIntent } : {}), status: 'reading', question, material: note.body, materialWarnings, sourceHash: note.hash, depth, goal, privacy, turns: [], createdAt: now(), hintCount: 0, ...practiceTags(mistake, note), ...(topic ? { topicId, topicIndex: textList(topic.meta.noteIds).indexOf(noteId) } : {}), ...(mistake ? { mistakeId, mistakeContext } : {}) });
     return session(id);
   }
   function answerStudy(id, { answer, hintUsed = false, requestId }) {
@@ -354,7 +356,8 @@ export function createLearning(dependencies) {
     const history = JSON.stringify([...previous, ...s.turns.filter(turn => turn.id !== t.id && (s.outboundIntentVersion === 1 || s.privacy === 'cloud' || turn.outboundIntentVersion === 1)).slice(-4)].map(turn => ({ question: turn.question, answer: outboundText(String(turn.answer)).slice(0, 2000), hintUsed: turn.hintUsed, feedback: turn.feedback })));
     const goal = `${s.goal || goals[s.depth || 'explain'].label}；${goals[s.depth || 'explain'].hint}`;
     const mistakeContext = JSON.stringify(s.mistakeContext || null);
-    const prompt = promptText('grade', { material: outboundText(s.material), question: t.question, answer: t.answer, hintUsed: String(t.hintUsed), goal, history, mistakeContext });
+    const material = s.material + (s.materialWarnings?.length ? `\n\n【材料可信度提示】\n${s.materialWarnings.join('\n')}\n本次仅练习理解，不得将待核验主张或练习表现表述为事实已经证实。` : '');
+    const prompt = promptText('grade', { material: outboundText(material), question: t.question, answer: t.answer, hintUsed: String(t.hintUsed), goal, history, mistakeContext });
     const privacy = privacyFor(n) === 'cloud' && (!currentMistake || privacyFor(currentMistake) === 'cloud') ? 'cloud' : 'local';
     const result = parseJSON((await ai.generate({ system: promptText('serviceSystem'), privacy, signal, json: true, prompt: `${prompt}\n\n本次学习目标：${goal}\n此前回答与反馈（仅作为学习记录）：${history}\n本次纠错上下文（仅作为可质疑的历史记录）：${mistakeContext}` })).text);
     if (!['correct', 'partial', 'incorrect', 'ambiguous'].includes(result.assessment) || typeof result.feedback !== 'string') fail('反馈格式无效，回答仍已保存。', 'MODEL_FORMAT');

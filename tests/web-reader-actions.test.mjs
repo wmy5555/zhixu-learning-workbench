@@ -8,15 +8,15 @@ import { reader } from '../public/web/reader.mjs';
 const source={id:'source-1',kind:'source',title:'合成原始资料'};
 const knowledge=(meta={})=>({id:'knowledge-1',kind:'knowledge',title:'合成知识',body:'完整正文',meta:{stage:'candidate',sources:[{id:source.id,role:'input'}],...meta}});
 
-test('blocked reading and menu expose the correct source recovery without starting or promoting',()=>{
+test('unselected material exposes arrangement and optional research separately',()=>{
   const note=knowledge(), readiness=learningReadiness(note,[source],['整理尚未核验']);
   const html=reader(note,[source],'library',[],readiness).html;
   assert.match(html,/aria-label="学习条件"/);assert.match(html,/data-action="prepare-learning"/);
   assert.doesNotMatch(html,/data-action="start-note"/);
   const help=learningHelp(note,readiness);
   assert.match(help,/data-action="research-source"[^>]*data-id="source-1"/);
-  assert.match(help,/修订建议/);assert.match(help,/data-route="jobs"/);
-  assert.doesNotMatch(help,/data-action="promote"/);
+  assert.match(help,/学习帮助你理解材料/);assert.match(help,/data-route="jobs"/);
+  assert.match(help,/data-action="promote"/);
   const menu=readerMenu(note,readiness);
   assert.match(menu,/aria-label="常用操作"/);assert.match(menu,/aria-label="来源与记录"/);
   assert.match(menu,/<details class="reader-menu-management">/);
@@ -26,7 +26,7 @@ test('material, source identity, lifecycle and learning arrangement transitions 
   const note=knowledge({stage:'learning',processKey:'missing:hash:0',sources:[{id:source.id,role:'input'}]});
   let ready=learningReadiness(note,[source],['底层原文已变化']);
   assert.equal(ready.sourceId,undefined);assert.doesNotMatch(learningHelp(note,ready),/data-action="research-source"/);
-  assert.match(learningHelp(note,ready),/不会改用其他来源/);
+  assert.equal(ready.ready,true);assert.deepEqual(ready.warnings,['底层原文已变化']);
   ready=learningReadiness(knowledge({sources:[{id:'a',role:'input'},{id:'b',role:'input'}]}),[source],['待核验']);
   assert.equal(ready.sourceId,undefined);
   ready=learningReadiness(knowledge(),[source],[]);assert.equal(ready.arrange,true);
@@ -60,10 +60,10 @@ function harness({limitations=[],stage='learning',postError,hold=false}={}) {
 }
 
 test('start redirects unmet conditions to recovery, coalesces clicks, and preserves successful start intent',async()=>{
-  for(const options of [{limitations:['待核验']},{stage:'candidate'}]){
+  for(const options of [{stage:'candidate'},{stage:'retired'}]){
     const h=harness(options);await h.context.start('knowledge-1');assert.equal(h.writes.length,0);assert.equal(h.dialogs.length,1);
   }
-  const h=harness({hold:true}),one=h.context.start('knowledge-1'),two=h.context.start('knowledge-1');
+  const h=harness({hold:true,limitations:['待核验']}),one=h.context.start('knowledge-1'),two=h.context.start('knowledge-1');
   h.release();await Promise.all([one,two]);assert.equal(h.writes.length,1);
   assert.equal(h.writes[0].body.requestId,'one-intent');assert.equal(h.context.state.route,'study/session-1');
 });
@@ -71,11 +71,13 @@ test('start redirects unmet conditions to recovery, coalesces clicks, and preser
 test('late readiness is ignored after navigation; backend eligibility races still open recovery',async()=>{
   const late=harness({hold:true,limitations:['待核验']}),pending=late.context.start('knowledge-1');
   late.context.state.sequence++;late.release();await pending;assert.equal(late.writes.length,0);assert.equal(late.dialogs.length,0);
-  const error=Object.assign(new Error('材料发生变化'),{code:'RESEARCH_REQUIRED'});
+  const error=Object.assign(new Error('知识已停用'),{code:'NOTE_UNAVAILABLE'});
   const h=harness({postError:error});
   // The second evidence read observes the changed material version.
   let reads=0,original=h.context.api.get;
-  h.context.api.get=async path=>path.endsWith('/evidence')&&++reads>1?{limitations:['底层原文已变化']}:original(path);
+  h.context.api.get=async path=>!path.endsWith('/evidence')&&++reads>1?knowledge({stage:'retired'}):original(path);
   await h.context.start('knowledge-1');assert.equal(h.writes.length,1);assert.equal(h.dialogs.length,1);
-  assert.match(h.dialogs[0][1],/底层原文已变化/);
+  assert.match(h.dialogs[0][1],/重新选择用途/);
 });
+
+test('warned learning keeps the primary action in reader and menu, with escaped optional credibility details',()=>{const note=knowledge({stage:'learning'}),readiness=learningReadiness(note,[source],['<img src=x> 尚待核验']);const html=reader(note,[source],'library',[],readiness).html;assert.match(html,/data-action="start-note"/);assert.match(html,/可以先学习/);assert.match(html,/补充联网核验/);assert.doesNotMatch(html,/<img src=x>/);assert.match(readerMenu(note,readiness),/data-action="start-note"/);});

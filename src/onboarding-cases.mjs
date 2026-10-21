@@ -71,9 +71,9 @@ export function loadCase(service, caseId, roles = {}) {
     note('skipKnowledge', '仅供今日跳过的安排', '这张专用卡片用于体验今日跳过，知道它的用途即可。', { stage: 'learning', depth: 'aware' });
     note('pauseKnowledge', '仅供暂停的安排', '这张专用卡片用于体验暂停安排，知道它的用途即可。', { stage: 'learning', depth: 'aware' });
   } else if (caseId === 'prerequisites') {
-    const prerequisite = note('prerequisite', '尚待核验的前置知识', '预设主张：某个安排对所有学习者都有效。这个主张没有真实研究证据，只用于演示阻塞。', { claimType: 'fact', stage: 'learning', researchLimitations: ['预设演示案例：这项普遍性主张没有真实依据，不能当成已验证知识。'] });
+    const prerequisite = note('prerequisite', '尚未选学的前置知识', '预设主张：某个安排对所有学习者都有效。这个主张没有真实研究证据，尚未加入学习。', { claimType: 'fact', stage: 'candidate', researchLimitations: ['预设演示案例：这项普遍性主张没有真实依据，不能当成已验证知识。'] });
     const member = note('topicMember', '等待前置条件的成员', '只有前置事实得到真实核验后，才考虑继续这个虚构任务。', { stage: 'learning', prerequisites: [prerequisite.id] });
-    note('topicBlocked', '前置条件尚未满足的主题', '本主题用于演示前置项待核验时，学习路径保持阻塞。', { noteIds: [member.id], prerequisites: [prerequisite.id], minutes: 10, paused: false }, 'topic');
+    note('topicBlocked', '前置条件尚未满足的主题', '本主题用于演示前置项尚未加入学习时，学习路径保持阻塞。', { noteIds: [member.id], prerequisites: [prerequisite.id], minutes: 10, paused: false }, 'topic');
   } else if (caseId === 'evidence') {
     const source = note('evidenceSource', '证据展示的虚构原文', '预设问题：在一次虚构分享里，保留出处是否便于回到原文？这里只展示证据结构，没有实际联网查询。', {}, 'source');
     const evidence = [];
@@ -86,7 +86,7 @@ export function loadCase(service, caseId, roles = {}) {
       const reference = note(`evidence${role[0].toUpperCase()}${role.slice(1)}`, `虚构${suffix}材料`, text, { excerptOnly: true, url: `https://example.invalid/zhixu-practice/${role}`, fetchedAt: stamp }, 'source');
       evidence.push({ title: `预设演示案例 · ${suffix}材料`, url: reference.meta.url, role, excerpt, rationale: `${label}\n该片段只用于演示${suffix}关系。`, locator: '原创虚构情节第 1 段', fetchedAt: stamp, ...marker });
     }
-    note('evidenceKnowledge', '带支持、反对与限制的知识', '请查看证据抽屉。下列引用全部为预设虚构材料，链接使用不可用示例域名，没有真实研究结论。', { claimType: 'fact', sources: [{ id: source.id, role: 'input' }, ...evidence.map(ev => ({ id: caseRoles[`evidence${ev.role[0].toUpperCase()}${ev.role.slice(1)}`], role: ev.role }))], evidence, researchedAt: stamp, reviewAfter: atOffset(stamp, 7), researchLimitations: ['预设演示案例：只有合成证据展示，没有真实联网核验，不能据此学习或作事实引用。'] });
+    note('evidenceKnowledge', '带支持、反对与限制的知识', '请查看证据抽屉。下列引用全部为预设虚构材料，链接使用不可用示例域名，没有真实研究结论。', { claimType: 'fact', sources: [{ id: source.id, role: 'input' }, ...evidence.map(ev => ({ id: caseRoles[`evidence${ev.role[0].toUpperCase()}${ev.role.slice(1)}`], role: ev.role }))], evidence, researchedAt: stamp, reviewAfter: atOffset(stamp, 7), researchLimitations: ['预设演示案例：只有合成证据展示，没有真实联网核验，可以练习辨析，不能作已证实的事实引用。'] });
   } else if (caseId === 'expired') {
     const source = note('staleSource', '待复查的原始资料', '这个虚构资料只用于展示核验期限。没有实际联网结论。', { researchIntervalDays: 1 }, 'source');
     note('staleKnowledge', '已经过期的依据', '演示日期已超过本条预设复查期限。请查看复查提示，不能把过期材料当成当前依据。', { claimType: 'fact', sources: [{ id: source.id, role: 'input' }], researchedAt: atOffset(stamp, -8), reviewAfter: atOffset(stamp, -1), researchLimitations: ['预设演示案例：没有真实外部核验；复查日期已过。'] });

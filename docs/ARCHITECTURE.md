@@ -143,3 +143,11 @@ generate 返回 `{text,usage}`；embed → `{vectors}`；search → `{results:[{
 - 原始资料 `meta.researchIntervalDays` 可设 1–365，默认 30，仅影响后续研究新结果的 reviewAfter。
 
 上述接口沿用原会话、CSRF、只监听回环地址及 MCP 只读/提案限制。当前设置默认值以 `src/service.mjs` 的 defaults 为准，本文件早期示例不是当前配置快照。
+
+## 学习与可信度解耦（2026-10-21）
+
+学习编排接收独立的 learnable：知识未被替代、未停用，且用户已选学习阶段，才能练习；核验限制作为 materialWarnings 随计划和会话保留，并进入批改材料提醒。旧会话缺此字段时读取当前提示。材料版本校验、原回答、外发许可、预算与个人确认约束保持；原 eligible 继续用于问答/关系/发现的证据筛选，未验证知识不能因学习通过而成为已验证依据。
+
+processNote 的 retryJobId 只接受当前原文版本的实际任务。明确重试才调整研究选项并将原任务排队，运行/排队中复用、完成回执重放不新建；失败的普通提交仍返回原记录。前端用轻量状态接口轮询，终态停止，只读刷新失败不会重发业务请求；普通拆解进行中收到核验意图时先显示当前任务，拆解完成后另给显式核验按钮。
+
+证据写回不再用 stage 不等于 candidate 作为人工编辑证据；仍保护正文 hash、userEdited、acceptedResearchProposal、confirmedAt 和未完成会话。自动补证据保留 stage/depth/promotionReason/promotedAt/topic/prerequisites。接受研究修订仍校验 expectedHash，保留学习选择；integrated/core 回到 learning 并清除当前确认标记，原理解留在历史，不能静默认定新材料已被理解。

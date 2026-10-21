@@ -10,23 +10,28 @@ export function learningReadiness(note, notes = [], limitations = note.meta?.res
   const inputIds = [...new Set((meta.sources || []).filter(ref => ref.role === 'input').map(ref => ref.id))];
   const sourceId = meta.processKey ? meta.processKey.split(':')[0] : inputIds.length === 1 ? inputIds[0] : null;
   const source = notes.find(item => item.id === sourceId && item.kind === 'source');
-  if (reasons.length) return { ready:false, heading:'学习前还需处理材料', reasons, sourceId:source?.id, sourceTitle:source?.title };
-  if (!['learning','integrated','core'].includes(meta.stage)) return { ready:false, heading:'还未加入学习', reasons:['选择学习目标并填写理由后，就可以开始。'], arrange:true };
-  return { ready:true, reasons:[] };
+  const credibility = { warnings:reasons, sourceId:source?.id, sourceTitle:source?.title };
+  if (!['learning','integrated','core'].includes(meta.stage)) return { ...credibility, ready:false, heading:'还未加入学习', reasons:['选择学习目标并填写理由后，就可以开始。联网核验可以稍后补充。'], arrange:true };
+  return { ...credibility, ready:true, reasons:[] };
+}
+
+export function credibilityNotice(warnings = [], noteId = '', sourceId = '') {
+  if (!warnings.length) return '';
+  return `<details class="reader-readiness credibility-notice"><summary>材料仍有待核验之处 <span>可以先学习</span></summary><p>学习帮助你理解材料，不代表其中的结论已经证实。引用或应用前，请核对依据与适用条件。</p><div class="credibility-detail"><ul class="learning-reasons">${warnings.map(reason=>`<li>${e(reason)}</li>`).join('')}</ul><div class="actions">${noteId ? button('查看依据与来源','evidence','text-button',`data-id="${e(noteId)}"`) : ''}${sourceId ? button('补充联网核验','research-source','text-button',`data-id="${e(sourceId)}"`) : ''}</div></div></details>`;
 }
 
 export function learningNotice(note, readiness) {
-  if (note.kind !== 'knowledge' || readiness.ready) return '';
-  return `<section class="reader-readiness" aria-label="学习条件"><h2>${e(readiness.heading)}</h2><p>${e(readiness.reasons[0])}</p>${button('处理学习条件', 'prepare-learning', 'text-button', `data-id="${e(note.id)}"`)}</section>`;
+  if (note.kind !== 'knowledge') return '';
+  return (readiness.ready ? '' : `<section class="reader-readiness" aria-label="学习条件"><h2>${e(readiness.heading)}</h2><p>${e(readiness.reasons[0])}</p>${button(readiness.arrange ? '选择学习安排' : '处理学习条件', 'prepare-learning', 'text-button', `data-id="${e(note.id)}"`)}</section>`)+credibilityNotice(readiness.warnings,note.id,readiness.sourceId);
 }
 
 export function learningHelp(note, readiness) {
   const id = `data-id="${e(note.id)}"`;
   return `<div class="reader-menu"><p class="reader-menu-title">${e(note.title)}</p><ul class="learning-reasons">${readiness.reasons.map(reason => `<li>${e(reason)}</li>`).join('')}</ul>
-    ${readiness.sourceId ? `<p class="form-note">从原文「${e(readiness.sourceTitle)}」补充核验。完成后查看拆解知识或修订建议，再选择可学习的条目。</p><div class="actions">${button('核验原始资料', 'research-source', 'primary', `data-id="${e(readiness.sourceId)}"`)}${routeButton('先阅读原文', `read/${readiness.sourceId}`, 'text-button')}</div>`
-      : readiness.replacementId ? routeButton('查看保留的知识', `read/${readiness.replacementId}`, 'primary')
+    ${readiness.replacementId ? routeButton('查看保留的知识', `read/${readiness.replacementId}`, 'primary')
       : readiness.arrange ? button('调整学习安排', 'promote', 'primary', id)
-      : `<p class="form-note">${note.meta?.processKey ? '原始资料已不可用，请先恢复原文；不会改用其他来源。' : '暂时无法确定唯一原文，请先查看依据与来源，或收集可核验的原始资料。'}</p>${routeButton('收集原始资料', 'capture', 'secondary')}`}
+      : readiness.ready ? button('开始学习','start-note','primary',id) : ''}
+    ${credibilityNotice(readiness.warnings,note.id,readiness.sourceId)}
     <div class="reader-help-links">${button('查看依据与来源', 'evidence', 'text-button', id)}${routeButton('查看处理任务', 'jobs', 'text-button')}</div></div>`;
 }
 
