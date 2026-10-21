@@ -488,3 +488,6 @@ input[type="file"]:disabled::file-selector-button { cursor:default; }
   .article-end { font-size:17px; }
 }
 @media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none!important; transition:none!important; scroll-behavior:auto!important; } }
+
+/* Optional arrangement reason: hide the hint while typing. */
+dialog textarea[name="reason"]:focus::placeholder { color:transparent; }

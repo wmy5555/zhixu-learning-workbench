@@ -6,12 +6,12 @@ export function learningReadiness(note, notes = [], limitations = note.meta?.res
   const meta = note.meta || {};
   const reasons = [...new Set(limitations.filter(value => typeof value === 'string' && value.trim()))];
   if (meta.supersededBy) return { ready:false, heading:'这条知识已有替代条目', reasons:['请查看保留的知识，旧条目不能继续学习。'], replacementId:meta.supersededBy };
-  if (meta.stage === 'retired') return { ready:false, heading:'这条知识已暂停使用', reasons:['如需继续，请在学习安排中重新选择用途并填写理由。'], arrange:true };
+  if (meta.stage === 'retired') return { ready:false, heading:'这条知识已暂停使用', reasons:['如需继续，请在学习安排中重新选择用途，理由可选填。'], arrange:true };
   const inputIds = [...new Set((meta.sources || []).filter(ref => ref.role === 'input').map(ref => ref.id))];
   const sourceId = meta.processKey ? meta.processKey.split(':')[0] : inputIds.length === 1 ? inputIds[0] : null;
   const source = notes.find(item => item.id === sourceId && item.kind === 'source');
   const credibility = { warnings:reasons, sourceId:source?.id, sourceTitle:source?.title };
-  if (!['learning','integrated','core'].includes(meta.stage)) return { ...credibility, ready:false, heading:'还未加入学习', reasons:['选择学习目标并填写理由后，就可以开始。联网核验可以稍后补充。'], arrange:true };
+  if (!['learning','integrated','core'].includes(meta.stage)) return { ...credibility, ready:false, heading:'还未加入学习', reasons:['选择学习目标后就可以开始，理由可选填。联网核验可以稍后补充。'], arrange:true };
   return { ...credibility, ready:true, reasons:[] };
 }
 

@@ -92,3 +92,12 @@ async function drain(s){for(let i=0;i<20&&s.store.records('jobs').some(j=>j.stat
 test('grading receives uncertainty and learning success does not remove the warning',async t=>{const h=setup(t),{service:s,calls}=h,{note}=await h.extract();s.updateSettings({ai:{enabled:true}});s.promote(note.id,{stage:'learning',reason:'合成练习'});const session=s.startStudy({noteId:note.id});s.answerStudy(session.id,{answer:'这是待核验的解释',requestId:'synthetic-answer'});await drain(s);assert.ok(calls.prompts.some(p=>p.includes('材料可信度提示')&&p.includes('不得将待核验主张')));assert.equal(s.session(session.id).turns[0].feedback.assessment,'correct');assert.ok(s.noteEvidence(note.id).limitations.length);});
 
 test('research requested while plain extraction runs is an explicit follow-on, never a false completed check',()=>{const running=processOutcome({state:'running',research:false},{research:true});assert.match(running.html,/尚未包含联网核验/);const done=processOutcome({state:'done',research:false},{research:true});assert.equal(done.needsResearch,true);assert.match(done.html,/data-process-research/);assert.match(done.html,/尚未执行联网核验/);assert.doesNotMatch(processOutcome({state:'done',research:false},{research:false}).html,/data-process-research/);});
+
+test('learning arrangement reason is optional and understanding remains required',async t=>{
+ const h=setup(t),{service:s}=h,{note}=await h.extract();
+ for(const reason of [undefined,'','   ','下周需要用到']) {
+  const saved=s.promote(note.id,{stage:'learning',depth:'explain',...(reason===undefined?{}:{reason})});
+  assert.equal(saved.meta.promotionReason,reason??'');
+ }
+ for(const stage of ['integrated','core'])assert.throws(()=>s.promote(note.id,{stage}),/先以自己的语言确认个人理解/);
+});

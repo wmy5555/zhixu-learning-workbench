@@ -614,7 +614,6 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     const note = getNote(id); if (note.kind !== 'knowledge') fail('只有知识条目能进入学习阶段。');
     if (!stages.includes(stage) || !depths.includes(depth)) fail('阶段或学习目标无效。');
     if (['integrated','core'].includes(stage) && !note.meta.confirmedAt) fail('请先以自己的语言确认个人理解。');
-    if (!reason.trim()) fail('请写下调整理由，便于以后回顾。');
     return store.update(id, { expectedHash: note.hash, meta: { stage, depth, promotionReason: reason, promotedAt: learningNow() } });
   }
   function confirmNote(id, { body, expectedHash }) {
