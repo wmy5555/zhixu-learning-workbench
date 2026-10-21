@@ -1,3 +1,4 @@
+import {learningTarget} from './onboarding-targets.mjs';
 import {welcomeBody,assistantBody,proposalBody,goalLabels} from './onboarding-dialogs.mjs';
 import {guideSteps,complete,prerequisite,destination,selectors,speeds,intents,suggestGoals,intersection} from './onboarding-model.mjs';
 import {createGuideMotion} from './onboarding-motion.mjs';
@@ -29,7 +30,7 @@ export function createWebOnboarding({api,state,go,refreshBoot,beforeLeave}){
  const context=()=>({version:1,active,mode,speed,currentStepId:step()?.id,position:index+1,total:steps.length,completed:steps.filter(s=>complete(proof?.progress?.[s.id])).map(s=>s.id),missing:prerequisite(step(),proof)?.id||null,scope:api.getContext().practiceId?'practice':'shared-settings',targetVisible:Boolean(target()),aiConnected:false});
  function publicEvent(type){window.dispatchEvent(new CustomEvent('zhixu:guide-event',{detail:{type,...context()}}));}
  function visible(n){if(!n||!n.isConnected||!n.getClientRects().length)return false;for(let p=n;p;p=p.parentElement){const style=getComputedStyle(p);if(p.hidden||p.inert||style.visibility==='hidden'||style.display==='none')return false;}return true;}
- function target(){if(requestedRoute&&state.route!==requestedRoute&&!(requestedRoute==='study'&&state.route.startsWith('study/')&&state.session?.noteId===proof?.roles?.explain))return null;const list=selectors(step(),proof);const dialog=all('dialog[open]').at(-1);for(const selector of list){const n=all(selector).find(n=>visible(n)&&(!dialog||dialog.contains(n)));if(n)return n;}return null;}
+ function target(){if(step()?.id==='library-explain')return learningTarget({root:document,route:state.route,noteId:proof?.roles?.explain,visible});if(requestedRoute&&state.route!==requestedRoute&&!(requestedRoute==='study'&&state.route.startsWith('study/')&&state.session?.noteId===proof?.roles?.explain))return null;const list=selectors(step(),proof);const dialog=all('dialog[open]').at(-1);for(const selector of list){const n=all(selector).find(n=>visible(n)&&(!dialog||dialog.contains(n)));if(n)return n;}return null;}
  const hintButton=()=>button(bulb,'hint','class="onboard-icon" aria-label="提示操作位置" title="提示操作位置"');
  const speedButton=()=>button(speed+'x','speed',`class="onboard-speed" aria-label="引导速度 ${speed}x，点击切换倍速" title="0.75x · 1x · 1.5x · 2x" ${travelling?'disabled':''}`);
  function render(){
@@ -53,7 +54,7 @@ export function createWebOnboarding({api,state,go,refreshBoot,beforeLeave}){
   if(t)candidates.sort((a,b)=>(intersection(a,{x:t.x,y:t.y,w:t.width,h:t.height})+intersection(a,{x:m.x,y:m.y,w:m.width,h:m.height})*20)-(intersection(b,{x:t.x,y:t.y,w:t.width,h:t.height})+intersection(b,{x:m.x,y:m.y,w:m.width,h:m.height})*20));const p=candidates[0];card.style.left=p.x+'px';card.style.top=p.y+'px';
  }
  async function settle(){await document.fonts.ready;await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);}
- async function showTarget(){const el=target();if(!el||card.contains(el)){motion.hide();render();return;}await motion.scroll(el);await settle();if(!active)return;await motion.move(el);if(step().kind==='read')await motion.frame(el);motion.pulse();}
+ async function showTarget(){const el=target();if(!el||card.contains(el)){motion.hide();render();return;}await motion.scroll(el);await settle();if(!active||target()!==el){changed();return;}await motion.move(el);if(step().kind==='read')await motion.frame(el);motion.pulse();}
  async function openCard(){if(mode==='A'&&active){detail=true;render();placeCard();if(innerWidth<850){card.style.visibility='hidden';await motion.scroll(target());await motion.track();card.style.visibility='';}await motion.panel(card,true);}}
  async function refreshProof(){if(!active||travelling||motion.moving||polling)return;const token=sequence;polling=api.get('/api/onboarding/state');try{const value=await polling;if(token!==sequence||!active)return;adopt(value);const next=JSON.stringify([step().id,proof.progress?.[step().id],proof.learningCandidates?.map(n=>n.id),error,Boolean(target())]);if(next!==signature){if(done())error='';render();placeCard();}}catch(err){if(token===sequence){error=err.message;render();}}finally{polling=null;}}
  async function navigate(to){
@@ -106,9 +107,31 @@ export function createWebOnboarding({api,state,go,refreshBoot,beforeLeave}){
  document.addEventListener('click',ev=>{const control=ev.target.closest('[data-guide]');if(control){ev.preventDefault();ev.stopPropagation();if(control.disabled||travelling||motion.panelMoving||handling&&!['hint','speed'].includes(control.dataset.guide))return;const exclusive=!['hint','speed'].includes(control.dataset.guide);if(exclusive)handling=true;Promise.resolve(invoke(control.dataset.guide,control)).catch(err=>{travelling=false;error=err.message;notify(error,true);render();}).finally(()=>{if(exclusive)handling=false;});return;}
   const t=target();if(active&&hinting&&t&&(t===ev.target||t.contains(ev.target))){hinting=false;motion.retract();}
  },true);
- function changed(){if(!active||travelling||motion.moving||scheduled)return;scheduled=requestAnimationFrame(async()=>{scheduled=0;if(!active||travelling||motion.moving)return;const dialog=all('dialog[open]').at(-1);const el=target();if(dialog){if(!el||card.contains(el)){motion.hide();return;}if(motion.layer.parentElement!==dialog){motion.hide();dialog.append(motion.layer);await Promise.allSettled(dialog.getAnimations().map(a=>a.finished));await showTarget();}return;}if(motion.layer.parentElement!==document.body){motion.hide();document.body.append(motion.layer);}if(!el){motion.hide();return;}if(motion.layer.firstElementChild.hidden||motion.target!==el){await showTarget();render();placeCard();}else{await motion.track();placeCard();}});}
+ let following=false,followTimer;
+ function changed(){
+  if(!active)return;
+  // Keep the latest DOM change pending while travel or a panel transition owns geometry.
+  if(travelling||motion.moving||following){clearTimeout(followTimer);followTimer=setTimeout(changed,80);return;}
+  if(scheduled)return;
+  scheduled=requestAnimationFrame(async()=>{
+   scheduled=0;if(!active)return;if(travelling||motion.moving||following){changed();return;}
+   following=true;
+   try{
+    const dialog=all('dialog[open]').at(-1),host=dialog||document.body;
+    if(dialog)await Promise.allSettled(dialog.getAnimations().map(a=>a.finished));
+    if(!active||dialog!==all('dialog[open]').at(-1))return;
+    const el=target(),hostChanged=motion.layer.parentElement!==host;
+    if(hostChanged){motion.hide();host.append(motion.layer);}
+    if(!el){motion.hide();return;}
+    if(hostChanged||motion.layer.firstElementChild.hidden||motion.target!==el){
+     await showTarget();if(!dialog){render();placeCard();}
+    }else{await motion.track();if(!dialog)placeCard();}
+   }finally{following=false;}
+  });
+ }
+ document.addEventListener('change',ev=>{if(ev.target.closest('dialog[data-guide-form="learning"]'))changed();});
  window.addEventListener('scroll',changed,{passive:true,capture:true});let resizeTimer;window.addEventListener('resize',()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(async()=>{if(active&&!travelling){placeCard();await motion.scroll(target());changed();}},120);});
- window.addEventListener('zhixu:web-page',()=>{if(!travelling){motion.hide();changed();}});
+ window.addEventListener('zhixu:web-page',()=>{if(!travelling)motion.hide();changed();});
  new MutationObserver(records=>{if(records.some(r=>[...r.addedNodes,...r.removedNodes].some(n=>n.nodeName==='DIALOG')))changed();}).observe(document.body,{childList:true});
  new MutationObserver(changed).observe($('#main'),{subtree:true,childList:true,attributes:true,attributeFilter:['hidden','open','inert']});
  document.addEventListener('keydown',ev=>{if(ev.key==='Escape'&&!ev.isComposing&&!$('dialog[open]')&&active){ev.preventDefault();ev.stopImmediatePropagation();detail=false;render();}},true);

@@ -350,9 +350,10 @@ async function extract(id) {
 }
 async function promote(id) {
   const note=await api.get(endpoint('notes',id));
-  formModal('怎样继续这条知识？',`<p>${e(note.title)}</p><label class="field"><span>接下来的用途</span><select name="stage">${[['reference','先留作查阅'],['candidate','放进待选学'],['learning','加入学习'],['integrated','已整理个人理解'],['core','重点知识'],['retired','暂时不再使用']].map(([value,label])=>`<option value="${value}" ${note.meta?.stage===value?'selected':''}>${label}</option>`).join('')}</select></label><label class="field"><span>希望达到什么程度</span><select name="depth">${[['aware','知道它是什么'],['find','需要时能找回'],['explain','能用自己的话解释'],['apply','能在情境中应用']].map(([value,label])=>`<option value="${value}" ${(note.meta?.depth||'explain')===value?'selected':''}>${label}</option>`).join('')}</select></label>${area('写一点理由，留给以后的自己','reason',{placeholder:'（可选）',rows:3})}`,async values=>{
+  const dialog=formModal('怎样继续这条知识？',`<p>${e(note.title)}</p><label class="field"><span>接下来的用途</span><select name="stage">${[['reference','先留作查阅'],['candidate','放进待选学'],['learning','加入学习'],['integrated','已整理个人理解'],['core','重点知识'],['retired','暂时不再使用']].map(([value,label])=>`<option value="${value}" ${note.meta?.stage===value?'selected':''}>${label}</option>`).join('')}</select></label><label class="field"><span>希望达到什么程度</span><select name="depth">${[['aware','知道它是什么'],['find','需要时能找回'],['explain','能用自己的话解释'],['apply','能在情境中应用']].map(([value,label])=>`<option value="${value}" ${(note.meta?.depth||'explain')===value?'selected':''}>${label}</option>`).join('')}</select></label>${area('写一点理由，留给以后的自己','reason',{placeholder:'（可选）',rows:3})}`,async values=>{
     await api.post(endpoint('notes',id,'promote'),values);await refreshBoot();await go(state.route,{force:true,replace:true});notify('学习安排已更新。');
   });
+  dialog.dataset.guideForm='learning';dialog.dataset.guideNote=id;
 }
 async function understanding(id, sessionId = '') {
   const note=await api.get(endpoint('notes',id));
