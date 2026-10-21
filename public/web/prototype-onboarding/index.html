@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>知序 · 新手引导交互原型</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="./host/prototype.css">
+  <link rel="stylesheet" href="./host/styles.css">
+  <link rel="stylesheet" href="./onboarding.css">
+</head>
+<body>
+  <a class="skip" href="#main">跳到正文</a>
+  <aside id="sidebar" class="sidebar" aria-label="主要导航"></aside>
+  <div class="workspace">
+    <header class="topbar"><div class="breadcrumb"><span>练习空间</span><span>/</span><strong id="page-name">今日</strong></div><div class="top-actions"><span class="prototype-label"><i></i>交互原型 · 全部为模拟操作</span><button class="icon-button" data-action="theme" aria-label="切换明暗模式">◐</button><button class="text-button" data-action="welcome">新手引导</button></div></header>
+    <main id="main" tabindex="-1"></main>
+  </div>
+  <div id="spotlight" aria-hidden="true" hidden></div>
+  <section id="coach" aria-label="分步引导" hidden></section>
+  <button id="resume" class="resume-guide" data-action="resume" hidden></button>
+  <dialog id="welcome" aria-labelledby="welcome-title"></dialog>
+  <dialog id="assistant" aria-labelledby="assistant-title"></dialog>
+  <dialog id="inspector" aria-labelledby="inspector-title"></dialog>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
+  <div id="announcer" class="sr-only" role="status" aria-live="polite"></div>
+  <nav id="switcher" aria-label="原型方案切换"></nav>
+  <script type="module" src="./prototype.mjs"></script>
+</body>
+</html>

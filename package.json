@@ -17,7 +17,8 @@
     "verify": "pnpm check && pnpm test && pnpm quality",
     "android:prepare": "node scripts/prepare-android.mjs",
     "android:sync": "node scripts/prepare-android.mjs && node node_modules/@capacitor/cli/bin/capacitor sync android",
-    "android:test-device": "node scripts/test-android-device.mjs"
+    "android:test-device": "node scripts/test-android-device.mjs",
+    "prototype:onboarding": "node public/web/prototype-onboarding/serve.mjs"
   },
   "dependencies": {
     "@capacitor/android": "8.5.2",
