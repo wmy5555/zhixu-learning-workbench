@@ -86,6 +86,33 @@ test('reader separates source children and actual relations, with expandable lis
   assert.ok(!result.html.split('class="article-prose"')[1].split('</div>')[0].includes('讨论了持续学习。'));
 });
 
+test('source right margin retains the full numbered child list apart from related knowledge', () => {
+  const note = fixture();
+  note.children = Array.from({ length: 19 }, (_, i) => ({ id: `child-${i}`, title: `子知识 ${i}`, kind: 'knowledge', meta: { stage: 'candidate' } }));
+  note.children.push(note.children[0], { id: note.id, title: '资料自身', kind: 'source' });
+  const html = reader(note, [], 'library', [{ id: 'other', title: '其他关联知识内容', kind: 'knowledge' }]).html;
+  const margin = html.split('<aside class="reading-margin">')[1].split('</aside>')[0];
+  assert.match(margin, /<h2>这份资料里的想法<\/h2>/);
+  assert.match(margin, /19 条知识，逐一读懂/);
+  assert.match(margin, /aria-label="这份资料拆解出的知识"/);
+  assert.equal((margin.match(/class="related-note"/g) || []).length, 19);
+  for (let i = 0; i < 19; i++) assert.match(margin, new RegExp(`data-route="read/child-${i}"`));
+  assert.match(margin, /<span>01<\/span>/);
+  assert.match(margin, /<span>19<\/span>/);
+  assert.equal((margin.match(/待选学/g) || []).length, 19);
+  assert.doesNotMatch(margin, /其他关联知识内容|资料自身/);
+  assert.match(margin, /data-action="process"/);
+  assert.match(html, /展开更多（14）/);
+});
+
+test('source without child knowledge keeps its reading and extraction actions without a fake list', () => {
+  const margin = reader(fixture(), []).html.split('<aside class="reading-margin">')[1].split('</aside>')[0];
+  assert.match(margin, /先读原文，再决定值得留下什么/);
+  assert.doesNotMatch(margin, /class="related-note"|逐一读懂/);
+  assert.match(margin, /data-action="process"/);
+  assert.match(margin, /data-action="extract"/);
+});
+
 test('long abstract renders one complete content block rather than preview plus duplicate full text', () => {
   const note = fixture();
   const summary = '同一份摘要应在原位展开。'.repeat(30);
