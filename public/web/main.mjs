@@ -1,3 +1,4 @@
+import { installInputModality } from './input-modality.mjs';
 import { api, endpoint, pendingPlan, capturePayload } from './api.mjs';
 import { escape as e, markdown } from './markdown.mjs';
 import { $, $$, icon, button as btn, routeButton as link, field, area, empty, heading, kind, stage, jobState, calendar, notify, modal, confirm, busy } from './ui.mjs';
@@ -11,6 +12,8 @@ import { createManagement, initializeAccent } from './management.mjs';
 import { createFocus } from './focus.mjs';
 import { aidUsed, markAid, clearAid } from './study-aid.mjs';
 import { batchImport } from './batch-import.mjs';
+
+installInputModality(document.documentElement, document);
 
 const navigation = [['home','今日','today'],['plus','收集与加工','capture'],['book','知识库','library'],['check','学习与错题','study'],['layers','主题学习包','topics'],['network','检索与发现','search'],['chat','问答与输出','output']];
 const state = { boot:null, route:'today', sequence:0, dirty:false, saving:0, readerReturn:'library', note:null, session:null, jobs:[], scroll:new Map() };
