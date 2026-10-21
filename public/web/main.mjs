@@ -2,6 +2,7 @@ import { api, endpoint, pendingPlan, capturePayload } from './api.mjs';
 import { escape as e, markdown } from './markdown.mjs';
 import { $, $$, icon, button as btn, routeButton as link, field, area, empty, heading, kind, stage, jobState, calendar, notify, modal, confirm, busy } from './ui.mjs';
 import { reader } from './reader.mjs';
+import { relatedReadingNotes } from './reading-content.mjs';
 import { springEnter } from './cds/motion-bridge.mjs';
 import { mountNoteEditor, noteEditSession } from './note-editor.mjs';
 import { createParity, feedbackHTML, completionHTML, evidenceHTML, paginate, details } from './parity.mjs';
@@ -124,7 +125,12 @@ async function libraryPage() {
     `<div class="library-toolbar"><div class="segmented" aria-label="内容类型">${[['all','全部'],['source','原始资料'],['knowledge','知识'],['mistake','错题']].map(([value,label])=>btn(label,'library-filter','',`data-kind="${value}" aria-pressed="${value==='all'}"`)).join('')}</div><label class="inline-search">${icon('search')}<input id="library-query" type="search" placeholder="在这些想法里找一找" aria-label="筛选知识库"></label></div><div id="library-notes" class="library-grid">${notes.map(noteCard).join('')||empty('书架还空着','从一份真正想理解的材料开始。',link('收集第一份资料','capture','primary'))}</div>`,
     bind(){let selected='all';const update=()=>{const query=$('#library-query').value.trim().toLowerCase();const visible=notes.filter(n=>(selected==='all'||n.kind===selected)&&`${n.title}\n${n.body}\n${n.meta?.topic||''}`.toLowerCase().includes(query));$('#library-notes').innerHTML=visible.map(noteCard).join('')||empty('这里暂时没有找到','换一个词，或者看看其他内容分类。');};$$('[data-action="library-filter"]').forEach(b=>{b.onclick=()=>{selected=b.dataset.kind;$$('[data-action="library-filter"]').forEach(other=>other.setAttribute('aria-pressed',String(other===b)));update();};});$('#library-query').oninput=update;}};
 }
-async function readPage(id) { const note=await api.get(endpoint('notes',id));state.note=note;return reader(note,list(state.boot.notes),state.readerReturn); }
+async function readPage(id) {
+  const sequence = state.sequence;
+  const [note, related] = await Promise.all([api.get(endpoint('notes', id)), api.get('/api/relations')]);
+  if (sequence === state.sequence) state.note = note;
+  return reader(note, list(state.boot.notes), state.readerReturn, relatedReadingNotes(note, list(state.boot.notes), list(related.relations)));
+}
 async function editPage(id) {
   const note=await api.get(endpoint('notes',id));
   return {html:heading('KEEP THE ORIGINAL','把想表达的，写得更清楚。','保存时会核对原版本，其他地方的修改不会被覆盖。',link('回到阅读',`read/${id}`,'text-button'))+
