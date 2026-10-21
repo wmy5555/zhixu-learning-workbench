@@ -92,6 +92,15 @@ try{
   await open(meta.candidate,'output');await page.locator('[data-page="next"]').click();assert.match(await page.locator('#all-drafts').innerText(),/2 \/ 2/);
   check('all jobs and drafts reachable through pagination');
   await open(meta.candidate,'manage');
+  assert.equal(await page.locator('.accent-preview').count(),0);
+  for(const [input,seed] of [['preset','#58746a'],['code','#68758a'],['picker','#846a80']]){
+    if(input==='preset')await page.getByRole('button',{name:`预览 ${seed}`,exact:true}).click();
+    else await page.locator(`[name="${input}"]`).fill(seed);
+    const preview=await page.locator('#accent-form [type="submit"]').evaluate(el=>({color:el.style.getPropertyValue('--accent-preview'),ink:el.style.getPropertyValue('--accent-preview-ink')}));
+    assert.match(preview.color,/^#[0-9a-f]{6}$/i);assert.match(preview.ink,/^#(?:000000|ffffff)$/);
+    assert.equal(await page.locator('[name="code"]').inputValue(),seed);
+    assert.equal(await page.locator('[name="picker"]').inputValue(),seed);
+  }
   await page.locator('[name="code"]').fill('#123456');
   await page.locator('#sidebar [data-route="library"]').click();
   await page.getByRole('dialog',{name:'放弃还没保存的输入？'}).waitFor();
