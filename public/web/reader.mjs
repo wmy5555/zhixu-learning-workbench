@@ -1,3 +1,4 @@
+import {api} from './api.mjs';
 import { escape as e, markdown, safeLink } from './markdown.mjs';
 import { icon, button, routeButton, kind, stage } from './ui.mjs';
 import { learningReadiness, learningNotice } from './reader-actions.mjs';
@@ -25,7 +26,7 @@ export function reader(note, notes, returnTo = 'library', related = [], readines
         <header class="article-heading"><p class="eyebrow">${e(note.meta?.topic || kind(note.kind))} / READING NOTE</p><h1>${e(note.title || '未命名资料')}</h1><p>${e(kind(note.kind))} · ${e(stage(note.meta?.stage))} · ${Number(content.conversation?.count ?? String(note.body || '').length).toLocaleString()} 字</p></header>
         ${learningNotice(note, readiness)}<div class="article-prose">${content.html}</div>
         ${files.length ? `<section class="article-attachments"><h2>原始附件</h2>${files.map(file=>{
-          const url = `/api/notes/${encodeURIComponent(note.id)}/attachments?asset=${encodeURIComponent(file.id)}`;
+          const url = api.url(`/api/notes/${encodeURIComponent(note.id)}/attachments?asset=${encodeURIComponent(file.id)}`);
           return `<div>${file.kind === 'image' ? `<img src="${url}" alt="${e(file.name)}" loading="lazy">` : ''}<a href="${url}&download=1">${icon('file')} ${e(file.name)} · 下载原件</a></div>`;
         }).join('')}</section>` : ''}
         ${sourceUrl ? `<p class="article-source"><a href="${e(sourceUrl)}" target="_blank" rel="noopener noreferrer">访问原始出处 ↗</a></p>` : ''}

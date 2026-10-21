@@ -1,6 +1,9 @@
 // A new web client for the documented HTTP contract. Session tokens stay in memory.
 export function createClient(fetcher = (...args) => fetch(...args)) {
   let csrf = '';
+  let practiceId='', pending=0, version=0;
+  const context=()=>({practiceId,pending,version});
+  const setContext=(id='')=>{if(id===practiceId)return;if(pending)throw Error('当前操作仍在处理中，请稍后切换知识库。');if(id&&!/^[a-zA-Z0-9-]+$/.test(id))throw Error('练习空间标识无效。');practiceId=id;version++;};
   let starting;
   async function session() {
     if (!starting) starting = fetcher('/api/session', { credentials: 'same-origin', cache: 'no-store' })
@@ -13,8 +16,13 @@ export function createClient(fetcher = (...args) => fetch(...args)) {
   }
   async function request(path, { method = 'GET', body, binary, signal } = {}) {
     if (!path.startsWith('/api/') || path.includes('://')) throw new Error('只允许调用本机知识接口。');
+    const requestVersion=version;
+    const scoped=practiceId&&!['session','onboarding'].includes(path.split('/')[2]);
+    const actual=scoped?'/api/practice/'+encodeURIComponent(practiceId)+path.slice(4):path;
+    pending++;
+    try {
     if (!csrf) await session();
-    const response = await fetcher(path, {
+    const response = await fetcher(actual, {
       method, signal, credentials: 'same-origin', cache: 'no-store',
       headers: { ...(binary ? { 'Content-Type': binary.type || 'application/octet-stream' } : body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(method !== 'GET' ? { 'X-CSRF-Token': csrf } : {}) },
       ...(binary ? { body: binary } : body !== undefined ? { body: JSON.stringify(body) } : {}),
@@ -26,9 +34,12 @@ export function createClient(fetcher = (...args) => fetch(...args)) {
       error.code = data.code;
       throw error;
     }
+    if(version!==requestVersion)throw Error('知识空间已经改变，请重新读取。');
     return data;
+    } finally {pending--;}
   }
-  return { request, session,
+  return { request, session, getContext:context, setContext,
+    url:path=>practiceId?`/api/practice/${encodeURIComponent(practiceId)}${path.slice(4)}`:path,
     get: (path, options) => request(path, options),
     post: (path, body = {}) => request(path, { method: 'POST', body }),
     put: (path, body) => request(path, { method: 'PUT', body }),
@@ -45,6 +56,6 @@ export function pendingPlan(today = {}) {
 }
 export function capturePayload(form) {
   const process = form.process === true;
-  return { items: [{ title: form.title || '', body: form.body, platform: form.platform || '', url: form.url || '', author: form.author || '', topic: form.topic || '', date: form.date || '', locator: form.locator || '' }],
+  return { captureMode:'text', items: [{ title: form.title || '', body: form.body, platform: form.platform || '', url: form.url || '', author: form.author || '', topic: form.topic || '', date: form.date || '', locator: form.locator || '' }],
     process, research: process && form.research === true };
 }

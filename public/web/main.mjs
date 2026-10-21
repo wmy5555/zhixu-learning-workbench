@@ -1,3 +1,4 @@
+import {createWebOnboarding} from './onboarding.mjs';
 import { installInputModality } from './input-modality.mjs';
 import { api, endpoint, pendingPlan, capturePayload } from './api.mjs';
 import { escape as e, markdown } from './markdown.mjs';
@@ -21,6 +22,12 @@ const navigation = [['home','今日','today'],['plus','收集与加工','capture
 const state = { boot:null, route:'today', sequence:0, dirty:false, saving:0, readerReturn:'library', note:null, session:null, jobs:[], scroll:new Map() };
 const context={api,state,go,refreshBoot,formModal,submit,watchForm,savedForm,processSource,noteCard:note=>noteCard(note)};
 const parity=createParity(context),management=createManagement(context,initializeAccent()),focus=createFocus(context);
+const onboarding=createWebOnboarding({api,state,go,refreshBoot,beforeLeave});
+async function beforeLeave(){
+ if(state.saving){notify('正在保存，请等操作返回后继续。');return false;}
+ for(const d of [...$$('dialog[open]')].reverse())if(d.beforeClose&&!await d.beforeClose())return false;
+ return !state.dirty||await confirm('离开未保存的输入？','先保存页面输入，或确认放弃后继续引导。','放弃输入并继续');
+}
 const list = value => Array.isArray(value) ? value : [];
 const formData = form => Object.fromEntries(new FormData(form));
 const noteTitle = id => list(state.boot?.notes).find(note=>note.id===id)?.title || '继续上次的学习';
@@ -29,7 +36,7 @@ const noteRows = notes => notes.map((note,index)=>`<article class="knowledge-row
 function shell() {
   const view = state.route.split('/')[0], pending = pendingPlan(state.boot?.today).items.length;
   const topics = [...new Set(list(state.boot?.notes).map(note=>note.meta?.topic).filter(Boolean))].slice(0,5);
-  $('#sidebar').innerHTML = `<a class="logo" href="#today">${icon('leaf')}<span class="wordmark">知序<small>ZHIXU</small></span></a>${link(`${icon('search')}<span>搜索你的知识</span><kbd>Ctrl K</kbd>`,'search','search-button')}${link(`${icon('plus')}收集新内容`,'capture','capture-button')}<p class="nav-label">工作台</p><nav class="nav-list" aria-label="工作台">${navigation.map(([symbol,label,route])=>btn(`${icon(symbol)}<span>${label}</span>${route==='today'&&pending?`<span class="count">${pending}</span>`:''}`,'navigate','',`data-route="${route}" ${view===route?'aria-current="page"':''}`)).join('')}</nav>${topics.length?`<section class="topics"><div class="nav-label">我的主题</div>${topics.map(topic=>btn(`<span class="dot clay"></span>${e(topic)}`,'topic-search','',`data-topic="${e(topic)}"`)).join('')}</section>`:''}<div class="sidebar-bottom"><p class="sidebar-note">让思考，有迹可循。</p>${link(`${icon('settings')}系统设置`,'settings')}<div class="profile"><span class="avatar">知</span><div>我的知识空间<small>本地保存 · 自己的节奏</small></div></div></div>`;
+  $('#sidebar').innerHTML = `<a class="logo" href="#today">${icon('leaf')}<span class="wordmark">知序<small>ZHIXU</small></span></a>${link(`${icon('search')}<span>搜索你的知识</span><kbd>Ctrl K</kbd>`,'search','search-button')}${link(`${icon('plus')}收集新内容`,'capture','capture-button')}<p class="nav-label">工作台</p><nav class="nav-list" aria-label="工作台">${navigation.map(([symbol,label,route])=>btn(`${icon(symbol)}<span>${label}</span>${route==='today'&&pending?`<span class="count">${pending}</span>`:''}`,'navigate','',`data-route="${route}" ${view===route?'aria-current="page"':''}`)).join('')}</nav>${topics.length?`<section class="topics"><div class="nav-label">我的主题</div>${topics.map(topic=>btn(`<span class="dot clay"></span>${e(topic)}`,'topic-search','',`data-topic="${e(topic)}"`)).join('')}</section>`:''}<div class="sidebar-bottom"><p class="sidebar-note">让思考，有迹可循。</p><button type="button" class="text-button" data-guide="welcome">${icon('spark')} 新手引导</button>${link(`${icon('settings')}系统设置`,'settings')}<div class="profile"><span class="avatar">知</span><div>我的知识空间<small>本地保存 · 自己的节奏</small></div></div></div>`;
   $('#page-name').textContent = navigation.find(item=>item[2]===view)?.[1] || ({focus:'学习时长',relations:'知识联系',history:'完整学习历史',manage:'设置与管理',settings:'系统设置',jobs:'处理动态',edit:'编辑资料',read:'我的书桌'}[view]) || '知序';
   const theme = $('#theme'), dark = document.documentElement.classList.contains('dark');
   if (!theme.firstElementChild) theme.innerHTML = `<span class="theme-icon theme-sun" aria-hidden="true">${icon('sun')}</span><span class="theme-icon theme-moon" aria-hidden="true">${icon('moon')}</span>`;
@@ -39,11 +46,16 @@ function shell() {
 }
 let stopStudyFeedback = () => {};
 async function refreshBoot() { state.boot = await api.get('/api/bootstrap'); return state.boot; }
-async function go(route, { replace = false, force = false } = {}) {
+async function go(route, { replace = false, force = false, guide = false, speed = 1 } = {}) {
+  if(onboarding.travelling&&!guide)return false;
   if(state.saving&&!force){notify('正在保存，请等这次操作返回后再切换。');return false;}
   const dialogs=$$('dialog[open]');
   if(!force)for(const dialog of [...dialogs].reverse())if(dialog.beforeClose&&!await dialog.beforeClose())return false;
   if (state.dirty && !force && !await confirm('放弃还没保存的输入？','当前输入还没有保存。取消可继续编辑，确认后会放弃这次输入。','放弃输入并离开')) return false;
+  await onboarding.prepareRoute(route);
+  const main=$('#main'),reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let ghost;
+  if(guide&&!reduce){ghost=main.cloneNode(true);ghost.removeAttribute('id');ghost.classList.add('onboard-page-ghost');ghost.inert=true;ghost.setAttribute('aria-hidden','true');ghost.querySelectorAll('[id]').forEach(n=>n.removeAttribute('id'));const r=main.getBoundingClientRect();Object.assign(ghost.style,{left:r.x+'px',top:r.y+'px',width:r.width+'px',height:r.height+'px'});document.body.append(ghost);main.style.opacity='0';}
   stopStudyFeedback();
   dialogs.forEach(dialog=>dialog.isConnected&&dialog.close());
   focus.capture();
@@ -61,16 +73,19 @@ async function go(route, { replace = false, force = false } = {}) {
   try {
     const [view,id] = state.route.split('/');
     const page = await ({ today:todayPage, capture:capturePage, library:parity.library, read:()=>readPage(id), edit:()=>editPage(id), study:()=>studyPage(id), topics:topicsPage, search:parity.search, output:outputPage, settings:settingsPage, jobs:parity.jobs, relations:parity.relations, history:parity.history, manage:()=>management.page(id), focus:focus.page }[view] || todayPage)();
-    if (sequence !== state.sequence) return false;
+    if (sequence !== state.sequence) {ghost?.remove();main.style.opacity='';return false;}
     $('#main').innerHTML = page.html;
     page.bind?.();
     $('#main').dataset.route=state.route;
     focus.mount();
     $('#main').focus({preventScroll:true});
     window.scrollTo({top:state.scroll.get(route)||0,behavior:'instant'});
-    if (!matchMedia('(prefers-reduced-motion: reduce)').matches) springEnter($('#main'), undefined, 6, .998);
+    if(ghost){main.style.opacity='';const out=ghost.animate([{opacity:1},{opacity:0}],{duration:460/speed,fill:'forwards',easing:'ease-in-out'}),incoming=main.animate([{opacity:0,transform:'translateY(8px)'},{opacity:1,transform:'none'}],{duration:600/speed,easing:'cubic-bezier(.22,1,.36,1)'});await Promise.allSettled([out.finished,incoming.finished]);ghost.remove();}
+    else if(!reduce)springEnter(main,undefined,6,.998);
+    window.dispatchEvent(new CustomEvent('zhixu:web-page'));
     return true;
   } catch(error) {
+    ghost?.remove();main.style.opacity='';
     if (sequence !== state.sequence) return false;
     $('#main').innerHTML = empty('这次没有顺利打开',error.message,btn('重新读取','reload','primary')+link('回到知识库','library','text-button'));
     $('#main').dataset.route=state.route;
@@ -217,7 +232,7 @@ async function settingsPage() {
     <section id="settings-rhythm"><p class="eyebrow">YOUR OWN PACE</p><h2>给每天留一点时间</h2><p class="muted">这是安排学习的参考，不是必须完成的目标。</p><form id="rhythm-form"><div class="form-grid">${field('每天可用时间（分钟）','dailyMinutes',{type:'number',value:settings.dailyMinutes||25,required:true,extra:'min="5" max="240"'})}${field('主题关注范围','focusTopics',{value:list(settings.focusTopics).join('，'),placeholder:'多个主题用逗号分开'})}</div><button class="primary" type="submit">保存学习节奏</button></form></section>
     <section id="settings-appearance"><p class="eyebrow">READING & APPEARANCE</p><h2>喜欢什么样的光线？</h2><div class="theme-options">${btn('<span class="theme-swatch light-swatch"></span><strong>日光</strong><small>暖白纸面，陶土色细节</small>','set-light','theme-option')}${btn('<span class="theme-swatch dark-swatch"></span><strong>夜读</strong><small>柔和深灰，让眼睛安静下来</small>','set-dark','theme-option')}</div></section>
     <section id="settings-ai"><p class="eyebrow">AN OPTIONAL THINKING PARTNER</p><h2>连接你的 AI</h2><p class="muted">保留原文、阅读和文字检索可以独立使用。连接之后，拆解、反馈与生成仍由你主动发起。</p><form id="ai-form"><label class="check"><input type="checkbox" name="enabled" ${ai.enabled?'checked':''}> 启用文本 AI</label><div class="form-grid">${field('服务地址','baseUrl',{value:ai.baseUrl||'',type:'url',placeholder:'https://api.example.com/v1'})}${field('模型名称','model',{value:ai.model||'',placeholder:'模型标识'})}${field('API Key（留空保留已保存的密钥）','apiKey',{type:'password',extra:'autocomplete="new-password"'})}${field('每日调用上限','dailyCallLimit',{type:'number',value:ai.dailyCallLimit??100,extra:'min="0"'})}</div><p class="form-note">密钥只交给本机后端保存，不在网页缓存或显示。保存本身不发送模型请求。</p><div class="actions"><button class="primary" type="submit">保存连接设置</button>${btn('测试已保存的连接','test-ai','text-button')}</div><p id="ai-result" role="status"></p></form></section>
-    <section><p class="eyebrow">YOUR KNOWLEDGE STAYS YOURS</p><h2>资料与备份</h2><p class="muted">你的原文和学习记录保存在本机。导出备份不包含连接密钥。</p><div class="actions"><a class="secondary" href="/api/backup" download>下载完整备份</a>${btn('查看回收站','recycle','text-button')}${link('预览并恢复完整备份','manage/restore','text-button')}${btn('恢复已移除知识','deleted-notes','text-button')}</div></section>
+    <section><p class="eyebrow">YOUR KNOWLEDGE STAYS YOURS</p><h2>资料与备份</h2><p class="muted">你的原文和学习记录保存在本机。导出备份不包含连接密钥。</p><div class="actions"><a class="secondary" href="${api.url('/api/backup')}" download>下载完整备份</a>${btn('查看回收站','recycle','text-button')}${link('预览并恢复完整备份','manage/restore','text-button')}${btn('恢复已移除知识','deleted-notes','text-button')}</div></section>
     </div></div>`,
     bind(){const rhythm=$('#rhythm-form');watchForm(rhythm);submit(rhythm,async values=>{await api.put('/api/settings',{dailyMinutes:Number(values.dailyMinutes),focusTopics:values.focusTopics.split(/[,，]/).map(s=>s.trim()).filter(Boolean)});savedForm(rhythm);await refreshBoot();notify('学习节奏已保存。');});
       const form=$('#ai-form');watchForm(form);submit(form,async values=>{await api.put('/api/settings',{ai:{enabled:form.elements.enabled.checked,baseUrl:values.baseUrl,model:values.model,...(values.apiKey?{apiKey:values.apiKey}:{}),dailyCallLimit:Number(values.dailyCallLimit)}});form.elements.apiKey.value='';savedForm(form);await refreshBoot();$('#ai-result').textContent='设置已保存。尚未测试连接。';notify('连接设置已保存。');});}};
@@ -407,7 +422,7 @@ async function actions(control) {
   if(action==='understanding')return understanding(id);
   if(action==='session-understanding')return understanding(state.session.noteId,id);
   if(action==='evidence')return evidence(id);
-  if(action==='hide-material') {$('#learning-material').hidden=true;$('#answer-workspace').hidden=false;$('#answer-form textarea')?.focus();return;}
+  if(action==='hide-material') {$('#learning-material').hidden=true;$('#answer-workspace').hidden=false;$('#answer-form textarea')?.focus();if(api.getContext().practiceId)await api.post('/api/onboarding/event',{practiceId:api.getContext().practiceId,event:'study-hide'});return;}
   if(action==='hint') {const current=state.session;const result=await api.post(endpoint('study',id,'hint'));markAid(current);if(state.route!==`study/${id}`)return;$('#study-hint').innerHTML=`<div class="hint-note"><p class="nav-label">这次使用了提示</p><p>${e(result.hint)}</p></div>`;return;}
   if(action==='study-material'){const current=state.session;await api.post(endpoint('study',id,'hint'));markAid(current);if(state.route!==`study/${id}`)return;modal('回到本轮原文',`<p class="form-note">本轮回看原文已记录，下一轮重新独立判断。</p><div class="article-prose">${markdown(current.material).html}</div>`,{wide:true});return;}
   if(action==='finish') {
@@ -449,5 +464,5 @@ $('#nav-shade').onclick=()=>document.documentElement.classList.remove('nav-open'
 window.addEventListener('beforeunload',event=>{if(state.dirty||$$('dialog').some(dialog=>dialog.hasUnsavedInput?.())){event.preventDefault();event.returnValue='unsaved';}});
 window.addEventListener('popstate',async()=>{const target=location.hash.slice(1)||'today';if(await go(target,{replace:true})===false)history.replaceState(null,'',`#${state.route}`);});
 window.addEventListener('hashchange',async()=>{const target=location.hash.slice(1)||'today';if(target!==state.route){if(await go(target,{replace:true})===false)history.replaceState(null,'',`#${state.route}`);}});
-try { await refreshBoot();await go(location.hash.slice(1)||'today',{replace:true}); }
+try { await onboarding.initialize();await refreshBoot();await go(location.hash.slice(1)||'today',{replace:true});await onboarding.ready(); }
 catch(error){$('#main').innerHTML=empty('暂时连接不上知识空间',error.message,btn('重新连接','reload','primary'));}
