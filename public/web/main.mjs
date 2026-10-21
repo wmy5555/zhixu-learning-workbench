@@ -30,6 +30,7 @@ async function beforeLeave(){
 }
 const list = value => Array.isArray(value) ? value : [];
 const formData = form => Object.fromEntries(new FormData(form));
+const aiConnectionValues = form => { const {enabled,...values}=formData(form); return JSON.stringify(values); };
 const noteTitle = id => list(state.boot?.notes).find(note=>note.id===id)?.title || '继续上次的学习';
 const noteCard = note => `<article class="library-note"><div class="note-kind">${icon(note.kind==='source'?'file':'book')}<span>${e(kind(note.kind))}</span><small>${e(stage(note.meta?.stage))}</small></div><h2>${e(note.title)}</h2><p>${e(String(note.body||'').replace(/<!-- zhixu-managed-links:start -->[\s\S]*?<!-- zhixu-managed-links:end -->/g,'').replace(/<!--[\s\S]*?-->/g,'').replace(/[#>*`]/g,'').replace(/\s+/g,' ').slice(0,135))}</p><footer><span>${e(note.meta?.topic || '未归入主题')}</span>${link('打开阅读 ↗',`read/${note.id}`,'text-button')}</footer></article>`;
 const noteRows = notes => notes.map((note,index)=>`<article class="knowledge-row"><span class="task-index">${String(index+1).padStart(2,'0')}</span><div><h3>${e(note.title)}</h3><p>${e(kind(note.kind))} · ${e(stage(note.meta?.stage))}</p></div>${link('阅读 ↗',`read/${note.id}`,'text-button')}</article>`).join('');
@@ -235,7 +236,7 @@ async function settingsPage() {
     <section><p class="eyebrow">YOUR KNOWLEDGE STAYS YOURS</p><h2>资料与备份</h2><p class="muted">你的原文和学习记录保存在本机。导出备份不包含连接密钥。</p><div class="actions"><a class="secondary" href="${api.url('/api/backup')}" download>下载完整备份</a>${btn('查看回收站','recycle','text-button')}${link('预览并恢复完整备份','manage/restore','text-button')}${btn('恢复已移除知识','deleted-notes','text-button')}</div></section>
     </div></div>`,
     bind(){const rhythm=$('#rhythm-form');watchForm(rhythm);submit(rhythm,async values=>{await api.put('/api/settings',{dailyMinutes:Number(values.dailyMinutes),focusTopics:values.focusTopics.split(/[,，]/).map(s=>s.trim()).filter(Boolean)});savedForm(rhythm);await refreshBoot();notify('学习节奏已保存。');});
-      const form=$('#ai-form');watchForm(form);submit(form,async values=>{await api.put('/api/settings',{ai:{enabled:form.elements.enabled.checked,baseUrl:values.baseUrl,model:values.model,...(values.apiKey?{apiKey:values.apiKey}:{}),dailyCallLimit:Number(values.dailyCallLimit)}});form.elements.apiKey.value='';savedForm(form);await refreshBoot();$('#ai-result').textContent='设置已保存。尚未测试连接。';notify('连接设置已保存。');});}};
+      const form=$('#ai-form');watchForm(form);form.dataset.connectionValues=aiConnectionValues(form);submit(form,async values=>{await api.put('/api/settings',{ai:{enabled:form.elements.enabled.checked,baseUrl:values.baseUrl,model:values.model,...(values.apiKey?{apiKey:values.apiKey}:{}),dailyCallLimit:Number(values.dailyCallLimit)}});form.elements.apiKey.value='';form.dataset.connectionValues=aiConnectionValues(form);savedForm(form);await refreshBoot();$('#ai-result').textContent='设置已保存。尚未测试连接。';notify('连接设置已保存。');});}};
 }
 async function jobsPage() {
   const jobs=list((await api.get('/api/jobs')).jobs);state.jobs=jobs;
@@ -441,7 +442,30 @@ async function actions(control) {
   if(action==='topic-search') {await go('search');const form=$('#parity-search');if(form){form.elements.q.value=control.dataset.topic;form.requestSubmit();}return;}
   if(action==='open-draft')return parity.draft(id);
   if(action==='retry-job') {if(!await confirm('重新尝试这项处理？','这会继续已有任务，可能向已配置的服务发送资料并产生费用。','重新尝试'))return;await api.post(endpoint('jobs',id,'action'),{action:'retry'});return go('jobs',{replace:true});}
-  if(action==='test-ai') {if(state.dirty){notify('请先保存表单，测试会使用已保存的连接设置。',true);return;}if(!await confirm('测试已保存的 AI 连接？','会向已配置的服务发送一次测试请求，可能计费。','发送测试请求'))return;const result=await api.post('/api/settings/test',{capability:'model'});if($('#ai-result'))$('#ai-result').textContent=result.message||'连接测试已返回。';notify(result.message||'连接测试已返回。');return;}
+  if(action==='test-ai') {
+    if(state.saving)return;
+    const form=$('#ai-form');
+    if(!form)return;
+    form.elements.enabled.checked=true;
+    if(aiConnectionValues(form)!==form.dataset.connectionValues||$$('#main form').some(item=>item!==form&&item.dataset.dirty==='true')){
+      form.dataset.dirty='true';state.dirty=true;
+      notify('请先保存表单，测试会使用已保存的连接设置。',true);return;
+    }
+    if(state.boot.settings.ai.enabled)savedForm(form);
+    else {form.dataset.dirty='true';state.dirty=true;}
+    const wasInert=form.inert;state.saving++;form.inert=true;
+    try {
+      if(!await confirm('测试已保存的 AI 连接？','会启用文本 AI，并向已配置的服务发送一次测试请求，可能计费。','发送测试请求'))return;
+      if(!state.boot.settings.ai.enabled){
+        await api.put('/api/settings',{ai:{enabled:true}});
+        savedForm(form);await refreshBoot();
+      }
+      const result=await api.post('/api/settings/test',{capability:'model'});
+      if($('#ai-result'))$('#ai-result').textContent=result.message||'连接测试已返回。';
+      notify(result.message||'连接测试已返回。');
+    } finally {state.saving--;form.inert=wasInert;}
+    return;
+  }
   if(await parity.handle(control)||await management.handle(control)||await focus.handle(control))return;
   if(action==='recycle')return recycle();
   if(action==='restore-source') {await api.post(endpoint('recycle-bin',id,'restore'),{versionId:control.dataset.version});control.closest('dialog')?.close();await refreshBoot();notify('资料已恢复。');return;}
