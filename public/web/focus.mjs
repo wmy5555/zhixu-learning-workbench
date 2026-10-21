@@ -72,7 +72,7 @@ export function createFocus({state,go}) {
       const zone=state.boot?.settings?.timezone||'UTC',rows=[...clock.records].reverse().slice(0,5);
       return `<div class="focus-clock-heading"><span>最近的学习时长</span><button class="text-button focus-drag" aria-label="拖动计时器">⠿</button></div><div class="focus-recent">${rows.map(r=>`<article><strong>${r.kind==='focus'?'专注':'休息'} · ${(r.durationMs/60000).toFixed(1)} 分钟</strong><small>${e(new Intl.DateTimeFormat('zh-CN',{timeZone:zone,month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}).format(new Date(r.endedAt)))}</small></article>`).join('')||'<p class="form-note">还没有完成的计时记录。</p>'}</div><div class="actions">${btn('返回计时器','focus-clock','text-button')}${link('完整记录 ↗','focus','text-button')}</div>`;
     }
-    return `<div class="focus-clock-heading"><span>${a.kind==='focus'?'留一点时间给此刻':'让思绪休息一下'}</span><button type="button" class="text-button focus-drag" aria-label="拖动计时器，或用方向键移动" title="拖动或用方向键移动">⠿</button></div><div class="focus-face"><svg viewBox="0 0 100 100" aria-hidden="true"><circle class="focus-track" cx="50" cy="50" r="44"/><circle class="focus-progress" cx="50" cy="50" r="44"/></svg><span class="focus-tomato" aria-hidden="true">🍅</span><strong data-clock-time></strong></div><p data-clock-status class="form-note" role="status"></p><div class="actions focus-controls">${a.status==='finished'?btn(a.kind==='focus'?'休息 5 分钟':'再专注 25 分钟',a.kind==='focus'?'focus-break':'focus-start','primary')+btn('收好计时器','focus-dismiss','text-button'):btn(a.status==='paused'?'继续':'暂停',a.status==='paused'?'focus-resume':'focus-pause','secondary')+btn('结束本轮','focus-end','text-button')}</div>${btn('学习时长记录','focus-recent','text-button')}`;
+    return `<div class="focus-clock-heading"><span>${a.kind==='focus'?'留一点时间给此刻':'让思绪休息一下'}</span><button type="button" class="text-button focus-drag" aria-label="拖动计时器，或用方向键移动" title="拖动或用方向键移动">⠿</button></div><div class="focus-face"><svg viewBox="0 0 100 100" aria-hidden="true"><circle class="focus-track" cx="50" cy="50" r="44"/><circle class="focus-progress" cx="50" cy="50" r="44"/></svg><span class="focus-tomato" aria-hidden="true">🍅</span><strong data-clock-time></strong></div><p data-clock-status class="form-note" role="status"></p><div class="actions focus-controls">${a.status==='finished'?btn(a.kind==='focus'?'休息 5 分钟':'再专注 25 分钟',a.kind==='focus'?'focus-break':'focus-next','primary')+btn('收好计时器','focus-dismiss','text-button'):btn(a.status==='paused'?'继续':'暂停',a.status==='paused'?'focus-resume':'focus-pause','secondary')+btn('结束本轮','focus-end','text-button')}</div>${btn('学习时长记录','focus-recent','text-button')}`;
   }
   function render(animate=true) {
     if(state.route==='focus')recordsRender?.();
@@ -171,6 +171,7 @@ export function createFocus({state,go}) {
         }catch{}finally{starting=false;form.inert=false;}
       };
     }
+    else if(a==='focus-next'){if(clock.active?.kind==='break'&&clock.active.status==='finished')await start('focus',25);}
     else if(a==='focus-break')await start('break',5);
     else if(a==='focus-end'){
       const id=clock.active?.id;
