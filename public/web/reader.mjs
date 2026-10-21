@@ -6,6 +6,8 @@ import { readingContent, readingGroups } from './reading-content.mjs';
 
 export function reader(note, notes, returnTo = 'library', related = [], readiness = learningReadiness(note, notes)) {
   const content = readingContent(note);
+  const characterCount = Number(content.conversation?.count ?? String(note.body || '').length);
+  const readingMinutes = Math.max(1, Math.ceil(characterCount / 400));
   const { children, related: otherKnowledge } = readingGroups(note, related);
   const summary = content.conversation?.summary || '';
   const abstract = `<div id="reader-abstract-copy" class="abstract-copy${summary.length > 150 ? ' is-collapsible' : ''}">${markdown(summary).html}</div>${summary.length > 150 ? button('阅读完整摘要', 'reader-abstract', 'abstract-toggle', 'aria-expanded="false" aria-controls="reader-abstract-copy"') : ''}`;
@@ -23,7 +25,7 @@ export function reader(note, notes, returnTo = 'library', related = [], readines
         ${note.kind === 'source' ? group('从这份资料拆解', children) : ''}${group('其他关联知识', otherKnowledge)}
       </aside>
       <div class="reading-scroll" tabindex="0" aria-label="资料正文"><article class="reading-article">
-        <header class="article-heading"><p class="eyebrow">${e(note.meta?.topic || kind(note.kind))} / READING NOTE</p><h1>${e(note.title || '未命名资料')}</h1><p>${e(kind(note.kind))} · ${e(stage(note.meta?.stage))} · ${Number(content.conversation?.count ?? String(note.body || '').length).toLocaleString()} 字</p></header>
+        <header class="article-heading"><p class="eyebrow">${e(note.meta?.topic || kind(note.kind))} / READING NOTE</p><h1>${e(note.title || '未命名资料')}</h1><p>${e(kind(note.kind))} · ${e(stage(note.meta?.stage))} · ${characterCount.toLocaleString()} 字 · <span title="按每分钟 400 字估算">阅读 ${readingMinutes} 分钟</span></p></header>
         ${learningNotice(note, readiness)}<div class="article-prose">${content.html}</div>
         ${files.length ? `<section class="article-attachments"><h2>原始附件</h2>${files.map(file=>{
           const url = api.url(`/api/notes/${encodeURIComponent(note.id)}/attachments?asset=${encodeURIComponent(file.id)}`);

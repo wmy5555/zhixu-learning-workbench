@@ -183,3 +183,14 @@ test('nested exported loops cannot multiply output without a shared bound', () =
   assert.ok(result.html.length < 70000);
   assert.match(result.html, /重复展示已收起/);
 });
+
+
+test('reader estimates duration from the displayed count at 400 characters per minute',()=>{
+ for(const kind of ['knowledge','source'])for(const [count,minutes] of [[0,1],[292,1],[400,1],[401,2],[800,2],[801,3]]){
+  const note={id:'synthetic',kind,title:'阅读时长测试',body:'字'.repeat(count),meta:{stage:'candidate'}};
+  const html=reader(note,[]).html;
+  assert.ok(html.includes(`${count.toLocaleString()} 字 · <span title="按每分钟 400 字估算">阅读 ${minutes} 分钟</span>`));
+ }
+ const note=fixture('字'.repeat(800)),count=readingContent(note).conversation.count;
+ assert.ok(reader(note,[]).html.includes(`阅读 ${Math.max(1,Math.ceil(count/400))} 分钟`));
+});
