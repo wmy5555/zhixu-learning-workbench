@@ -6,7 +6,7 @@ export function reader(note, notes, returnTo = 'library', related = []) {
   const content = readingContent(note);
   const { children, related: otherKnowledge } = readingGroups(note, related);
   const summary = content.conversation?.summary || '';
-  const abstract = summary.length > 150 ? `<p>${e(summary.slice(0, 150))}…</p><details class="abstract-full"><summary>阅读完整摘要</summary>${markdown(summary).html}</details>` : markdown(summary).html;
+  const abstract = `<div id="reader-abstract-copy" class="abstract-copy${summary.length > 150 ? ' is-collapsible' : ''}">${markdown(summary).html}</div>${summary.length > 150 ? button('阅读完整摘要', 'reader-abstract', 'abstract-toggle', 'aria-expanded="false" aria-controls="reader-abstract-copy"') : ''}`;
   const links = items => items.map(item => routeButton(`${icon('book')}<span>${e(item.title)}</span>`, `read/${item.id}`, 'shelf-link')).join('');
   const group = (title, items) => `<section class="shelf-other"><h3 class="nav-label">${title}</h3>${links(items.slice(0, 5)) || '<p class="muted small">还没有相关内容。</p>'}${items.length > 5 ? `<details class="shelf-more"><summary>展开更多（${items.length - 5}）</summary>${links(items.slice(5))}</details>` : ''}</section>`;
   const files = [note.meta?.sourceFile, ...(note.meta?.attachments || [])].filter(Boolean);
