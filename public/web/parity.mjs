@@ -1,3 +1,4 @@
+import { createLibraryPreferences } from './library-preferences.mjs';
 import { escape as e, markdown, safeLink } from './markdown.mjs';
 import { $, $$, icon, button as btn, routeButton as link, field, area, heading, kind, stage, jobState, modal, confirm, busy, notify } from './ui.mjs';
 import { endpoint } from './api.mjs';
@@ -36,6 +37,7 @@ export function paginate(host, rows, render, {size=20,filter=()=>true}={}) {
 export function createParity(ctx) {
   const {api,state,go,refreshBoot,formModal,submit,watchForm}=ctx;
   const topicIntents=new Map();
+  const libraryPreferences=createLibraryPreferences();
   const title=id=>list(state.boot?.notes).find(n=>n.id===id)?.title||id;
   const refresh=async()=>{await refreshBoot();if(!state.dirty)await go(state.route,{force:true,replace:true});};
   const cards=notes=>notes.map(n=>`<article class="knowledge-row"><div><h3>${e(n.title)}</h3><p>${e(kind(n.kind))} · ${e(stage(n.meta?.stage))}</p></div>${link('阅读 ↗',`read/${n.id}`,'text-button')}</article>`).join('');
@@ -102,17 +104,18 @@ export function createParity(ctx) {
     d.querySelector('[data-action="confirm-links"]').onclick=ev=>busy(ev.currentTarget,async()=>{await api.post(endpoint('notes',id,'links-sync'),{expectedHash:p.expectedHash});d.close();await refresh();notify('托管链接已更新。');});
   }
   async function library() {
+    const preferences=libraryPreferences.read();
     const data=await api.get('/api/library'),recs=await api.get('/api/recommendations');
     const notes=[...new Map([...list(data.groups).flatMap(g=>[g.source,...list(g.children)]),...list(data.standalone)].map(n=>[n.id,n])).values()].sort((a,b)=>String(b.updatedAt||'').localeCompare(String(a.updatedAt||'')));
-    return {html:heading('YOUR GROWING LIBRARY','让每一个想法，有处可寻。',`${notes.filter(n=>n.kind==='source').length} 份原文 · ${notes.filter(n=>n.kind==='knowledge').length} 条知识，慢慢长成自己的理解。`,link(`${icon('plus')} 收集资料`,'capture','primary'))+`<div class="library-toolbar"><div class="segmented" aria-label="内容类型">${[['','全部'],['source','原始资料'],['knowledge','知识'],['mistake','错题']].map(([value,label])=>btn(label,'library-filter','',`data-kind="${value}" aria-pressed="${value===''}"`)).join('')}</div><label class="inline-search">${icon('search')}<input name="libraryQuery" type="search" placeholder="在这些想法里找一找" aria-label="筛选知识库"></label></div>${details('更多类别、学习状态与原文分组',`<div class="form-grid">${select('类别','libraryKind',types)}${select('学习状态','libraryStage',stages)}</div><label class="check"><input type="checkbox" name="sourceGroups"> 按原文分组，展开子知识</label>`)}<div id="parity-library"></div>${details('知识使用建议',suggestionHTML(recs))}`,
+    return {html:heading('YOUR GROWING LIBRARY','让每一个想法，有处可寻。',`${notes.filter(n=>n.kind==='source').length} 份原文 · ${notes.filter(n=>n.kind==='knowledge').length} 条知识，慢慢长成自己的理解。`,link(`${icon('plus')} 收集资料`,'capture','primary'))+`<div class="library-toolbar"><div class="segmented" aria-label="内容类型">${[['','全部'],['source','原始资料'],['knowledge','知识'],['mistake','错题']].map(([value,label])=>btn(label,'library-filter','',`data-kind="${value}" aria-pressed="${value===preferences.kind}"`)).join('')}</div><label class="inline-search">${icon('search')}<input name="libraryQuery" value="${e(preferences.q)}" type="search" placeholder="在这些想法里找一找" aria-label="筛选知识库"></label></div>${details('更多类别、学习状态与原文分组',`<div class="form-grid">${select('类别','libraryKind',types,preferences.kind)}${select('学习状态','libraryStage',stages,preferences.stage)}</div><label class="check"><input type="checkbox" name="sourceGroups" ${preferences.grouped?'checked':''}> 按原文分组，展开子知识</label>`,preferences.optionsOpen).replace('<details ', '<details data-library-options ')}<div id="parity-library"></div>${details('知识使用建议',suggestionHTML(recs),preferences.adviceOpen).replace('<details ', '<details data-library-advice ')}`,
       bind(){const host=$('#parity-library'),groups=list(data.groups),standalone=list(data.standalone);
-        const draw=()=>{const q=$('[name="libraryQuery"]').value.trim().toLowerCase(),k=$('[name="libraryKind"]').value,s=$('[name="libraryStage"]').value;
+        const draw=()=>{libraryPreferences.update({q:$('[name="libraryQuery"]').value,kind:$('[name="libraryKind"]').value,stage:$('[name="libraryStage"]').value,grouped:$('[name="sourceGroups"]').checked});const q=$('[name="libraryQuery"]').value.trim().toLowerCase(),k=$('[name="libraryKind"]').value,s=$('[name="libraryStage"]').value;
           const matches=n=>(!k||n.kind===k)&&(!s||n.meta?.stage===s)&&(!q||`${n.title} ${n.body} ${n.meta?.topic}`.toLowerCase().includes(q));
           $$('[data-action="library-filter"]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.kind===k)));
           const grid=items=>`<div class="library-grid">${items.map(ctx.noteCard).join('')}</div>`;
           host.innerHTML=($('[name="sourceGroups"]').checked?groups.filter(g=>matches(g.source)||list(g.children).some(matches)).map(g=>`<section class="parity-source-group">${cards([g.source])}${details(`${list(g.children).length} 条子知识`,grid(list(g.children).filter(n=>!q&&!k&&!s||matches(n))),Boolean(q||k||s))}</section>`).join('')+grid(standalone.filter(matches)):grid(notes.filter(matches)));
           if(!host.querySelector('article'))host.innerHTML='<p class="empty">没有符合条件的资料。</p>';
-        };['libraryQuery','libraryKind','libraryStage','sourceGroups'].forEach(n=>$(`[name="${n}"]`).addEventListener('input',draw));$$('[data-action="library-filter"]').forEach(b=>b.onclick=()=>{$('[name="libraryKind"]').value=b.dataset.kind;draw();});draw();}};
+        };for(const [selector,key] of [['[data-library-options]','optionsOpen'],['[data-library-advice]','adviceOpen']]){const panel=$(selector);panel.addEventListener('toggle',()=>{if(panel.isConnected)libraryPreferences.update({[key]:panel.open});});}['libraryQuery','libraryKind','libraryStage','sourceGroups'].forEach(n=>$(`[name="${n}"]`).addEventListener('input',draw));$$('[data-action="library-filter"]').forEach(b=>b.onclick=()=>{$('[name="libraryKind"]').value=b.dataset.kind;draw();});draw();}};
   }
   async function search() {
     const sources=list(state.boot.notes).filter(n=>n.kind==='source');
