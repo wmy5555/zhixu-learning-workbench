@@ -11,6 +11,7 @@ import { mountNoteEditor, noteEditSession } from './note-editor.mjs';
 import { createParity, feedbackHTML, completionHTML, evidenceHTML, paginate, details } from './parity.mjs';
 import { createManagement, initializeAccent } from './management.mjs';
 import { createFocus } from './focus.mjs';
+import { watchStudyFeedback, feedbackPending } from './study-feedback.mjs';
 import { aidUsed, markAid, clearAid } from './study-aid.mjs';
 import { batchImport } from './batch-import.mjs';
 
@@ -36,12 +37,14 @@ function shell() {
   theme.setAttribute('aria-label', dark ? '切换日间模式' : '切换夜间模式');
   theme.title = dark ? '切换日间模式' : '切换夜间模式';
 }
+let stopStudyFeedback = () => {};
 async function refreshBoot() { state.boot = await api.get('/api/bootstrap'); return state.boot; }
 async function go(route, { replace = false, force = false } = {}) {
   if(state.saving&&!force){notify('正在保存，请等这次操作返回后再切换。');return false;}
   const dialogs=$$('dialog[open]');
   if(!force)for(const dialog of [...dialogs].reverse())if(dialog.beforeClose&&!await dialog.beforeClose())return false;
   if (state.dirty && !force && !await confirm('放弃还没保存的输入？','当前输入还没有保存。取消可继续编辑，确认后会放弃这次输入。','放弃输入并离开')) return false;
+  stopStudyFeedback();
   dialogs.forEach(dialog=>dialog.isConnected&&dialog.close());
   focus.capture();
   state.dirty = false;
@@ -162,17 +165,33 @@ async function studyPage(id) {
     <aside class="study-history"><p class="eyebrow">PICK UP WHERE YOU LEFT OFF</p><h2>接着上一次思考</h2><div class="actions">${link('完整学习历史 ↗','history','text-button')}${link('学习时长 ↗','focus','text-button')}</div>${sessions.slice(0,6).map(s=>link(`<strong>${e(noteTitle(s.noteId))}</strong><small>${e(jobState(s.status))} · ${list(s.turns).length} 次回答</small>`,`study/${s.id}`,'history-item')).join('')||'<p class="muted">开始之后，你的思考会留在这里。</p>'}</aside></div>
     <section class="recent"><div class="section-title"><h2>再想一想 <small>${mistakes.length} 条错题</small></h2></div>${mistakes.length?noteRows(mistakes):'<p class="muted">遇到的误解会保留下来，成为下一次理解的起点。</p>'}</section>`};
 }
-async function sessionPage(id) {
-  const session=await api.get(endpoint('study',id));state.session=session;
-  const turns=list(session.turns), waiting=session.status==='awaiting_feedback'||session.pendingJobId, completed=session.status==='completed';
+async function sessionPage(id, loaded) {
+  const session=loaded || await api.get(endpoint('study',id));state.session=session;
+  const turns=list(session.turns), waiting=feedbackPending(session), completed=session.status==='completed';
   const title=noteTitle(session.noteId), material=markdown(session.material).html;
   return {html:heading('ONE THOUGHT AT A TIME',title,`${e(session.goal||'用自己的话解释')} · ${jobState(session.status)}`,link('回到学习池','study','text-button'))+
     `${credibilityNotice(session.materialWarnings,session.noteId)}<div class="learning-workspace"><section class="learning-page">${!turns.length?`<div class="learning-material" id="learning-material"><p class="eyebrow">先阅读，然后合上材料</p><div class="article-prose">${material}</div><div class="actions">${btn('合上材料，试着解释','hide-material','primary')}${link('在书桌里读',`read/${session.noteId}`,'text-button')}</div></div>`:''}
     <div id="answer-workspace" ${!turns.length?'hidden':''}><div class="learning-question"><p class="eyebrow">这一次，试着回答</p><h2>${e(session.question)}</h2></div>
     ${turns.map((turn,index)=>`<section class="learning-turn"><p class="nav-label">第 ${index+1} 次 · 我的回答 · ${turn.hintUsed?'使用过提示或原文':'独立作答'}</p><div class="answer-prose">${e(turn.answer).replaceAll('\n','<br>')}</div>${feedbackHTML(turn.feedback)}</section>`).join('')}
-    ${waiting?`<div class="waiting-note" role="status"><span class="status-pulse"></span><div><strong>你的回答已保存</strong><p>反馈还在等待处理。可以离开，之后从学习记录继续。</p>${btn('查看最新反馈','reload','text-button')} ${link('处理动态 ↗','jobs','text-button')}</div></div>`:completed?`<div class="completion-note"><h2>这一次思考，已经留下来了。</h2><p>${e(session.completion?.reason||'学习记录已保存。')}</p>${completionHTML(session.completion)}${link('回到今天','today','text-button')}</div>`:`<form id="answer-form">${area('我的解释','answer',{placeholder:'不用完美。先写下此刻的理解，再找一个自己的例子。',required:true,rows:9})}<div class="answer-actions">${btn('需要一点提示','hint','text-button',`data-id="${e(id)}"`)}${btn('再看原文','study-material','text-button',`data-id="${e(id)}"`)}<button type="submit" class="primary">保存回答，获取反馈 ${icon('arrow')}</button></div><p class="form-note">回答会保存到本机；AI 反馈使用已配置的服务，可能计费。未配置时保留回答并等待。</p></form>`}</div></section>
-    <aside class="learning-companion"><p class="eyebrow">给思考一点空间</p><h2>不是把答案写对，<br>而是看见自己怎么想。</h2><p>先说出结论，再补充理由。对不确定的部分，也可以明确写下。</p><div id="study-hint">${aidUsed(session)?'<p class="form-note">本轮已使用提示或回看原文，回答会如实记录。</p>':''}</div>${turns.length?`<div class="margin-actions">${btn('确认我的理解','session-understanding','text-button',`data-id="${e(id)}"`)}${!completed?btn('结束本轮练习','finish','text-button',`data-id="${e(id)}" ${waiting?'disabled':''}`):''}</div>`:''}</aside></div>`,
-    bind(){const form=$('#answer-form');if(form){watchForm(form);const requestId=crypto.randomUUID();submit(form,async values=>{await api.post(endpoint('study',id,'answer'),{answer:values.answer,hintUsed:aidUsed(session),requestId});clearAid(session);state.dirty=false;await go(`study/${id}`,{replace:true,force:true});});}}};
+    ${waiting?`<div class="waiting-note" role="status"><span class="status-pulse"></span><div><strong>你的回答已保存</strong><p>正在等待 AI 反馈，返回后会自动显示。可以离开，之后从学习记录继续。</p><div class="actions">${btn('查看最新反馈','reload','text-button')} ${link('处理动态 ↗','jobs','text-button')}${btn('结束本轮学习','finish','text-button',`data-id="${e(id)}" disabled title="收到反馈后即可结束"`)}</div></div></div>`:completed?`<div class="completion-note"><h2>这一次思考，已经留下来了。</h2><p>${e(session.completion?.reason||'学习记录已保存。')}</p>${completionHTML(session.completion)}${link('回到今天','today','text-button')}</div>`:`<form id="answer-form">${area('我的解释','answer',{placeholder:'不用完美。先写下此刻的理解，再找一个自己的例子。',required:true,rows:9})}<div class="answer-actions"><div class="answer-aids">${btn('需要一点提示','hint','text-button',`data-id="${e(id)}"`)}${btn('再看原文','study-material','text-button',`data-id="${e(id)}"`)}</div><div class="answer-submit">${btn('结束本轮学习','finish','text-button',`data-id="${e(id)}" ${!turns.length?'disabled title="先保存一次回答并收到反馈"':''}`)}<button type="submit" class="primary">保存回答，获取反馈 ${icon('arrow')}</button></div></div><p class="form-note">回答会保存到本机；AI 反馈使用已配置的服务，可能计费。未配置时保留回答并等待。</p></form>`}</div></section>
+    <aside class="learning-companion"><p class="eyebrow">给思考一点空间</p><h2>不是把答案写对，<br>而是看见自己怎么想。</h2><p>先说出结论，再补充理由。对不确定的部分，也可以明确写下。</p><div id="study-hint">${aidUsed(session)?'<p class="form-note">本轮已使用提示或回看原文，回答会如实记录。</p>':''}</div>${turns.length?`<div class="margin-actions">${btn('确认我的理解','session-understanding','text-button',`data-id="${e(id)}"`)}</div>`:''}</aside></div>`,
+    bind(){
+      if(waiting){
+        const sequence=state.sequence, host=$('#main');
+        const isCurrent=()=>state.sequence===sequence && state.route===`study/${id}` && host.isConnected;
+        stopStudyFeedback=watchStudyFeedback({
+          read:signal=>api.get(endpoint('study',id),{signal}),isCurrent,
+          async onReady(next){
+            if(!isCurrent())return;
+            const page=await sessionPage(id,next);
+            if(!isCurrent())return;
+            const scroll=window.scrollY;
+            host.innerHTML=page.html;page.bind?.();
+            window.scrollTo({top:scroll,behavior:'instant'});
+          }
+        });
+      }
+      const form=$('#answer-form');if(form){watchForm(form);const requestId=crypto.randomUUID();submit(form,async values=>{await api.post(endpoint('study',id,'answer'),{answer:values.answer,hintUsed:aidUsed(session),requestId});clearAid(session);state.dirty=false;await go(`study/${id}`,{replace:true,force:true});});}}};
 }
 async function topicsPage() {
   const topics=list((await api.get('/api/topics')).topics);
@@ -391,7 +410,16 @@ async function actions(control) {
   if(action==='hide-material') {$('#learning-material').hidden=true;$('#answer-workspace').hidden=false;$('#answer-form textarea')?.focus();return;}
   if(action==='hint') {const current=state.session;const result=await api.post(endpoint('study',id,'hint'));markAid(current);if(state.route!==`study/${id}`)return;$('#study-hint').innerHTML=`<div class="hint-note"><p class="nav-label">这次使用了提示</p><p>${e(result.hint)}</p></div>`;return;}
   if(action==='study-material'){const current=state.session;await api.post(endpoint('study',id,'hint'));markAid(current);if(state.route!==`study/${id}`)return;modal('回到本轮原文',`<p class="form-note">本轮回看原文已记录，下一轮重新独立判断。</p><div class="article-prose">${markdown(current.material).html}</div>`,{wide:true});return;}
-  if(action==='finish') {await api.post(endpoint('study',id,'finish'));await refreshBoot();return go(`study/${id}`,{replace:true});}
+  if(action==='finish') {
+    if(state.dirty && !await confirm('结束本轮学习？','输入框中尚未保存的回答不会计入本轮。取消可继续编辑。','结束本轮学习'))return;
+    const sequence=state.sequence, form=control.closest('form'), wasInert=form?.inert;
+    state.saving++;if(form)form.inert=true;
+    try {
+      await api.post(endpoint('study',id,'finish'));await refreshBoot();
+      if(sequence!==state.sequence)return;
+      state.dirty=false;return await go(`study/${id}`,{replace:true,force:true});
+    } finally { state.saving--;if(form)form.inert=wasInert; }
+  }
   if(action==='new-topic')return parity.editTopic();
   if(action==='open-topic')return parity.openTopic(id);
   if(action==='topic-search') {await go('search');const form=$('#parity-search');if(form){form.elements.q.value=control.dataset.topic;form.requestSubmit();}return;}
