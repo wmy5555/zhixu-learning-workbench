@@ -21,21 +21,29 @@ export function createClient(fetcher = (...args) => fetch(...args)) {
     const actual=scoped?'/api/practice/'+encodeURIComponent(practiceId)+path.slice(4):path;
     pending++;
     try {
+    for(let attempt=0;attempt<2;attempt++){
+    if(signal?.aborted)throw signal.reason;
     if (!csrf) await session();
+    const requestCsrf=csrf;
     const response = await fetcher(actual, {
       method, signal, credentials: 'same-origin', cache: 'no-store',
-      headers: { ...(binary ? { 'Content-Type': binary.type || 'application/octet-stream' } : body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(method !== 'GET' ? { 'X-CSRF-Token': csrf } : {}) },
+      headers: { ...(binary ? { 'Content-Type': binary.type || 'application/octet-stream' } : body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(method !== 'GET' ? { 'X-CSRF-Token': requestCsrf } : {}) },
       ...(binary ? { body: binary } : body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
     const data = await response.json();
     if (!response.ok) {
-      if (response.status === 401 || data.code === 'CSRF_DENIED') csrf = '';
+      const expired=response.status===401&&data.code==='SESSION_REQUIRED';
+      // A late response must not discard a session another request just renewed.
+      if ((expired || data.code === 'CSRF_DENIED')&&csrf===requestCsrf) csrf = '';
+      // Only retry reads rejected before routing; never replay writes or other failures.
+      if(expired&&method==='GET'&&attempt===0)continue;
       const error = new Error(data.error || `请求未完成（${response.status}）`);
       error.code = data.code;
       throw error;
     }
     if(version!==requestVersion)throw Error('知识空间已经改变，请重新读取。');
     return data;
+    }
     } finally {pending--;}
   }
   return { request, session, getContext:context, setContext,
