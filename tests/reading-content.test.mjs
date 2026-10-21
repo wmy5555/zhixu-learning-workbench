@@ -86,6 +86,17 @@ test('reader separates source children and actual relations, with expandable lis
   assert.ok(!result.html.split('class="article-prose"')[1].split('</div>')[0].includes('讨论了持续学习。'));
 });
 
+test('long abstract renders one complete content block rather than preview plus duplicate full text', () => {
+  const note = fixture();
+  const summary = '同一份摘要应在原位展开。'.repeat(30);
+  note.body = note.body.replace(literal('讨论了持续学习。'), literal(summary));
+  const html = reader(note, []).html;
+  assert.equal(html.split('同一份摘要应在原位展开。').length - 1, 30);
+  assert.ok(html.includes(summary));
+  assert.match(html, /aria-expanded="false" aria-controls="reader-abstract-copy"/);
+  assert.equal((html.match(/id="reader-abstract-copy"/g) || []).length, 1);
+});
+
 test('related reading follows accepted edges in both directions and omits retired notes', () => {
   const note = { id: 'source', children: [{ id: 'child' }] };
   const notes = ['source', 'child', 'left', 'right', 'suggestion', 'unrelated', 'retired'].map(id => ({ id, meta: { stage: id === 'retired' ? 'retired' : 'reference' } }));

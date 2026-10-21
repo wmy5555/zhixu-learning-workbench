@@ -332,7 +332,9 @@ input::placeholder,textarea::placeholder { color:var(--secondary); opacity:.65; 
 .desk-abstract > small { display:block; text-align:center; font-size:10px; color:var(--secondary); margin:5px 0 15px; }
 .desk-abstract > div { font:12px/1.95 var(--font-reading); overflow-wrap:anywhere; }
 .desk-abstract p { margin:.8em 0; }
-.abstract-full summary { cursor:pointer; color:var(--accent-ink); font-size:11px; }
+.abstract-copy.is-collapsible { max-height:15.6em; overflow:hidden; }
+.desk-abstract.is-expanded .abstract-copy { max-height:none; overflow:visible; }
+.abstract-toggle { display:block; padding:8px 0 0; color:var(--accent-ink); font-size:11px; text-align:left; }
 .reading-chart { margin:1.5em 0; }
 .reading-chart figcaption { font:500 1.1em/1.7 var(--font-editorial); }
 .reading-chart > p { font-size:.85em; color:var(--secondary); }

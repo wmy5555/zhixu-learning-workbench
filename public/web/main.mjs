@@ -325,6 +325,7 @@ async function actions(control) {
   if(action==='defer') {await api.post(endpoint('today',id,'action'),{action:'defer',days:1});await refreshBoot();await go('today',{replace:true});notify('已留到以后，按自己的节奏来。');return;}
   if(action==='budget')return formModal('今天想留多少时间？',field('可用时间（分钟）','dailyMinutes',{value:state.boot.today?.budget||25,type:'number',required:true,extra:'min="1" max="1440"'}),async values=>{await api.put('/api/settings',{dailyMinutes:Number(values.dailyMinutes)});await refreshBoot();await go('today',{force:true,replace:true});notify('可用时间已更新。');});
   if(action==='reader-size') {const active=$('.reading-scroll').classList.toggle('large-type');control.setAttribute('aria-pressed',String(active));return;}
+  if(action==='reader-abstract') {const expanded=control.closest('.desk-abstract').classList.toggle('is-expanded');control.setAttribute('aria-expanded',String(expanded));control.textContent=expanded?'收起摘要':'阅读完整摘要';return;}
   if(action==='reader-focus') {const active=$('.reader-shell').classList.toggle('focus-reading');control.setAttribute('aria-pressed',String(active));return;}
   if(action==='reader-section') {const target=document.getElementById(control.dataset.target);target?.scrollIntoView({block:'start',behavior:'instant'});target?.focus({preventScroll:true});$$('.reader-toc button').forEach(node=>node.removeAttribute('aria-current'));control.setAttribute('aria-current','location');return;}
   if(action==='prepare-learning')return prepareLearning(id);
