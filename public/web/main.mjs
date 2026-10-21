@@ -2,6 +2,7 @@ import { api, endpoint, pendingPlan, capturePayload } from './api.mjs';
 import { escape as e, markdown } from './markdown.mjs';
 import { $, $$, icon, button as btn, routeButton as link, field, area, empty, heading, kind, stage, jobState, calendar, notify, modal, confirm, busy } from './ui.mjs';
 import { reader } from './reader.mjs';
+import { learningReadiness, learningHelp, readerMenu } from './reader-actions.mjs';
 import { relatedReadingNotes } from './reading-content.mjs';
 import { springEnter } from './cds/motion-bridge.mjs';
 import { mountNoteEditor, noteEditSession } from './note-editor.mjs';
@@ -128,8 +129,9 @@ async function libraryPage() {
 async function readPage(id) {
   const sequence = state.sequence;
   const [note, related] = await Promise.all([api.get(endpoint('notes', id)), api.get('/api/relations')]);
-  if (sequence === state.sequence) state.note = note;
-  return reader(note, list(state.boot.notes), state.readerReturn, relatedReadingNotes(note, list(state.boot.notes), list(related.relations)));
+  const readiness = note.kind === 'knowledge' ? await readReadiness(note) : null;
+  if (sequence === state.sequence) { state.note = note; state.readiness = readiness; }
+  return reader(note, list(state.boot.notes), state.readerReturn, relatedReadingNotes(note, list(state.boot.notes), list(related.relations)), readiness);
 }
 async function editPage(id) {
   const note=await api.get(endpoint('notes',id));
@@ -218,16 +220,42 @@ async function startStudy(noteId, planId) {
   const intent=startStudy.intents.get(key)||{requestId:crypto.randomUUID(),pending:null};
   if(intent.pending)return intent.pending;
   startStudy.intents.set(key,intent);
-  intent.pending=(async()=>{const session=await api.post('/api/study/start',{noteId,...(planId?{planId}:{}),requestId:intent.requestId});await go(`study/${session.id}`);startStudy.intents.delete(key);})();
+  intent.pending=(async()=>{
+    const sequence=state.sequence;
+    const note=await api.get(endpoint('notes',noteId)),readiness=await readReadiness(note);
+    if(sequence!==state.sequence)return;
+    if(!readiness.ready){modal(readiness.heading,learningHelp(note,readiness));return;}
+    try {
+      const session=await api.post('/api/study/start',{noteId,...(planId?{planId}:{}),requestId:intent.requestId});
+      if(sequence===state.sequence)await go(`study/${session.id}`);
+      startStudy.intents.delete(key);
+    } catch(error) {
+      if(sequence!==state.sequence)return;
+      if(error.code==='RESEARCH_REQUIRED'){await prepareLearning(noteId);return;}
+      throw error;
+    }
+  })();
   try{return await intent.pending;}finally{intent.pending=null;}
 }
 startStudy.intents=new Map();
-async function processSource(id) {
+async function readReadiness(note) {
+  const data=await api.get(endpoint('notes',note.id,'evidence'));
+  return learningReadiness(note,list(state.boot.notes),list(data.limitations));
+}
+async function prepareLearning(id) {
+  const sequence=state.sequence;
+  const note=await api.get(endpoint('notes',id)),readiness=await readReadiness(note);
+  if(sequence!==state.sequence)return;
+  if(readiness.ready){notify('材料条件已满足，可以开始学习。');return go(state.route,{replace:true});}
+  modal(readiness.heading,learningHelp(note,readiness));
+}
+async function processSource(id, { research = false } = {}) {
   const note=await api.get(endpoint('notes',id));
-  const dialog=modal('把这份原文交给 AI 拆解？',`<p><strong>${e(note.title)}</strong></p><p>将所需原文发送给你配置的 AI 服务，生成可供选择的知识。可能计费，生成结果不会自动成为个人理解。</p><label class="check"><input type="checkbox" name="research"> 同时联网核验事实、条件与反例</label><div class="actions"><button class="primary" data-run>确认开始拆解</button></div>`);
+  const dialog=modal(research?'核验这份原始资料？':'把这份原文交给 AI 拆解？',`<p><strong>${e(note.title)}</strong></p><p>将所需原文发送给你配置的 AI 服务，生成可供选择的知识。可能计费，生成结果不会自动成为个人理解。</p><label class="check"><input type="checkbox" name="research" ${research?'checked':''}> 同时联网核验事实、条件与反例</label><p class="form-note">完成后到原文查看拆解知识；已有人工修改时需查看修订建议并决定是否采用。</p><div class="actions"><button class="primary" data-run>确认开始${research?'核验':'拆解'}</button></div>`);
   dialog.querySelector('[data-run]').onclick=event=>busy(event.currentTarget,async()=>{
-    await api.post(endpoint('notes',id,'process'),{research:dialog.querySelector('input').checked});
-    dialog.close();notify('处理请求已记录，可在处理动态中查看。');await refreshBoot();shell();
+    const result=await api.post(endpoint('notes',id,'process'),{research:dialog.querySelector('input').checked,reuseExtracted:research});
+    dialog.close();await refreshBoot();shell();
+    modal('查看处理进度',`<div class="reader-menu"><p>当前状态：${e(jobState(result.job?.state || result.state)) || '请求已记录'}。如需配置能力或重试，可在处理任务中继续。</p><div class="actions">${link('查看处理任务','jobs','primary')}${link('查看原文与拆解知识',`read/${id}`,'text-button')}</div></div>`);
   });
 }
 async function extract(id) {
@@ -300,7 +328,9 @@ async function actions(control) {
   if(action==='reader-abstract') {const expanded=control.closest('.desk-abstract').classList.toggle('is-expanded');control.setAttribute('aria-expanded',String(expanded));control.textContent=expanded?'收起摘要':'阅读完整摘要';return;}
   if(action==='reader-focus') {const active=$('.reader-shell').classList.toggle('focus-reading');control.setAttribute('aria-pressed',String(active));return;}
   if(action==='reader-section') {const target=document.getElementById(control.dataset.target);target?.scrollIntoView({block:'start',behavior:'instant'});target?.focus({preventScroll:true});$$('.reader-toc button').forEach(node=>node.removeAttribute('aria-current'));control.setAttribute('aria-current','location');return;}
-  if(action==='reader-actions') {const note=state.note;modal('继续这份资料',`<div class="reader-menu">${btn('出处与元数据','metadata','text-button',`data-id="${e(id)}"`)}${btn('历史版本','versions','text-button',`data-id="${e(id)}"`)}${btn('Obsidian 链接预览','links','text-button',`data-id="${e(id)}"`)}${note.kind==='knowledge'?btn('合并知识','merge','text-button',`data-id="${e(id)}"`)+btn('移除当前知识','delete-knowledge','text-button',`data-id="${e(id)}"`):''}${link('编辑正文',`edit/${id}`,'secondary')}${note.kind==='source'?`${btn('AI 拆解','process','secondary',`data-id="${e(id)}"`)}${btn('自己整理知识','extract','secondary',`data-id="${e(id)}"`)}${btn('移入回收站','trash-source','text-button',`data-id="${e(id)}"`)}`:`${btn('开始学习','start-note','secondary',`data-id="${e(id)}"`)}${btn('调整学习安排','promote','secondary',`data-id="${e(id)}"`)}${btn('确认我的理解','understanding','secondary',`data-id="${e(id)}"`)}${btn('查看依据与来源','evidence','secondary',`data-id="${e(id)}"`)}`}</div>`);return;}
+  if(action==='prepare-learning')return prepareLearning(id);
+  if(action==='research-source')return processSource(id,{research:true});
+  if(action==='reader-actions') {const note=state.note;if(!note||note.id!==id)return;modal('资料操作',readerMenu(note,state.readiness));return;}
   if(action==='trash-source') {const note=await api.get(endpoint('notes',id));if(note.kind!=='source')return;if(!await confirm('把这份原文暂时放下？','原始资料会进入回收站，可以恢复。','移入回收站'))return;await api.remove(endpoint('notes',id),{expectedHash:note.hash});$$('dialog[open]').forEach(dialog=>dialog.close());await refreshBoot();await go('library');notify('原文已移入回收站。');return;}
   if(action==='process')return processSource(id);
   if(action==='extract')return extract(id);

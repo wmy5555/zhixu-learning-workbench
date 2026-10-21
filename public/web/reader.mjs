@@ -1,8 +1,9 @@
 import { escape as e, markdown, safeLink } from './markdown.mjs';
 import { icon, button, routeButton, kind, stage } from './ui.mjs';
+import { learningReadiness, learningNotice } from './reader-actions.mjs';
 import { readingContent, readingGroups } from './reading-content.mjs';
 
-export function reader(note, notes, returnTo = 'library', related = []) {
+export function reader(note, notes, returnTo = 'library', related = [], readiness = learningReadiness(note, notes)) {
   const content = readingContent(note);
   const { children, related: otherKnowledge } = readingGroups(note, related);
   const summary = content.conversation?.summary || '';
@@ -22,7 +23,7 @@ export function reader(note, notes, returnTo = 'library', related = []) {
       </aside>
       <div class="reading-scroll" tabindex="0" aria-label="资料正文"><article class="reading-article">
         <header class="article-heading"><p class="eyebrow">${e(note.meta?.topic || kind(note.kind))} / READING NOTE</p><h1>${e(note.title || '未命名资料')}</h1><p>${e(kind(note.kind))} · ${e(stage(note.meta?.stage))} · ${Number(content.conversation?.count ?? String(note.body || '').length).toLocaleString()} 字</p></header>
-        <div class="article-prose">${content.html}</div>
+        ${learningNotice(note, readiness)}<div class="article-prose">${content.html}</div>
         ${files.length ? `<section class="article-attachments"><h2>原始附件</h2>${files.map(file=>{
           const url = `/api/notes/${encodeURIComponent(note.id)}/attachments?asset=${encodeURIComponent(file.id)}`;
           return `<div>${file.kind === 'image' ? `<img src="${url}" alt="${e(file.name)}" loading="lazy">` : ''}<a href="${url}&download=1">${icon('file')} ${e(file.name)} · 下载原件</a></div>`;
@@ -33,7 +34,7 @@ export function reader(note, notes, returnTo = 'library', related = []) {
       <aside class="reading-margin"><p class="nav-label">${note.kind === 'source' ? '从原文走向理解' : '我的学习'}</p>
         ${note.kind === 'source' ? `<h2>从原文到自己的理解</h2><p class="muted small">${children.length ? `已拆解 ${children.length} 条知识，可以从书桌继续阅读。` : '先读原文，再决定值得留下什么。'}</p>
           <div class="margin-actions">${button('AI 拆解这份资料', 'process', 'primary', `data-id="${e(note.id)}"`)}${button('自己整理一条', 'extract', 'text-button', `data-id="${e(note.id)}"`)}</div>`
-          : note.kind === 'knowledge' ? `<h2>用自己的例子，检验这段理解。</h2><p class="muted small">${e(stage(note.meta?.stage))}</p><div class="margin-actions">${button('开始学习', 'start-note', 'primary', `data-id="${e(note.id)}"`)}${button('调整学习安排', 'promote', 'text-button', `data-id="${e(note.id)}"`)}${button('写下我的理解', 'understanding', 'text-button', `data-id="${e(note.id)}"`)}${button('查看依据与来源', 'evidence', 'text-button', `data-id="${e(note.id)}"`)}</div>` : note.kind === 'mistake' ? `<h2>从上次没想清楚的地方继续。</h2><div class="margin-actions">${button('针对这次误解练习', 'start-mistake', 'primary', `data-id="${e(note.id)}" data-note="${e(note.meta?.noteId||'')}"`)}${button('记录修正或提出质疑', 'mistake-state', 'text-button', `data-id="${e(note.id)}"`)}</div>` : '<h2>先把这个想法读完整。</h2>'}
+          : note.kind === 'knowledge' ? `<h2>用自己的例子，检验这段理解。</h2><p class="muted small">${e(stage(note.meta?.stage))}</p><div class="margin-actions">${button(readiness.ready ? '开始学习' : '处理学习条件', readiness.ready ? 'start-note' : 'prepare-learning', 'primary', `data-id="${e(note.id)}"`)}${button('调整学习安排', 'promote', 'text-button', `data-id="${e(note.id)}"`)}${button('写下我的理解', 'understanding', 'text-button', `data-id="${e(note.id)}"`)}${button('查看依据与来源', 'evidence', 'text-button', `data-id="${e(note.id)}"`)}</div>` : note.kind === 'mistake' ? `<h2>从上次没想清楚的地方继续。</h2><div class="margin-actions">${button('针对这次误解练习', 'start-mistake', 'primary', `data-id="${e(note.id)}" data-note="${e(note.meta?.noteId||'')}"`)}${button('记录修正或提出质疑', 'mistake-state', 'text-button', `data-id="${e(note.id)}"`)}</div>` : '<h2>先把这个想法读完整。</h2>'}
         <blockquote>真正值得保留的，还有你重新组织它时，发生的思考。</blockquote>
       </aside>
     </div></div>`;
