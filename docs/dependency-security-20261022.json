@@ -1,0 +1,49 @@
+{
+  "date": "2026-10-22",
+  "scope": "Three changed transitive dependencies only; prior inventories remain historical evidence.",
+  "packageManager": "pnpm@11.19.0",
+  "removed": [
+    "sprintf-js@1.0.3"
+  ],
+  "packages": [
+    {
+      "name": "hono",
+      "version": "4.13.11",
+      "license": "MIT",
+      "repository": {
+        "url": "git+https://github.com/honojs/hono.git",
+        "type": "git"
+      },
+      "registry": "https://registry.npmjs.org/hono/4.13.11",
+      "integrity": "sha512-/SMX/RQNJn7oNmFwH6DtwDqcrzZU2otm1FD6OJe2cWF6cfy/F8hq0XVBv7xW3FTJshRQwuBnXHDq2kNsdZnshg==",
+      "licenseFile": "LICENSE",
+      "licenseSha256": "a6ab98e5c77b9070c443eaff2ff81034a6f8cc05a7524d5098eb0f24defa0115"
+    },
+    {
+      "name": "argparse",
+      "version": "2.0.1",
+      "license": "Python-2.0",
+      "repository": {
+        "url": "git+https://github.com/nodeca/argparse.git",
+        "type": "git"
+      },
+      "registry": "https://registry.npmjs.org/argparse/2.0.1",
+      "integrity": "sha512-8+9WqebbFzpX9OR+Wa6O29asIogeRMzcGtAINdpMHHyAg10f05aSFVBbcEqGf/PXw1EjAZ+q2/bEBg3DvurK3Q==",
+      "licenseFile": "LICENSE",
+      "licenseSha256": "de4d1f2d2ad5ad0cfd1657a106476b31cb5db5ef9d1ff842b237c0c81f0c8a23"
+    },
+    {
+      "name": "uuid",
+      "version": "11.1.1",
+      "license": "MIT",
+      "repository": {
+        "url": "git+https://github.com/uuidjs/uuid.git",
+        "type": "git"
+      },
+      "registry": "https://registry.npmjs.org/uuid/11.1.1",
+      "integrity": "sha512-vIYxrBCC/N/K+Js3qSN88go7kIfNPssr/hHCesKCQNAjmgvYS2oqr69kIufEG+O4+PfezOH4EbIeHCfFov8ZgQ==",
+      "licenseFile": "LICENSE.md",
+      "licenseSha256": "beaa6b04fb82e41dd2ad679e19e27953afb5999b1abbb455b6564e78ebfeb332"
+    }
+  ]
+}
