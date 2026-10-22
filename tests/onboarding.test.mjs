@@ -333,8 +333,9 @@ test('unchanged edits preserve source versions while stale saves and real edits 
   const edited = p.editNote(source.id, { expectedHash: source.hash, body: source.body + '\n真实修改（合成数据）' });
   assert.notEqual(edited.hash, source.hash);
   assert.match(p.noteEvidence(knowledge.id).limitations.join(), /原始资料已修改/);
-  assert.ok(!p.today().items.some(item => item.noteId === knowledge.id));
-  assert.equal(p.today().unavailable.find(item => item.noteId === knowledge.id).sourceId, source.id);
+  const plan = p.today().items.find(item => item.noteId === knowledge.id);
+  assert.ok(plan, 'joining learning remains scheduled with the approved material warning');
+  assert.match(plan.materialWarnings.join(), /原始资料已修改/);
   assert.throws(() => p.editNote(source.id, { expectedHash: source.hash, body: edited.body }), { code: 'CONFLICT' });
   assert.throws(() => p.editNote(source.id, { body: edited.body }), { code: 'CONFLICT' });
   const revised = p.editNote(source.id, { expectedHash: edited.hash, meta: { locator: '新增合成来源定位' } });

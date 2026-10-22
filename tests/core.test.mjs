@@ -81,15 +81,14 @@ test('material reprocessing targets the tracked input source and never substitut
   const note = createKnowledge(s, { title: '合成多来源知识', meta: { sources: refs, processKey: `${tracked.id}:${tracked.hash}:0` } });
   assert.equal(s.today().items.some(item => item.noteId === note.id), true);
   const changed = s.editNote(tracked.id, { expectedHash: tracked.hash, body: '合成修改后的原文乙' });
-  const unavailable = () => s.today().unavailable.find(item => item.noteId === note.id);
-  assert.equal(unavailable().code, 'material');
-  assert.equal(unavailable().sourceId, tracked.id);
+  const warnings = () => s.today().items.find(item => item.noteId === note.id)?.materialWarnings || [];
+  assert.match(warnings().join(), /修改或删除/, 'changed tracked input remains a learning warning');
+  assert.match(s.noteEvidence(note.id).limitations.join(), /修改或删除/);
   s.store.delete(tracked.id, changed.hash);
-  assert.equal(unavailable().sourceId, undefined, 'a deleted tracked source cannot be replaced by the first surviving input');
-  assert.match(unavailable().reason, /修改或删除/);
+  assert.match(warnings().join(), /修改或删除/, 'the surviving unrelated input cannot clear the missing tracked-source warning');
   assert.equal(s.getNote(first.id).body, first.body);
   const untracked = createKnowledge(s, { title: '合成未明确来源的限制', meta: { sources: refs, researchLimitations: ['合成待核验'] } });
-  assert.equal(s.today().unavailable.find(item => item.noteId === untracked.id).sourceId, undefined);
+  assert.ok(s.today().items.find(item => item.noteId === untracked.id).materialWarnings.includes('合成待核验'));
   assert.equal(calls.length, 0);
 });
 
