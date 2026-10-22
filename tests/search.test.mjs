@@ -242,3 +242,17 @@ test('near-limit high-entropy Markdown indexes within a bounded Node heap and re
   assert.equal(child.status,0,child.stderr);
   const result=JSON.parse(child.stdout);assert.ok(result.segments>1);assert.ok(result.max<1_000_000);
 });
+
+test('semantic relevance is not displaced by learning stage and pagination reuses one query', async t => {
+  let calls=0;
+  const {s}=harness(t,{embed:async()=>{calls++;return {vectors:[[1,0]]};}});
+  s.updateSettings({embedding:{enabled:true,model:'synthetic'}});
+  note(s,'direct','明确行动和复核记录',{stage:'candidate'});
+  note(s,'middle','行动记录的边界',{stage:'reference'});
+  note(s,'learned','阅读术语和解释练习',{stage:'integrated'});
+  const update=s.store.db.prepare('UPDATE index_chunks SET vector=?,model=? WHERE noteId=?');
+  for(const [id,vector] of [['direct',[1,0]],['middle',[.8,.6]],['learned',[.4,.9]]])update.run(JSON.stringify(vector),'synthetic',id);
+  let cursor;const seen=[];
+  do {const page=await s.search('如何复盘行动',{mode:'semantic',privacy:'cloud',limit:1,cursor});seen.push(...ids(page));cursor=page.nextCursor;} while(cursor);
+  assert.deepEqual(seen,['direct','middle','learned']);assert.equal(calls,1);
+});

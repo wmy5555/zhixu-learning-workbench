@@ -3,13 +3,15 @@ import { tokenCount } from './token-usage.mjs';
 import { knownPurpose } from './call-purpose.mjs';
 
 const unresolved = new Set(['reserved', 'dispatch', 'received', 'unknown']);
+const acknowledgedContinuation = row => ['unknown', 'resolved_unknown'].includes(row.phase) && row.continuation?.acknowledged === true;
 const costValue = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 const fail = (code, message) => { throw Object.assign(new Error(message), { code, status: 409 }); };
 
 // Private local records only. No request body, URL, headers or credentials are stored.
 // All transitions commit synchronously before returning to the external adapter.
-export function createCallLedger({ store, getStore = () => store, at = () => new Date() } = {}) {
+export function createCallLedger({ store, getStore = () => store, at = () => new Date(), allowUncertainContinuation = false } = {}) {
   const active = new Set();
+  const allowsNew = row => allowUncertainContinuation === true && acknowledgedContinuation(row);
   function transaction(fn) {
     const current = getStore();
     current.db.exec('BEGIN IMMEDIATE');
@@ -24,14 +26,16 @@ export function createCallLedger({ store, getStore = () => store, at = () => new
   };
   function pending(current) { return current.records('callLedger').filter(row => unresolved.has(row.phase) || row.phase === 'resolved_unknown' && costValue(row.confirmation?.cost) === null); }
   function listPending() {
-    return pending(getStore()).map(({ id, phase, capability, model, createdAt, updatedAt, jobId, turnId, error }) =>
-      ({ id, phase, capability, model, createdAt, updatedAt, jobId, turnId, error, active: active.has(id), hasResult: phase === 'received' }));
+    return pending(getStore()).map(row => {
+      const { id, phase, capability, model, createdAt, updatedAt, jobId, turnId, error } = row;
+      return { id, phase, capability, model, createdAt, updatedAt, jobId, turnId, error, active: active.has(id), hasResult: phase === 'received', newRequestsAllowed: allowsNew(row) };
+    });
   }
   function reserve({ capability, model = null, sourceId, key, contextKey, singleRequest = false, jobId, turnId, purpose, reservedCost = null }, config) {
     const metadata = knownPurpose(purpose) ? { purpose } : {};
     const row = transaction(current => {
-      if (pending(current).some(item => !active.has(item.id))) fail('CALL_RECOVERY_REQUIRED', '有结果未知或记账未完成的调用。请先在用量与费用中处理，系统不会自动重发。');
-      if (contextKey && current.records('callLedger').some(item => item.contextKey === contextKey && item.phase === 'resolved_unknown')) fail('CALL_RECOVERY_REQUIRED', '原操作没有可恢复的响应。人工核对费用不会授权该操作重新发送。');
+      if (pending(current).some(item => !active.has(item.id) && !allowsNew(item))) fail('CALL_RECOVERY_REQUIRED', '有结果未知或记账未完成的调用。请先在用量与费用中处理，系统不会自动重发。');
+      if (contextKey && current.records('callLedger').some(item => item.contextKey === contextKey && ['unknown','resolved_unknown'].includes(item.phase))) fail('CALL_RECOVERY_REQUIRED', '原操作没有可恢复的响应。确认继续其他请求不会授权该操作重新发送。');
       if (singleRequest && contextKey && current.records('callLedger').some(item => item.contextKey === contextKey && item.phase !== 'cancelled')) fail('CALL_RECOVERY_REQUIRED', '此轮操作已有调用，请恢复已有结果；修改输入或模型配置不会重新发送。');
       if (key && current.records('callLedger').some(item => item.key === key && item.phase !== 'cancelled')) fail('CALL_RECOVERY_REQUIRED', '同一操作已有调用记录，请恢复已有结果，不能重新发送。');
       const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: config.timezone || 'Asia/Singapore', year: 'numeric', month: '2-digit', day: '2-digit' });
@@ -59,7 +63,7 @@ export function createCallLedger({ store, getStore = () => store, at = () => new
     return transaction(current => {
       const row = read(current, id);
       if (row.phase !== 'reserved') fail('CALL_STATE', '该调用不能再次发送。');
-      if (pending(current).some(item => item.id !== id && (item.phase === 'unknown' || !active.has(item.id)))) fail('CALL_RECOVERY_REQUIRED', '另一调用结果未知或记账未完成，请先处理。');
+      if (pending(current).some(item => item.id !== id && !allowsNew(item) && (item.phase === 'unknown' || !active.has(item.id)))) fail('CALL_RECOVERY_REQUIRED', '另一调用结果未知或记账未完成，请先处理。');
       current.put('calls', id, { ...current.get('calls', id), phase: 'dispatch' });
       return current.put('callLedger', id, { ...row, phase: 'dispatch', updatedAt: timestamp() });
     });
@@ -130,6 +134,16 @@ export function createCallLedger({ store, getStore = () => store, at = () => new
     read(getStore(), id);
     return getStore().get('callResults', id);
   }
+  function allowNewRequests(id, { acknowledgeUnknownCost, reason } = {}) {
+    if (allowUncertainContinuation !== true) fail('CALL_CONTINUE_DISABLED', '此实例没有启用未知费用继续选项。');
+    if (active.has(id)) fail('CALL_ACTIVE', '请求仍在执行，请等待结束。');
+    if (acknowledgeUnknownCost !== true || typeof reason !== 'string' || !reason.trim() || reason.length > 1000) fail('INVALID_INPUT', '请明确确认费用仍未知、新请求可能收费，并填写原因。');
+    return transaction(current => {
+      const row = read(current, id);
+      if (!['unknown', 'resolved_unknown'].includes(row.phase)) fail('CALL_STATE', '仅能为已结束且没有完整结果的请求确认继续。');
+      return current.put('callLedger', id, { ...row, continuation: { acknowledged: true, at: timestamp(), reason: reason.trim() } });
+    });
+  }
   function evidence(jobId) {
     const current = getStore();
     // The adapter may be shared by an isolated practice library. Its owner
@@ -152,5 +166,5 @@ export function createCallLedger({ store, getStore = () => store, at = () => new
     if (!result) fail('CALL_RESULT_MISSING', '已有调用的响应缺失，不能重新发送。');
     return { ...result, callId: row.id };
   }
-  return { reserve, dispatch, received, accounted, unknown, cancel, finish: id => active.delete(id), listPending, recover, confirm, getResult, evidence, replay };
+  return { reserve, dispatch, received, accounted, unknown, cancel, finish: id => active.delete(id), listPending, recover, confirm, allowNewRequests, getResult, evidence, replay };
 }

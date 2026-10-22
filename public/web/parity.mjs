@@ -19,7 +19,8 @@ export function evidenceHTML(items, limitations = []) {
 export function feedbackHTML(feedback) {
   if(!feedback)return '';
   const labels={correct:'回答正确',partial:'仍有遗漏',incorrect:'需要修正',ambiguous:'存在不确定性'};
-  return `<div class="learning-feedback"><p class="nav-label">AI 反馈 · 供你判断</p>${facts([['评估',labels[feedback.assessment]||feedback.assessment]])}${[['反馈',feedback.feedback],['遗漏',feedback.omission],['修正与依据',feedback.correction],['下一问',feedback.nextQuestion],['建议',feedback.suggestion]].filter(([,v])=>v).map(([k,v])=>`<section><h3>${k}</h3><div class="article-prose">${markdown(readable(v)).html}</div></section>`).join('')}</div>`;
+  const section=(title,value)=>value?`<section>${title?`<h3>${title}</h3>`:''}<div class="article-prose">${markdown(readable(value)).html}</div></section>`:'';
+  return `<div class="learning-feedback"><p class="nav-label">${e(labels[feedback.assessment]||feedback.assessment)}</p>${section('',feedback.feedback)}${details('查看解析',section('关键缺口',feedback.omission)+section('修正与依据',feedback.correction)+section('可修改的建议',feedback.suggestion)+section('后续练习',feedback.nextQuestion))}</div>`;
 }
 export function completionHTML(completion) {
   if(!completion)return '';
