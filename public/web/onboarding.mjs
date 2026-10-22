@@ -54,7 +54,7 @@ export function createWebOnboarding({api,state,go,refreshBoot,beforeLeave}){
   if(t)candidates.sort((a,b)=>(intersection(a,{x:t.x,y:t.y,w:t.width,h:t.height})+intersection(a,{x:m.x,y:m.y,w:m.width,h:m.height})*20)-(intersection(b,{x:t.x,y:t.y,w:t.width,h:t.height})+intersection(b,{x:m.x,y:m.y,w:m.width,h:m.height})*20));const p=candidates[0];card.style.left=p.x+'px';card.style.top=p.y+'px';
  }
  async function settle(){await document.fonts.ready;await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);}
- async function showTarget(){const el=target();if(!el||card.contains(el)){motion.hide();render();return;}await motion.scroll(el);await settle();if(!active||target()!==el){changed();return;}await motion.move(el);if(step().kind==='read')await motion.frame(el);motion.pulse();}
+ async function showTarget(){const el=target();if(!el){motion.hide();render();return;}if(card.contains(el)){motion.hide();return;}await motion.scroll(el);await settle();if(!active||target()!==el){changed();return;}await motion.move(el);if(step().kind==='read')await motion.frame(el);motion.pulse();}
  async function openCard(){if(mode==='A'&&active){detail=true;render();placeCard();if(innerWidth<850){card.style.visibility='hidden';await motion.scroll(target());await motion.track();card.style.visibility='';}await motion.panel(card,true);}}
  async function refreshProof(){if(!active||travelling||motion.moving||polling)return;const token=sequence;polling=api.get('/api/onboarding/state');try{const value=await polling;if(token!==sequence||!active)return;adopt(value);const next=JSON.stringify([step().id,proof.progress?.[step().id],proof.learningCandidates?.map(n=>n.id),error,Boolean(target())]);if(next!==signature){if(done())error='';render();placeCard();}}catch(err){if(token===sequence){error=err.message;render();}}finally{polling=null;}}
  async function navigate(to){
@@ -123,6 +123,8 @@ export function createWebOnboarding({api,state,go,refreshBoot,beforeLeave}){
     const el=target(),hostChanged=motion.layer.parentElement!==host;
     if(hostChanged){motion.hide();host.append(motion.layer);}
     if(!el){motion.hide();return;}
+    // Card actions already stay in view; rebuilding them on scroll loses focus and repeats layout.
+    if(card.contains(el)){if(!motion.layer.firstElementChild.hidden)motion.hide();if(!dialog)placeCard();return;}
     if(hostChanged||motion.layer.firstElementChild.hidden||motion.target!==el){
      await showTarget();if(!dialog){render();placeCard();}
     }else{await motion.track();if(!dialog)placeCard();}
