@@ -78,6 +78,31 @@ function linkToken(text, start, budget) {
   return { end: end + 1, label: text.slice(start + 1, labelEnd), url, value, title: match[3] ? unescapeMarkdown(match[3]) : '' };
 }
 
+// These private delimiters are export syntax, not source URLs. Interpret only a
+// complete citation token outside code; keep its original bytes in stored text.
+const citationId = /^turn[0-9]+(?:view|search|fetch|news|file)[0-9]+$/;
+function citationMap(values) {
+  const map = new Map();
+  for (const value of Array.isArray(values) ? values.slice(0, 2000) : []) {
+    if (!value || !citationId.test(value.id)) continue;
+    let url = '';
+    try {
+      const parsed = new URL(value.url);
+      if (!parsed.username && !parsed.password) url = safeExternalUrl(value.url);
+    } catch { /* Missing or unsafe URLs stay unresolved. */ }
+    const entry = url ? { url, title: typeof value.title === 'string' && value.title.trim() ? value.title.trim().slice(0, 200) : '查看来源' } : null;
+    // A duplicated reference with conflicting metadata must never pick a URL.
+    if (map.has(value.id) && map.get(value.id)?.url !== entry?.url) map.set(value.id, null);
+    else if (!map.has(value.id)) map.set(value.id, entry);
+  }
+  return map;
+}
+function citationToken(text, start) {
+  if (text[start] !== '\uE200') return null;
+  const match = text.slice(start, start + 2048).match(/^\uE200cite\uE202(turn[0-9]+(?:view|search|fetch|news|file)[0-9]+(?:\uE202turn[0-9]+(?:view|search|fetch|news|file)[0-9]+)*)\uE201/);
+  return match ? { end: start + match[0].length, ids: [...new Set(match[1].split('\uE202'))] } : null;
+}
+
 function inline(text, depth = 0, allowLinks = true, budget = { remaining: text.length * 4 + INLINE_SCAN_LIMIT }) {
   if (depth >= MAX_DEPTH) return [text];
   const children = [];
@@ -93,6 +118,21 @@ function inline(text, depth = 0, allowLinks = true, budget = { remaining: text.l
       // Consume an unmatched run once rather than rescanning every backtick.
       do { plain += text[i++]; } while (text[i] === '`');
       continue;
+    }
+    const citation = citationToken(text, i);
+    if (citation) {
+      flush();
+      const items = [], missing = [];
+      for (const id of citation.ids) {
+        const source = budget.citationSources?.get(id);
+        if (source) items.push(allowLinks
+          ? el('a', { href: source.url, target: '_blank', rel: 'noopener noreferrer' }, source.title)
+          : el('span', { text: source.title }));
+        else missing.push(id);
+      }
+      if (missing.length) items.push(el('span', { text: '来源信息未随原文导入', title: `原始引用编号：${missing.join('、')}` }));
+      children.push(el('span', { class: 'chatgpt-citation' }, ['〔', ...items.flatMap((item, index) => index ? ['；', item] : [item]), '〕']));
+      i = citation.end; continue;
     }
     if (budget.presentation && text[i] === '<') {
       const decoration = text.slice(i, i + 2050).match(/^<\/?(box|row|text|badge|icon|divider)(?=[\s/>])[^<>]{0,2000}>/);
@@ -194,8 +234,8 @@ function blockStart(lines, index) {
   return Boolean(!line.trim() || fence(line) || heading(line) || listMarker(line) || /^ {0,3}>/.test(line) || tableAt(lines, index));
 }
 
-function blocks(lines, depth = 0, imageResolver, conversation = false, presentation = false) {
-  const textInline = text => inline(text, 0, true, { remaining: text.length * 4 + INLINE_SCAN_LIMIT, imageResolver, presentation });
+function blocks(lines, depth = 0, imageResolver, conversation = false, presentation = false, citationSources) {
+  const textInline = text => inline(text, 0, true, { remaining: text.length * 4 + INLINE_SCAN_LIMIT, imageResolver, presentation, citationSources });
   if (depth >= MAX_DEPTH) return [el('p', { class: 'markdown-fallback' }, inline(lines.join('\n'), MAX_DEPTH))];
   const capturedConversation = conversation && lines.some(line => /^ {0,3}##[ \t]+会话原文（按收到的顺序保留）[ \t]*$/.test(line));
   const children = [];
@@ -226,7 +266,7 @@ function blocks(lines, depth = 0, imageResolver, conversation = false, presentat
           || capturedConversation && depth === 0 && exportedSection === 'scope');
       if (proseEnvelope) {
         // Unwrap only generated prose envelopes, once. Inner fenced samples stay literal.
-        children.push(el('section', { class: transcript && message ? 'conversation-message' : 'conversation-context' }, blocks(code, depth + 1, imageResolver, false, true)));
+        children.push(el('section', { class: transcript && message ? 'conversation-message' : 'conversation-context' }, blocks(code, depth + 1, imageResolver, false, true, citationSources)));
         message = false;
         exportedSection = '';
         continue;
@@ -249,7 +289,7 @@ function blocks(lines, depth = 0, imageResolver, conversation = false, presentat
     if (/^ {0,3}>/.test(line)) {
       const quote = [];
       while (i < lines.length && /^ {0,3}>/.test(lines[i])) quote.push(lines[i++].replace(/^ {0,3}> ?/, ''));
-      children.push(el('blockquote', {}, blocks(quote, depth + 1, imageResolver, false, presentation)));
+      children.push(el('blockquote', {}, blocks(quote, depth + 1, imageResolver, false, presentation, citationSources)));
       continue;
     }
     const marker = listMarker(line);
@@ -267,7 +307,7 @@ function blocks(lines, depth = 0, imageResolver, conversation = false, presentat
           itemLines.push(lines[i].slice(Math.min(indentation, item.width)));
           i++;
         }
-        list.append(el('li', {}, blocks(itemLines, depth + 1, imageResolver, false, presentation)));
+        list.append(el('li', {}, blocks(itemLines, depth + 1, imageResolver, false, presentation, citationSources)));
       }
       children.push(list);
       continue;
@@ -303,10 +343,10 @@ function blocks(lines, depth = 0, imageResolver, conversation = false, presentat
 }
 
 /** Render body text only. Keep titles/metadata and editing/storage as plain text. */
-export function renderMarkdown(value, { className = '', emptyText = '暂无正文', imageResolver, conversation = false } = {}) {
+export function renderMarkdown(value, { className = '', emptyText = '暂无正文', imageResolver, conversation = false, citationSources } = {}) {
   const source = String(value ?? '');
   const root = el('div', { class: ['markdown-reader', className].filter(Boolean).join(' ') });
   if (!source.trim()) root.append(el('p', { class: 'markdown-empty', text: emptyText }));
-  else for (const block of blocks(source.replace(/\r\n?/g, '\n').split('\n'), 0, imageResolver, conversation)) root.append(block);
+  else for (const block of blocks(source.replace(/\r\n?/g, '\n').split('\n'), 0, imageResolver, conversation, false, citationMap(citationSources))) root.append(block);
   return root;
 }

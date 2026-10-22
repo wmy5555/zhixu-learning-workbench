@@ -167,7 +167,7 @@ test('default extraction does not research; explicit later research reuses extra
   assert.equal(before.meta.researchedAt, null);
   assert.equal(before.meta.reviewAfter, null);
   assert.equal(service.today().items.some(item => item.noteId === before.id), false);
-  assert.throws(() => service.startStudy({ noteId: before.id }), error => error.code === 'RESEARCH_REQUIRED');
+  assert.throws(() => service.startStudy({ noteId: before.id }), /加入学习/);
   const generateCount = mock.events.filter(e => e.capability === 'generate').length;
   const job = service.processNote(imported.notes[0].id, { research: true, reuseExtracted: true });
   assert.equal(service.processNote(imported.notes[0].id, { research: true, reuseExtracted: true }).id, job.id);
@@ -235,7 +235,7 @@ test('orchestration-only mock covers source evidence, learning, mistake dispute,
   assert.match(confirmed.body, /我的理解（用户确认）/);
 });
 
-test('simulated research failure keeps a limited candidate out of learning and RAG answers', async t => {
+test('simulated research failure permits warned learning but excludes RAG answers', async t => {
   const { service } = await harness(t, { researchFailure: true });
   const imported = service.importItems({
     items: [{ title: '研究失败资料', body: '需要研究但测试桩故意失败。', privacy: 'cloud' }],
@@ -250,14 +250,14 @@ test('simulated research failure keeps a limited candidate out of learning and R
   assert.ok(candidate.meta.researchLimitations.some(item => item.includes('尚待核验')));
   assert.ok(processJob.runtimeIssues.some(item => item.message.includes('模拟研究失败')));
   candidate = service.promote(candidate.id, { stage: 'learning', reason: '仅验证受限材料隔离', depth: 'explain' });
-  assert.equal(service.today().items.some(item => item.noteId === candidate.id), false);
-  assert.throws(() => service.startStudy({ noteId: candidate.id }), error => error.code === 'RESEARCH_REQUIRED');
+  assert.equal(service.today().items.some(item => item.noteId === candidate.id), true);
+  assert.ok(service.startStudy({ noteId: candidate.id }).materialWarnings.length);
   const answer = await service.ask({ question: '北辰', scope: ['knowledge'] });
   assert.equal(answer.citations.length, 0);
   assert.match(answer.answer, /没有找到可直接支持/);
 });
 
-test('a changed source makes its old processKey candidate ineligible for study and RAG answers', async t => {
+test('a changed source warns during study and remains excluded from RAG answers', async t => {
   const { service } = await harness(t);
   const imported = service.importItems({
     items: [{ title: '会变化的来源', body: '来源初始版本。', privacy: 'cloud' }],
@@ -272,7 +272,7 @@ test('a changed source makes its old processKey candidate ineligible for study a
   const found = await service.search('北辰', { scope: ['knowledge'] });
   assert.equal(found.results[0]?.id, candidate.id);
   assert.equal(found.results[0].limitations.some(item => item.includes('底层原始资料已修改')), true);
-  assert.equal(service.today().items.some(item => item.noteId === candidate.id), false);
+  assert.equal(service.today().items.some(item => item.noteId === candidate.id), true);
   const answer = await service.ask({ question: '北辰', scope: ['knowledge'] });
   assert.equal(answer.citations.length, 0);
   assert.match(answer.answer, /没有找到可直接支持/);

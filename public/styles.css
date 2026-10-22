@@ -111,6 +111,12 @@ main { padding: 30px clamp(24px, 4vw, 58px) 64px; width: 100%; }
 .list-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 13px; align-items: center; padding: 14px 15px; background: var(--panel); border: 1px solid var(--line); border-radius: 13px; transition: .15s ease; }
 .list-item:hover { border-color: #cbd3cf; }
 .list-item.no-icon { grid-template-columns: minmax(0, 1fr) auto; }
+.recycle-bin [hidden] { display: none !important; }
+.recycle-bin .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+@media (max-width: 600px) {
+  .recycle-bin .list-item.no-icon { grid-template-columns: minmax(0, 1fr); }
+  .recycle-bin .list-item .actions { justify-content: flex-end; }
+}
 .item-symbol { display: grid; place-items: center; width: 37px; height: 37px; color: var(--accent); background: var(--accent-soft); border-radius: 11px; font-weight: 800; }
 .item-copy { min-width: 0; }
 .item-copy h3, .card h3 { margin: 0; font-size: 14px; }
@@ -139,6 +145,8 @@ main { padding: 30px clamp(24px, 4vw, 58px) 64px; width: 100%; }
 .card .text-button { align-self: flex-start; }
 .library-sections { display: grid; gap: 28px; }
 .source-group-card { min-height: 290px; border-top: 3px solid var(--accent); }
+.source-group-card .card-foot { flex-wrap: wrap; }
+.source-card-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 9px; margin-left: auto; }
 .group-grid { grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); }
 .group-child-preview { display: grid; gap: 6px; margin: 4px 0 12px; }
 .group-child-preview-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; padding: 8px 9px; background: var(--panel-soft); border-radius: 9px; font-size: 12px; }
@@ -298,6 +306,10 @@ input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent);
 .original-material > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .original-material > summary small { color: var(--faint); font-weight: 400; }
 .original-body { max-height: 58vh; overflow-y: auto; padding: 4px 15px 18px; border-top: 1px solid var(--line); }
+.related-source-heading { padding: 12px 15px 4px; }
+.related-source-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.8; }
+.related-source-scroll { overscroll-behavior: contain; overflow-anchor: none; }
+.related-source-highlight { background: #ffdf87; color: #30250c; border-radius: 3px; }
 .source-reader-backdrop { position: fixed; inset: 0; z-index: 100; padding: clamp(8px, 2vw, 24px); background: rgba(17,24,27,.72); backdrop-filter: blur(5px); }
 .source-reader-dialog { display: grid; grid-template-rows: auto minmax(0, 1fr); width: 100%; height: 100%; overflow: hidden; border: 1px solid var(--line); border-radius: 18px; background: var(--paper); box-shadow: 0 22px 80px rgba(0,0,0,.28); }
 .source-reader-header { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 18px clamp(18px, 3vw, 36px); border-bottom: 1px solid var(--line); background: var(--panel); }
@@ -712,3 +724,36 @@ dialog.source-reader-dialog .source-reader-header button { flex: none; }
   .diagnostic-action .form-actions { width: 100%; }
   .diagnostic-action .form-actions > button { flex: 1 1 140px; }
 }
+
+/* Knowledge views share existing panel, typography and accent colors. */
+.knowledge-views > div > details { margin: .6rem 0; padding: .6rem; border-left: 2px solid var(--border); }
+.knowledge-views summary { cursor: pointer; line-height: 1.7; }
+.knowledge-event { border-left: 3px solid var(--accent); padding: .7rem 1rem; margin-left: .5rem; }
+.knowledge-field { display: grid; gap: .35rem; margin: .65rem 0; }
+.knowledge-views fieldset { display: flex; flex-wrap: wrap; gap: .7rem; margin: .7rem 0; }
+.knowledge-views fieldset label { display: inline-flex; gap: .3rem; align-items: center; }
+.knowledge-views input[type=checkbox] { width: auto; }
+
+.knowledge-legend, .knowledge-branches { line-height: 1.8; }
+.knowledge-views .map-node.is-decision { border: 2px dashed currentColor; border-radius: 24px; }
+.knowledge-views [data-kind=argument] .map-line[data-type=support] { stroke: #267454; stroke-dasharray: none; }
+.knowledge-views [data-kind=argument] .map-line[data-type=oppose],
+.knowledge-views [data-kind=argument] .map-line[data-type=counterexample] { stroke: #aa4452; stroke-dasharray: 7 5; }
+.knowledge-views [data-kind=argument] .map-edge-caption[data-type=support] text { fill: #267454; }
+.knowledge-views [data-kind=argument] .map-edge-caption[data-type=oppose] text,
+.knowledge-views [data-kind=argument] .map-edge-caption[data-type=counterexample] text { fill: #aa4452; }
+
+/* Relationship controls stay bounded on the canvas; full text lives in the reader. */
+.map-edge-control { position: absolute; z-index: 1; width: 112px; height: 26px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); font: inherit; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.map-edge-control.is-related { background: var(--accent-soft); border-color: var(--accent); }
+.map-edge-control[aria-pressed="true"] { border: 3px solid var(--ink); font-weight: 700; background: var(--accent-soft); }
+.map-line.is-selected { stroke-width: 4; stroke-dasharray: none; opacity: 1; }
+.map-line.is-muted { opacity: .3; }
+.source-map .map-node[aria-pressed="true"], .source-map .map-node.is-endpoint { border: 3px solid var(--ink); background: var(--accent-soft); box-shadow: 0 0 0 3px var(--panel), 0 0 0 5px var(--ink); }
+.map-node-kicker { flex-shrink: 0; }
+.map-edge-detail, .map-selected-title { overflow-wrap: anywhere; white-space: normal; }
+.map-edge-detail.is-selected { border: 3px solid var(--ink); background: var(--accent-soft); }
+.map-edge-detail[open] { max-height: 28rem; overflow-y: auto; scrollbar-gutter: stable; }
+.map-selected-title { font-size: 15px; padding: 10px; border-left: 4px solid var(--ink); background: var(--accent-soft); }
+.knowledge-views [data-kind=argument] .map-edge-control[data-type=support] { color: #267454; }
+.knowledge-views [data-kind=argument] .map-edge-control[data-type=oppose], .knowledge-views [data-kind=argument] .map-edge-control[data-type=counterexample] { color: #aa4452; }

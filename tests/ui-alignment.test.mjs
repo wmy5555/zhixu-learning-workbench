@@ -23,7 +23,10 @@ const appSource = await readFile(new URL('../public/app.mjs', import.meta.url), 
 const editorSource = await readFile(new URL('../public/markdown-editor.mjs', import.meta.url), 'utf8');
 const fileUiSource = await readFile(new URL('../public/source-files.mjs', import.meta.url), 'utf8');
 const onboardingSource = await readFile(new URL('../public/onboarding.mjs', import.meta.url), 'utf8');
-const sourceMapSource = (await readFile(new URL('../public/source-map.mjs', import.meta.url), 'utf8')).replace(/^import.*;$/m, '').replaceAll('export ', '');
+const knowledgeViewSource = (await readFile(new URL('../public/knowledge-view.mjs', import.meta.url), 'utf8')).replace(/^import.*;$/gm, '').replaceAll('export ', '');
+const sourceMapSource = (await readFile(new URL('../public/source-map.mjs', import.meta.url), 'utf8')).replace(/^import.*;$/gm, '').replaceAll('export ', '');
+
+const relatedSourceUi = (await readFile(new URL('../public/related-source.mjs', import.meta.url), 'utf8')).replace(/^import.*;$/m, '').replaceAll('export ', '');
 
 class Element {
   constructor(tag = 'div') {
@@ -362,7 +365,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat, savedSession = 
   // is covered by the separate browser flow, not the minimal DOM fixture.
   vm.runInContext(fileUiSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') +
     '\ncreateFilePicker = async (_input, options) => { api.onImagePicker?.(options); return { getFiles: () => [] }; };\nthis.attachmentUrl = (id, asset, download = false) => "/api/notes/" + id + "/attachments?asset=" + asset + (download ? "&download=1" : "");', context);
-  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + discoverySource + '\n' + ('const renderMarkdown = (() => {\n' + markdownSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn renderMarkdown;\n})();') + '\nconst createMarkdownEditor = (() => {\n' + editorSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn createMarkdownEditor;\n})();\n' + sourceMapSource + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { attachModelDiscovery, renderSourceGroupDrawer, conversationReading, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
+  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + discoverySource + '\n' + ('const renderMarkdown = (() => {\n' + markdownSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn renderMarkdown;\n})();') + '\nconst createMarkdownEditor = (() => {\n' + editorSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn createMarkdownEditor;\n})();\n' + knowledgeViewSource + '\n' + sourceMapSource + '\n' + relatedSourceUi + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { attachModelDiscovery, renderSourceGroupDrawer, conversationReading, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
   context.app.beginStudy = vm.runInContext('beginStudy', context);
   context.app.callHistoryPanel = vm.runInContext('callHistoryPanel', context);
   context.app.manualExtract = vm.runInContext('manualExtract', context);
@@ -1264,35 +1267,6 @@ test('ChatGPT-shaped sources render text envelopes as prose and keep the floatin
   assert.equal(app.refs.drawer.classList.contains('source-reading-fullscreen'), false);
   await click(findButton(dialog, '关闭全屏阅读'));
   assert.equal(app.document.body.querySelector('.source-reader-dialog'), null);
-});
-
-test('floating source reader Escape closes only the top reader and retains drawer state and focus', async () => {
-  const app = browser();
-  const source = { id: 'escape-source', kind: 'source', title: '合成原文', body: '完整正文', meta: {}, children: [], jobs: [] };
-  app.renderSourceGroupDrawer(source);
-  app.refs.drawer.classList.add('is-open');
-  app.refs.drawer.scrollTop = 123;
-  const original = app.refs.drawerBody.querySelector('[data-tour="note-original"]');
-  original.open = true;
-  const launcher = findButton(original, '全屏阅读');
-  launcher.isConnected = true;
-  app.document.activeElement = launcher;
-  await click(launcher);
-  const backdrop = app.document.body.querySelector('.source-reader-backdrop');
-  const panel = app.refs.drawerBody.children[0];
-  const event = { key: 'Escape', prevented: false, stopped: false,
-    preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; } };
-  backdrop.events.keydown(event);
-  if (!event.stopped) await app.document.events.keydown(event);
-  assert.equal(app.document.body.querySelector('.source-reader-backdrop'), null);
-  assert.equal(app.refs.drawer.classList.contains('is-open'), true, 'the same Escape must not reach the drawer handler');
-  assert.equal(app.refs.drawerBody.children[0], panel);
-  assert.equal(app.refs.drawer.scrollTop, 123);
-  assert.equal(original.open, true);
-  assert.equal(launcher.focused, true);
-  assert.equal(event.prevented, true);
-  await app.document.events.keydown({ key: 'Escape' });
-  assert.equal(app.refs.drawer.classList.contains('is-open'), false, 'a later Escape may close the drawer normally');
 });
 
 test('capture research requires AI processing and clears on deselection, clear, and successful save', async () => {
@@ -2741,7 +2715,9 @@ test('source group reading shows every current child once and keeps original tex
   const card = app.refs.main.querySelectorAll('.source-group-card').find(n => n.textContent.includes('合成拆解甲'));
   assert.match(card.textContent, /3 条拆解/);
   const reader = findButton(card, '阅读原始资料全文');
-  assert.ok(card.children.indexOf(reader) < card.children.indexOf(card.querySelector('.group-child-preview')));
+  const actions = card.querySelector('.source-card-actions');
+  assert.equal(card.querySelector('.card-foot').children[1], actions);
+  assert.deepEqual(actions.children.map(n => n.textContent), ['阅读原始资料全文', '查看整组']);
   await click(findButton(card, '查看整组'));
   const panel = app.refs.drawerBody.querySelector('.source-group-drawer');
   assert.equal(panel.children[0].dataset.tour, 'note-original');
@@ -2755,6 +2731,35 @@ test('source group reading shows every current child once and keeps original tex
   assert.equal(panel.querySelectorAll('.child-note').length, 3);
 });
 
+test('source cards with and without breakdowns read full text from footer without bubbling', async () => {
+  for (const withChildren of [true, false]) {
+    const data = libraryFixture(['source']);
+    if (!withChildren) data.groups[0].children = [];
+    data.groups[0].source.updatedAt = '2026-10-01T08:00:00Z';
+    let reads = 0;
+    const app = browser({ library: async () => data, recommendations: async () => ({ suggestions: [] }), note: async id => {
+      assert.equal(id, 'source'); reads++;
+      return { ...data.groups[0].source, body: '完整合成原文 FULL-END' };
+    } });
+    app.state.view = 'library'; await app.renderLibrary();
+    const card = app.refs.main.querySelector('.source-group-card');
+    const footer = card.querySelector('.card-foot');
+    const actions = card.querySelector('.source-card-actions');
+    assert.equal(footer.children[1], actions);
+    assert.deepEqual(actions.children.map(n => n.textContent), ['阅读原始资料全文', '查看整组']);
+    assert.equal(card.children.includes(actions.children[0]), false);
+    const event = { prevented: false, stopped: false, preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; } };
+    await actions.children[0].events.click(event);
+    assert.equal(event.prevented, true);
+    assert.equal(event.stopped, true);
+    assert.equal(reads, 1);
+    assert.match(app.document.body.querySelector('.source-reader-dialog').textContent, /FULL-END/);
+    assert.equal(app.refs.drawerBody.querySelector('.source-group-drawer'), null);
+    assert.equal(data.groups[0].source.updatedAt, '2026-10-01T08:00:00Z');
+    assert.equal(data.groups[0].source.body, '## 阅读标题\n\n**原文**');
+  }
+});
+
 test('source card full-text reader ignores retained cards and late replies after library switches', async () => {
   let context = { practiceId: '', version: 0 }, release, reads = 0;
   const data = libraryFixture(['source']);
@@ -2766,6 +2771,45 @@ test('source card full-text reader ignores retained cards and late replies after
   release({ ...data.groups[0].source, body: '旧库迟到原文' }); await pending;
   assert.equal(app.dialogs.querySelectorAll('.source-reader-dialog').length, 0);
   await click(reader); assert.equal(reads, 1);
+});
+
+test('all source full-text entries retain the reviewed floating reader and return to unchanged drawer state', async () => {
+  const data = libraryFixture(['source']);
+  const source = { ...data.groups[0].source, body: '## 合成完整原文\n\nORIGINAL-END', children: data.groups[0].children, jobs: [] };
+  const app = browser({ library: async () => data, recommendations: async () => ({ suggestions: [] }), note: async () => source });
+  app.renderSourceGroupDrawer(source);
+  app.refs.drawer.classList.add('is-open');
+  const panel = app.refs.drawerBody.children[0];
+  const original = panel.querySelector('[data-tour="note-original"]');
+  original.open = true;
+  app.refs.drawer.scrollTop = 123;
+  app.state.view = 'library'; await app.renderLibrary();
+  const launchers = [findButton(app.refs.main, '阅读原始资料全文'), findButton(panel, '全屏阅读原文'), findButton(original, '全屏阅读')];
+  for (const [i, launcher] of launchers.entries()) {
+    launcher.isConnected = true; launcher.focused = false; app.document.activeElement = launcher;
+    await click(launcher);
+    const backdrop = app.document.body.querySelector('.source-reader-backdrop');
+    const dialog = backdrop?.querySelector('.source-reader-dialog');
+    assert.ok(backdrop && dialog, 'every entry must use the C floating reader');
+    assert.equal(dialog.tagName, 'section');
+    assert.match(dialog.textContent, /ORIGINAL-END/);
+    if (i === 0) await click(findButton(dialog, '关闭全屏阅读'));
+    else if (i === 1) backdrop.events.click({ target: backdrop });
+    else {
+      const event = { key: 'Escape', stopped: false, preventDefault() {}, stopPropagation() { this.stopped = true; } };
+      backdrop.events.keydown(event);
+      if (!event.stopped) await app.document.events.keydown(event);
+    }
+    assert.equal(app.document.body.querySelector('.source-reader-backdrop'), null);
+    assert.equal(app.refs.drawer.classList.contains('is-open'), true);
+    assert.equal(app.refs.drawerBody.children[0], panel);
+    assert.equal(app.refs.drawer.scrollTop, 123);
+    assert.equal(original.open, true);
+    assert.equal(launcher.focused, true);
+  }
+  assert.equal(app.refs.drawer.classList.contains('source-reading-fullscreen'), false);
+  const css = await readFile(new URL('../public/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\.source-reader-dialog\s*\{[^}]*border-radius:\s*18px/);
 });
 
 test('captured source cards use the same conversation prose display as full reading', async () => {

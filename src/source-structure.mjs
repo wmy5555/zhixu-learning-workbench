@@ -1,3 +1,4 @@
+import { validateKnowledgeStructure } from './knowledge-structure.mjs';
 import { hash, now } from './store.mjs';
 
 const types = new Set(['support', 'explain', 'prerequisite', 'example', 'counterexample', 'limit', 'application', 'sequence']);
@@ -6,6 +7,7 @@ const array = value => Array.isArray(value) ? value : [];
 const missingMessage = '本次拆解未提供可用结构，可点击「重新分析结构」重试；已保存的条目保留。';
 export const structureBasis = (source, notes) => ({
   sourceHash: source.hash,
+  ...(source.structureSources ? { referenceSources: source.structureSources.map(s => [s.id, s.hash]).sort(([a],[b]) => a.localeCompare(b)) } : {}),
   notes: notes.map(n => [n.id, hash(JSON.stringify([n.title, n.body]))]).sort(([a], [b]) => a.localeCompare(b)),
 });
 
@@ -36,7 +38,15 @@ export function normalizeStructure(raw, notes, keys = new Map(notes.map(n => [n.
   return { hierarchy: [...parents].map(([child, parent]) => ({ child, parent })), edges, discarded };
 }
 
-export function structureRecord(source, notes, raw, keys) {
+export function structureRecord(source, notes, raw, keys, { user = false } = {}) {
+  if (raw?.version === 2) {
+    if (![raw.units, raw.topics, raw.edges].every(Array.isArray)) return { version: 2, state: 'missing', message: missingMessage };
+    const input = user ? raw : { ...raw, edges: raw.edges.map(e => e?.status === 'user' ? { ...e, status: 'pending' } : e), topics: raw.topics.map(t => t?.origin === 'user' ? { ...t, origin: 'ai' } : t) };
+    const valid = validateKnowledgeStructure(input, source, notes, keys);
+    return { version: 2, sourceId: source.id, basis: structureBasis(source, notes), generatedAt: now(),
+      ...valid, hierarchy: [], state: valid.gaps.length ? 'partial' : 'ready',
+      message: '结构校验不等于事实核验；事实性是知识维度，不表示已证实。' };
+  }
   const valid = normalizeStructure(raw, notes, keys);
   const missing = !raw || !Array.isArray(raw.edges) || !Array.isArray(raw.hierarchy);
   if (missing) { valid.edges = []; valid.hierarchy = []; }
@@ -47,9 +57,22 @@ export function structureRecord(source, notes, raw, keys) {
 
 export function structureView(source, notes, stored) {
   const nodes = notes.map(n => ({ id: n.id, title: n.title }));
-  if (!stored || stored.version !== 1) return { state: 'missing', nodes, hierarchy: [], edges: [], message: '尚未分析资料内部结构。当前仅展示来源归属。' };
+  if (!stored || ![1, 2].includes(stored.version)) return { state: 'missing', nodes, hierarchy: [], edges: [], message: '尚未分析资料内部结构。当前仅展示来源归属。' };
   if (JSON.stringify(structureBasis(source, notes)) !== JSON.stringify(stored.basis)) {
+    if (stored.version === 2) {
+      const pendingCurrent = stored.pendingCandidate && JSON.stringify(stored.pendingCandidate.basis) === JSON.stringify(structureBasis(source, notes));
+      return { version: 2, state: 'stale', nodes, hierarchy: [], ...validateKnowledgeStructure({ units: stored.units, topics: [], edges: [] }, source, notes),
+        revision: hash(JSON.stringify(stored)), hasPendingCandidate: Boolean(pendingCurrent),
+        pendingCandidate: pendingCurrent ? { version: 2, ...validateKnowledgeStructure(stored.pendingCandidate, source, notes) } : undefined,
+        message: '原文或条目已变化，旧导航与关系暂不展示；人工修订仍保留，新候选须核对后采用。' };
+    }
     return { state: 'stale', nodes, hierarchy: [], edges: [], message: '结构待更新：原文或拆解内容已有变化，请重新分析。' };
+  }
+  if (stored.version === 2) {
+    const valid = validateKnowledgeStructure(stored, source, notes);
+    valid.gaps = [...new Set([...(stored.gaps || []), ...valid.gaps])];
+    return { ...stored, ...valid, nodes, revision: hash(JSON.stringify(stored)), pendingCandidate: stored.pendingCandidate ? { version: 2, ...validateKnowledgeStructure(stored.pendingCandidate, source, notes) } : undefined, previousRevision: undefined,
+      hasPendingCandidate: Boolean(stored.pendingCandidate), state: valid.gaps.length ? 'partial' : 'ready' };
   }
   const valid = normalizeStructure(stored, notes);
   return { state: valid.discarded ? 'partial' : stored.state, nodes, hierarchy: valid.hierarchy, edges: valid.edges,

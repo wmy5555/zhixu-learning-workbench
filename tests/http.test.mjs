@@ -1,3 +1,4 @@
+import { structureRecord } from '../src/source-structure.mjs';
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
 import { once } from 'node:events';
@@ -656,4 +657,23 @@ test('concurrent start POSTs with one intent return one persisted session and a 
   const next = await send({ ...body, requestId: 'synthetic-next-intent' });
   assert.equal(next.status, 200); assert.notEqual(next.body.id, a.body.id);
   assert.equal(app.service.store.records('sessions').length, 2);
+});
+
+
+test('knowledge structure PUT validates revision and retains session and CSRF boundaries', async t => {
+  const app=await startApp(t), session=await webSession(app);
+  const source=app.service.store.create({kind:'source',title:'合成结构',body:'先检查，再记录。'});
+  const note=app.service.store.create({kind:'knowledge',title:'检查',body:'先检查',meta:{sources:[{id:source.id,role:'input'}]}});
+  const raw={version:2,units:[{id:note.id,shortTitle:'检查',dimensions:['procedural'],roles:['step'],sourceRefs:[{quote:'先检查'}]}],topics:[],edges:[]};
+  app.service.store.put('sourceStructures',source.id,structureRecord(source,[note],raw));
+  const before=app.service.readPublicNote(source.id), endpoint=`/api/notes/${source.id}/structure`;
+  const body={structure:{...raw,units:[{...raw.units[0],shortTitle:'先检查'}]},revision:before.structure.revision};
+  assert.equal((await request(app.baseUrl,endpoint,{method:'PUT',body})).status,401);
+  const noCsrf={...session.headers};delete noCsrf['X-CSRF-Token'];delete noCsrf['x-csrf-token'];
+  assert.equal((await request(app.baseUrl,endpoint,{method:'PUT',headers:noCsrf,body})).status,403);
+  assert.equal((await request(app.baseUrl,endpoint,{method:'PUT',headers:session.headers,body:{...body,structure:{version:2,units:[],topics:[],edges:{}}}})).status,400);
+  const saved=await request(app.baseUrl,endpoint,{method:'PUT',headers:session.headers,body});
+  assert.equal(saved.status,200);assert.equal(saved.body.structure.units[0].shortTitle,'先检查');
+  assert.equal((await request(app.baseUrl,endpoint,{method:'PUT',headers:session.headers,body})).status,409);
+  assert.equal(app.service.getNote(source.id).hash,source.hash);
 });

@@ -1,3 +1,5 @@
+import { validateImportedStructure } from './chatgpt-structure.mjs';
+import { historySourceMetadata } from './chatgpt-source-metadata.mjs';
 import { createHash } from 'node:crypto';
 
 export const historyBatchLimits = Object.freeze({ maxCharacters: 500000, maxMessages: 200,
@@ -64,26 +66,11 @@ function validateSnapshot(snapshot, currentTime) {
   if (!equal(end, { message: snapshot.units.length, offset: 0 })) invalid('历史分页未覆盖完整末尾。', 'CHATGPT_BATCH_PAGES');
 }
 function validateStructured(value, units) {
-  if (value === undefined) return [];
-  if (value?.version !== 1 || !Array.isArray(value.items) || value.items.length > 100 || Object.keys(value).some(key => !['version', 'items'].includes(key))) {
-    invalid('结构化候选格式无效。', 'CHATGPT_BATCH_STRUCTURE');
-  }
-  const messageIds = new Set(units.map(unit => unit.message_id)), itemIds = new Set();
-  for (const item of value.items) {
-    if (!item || Object.keys(item).some(key => !['id', 'title', 'body', 'type', 'sourceMessageIds', 'uncertainties'].includes(key)) ||
-      !id.test(item.id || '') || itemIds.has(item.id) || !['knowledge', 'conclusion', 'unverified_fact'].includes(item.type) ||
-      typeof item.title !== 'string' || !item.title.trim() || item.title.length > 200 ||
-      typeof item.body !== 'string' || !item.body.trim() || item.body.length > 30000 ||
-      !Array.isArray(item.sourceMessageIds) || !item.sourceMessageIds.length || item.sourceMessageIds.length > 200 ||
-      item.sourceMessageIds.some(source => !messageIds.has(source)) ||
-      !Array.isArray(item.uncertainties) || item.uncertainties.length > 20 ||
-      item.uncertainties.some(text => typeof text !== 'string' || !text.trim() || text.length > 2000)) {
-      invalid('结构化候选身份、类型或全局消息来源无法核对。', 'CHATGPT_BATCH_STRUCTURE');
-    }
-    itemIds.add(item.id);
-  }
-  return value.items;
+  try { validateImportedStructure(value, units.map(unit => ({ id:unit.message_id, content:unit.content }))); }
+  catch(error) { if (error.code === 'CHATGPT_STRUCTURE_INVALID') invalid(error.message,'CHATGPT_BATCH_STRUCTURE'); throw error; }
+  return value?.items || [];
 }
+
 const unitFrom = (fragment, content) => Object.fromEntries(fragment.unitFields.map(key =>
   [key, key === 'content' ? content : fragment.unitMetadata[key]]));
 function fragmentFor(unit, from, to) {
@@ -121,12 +108,12 @@ export function planHistoryBatch(input, { summary, structured, now = Date.now() 
   validateSnapshot(snapshot, now);
   const items = clone(validateStructured(structured, snapshot.units));
   if (typeof summary !== 'string' || !summary.trim() || summary.length > historyBatchLimits.maxSummaryCharacters) invalid('摘要不能为空或超过原有限额。');
-  const global = { conversationId: snapshot.conversation_id, branchId: snapshot.branch, snapshotId: snapshot.snapshot_id,
+  const global = { sourceMetadata: historySourceMetadata(snapshot), conversationId: snapshot.conversation_id, branchId: snapshot.branch, snapshotId: snapshot.snapshot_id,
     transcriptSha256: snapshot.transcript_sha256, pagesSha256: jsonHash(snapshot.pages),
     snapshotPayloadSha256: jsonHash(snapshot), issuedAt: snapshot.issued_at, expiresAt: snapshot.expires_at,
     messageCount: snapshot.units.length, textCharacters: snapshot.units.reduce((n, unit) => n + unit.content.length, 0),
     coverage: snapshot.coverage, limitations: ['仅含已授权的当前可见分支正文；隐藏分支、隐藏推理和附件字节未读取。', ...(snapshot.warnings || [])] };
-  const batchId = jsonHash({ version: 1, global, summary, structured: items, limits: historyBatchLimits });
+  const batchId = jsonHash({ version: 1, global, summary, structured: structured?.version === 2 ? structured : items, limits: historyBatchLimits });
   const parts = [];
   let current = null;
   const startPart = point => ({ version: 1, batchId, global, title: snapshot.title, summary,
@@ -172,6 +159,7 @@ export function planHistoryBatch(input, { summary, structured, now = Date.now() 
         ranges: part.fragments.filter(fragment => fragment.messageId === messageId).map(fragment => ({ start: fragment.charStart, end: fragment.charEnd })) })) })) }));
   const payloadBytes = Buffer.byteLength(JSON.stringify(snapshot));
   return freeze({ version: 1, batchId, global, parts, deferredStructured,
+    ...(structured?.version === 2 ? { structureInput: structured } : {}),
     manifestSha256: jsonHash({ parts, deferredStructured }),
     execution: { status: 'planning_only', persisted: false, storageContract: 'independent_batch_parts_required',
       cumulativeSyncSupported: false, authenticatedTransportRequired: true },

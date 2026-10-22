@@ -1,3 +1,4 @@
+import { importedContext, readImportedView } from './chatgpt-structure.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -241,6 +242,8 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     return issues;
   };
   const eligible = n => usable(n, learningNow()) && !materialLimitations(n).length;
+  // Practising a material does not certify its claims for retrieval or generated answers.
+  const learnable = n => n.kind === 'knowledge' && n.meta.stage !== 'retired' && !n.meta.supersededBy;
   const needsMaterialScope = (type, payload) => type === 'index' || type === 'topics' || ['relate','discover'].includes(type) && payload?.useAI === true;
   const validMaterialSnapshots = snapshots => Array.isArray(snapshots) && snapshots.every(n => typeof n?.noteId === 'string' && n.noteId && typeof n.hash === 'string' && n.hash);
   function materialSnapshots(type) {
@@ -298,13 +301,25 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   const processJobs = (id, sourceHash) => store.records('jobs').filter(job => job.type === 'process'
     && job.payload?.noteId === id && job.payload.hash === sourceHash && !job.presetCase && !job.payload.presetCase);
   const processReply = (job, reused = false) => ({ ...publicJob(job), reused, jobRevision, jobSnapshot: ++jobSnapshot });
-  function processNote(id, { research = false, reuseExtracted = false } = {}) {
+  function processNote(id, { research = false, reuseExtracted = false, retryJobId } = {}) {
     const source = getNote(id);
     assertTextSource(source);
     if (source.kind !== 'source') fail('请选择原始资料重新加工。');
     const payload = { noteId: id, hash: source.hash, research: research === true, ...(needsTitle(source) ? { titleRequested: true } : {}) };
     for (const task of store.records('jobs')) if (task.type === 'title' && task.payload.noteId === id && ['queued','waiting'].includes(task.state)) putJob({ ...task, state: 'cancelled', code: 'CANCELLED', error: '标题将与资料拆解一同生成。' });
     const previous = processJobs(id, source.hash);
+    if (retryJobId !== undefined) {
+      const retry = previous.find(job => job.id === retryJobId);
+      if (!retry) fail('原文或任务已变化，请刷新后确认本次核验。', 'PROCESS_RETRY_CHANGED', 409);
+      const active = previous.find(job => ['queued','running'].includes(job.state));
+      if (active) return processReply(active, true);
+      if (retry.state === 'done') return processReply(retry, true);
+      if (!['waiting','failed','cancelled'].includes(retry.state)) fail('该任务当前不可重试。');
+      if (pausing || stopped) fail('当前任务正在暂停，请稍后继续。', 'BUSY', 409);
+      // An explicit retry is bound to the shown task and the current source version.
+      putJob({ ...retry, payload: { ...retry.payload, research: payload.research }, dedupKey: `process:${id}:${source.hash}${payload.research ? ':research' : ''}` });
+      return processReply(jobAction(retry.id, { action: 'retry' }), true);
+    }
     const pending = previous.find(job => ['queued','running','waiting'].includes(job.state));
     // Clicking AI decomposition is the current intent, including a retained pre-upgrade task.
     if (pending) {
@@ -473,7 +488,35 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     assertCurrent();
     const record = structureRecord(source, notes, parseJSON(result.text).structure);
     if (record.state === 'missing') fail(record.message, 'MODEL_FORMAT');
-    store.put('sourceStructures', source.id, record);
+    const previous = store.get('sourceStructures', source.id);
+    if (previous?.userEdited && record.version !== 2) fail('新结果缺少可核对的知识结构；已有人工修订保留。', 'MODEL_FORMAT');
+    store.put('sourceStructures', source.id, previous?.userEdited ? { ...previous, pendingCandidate: record } : record);
+  }
+  function editSourceStructure(id, { structure, revision } = {}) {
+    const context = importedContext(store,getNote(id));
+    const source = context.source, notes = context.notes, previous = context.stored;
+    if (source.kind !== 'source' || !previous || hash(JSON.stringify(previous)) !== revision) fail('结构已变化，请重新打开后修改。', 'CONFLICT', 409);
+    const currentView = structureView(source, notes, previous);
+    const content = value => JSON.stringify([value?.units, value?.topics, value?.edges]);
+    if (currentView.state === 'stale' && (!currentView.pendingCandidate || content(structure) !== content(currentView.pendingCandidate))) fail('原文或条目已变化，请先核对新结构候选。', 'CONFLICT', 409);
+    if (structure?.version !== 2 || ![structure.units, structure.topics, structure.edges].every(Array.isArray) || [...structure.units, ...structure.topics, ...structure.edges].some(value => !value || typeof value !== 'object' || Array.isArray(value))) fail('结构格式无效。', 'MODEL_FORMAT');
+    const adoptingCandidate = currentView.pendingCandidate && content(structure) === content(currentView.pendingCandidate);
+    const edited = structuredClone(structure);
+    for (const edge of edited.edges || []) {
+      const old = previous.edges?.find(e => e.id === edge.id);
+      if (!adoptingCandidate && (!old || ['from','to','label','condition','exceptions','type','explanation','sourceRefs'].some(key => JSON.stringify(old[key]) !== JSON.stringify(edge[key])))) edge.status = 'user';
+    }
+    for (const topic of edited.topics || []) {
+      const old = previous.topics?.find(t => t.id === topic.id);
+      if (!adoptingCandidate && (!old || JSON.stringify(old) !== JSON.stringify(topic))) topic.origin = 'user';
+    }
+    const record = structureRecord(source, notes, edited, undefined, { user: true });
+    const importedMarker = (adoptingCandidate ? previous.pendingCandidate : previous)?.chatgptStructure;
+    if (importedMarker) record.chatgptStructure = importedMarker;
+    if (record.state === 'missing') fail(record.message, 'MODEL_FORMAT');
+    // Validation preserves unknowns and reports gaps; retain the previous revision for recovery.
+    store.put('sourceStructures', id, { ...record, userEdited: true, previousRevision: { ...previous, previousRevision: undefined, pendingCandidate: undefined } });
+    return readPublicNote(id);
   }
   function library(filters = {}) {
     const all = listNotes().filter(n=>!n.meta.excerptOnly).map(publicNote), matching = new Set(listNotes(filters).filter(n=>!n.meta.excerptOnly).map(n => n.id)), grouped = new Set();
@@ -488,8 +531,8 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     const note = getNote(id);
     if (note.meta.excerptOnly) fail('内部核验资料不作为知识条目展示。', 'NOT_FOUND', 404);
     if (note.kind !== 'source') return publicNote(note);
-    const children = sourceChildren(id);
-    return { ...publicNote(note), children: children.map(publicNote), structure: structureView(note, children, store.get('sourceStructures', id)) };
+    const context = importedContext(store,note), children = context.notes;
+    return { ...publicNote(note), children: children.map(publicNote), structure: structureView(context.source, children, context.stored) };
   }
   function noteEvidence(id) {
     const note = getNote(id);
@@ -571,7 +614,6 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     const note = getNote(id); if (note.kind !== 'knowledge') fail('只有知识条目能进入学习阶段。');
     if (!stages.includes(stage) || !depths.includes(depth)) fail('阶段或学习目标无效。');
     if (['integrated','core'].includes(stage) && !note.meta.confirmedAt) fail('请先以自己的语言确认个人理解。');
-    if (!reason.trim()) fail('请写下调整理由，便于以后回顾。');
     return store.update(id, { expectedHash: note.hash, meta: { stage, depth, promotionReason: reason, promotedAt: learningNow() } });
   }
   function confirmNote(id, { body, expectedHash }) {
@@ -687,7 +729,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     return { results, nextCursor, total: ranked.length, diagnostics: { mode, semanticUsed: cached?.semanticUsed ?? semanticUsed, keywordIds: keyword.slice(0,12).map(r => r.note.id), semanticIds: (cached?.semantic || semantic).slice(0,12).map(r => r.note.id), scanned: sync.count, candidateCount: keyword.length, bodyReads: page.length, indexUpdated, revision, sync, phases, elapsedMs: performance.now() - started, limitations } };
   }
   const {today,planAction,session,startStudy,answerStudy,hintStudy,confirmStudy,finishStudy,mistakeAction,topics,createTopic,updateTopic,topicAction,grade} = createLearning({
-    get store(){return store;}, settings, getNote, eligible, limitationsFor: materialLimitations, privacyFor, queue, ai, promptText, parseJSON, confirmNote, updateSettings, learningClock: learningDate, practice, getPracticeQuestion: practice ? getPracticeQuestion : undefined
+    get store(){return store;}, settings, getNote, eligible: learnable, limitationsFor: materialLimitations, privacyFor, queue, ai, promptText, parseJSON, confirmNote, updateSettings, learningClock: learningDate, practice, getPracticeQuestion: practice ? getPracticeQuestion : undefined
   });
   const {recommendations,recommendationAction} = createLifecycle({get store(){return store;},settings,materialLimitations,getNote,promote,merge});
   function valuableRelation(r, left, right) {
@@ -858,7 +900,11 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   }
   function proposalAction(id, { action }) {
     const p = store.get('proposals', id); if (!p || p.state !== 'pending') fail('提案不可操作。');
-    if (action === 'accept') store.update(p.noteId, { body: p.body, expectedHash: p.expectedHash, ...(p.meta ? { meta: { ...p.meta, userEdited: false, ...(p.meta.processKey ? { acceptedResearchProposal: p.id } : {}), personalUnderstanding: null, confirmedAt: null, confirmedBy: null } } : {}) }); else if (action !== 'reject') fail('提案操作无效。');
+    if (action === 'accept') {
+      const current = getNote(p.noteId);
+      const arrangement = p.meta?.processKey ? Object.fromEntries(['stage','depth','promotionReason','promotedAt','topic','prerequisites'].filter(key => current.meta[key] !== undefined).map(key => [key, key === 'stage' && ['integrated','core'].includes(current.meta.stage) ? 'learning' : current.meta[key]])) : {};
+      store.update(p.noteId, { body: p.body, expectedHash: p.expectedHash, ...(p.meta ? { meta: { ...p.meta, ...arrangement, userEdited: false, ...(p.meta.processKey ? { acceptedResearchProposal: p.id } : {}), personalUnderstanding: null, confirmedAt: null, confirmedBy: null } } : {}) });
+    } else if (action !== 'reject') fail('提案操作无效。');
     return store.put('proposals', id, { ...p, state: action === 'accept' ? 'accepted' : 'rejected', updatedAt: now() });
   }
   async function processSource(job, signal) {
@@ -938,7 +984,8 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
         const body = `## 原资料拆解（AI 整理）\n\n${candidate.body}\n\n## 证据与适用范围\n\n${conclusions.join('\n\n')}\n\n${evidence.map(e => `- [${e.title || e.url}](${e.url})（${e.role}，读取于 ${e.fetchedAt}）\n  ${e.excerpt}${e.rationale ? '\n  对应关系：'+e.rationale : ''}`).join('\n\n') || '此条未取得可引用的外部正文。'}${notices.length ? '\n\n### 研究范围\n'+notices.join('\n') : ''}${limitations.length ? '\n\n## 尚需补充的研究\n'+limitations.map(l=>`- ${l}`).join('\n') : ''}`;
         const meta = { stage: 'candidate', sources: sourceRefs, topic: candidate.topic || '', prerequisites: candidate.prerequisites || [], promotionReason: candidate.reason || '', depth: depths.includes(candidate.depth) ? candidate.depth : 'explain', claims: candidate.claims, evidence, researchConclusions: conclusions.join('\n\n'), researchLimitations: limitations, researchedAt: research ? now() : null, reviewAfter: research && candidate.claims.length ? new Date(learningDate().getTime()+(Number.isInteger(source.meta.researchIntervalDays)&&source.meta.researchIntervalDays>=1&&source.meta.researchIntervalDays<=365?source.meta.researchIntervalDays:30)*86400000).toISOString() : null, processKey, generatedBodyHash: hash(body) };
         if (existing && !research) continue;
-        const wasEdited = existing && (existing.meta.userEdited || existing.meta.acceptedResearchProposal || existing.meta.confirmedAt || existing.meta.stage !== 'candidate' || (existing.meta.generatedBodyHash && hash(existing.body) !== existing.meta.generatedBodyHash));
+        const activeStudy = existing && store.records('sessions').some(session => session.noteId === existing.id && session.status !== 'completed');
+        const wasEdited = existing && (existing.meta.userEdited || existing.meta.acceptedResearchProposal || existing.meta.confirmedAt || activeStudy || !existing.meta.generatedBodyHash || hash(existing.body) !== existing.meta.generatedBodyHash);
         if (existing && existing.body === body && JSON.stringify(existing.meta.evidence || []) === JSON.stringify(evidence) && JSON.stringify(existing.meta.researchLimitations || []) === JSON.stringify(limitations)) { continue; }
         if (wasEdited) {
           const proposalId = hash(`research-update:${existing.id}:${existing.hash}:${hash(body)}`);
@@ -946,10 +993,11 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
             store.put('proposals', previous.id, { ...previous, state: 'superseded', supersededBy: proposalId, updatedAt: now() });
           }
           const previous = store.get('proposals', proposalId);
-          if (!previous || previous.state === 'superseded') store.put('proposals', proposalId, { id: proposalId, noteId: existing.id, before: existing.body, body, meta, reason: '重新研究产生修订建议，已有人工内容，未自动覆盖。接受后回到候选阶段，原来的个人理解保留在历史中；请依据新材料再次确认自己的理解。', expectedHash: existing.hash, state:'pending', createdAt:previous?.createdAt || now() });
+          if (!previous || previous.state === 'superseded') store.put('proposals', proposalId, { id: proposalId, noteId: existing.id, before: existing.body, body, meta, reason: '核验更新已保存为建议，保留人工内容和正在进行的练习。接受后保留学习安排；原来的个人理解保留在历史中，需依据新材料重新确认。', expectedHash: existing.hash, state:'pending', createdAt:previous?.createdAt || now() });
           continue;
         }
-        const note = existing ? store.update(existing.id, { body, meta, expectedHash: existing.hash }) : store.create({ kind:'knowledge', title:candidate.title, body, meta });
+        const arrangement = existing ? Object.fromEntries(['stage','depth','promotionReason','promotedAt','topic','prerequisites'].filter(key => existing.meta[key] !== undefined).map(key => [key, existing.meta[key]])) : {};
+        const note = existing ? store.update(existing.id, { body, meta: { ...meta, ...arrangement }, expectedHash: existing.hash }) : store.create({ kind:'knowledge', title:candidate.title, body, meta });
         if (!job.payload.savedCandidates.ids[i]) { job.payload.savedCandidates.ids[i] = note.id; putJob(job); }
         if (eligible(note)) requestRelations(note.id);
       }
@@ -962,7 +1010,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
           return note && note.body.includes(candidate.body) ? [[String(index), note.id]] : [];
         }));
         const previous = store.get('sourceStructures', source.id);
-        if (!previous || structureView(source, children, previous).state === 'stale') {
+        if (!previous || !previous.userEdited && structureView(source, children, previous).state === 'stale') {
           store.put('sourceStructures', source.id, structureRecord(source, children, extracted.structure, keys));
         }
       }
@@ -1250,14 +1298,14 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     confirmUndo(input) { requireCapture(); return undoController.confirmUndo(input, undoAuthority); },
     confirmRestore(input) { requireCapture(); return undoController.confirmRestore(input, undoAuthority); },
   };
-  const chatgpt = createChatgptBridge({ getStore: () => store, settings, search: tracked(search), getNote, related, undo: chatgptUndo, receiveSnapshot: receiveHistorySnapshot });
+  const chatgpt = createChatgptBridge({ getStore: () => store, settings, search: tracked(search), getNote, readStructure: id => readImportedView(store,getNote(id)), related, undo: chatgptUndo, receiveSnapshot: receiveHistorySnapshot });
   sourceFiles = createSourceFiles({ store, getNote });
   const uploadFile = input => sourceFiles.receive(input);
   const revertUpload = id => sourceFiles.revert(id);
   const commitFile = tracked(input => sourceFiles.commit(input));
   const readFile = (id, assetId) => sourceFiles.read(id, assetId);
   const pendingUploads = () => sourceFiles.pending();
-  return { get store(){return store;}, get processing(){return processing;}, get hasPendingOperations(){return processing||activeOperations>0||pausing;}, chatgpt, chatgptUndo, learningNow, settings, updateSettings, capabilityTests, getPrompts, updatePrompts, usage, usageReport, updateUsageSettings, callRecovery, recoverCall, ai, importItems, processNote, requestSourceStructure, listNotes, publicNote, publicJob, library, readPublicNote, noteEvidence, linksPreview, syncLinks, getNote, editNote, extractNote, promote, confirmNote, merge, search:tracked(search), today, planAction, startStudy, session, answerStudy, hintStudy, confirmStudy, finishStudy, mistakeAction, topics, createTopic, updateTopic, topicAction, recommendations, recommendationAction, requestRelations, relationReview, relationAction, related, ask:tracked(ask), updateDraft, propose, proposalAction, queue, runJobs, pauseJobs, jobAction, tick, demo, diagnostics, backup, restore,
+  return { get store(){return store;}, get processing(){return processing;}, get hasPendingOperations(){return processing||activeOperations>0||pausing;}, chatgpt, chatgptUndo, learningNow, settings, updateSettings, capabilityTests, getPrompts, updatePrompts, usage, usageReport, updateUsageSettings, callRecovery, recoverCall, ai, importItems, processNote, requestSourceStructure, editSourceStructure, listNotes, publicNote, publicJob, library, readPublicNote, noteEvidence, linksPreview, syncLinks, getNote, editNote, extractNote, promote, confirmNote, merge, search:tracked(search), today, planAction, startStudy, session, answerStudy, hintStudy, confirmStudy, finishStudy, mistakeAction, topics, createTopic, updateTopic, topicAction, recommendations, recommendationAction, requestRelations, relationReview, relationAction, related, ask:tracked(ask), updateDraft, propose, proposalAction, queue, runJobs, pauseJobs, jobAction, tick, demo, diagnostics, backup, restore,
     jobStatuses, rebuildLocalSearch,
     bootstrap(){return{settings:settings(),stats:{notes:store.list().filter(n=>!n.meta.excerptOnly).length,sources:store.list().filter(n=>n.kind==='source'&&!n.meta.excerptOnly).length,knowledge:store.list().filter(n=>n.kind==='knowledge').length,pending:store.records('jobs').filter(j=>['waiting','failed'].includes(j.state)).length},today:today(),notes:listNotes().filter(n=>!n.meta.excerptOnly).map(publicNote),jobs:store.records('jobs').map(publicJob),jobRevision,jobSnapshot:++jobSnapshot,conflicts:store.conflicts,capabilities:{offline:true,model:settings().ai.enabled,embedding:settings().embedding.enabled,search:settings().search.enabled}};},
     uploadFile, revertUpload, commitFile, readFile, pendingUploads,

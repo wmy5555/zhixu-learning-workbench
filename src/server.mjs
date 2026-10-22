@@ -98,6 +98,7 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
           else if (url.pathname === '/api/chatgpt/undo-previews' && method === 'POST') result = service.chatgpt.previewUndo(await readJSON(req, 16384));
           else if (url.pathname === '/api/chatgpt/restore-previews' && method === 'POST') result = service.chatgpt.previewRestore(await readJSON(req, 16384));
           else if (url.pathname === '/api/chatgpt/search' && method === 'GET') result = await service.chatgpt.search(query.q);
+          else if (parts.length === 4 && parts[2] === 'structures' && method === 'GET') result = service.chatgpt.readStructure(parts[3], { offset: query.offset === undefined ? 0 : Number(query.offset), limit: query.limit === undefined ? 12000 : Number(query.limit) });
           else if (parts.length === 4 && ['notes', 'sources'].includes(parts[2]) && method === 'GET') result = service.chatgpt.read(parts[3], { sourceOnly: parts[2] === 'sources', offset: query.offset === undefined ? 0 : Number(query.offset), limit: query.limit === undefined ? 12000 : Number(query.limit) });
           else if (parts.length === 4 && parts[2] === 'related' && method === 'GET') result = service.chatgpt.related(parts[3]);
           else fail('ChatGPT 接口不存在。', 'NOT_FOUND', 404);
@@ -166,10 +167,13 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
       let result;
       if(resource==='recycle-bin'&&!id&&method==='GET')result={...createRecycleBin(service.store).list(),purgeEnabled:!!purgeToken};
       else if(resource==='recycle-bin'&&id&&action==='restore'&&method==='POST')result=createRecycleBin(service.store).restore(id,body.versionId);
-      else if(resource==='recycle-bin'&&!id&&method==='DELETE'){
-        if(!purgeToken)fail('永久清空尚未启用，请由所有者单独配置清空凭据。恢复功能仍可使用。','RECYCLE_PURGE_DISABLED',403);
-        if(!safeEqual(req.headers['x-zhixu-purge-token'],purgeToken))fail('永久清空需要独立的所有者凭据。','RECYCLE_PURGE_UNAUTHORIZED',403);
-        result=createRecycleBin(service.store).clear(body);
+      else if(resource==='recycle-bin'&&!action&&method==='DELETE'){
+        // Both single-item purge and clear require the same independent owner capability.
+        if(!purgeToken)fail('永久删除未启用。恢复功能仍可使用。','RECYCLE_PURGE_DISABLED',403);
+        if(!safeEqual(req.headers['x-zhixu-purge-token'],purgeToken))fail('永久删除需要独立的所有者凭据。','RECYCLE_PURGE_UNAUTHORIZED',403);
+        if(route.length > 2) fail('回收站接口不存在。','NOT_FOUND',404);
+        const bin=createRecycleBin(service.store);
+        result=id?bin.purge(id,body.versionId,body):bin.clear(body);
       }
       else if(resource==='uploads'&&!id&&method==='POST') result=service.uploadFile({ name: query.name, mime: req.headers['content-type'] || '', uploadId: query.uploadId, bytes: await readBinary(req) });
       else if(resource==='uploads'&&!id&&method==='GET') result={uploads:service.pendingUploads()};
@@ -190,6 +194,7 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
       else if(resource==='notes'&&id&&!action&&method==='DELETE'){result=service.store.delete(id,body.expectedHash);for(const j of service.store.records('jobs'))if(j.payload.noteId===id&&['queued','waiting','running'].includes(j.state))service.jobAction(j.id,{action:'cancel'});}
       else if(resource==='notes'&&action==='extract'&&method==='POST')result=service.extractNote(id,body);
       else if(resource==='notes'&&action==='process'&&method==='POST')result=service.processNote(id,body);
+      else if(resource==='notes'&&action==='structure'&&method==='PUT')result=service.editSourceStructure(id,body);
       else if(resource==='notes'&&action==='structure'&&method==='POST')result=service.requestSourceStructure(id);
       else if(resource==='notes'&&action==='promote'&&method==='POST')result=service.promote(id,body);
       else if(resource==='notes'&&action==='confirm'&&method==='POST')result=service.confirmNote(id,body);
@@ -208,7 +213,12 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
       else if(resource==='today'&&(!id||id==='generate'))result=service.today({regenerate:method==='POST'});
       else if(resource==='today'&&action==='action'&&method==='POST')result=service.planAction(id,body);
       else if(resource==='study'&&id==='start'&&method==='POST')result=service.startStudy(body);
-      else if(resource==='study'&&!id&&method==='GET')result={sessions:service.store.records('sessions').slice(0,50)};
+      else if(resource==='study'&&!id&&method==='GET'){
+        const offset=Number(query.offset??0),limit=Number(query.limit??50);
+        if(!Number.isSafeInteger(offset)||offset<0||!Number.isSafeInteger(limit)||limit<1||limit>100)fail('学习历史分页范围无效。');
+        const sessions=service.store.records('sessions');
+        result={sessions:sessions.slice(offset,offset+limit),total:sessions.length,offset,limit};
+      }
       else if(resource==='study'&&id&&!action&&method==='GET')result=service.session(id);
       else if(resource==='study'&&action==='answer'&&method==='POST')result=service.answerStudy(id,body);
       else if(resource==='study'&&action==='hint'&&method==='POST')result=service.hintStudy(id);
@@ -270,6 +280,7 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
         return json(res,200,result,{'Content-Disposition':`attachment; filename="${practiceId?'practice':'learning'}-backup-${Date.now()}.json"`});
       }
       else if(resource==='restore'&&method==='POST')result=service.restore(body);
+      else if(resource==='deleted-notes'&&!id&&method==='GET')result={items:service.store.deletedNotes()};
       else if(resource==='history'&&id&&!action&&method==='GET')result={versions:service.store.history(id)};
       else if(resource==='history'&&action==='restore'&&method==='POST')result=service.store.restoreVersion(id,body.versionId,body.expectedHash);
       else if(resource==='proposals'&&!id&&method==='GET')result={proposals:service.store.records('proposals')};

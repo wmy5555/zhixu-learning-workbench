@@ -98,7 +98,7 @@ for (const partialCheckpoint of [false, true]) test(`expired cache remains limit
       assert.deepEqual(pending, claims.slice(1));
       const note = service.getNote(service.readPublicNote(source.id).children[0].id);
       assert.match(note.meta.researchLimitations.join(' '), /缓存已过期/);
-      assert.throws(() => service.startStudy({ noteId: note.id }), error => error.code === 'RESEARCH_REQUIRED');
+      assert.throws(() => service.startStudy({ noteId: note.id }), /加入学习/);
       if (partialCheckpoint) await onBatch([complete(claims[1])]);
       throw Object.assign(new Error('Synthetic network interruption'), { code: 'NETWORK_ERROR' });
     } };
@@ -113,7 +113,7 @@ for (const partialCheckpoint of [false, true]) test(`expired cache remains limit
   assert.match(note.meta.researchLimitations.join(' '), /Synthetic stale claim B.*缓存已过期/);
   assert.equal(note.meta.evidence.length, 3, 'old evidence remains readable, with its limitation');
   assert.equal(service.store.get('research', hash(`${claims[2]}:${source.hash}`)).at, staleAt);
-  assert.throws(() => service.startStudy({ noteId: note.id }), error => error.code === 'RESEARCH_REQUIRED');
+  assert.throws(() => service.startStudy({ noteId: note.id }), /加入学习/);
   allowCompletion = true; service.jobAction(job.id, { action: 'retry' }); await service.runJobs();
   assert.equal(service.store.get('jobs', job.id).researchProgress.verified, 3);
   assert.equal(service.getNote(note.id).meta.researchLimitations.length, 0, 'only successful rechecking clears stale limitations');

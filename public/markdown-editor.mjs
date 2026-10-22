@@ -117,7 +117,15 @@ export function createMarkdownEditor(textarea, { value = textarea.value, loadEdi
   textarea.value = draft.source;
   const host = el('div', { class: 'source-rich-editor', hidden: true });
   const status = el('p', { class: 'field-hint', role: 'status', ariaLive: 'polite', text: '源码和可视化编辑同一份 Markdown。切换模式不会保存或改写原文。' });
-  let editor, mode = 'source', generation = 0, disposed = false, observer, initializing = false, editorDestroyed = false;
+  let editor, mode = 'source', generation = 0, disposed = false, observer, themeObserver, initializing = false, editorDestroyed = false;
+  const darkTheme = () => document.documentElement?.classList?.contains('dark') || document.documentElement?.dataset.theme === 'dark';
+  let appliedTheme;
+  const updateTheme = () => {
+    const theme = darkTheme() ? 'dark' : 'classic';
+    if (!editor || theme === appliedTheme) return;
+    editor.setTheme?.(theme, theme === 'dark' ? 'dark' : 'light');
+    appliedTheme = theme;
+  };
   let guardPreviewImages = html => html;
   const destroyEditor = () => { if (editor?.vditor?.lute && !editorDestroyed) { editorDestroyed = true; editor.destroy(); } };
   const richValue = () => editor.getValue();
@@ -156,13 +164,13 @@ export function createMarkdownEditor(textarea, { value = textarea.value, loadEdi
         try {
           editor = new Vditor(host, {
             cdn: VENDOR, mode: 'wysiwyg', lang: 'zh_CN', value: '', height: 440,
-            theme: document.documentElement?.dataset.theme === 'dark' ? 'dark' : 'classic',
+            theme: darkTheme() ? 'dark' : 'classic',
             cache: { enable: false }, icon: '',
             hint: { emoji: {}, emojiPath: `${VENDOR}/dist/images/emoji`, parse: false },
             link: { isOpen: false }, image: { isPreview: false },
             toolbar: ['headings', 'bold', 'italic', 'strike', '|', 'list', 'ordered-list', 'check', '|', 'quote', 'code', 'inline-code', 'link', 'table', '|', 'undo', 'redo'],
             preview: { mode: 'editor', actions: [], hljs: { enable: false }, transform: html => guardPreviewImages(html),
-              theme: { current: document.documentElement?.dataset.theme === 'dark' ? 'dark' : 'light', path: `${VENDOR}/dist/css/content-theme` },
+              theme: { current: darkTheme() ? 'dark' : 'light', path: `${VENDOR}/dist/css/content-theme` },
               markdown: { sanitize: true, codeBlockPreview: false, mathBlockPreview: false, autoSpace: false, fixTermTypo: false } },
             // Always intercept file paste/drop below; never use Vditor's data-URL fallback.
             upload: { handler: () => '请使用本地附件入口。', linkToImgUrl: '' },
@@ -181,6 +189,7 @@ export function createMarkdownEditor(textarea, { value = textarea.value, loadEdi
         } catch (error) { clearTimeout(timer); reject(error); }
       });
       if (disposed || request !== generation) return;
+      updateTheme();
       // Exposed by the bundled Lute 1.7.6 API. Keep colon emoji and newly typed
       // inline formula text literal; do not start optional renderers/resources.
       editor.vditor.lute.SetEmoji(false);
@@ -271,8 +280,10 @@ export function createMarkdownEditor(textarea, { value = textarea.value, loadEdi
     if (typeof MutationObserver === 'undefined' || !(container || root.parentNode)) return;
     observer = new MutationObserver(() => { if (!root.isConnected) root.destroy(); });
     observer.observe(container || root.parentNode, { childList: true });
+    themeObserver = new MutationObserver(updateTheme);
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme'] });
   };
-  root.destroy = () => { disposed = true; generation++; observer?.disconnect(); destroyEditor(); };
+  root.destroy = () => { disposed = true; generation++; observer?.disconnect(); themeObserver?.disconnect(); destroyEditor(); };
   updateMode();
   return root;
 }
