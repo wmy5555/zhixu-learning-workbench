@@ -1,120 +1,94 @@
-// Three progressive-onboarding layouts, ?variant=A|B|C. In-memory, disposable.
-// Question: does earning each new region make the existing workbench easier to explore?
+// Prototype 02: fixed geography, persistent controls, memory-only demo data.
 import {icon} from './ui.mjs';
 import {createGuideMotion} from './onboarding-motion.mjs';
-import {calcDampedHarmonicOscillator,SPRING_GENTLE,SPRING_SNAPPY} from './cds/ClaudeMotionPresets.mjs';
+import {calcDampedHarmonicOscillator,SPRING_GENTLE} from './cds/ClaudeMotionPresets.mjs';
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
-const escape=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const sample=`读完一页书后，先合上书，试着用自己的话回想。
-再打开书，找到刚才遗漏的部分。与反复重读相比，这个动作让我们更容易发现：哪些只是眼熟，哪些才真正理解。`;
-const sampleAnswer='我会先合上书，用自己的话解释，再对照原文补上遗漏。能认出来，不代表能独立想起来。';
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const sample='读完一页书后，先合上书，试着用自己的话回想。\n再打开书，找到刚才遗漏的部分。眼熟，不代表能独立想起来。';
+const example='我会先合上书，用自己的话解释，再对照原文补上遗漏。能认出来，不代表能独立想起来。';
 const names=['收集','知识库','学习','输出'],symbols=['plus','layers','book','file'];
-const variants={A:'地图生长',B:'章节探索',C:'路径漫游'};
-let variant=new URLSearchParams(location.search).get('variant');if(!variants[variant])variant='A';
-const fresh=()=>({started:false,done:0,material:'',opened:false,answer:'',answered:false,selected:false,generated:false,view:null});
-let state=fresh(),epoch=0,guideEpoch=0;
+const fresh=()=>({started:false,done:0,sources:[],selected:null,read:false,answers:[],drafts:[]});
+let state=fresh(),serial=0,guideSerial=0;
 const reduced=()=>matchMedia('(prefers-reduced-motion: reduce)').matches;
-$$('[data-icon]').forEach(n=>n.innerHTML=icon(n.dataset.icon));
 const motion=createGuideMotion({bottom:()=>$('#guide').getBoundingClientRect().top-12,onToggle:()=>locate(true)});
-function animateIn(node,large=false){
- if(!node||reduced())return Promise.resolve();
- const spring=large?SPRING_GENTLE:SPRING_SNAPPY;
- const frames=Array.from({length:61},(_,i)=>{const t=i/60,p=i===60?1:calcDampedHarmonicOscillator(spring.stiffness,spring.damping,1,t*.85);return {offset:t,opacity:Math.min(1,t*5),transform:`translateY(${(1-p)*(large?35:15)}px) scale(${1-(1-p)*(large?.09:.025)},${1-(1-p)*(large?.14:.025)})`};});
- return node.animate(frames,{duration:850,easing:'linear'}).finished.catch(()=>{});
+$$('[data-icon]').forEach(n=>n.innerHTML=icon(n.dataset.icon));
+const holes=[[0,0,450,300],[450,0,550,300],[0,300,450,300],[450,300,550,300]];
+const contours=['M-70 100C70-20 250 5 335 63S390 180 520 155 600-15 780 25s80 160 310 140','M-55 121C80 5 241 32 324 85S400 199 531 177 624 6 779 48s102 159 315 144','M-40 142C78 31 230 52 311 107S400 222 538 197 647 33 784 72s112 162 310 140','M-30 161C70 55 219 75 301 129S406 244 552 219 672 58 788 94s124 168 312 139','M-80 443C150 322 173 462 345 446s100-104 277-82 172 179 437 58','M-80 466C130 349 179 487 346 470s109-105 272-81 177 180 443 58','M-80 490C120 376 179 512 349 494s116-106 268-81 184 181 449 58','M-80 515C120 403 179 537 351 520s122-107 267-81 188 183 452 58'];
+$('#main').innerHTML='<header class="page-heading"><div><div class="eyebrow">A WORLD OF YOUR OWN</div><h1>我的知识空间</h1></div><div class="heading-right"><span id="world-status">尚待探索</span><strong id="completion">0</strong><span>/ 4</span></div></header>'+
+'<div class="world" id="world"><div class="fixed-map">'+names.map((name,i)=>'<section class="region" data-region="'+i+'" aria-label="'+name+'区域" inert aria-hidden="true"><header class="zone-head">'+icon(symbols[i])+'<h2>'+(i===2?'今日学习':name)+'</h2><span class="zone-mark" id="mark-'+i+'"></span></header><div class="zone-body" id="body-'+i+'"></div><footer class="zone-footer" id="footer-'+i+'"></footer></section>').join('')+'</div>'+
+'<svg class="fog-field" viewBox="0 0 1000 600" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="fog-tone" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#1c2725"/><stop offset=".55" stop-color="#29332e"/><stop offset="1" stop-color="#343b31"/></linearGradient><radialGradient id="cloud-light"><stop stop-color="#a4a783" stop-opacity=".1"/><stop offset="1" stop-color="#88977e" stop-opacity="0"/></radialGradient>'+holes.map(([x,y,w,h],i)=>'<clipPath id="fog-clip-'+i+'"><rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+h+'"/></clipPath>').join('')+'</defs>'+
+holes.map((_,i)=>'<g clip-path="url(#fog-clip-'+i+')"><g id="hole-'+i+'" class="fog-hole"><rect width="1000" height="600" fill="url(#fog-tone)"/><ellipse cx="260" cy="150" rx="380" ry="230" fill="url(#cloud-light)"/><ellipse cx="790" cy="510" rx="500" ry="320" fill="url(#cloud-light)"/><g class="contour">'+contours.map(d=>'<path d="'+d+'"/>').join('')+'</g><path class="trail" d="M225 150C420 40 700 30 725 150S200 240 225 450 580 550 725 450"/><g class="star"><circle cx="725" cy="150" r="2"/><circle cx="225" cy="450" r="2"/><circle cx="725" cy="450" r="2"/><circle cx="621" cy="74" r="1"/><circle cx="851" cy="285" r="1.2"/><circle cx="124" cy="525" r="1.2"/></g></g></g>').join('')+'</svg>'+
+'<div class="first-light" id="first-light"><div class="beacon">'+icon('leaf')+'</div><h2>从一束微光开始</h2><p>这里的一切，已在原地等你。<br>走过的地方，会一直亮着。</p><button id="begin">点亮第一片区域 '+icon('arrow')+'</button></div><div class="world-coordinate">ZHIXU<br>A WORLD TO DISCOVER</div></div>'+
+'<div class="map-caption"><span id="map-caption">跟随小叶子，探索这张属于你的地图。</span><span>练习原型 · 仅本页内存</span></div>';
+$('#body-0').innerHTML='<div class="field-caption"><label for="material">留下一段文字</label><button data-do="sample">放入示例</button></div><textarea class="text-field" id="material" placeholder="一段摘录，一个念头。都从这里留下。"></textarea>';
+$('#footer-0').innerHTML='<small id="capture-count">0 份资料</small><button class="primary" data-do="save" disabled>收进知识库 '+icon('arrow')+'</button>';
+$('#body-1').innerHTML='<div class="library-columns"><div class="source-list" id="source-list"></div><article class="source-detail" id="source-detail"></article></div>';
+$('#footer-1').innerHTML='<small>资料与来源留在这里</small><button class="primary" data-do="learn" disabled>加入今日学习 '+icon('arrow')+'</button>';
+$('#body-2').innerHTML='<p class="study-question" id="study-question">用自己的话，解释刚才的发现。</p><div class="field-caption"><label for="answer">我的理解</label><button data-do="example-answer">填入示例</button></div><textarea class="text-field study-answer" id="answer" placeholder="合上资料，试着回想，再写一句自己的理解…"></textarea>';
+$('#footer-2').innerHTML='<small id="answer-count">练习原型不进行 AI 批改</small><button class="primary" data-do="answer" disabled>保存理解 '+icon('check')+'</button>';
+$('#body-3').innerHTML='<div class="output-caption"><label for="output">我的知识卡片</label><span>可以继续编辑</span></div><textarea class="text-field output-editor" id="output" placeholder="把刚才的理解整理成一张卡片，让知识用起来。"></textarea>';
+$('#footer-3').innerHTML='<small id="draft-count">0 份草稿</small><div class="output-footer"><button class="secondary" data-do="generate" disabled>引用刚才的理解</button><button class="primary" data-do="draft" disabled>存为草稿 '+icon('file')+'</button></div>';
+$('#navigation').innerHTML='<button class="nav-item" data-nav="home" aria-label="查看探索全景">'+icon('home')+'<span>今日</span></button>'+names.map((n,i)=>'<button class="nav-item locked" data-nav="'+i+'" aria-label="'+n+'" disabled>'+icon(symbols[i])+'<span>'+n+'</span><span class="nav-done" id="nav-mark-'+i+'"></span></button>').join('');
+$('#seed-progress').innerHTML=names.map((_,i)=>'<i id="progress-'+i+'"></i>').join('');
+const zone=i=>$('[data-region="'+i+'"]'),enabled=i=>state.started&&i<=Math.min(3,state.done);
+function report(){$('#state').textContent=JSON.stringify({方案:'固定地图 / 迷雾揭示',阶段:!state.started?'尚未开始':state.done===4?'自由使用':names[state.done],已探索:names.slice(0,state.done),当前可用:names.filter((_,i)=>enabled(i)),资料:state.sources.length,理解:state.answers.length,草稿:state.drafts.length,区域布局:'45% / 55% 两列，50% / 50% 两行；不替换节点或改变位置',保存:'本页内存，刷新重置',网络:'禁用，无真实 AI'},null,2);}
+function flash(message){$('#announcement').textContent=message;$('#toast').textContent=message;$('#toast').hidden=false;clearTimeout(flash.timer);flash.timer=setTimeout(()=>$('#toast').hidden=true,2000);}
+function updateAccess(){
+ names.forEach((_,i)=>{const available=enabled(i),el=zone(i),nav=$('[data-nav="'+i+'"]');el.inert=!available;el.setAttribute('aria-hidden',String(!available));nav.disabled=!available;nav.classList.toggle('locked',!available);if(state.started&&state.done===i)nav.setAttribute('aria-current','step');else nav.removeAttribute('aria-current');$('#nav-mark-'+i).textContent=i<state.done?'✓':'';$('#progress-'+i).classList.toggle('done',i<state.done);$('#mark-'+i).textContent=i<state.done?'已点亮':available?'当前探索':'';$('#mark-'+i).classList.toggle('active',available&&i===state.done);});
+ $('#completion').textContent=state.done;$('#world-status').textContent=!state.started?'尚待探索':state.done===4?'自由使用':'正在探索';$('#first-light').hidden=state.started;$('#world').classList.toggle('fog-free',state.done>=3);$('#map-caption').textContent=state.done===4?'地图已点亮。所有功能仍在原来的位置，继续使用就好。':'已点亮的区域可以随时使用，下一片区域等待你完成当前探索。';report();
 }
-function flash(message){$('#announcement').textContent=message;$('#toast').textContent=message;$('#toast').hidden=false;clearTimeout(flash.timer);flash.timer=setTimeout(()=>$('#toast').hidden=true,2400);}
-function report(){
- $('#state').textContent=JSON.stringify({方案:`${variant} · ${variants[variant]}`,阶段:!state.started?'尚未开始':state.done===4?'探索完成':names[state.done],已完成:names.slice(0,state.done),已展开:state.started?names.slice(0,Math.min(4,state.done+1)):[],下一步解锁:state.done<3?names[state.done+1]:null,操作:{已放入资料:!!state.material.trim(),已展开知识:state.opened,已有回答:!!state.answer.trim(),已确认回答:state.answered,已选择引用:state.selected,已生成示例:state.generated},保存:'仅本页内存，刷新重置',网络:'禁用；没有 API 调用'},null,2);
+function updateData(){
+ $('#capture-count').textContent=state.sources.length+' 份资料';
+ $('#source-list').innerHTML=state.sources.map(s=>'<button class="source-row" data-source="'+s.id+'" aria-pressed="'+(s.id===state.selected)+'">'+icon('file')+'<span><strong>'+esc(s.title)+'</strong><small>本次体验 · 原文保留</small></span></button>').join('');
+ const source=state.sources.find(s=>s.id===state.selected);
+ $('#source-detail').innerHTML=source&&state.read?'<small>原始资料 · 本页示例</small><h3>'+esc(source.title)+'</h3><p>'+esc(source.text)+'</p>':'<div class="empty-copy">选择一份资料，<br>接着探索它。</div>';
+ $('[data-do="learn"]').disabled=!source||!state.read;$('[data-do="generate"]').disabled=!state.answers.length;
+ $('#answer-count').textContent=state.answers.length?'已留下 '+state.answers.length+' 次理解 · 未进行批改':'练习原型不进行 AI 批改';$('#draft-count').textContent=state.drafts.length+' 份草稿';guidance();report();
 }
-function nav(){
- $('#navigation').innerHTML=`<button class="nav-item" data-nav="home" aria-label="查看探索全景">${icon('home')}<span class="nav-label">今日</span></button>`+names.slice(0,state.started?Math.min(4,state.done+1):0).map((n,i)=>`<button class="nav-item" data-nav="${i}" aria-label="${n}" ${i===state.done?'aria-current="step"':''}>${icon(symbols[i])}<span class="nav-label">${n}</span>${i<state.done?'<span class="nav-done">✓</span>':''}</button>`).join('');
- $('#seed-progress').innerHTML=names.map((_,i)=>`<i class="${i<state.done?'done':''}"></i>`).join('');
+async function unveil(i){
+ const hole=$('#hole-'+i),el=zone(i);hole.style.opacity='0';if(reduced())return;
+ const fade=hole.animate([{opacity:1},{opacity:0}],{duration:1150,easing:'cubic-bezier(.16,1,.3,1)'});
+ const frames=Array.from({length:55},(_,n)=>{const t=n/54,p=n===54?1:calcDampedHarmonicOscillator(SPRING_GENTLE.stiffness,SPRING_GENTLE.damping,1,t*.8);return {offset:t,transform:'scale('+(1-(1-p)*.045)+')'};});
+ const spring=el.animate(frames,{duration:800,delay:200,easing:'linear'});await Promise.allSettled([fade.finished,spring.finished]);
 }
-function welcome(){return `<section class="welcome"><div class="welcome-art">${icon('leaf')}<i></i></div><div class="eyebrow">A LITTLE AT A TIME</div><h1>一点一点，<br>展开你的知识世界。</h1><p>现在，这里还是一张空白地图。<br>跟着小叶子走一小段，让知序随你的探索慢慢生长。</p><button class="primary" data-do="start">开始探索 ${icon('arrow')}</button><small>4 个小发现 · 约 2 分钟 · 随时重新开始</small></section>`;}
-const titles=['先收下一点好奇','让灵感，有处可寻','把看过，变成想得起','让知识，走出知识库'];
-const doneTitles=['第一份灵感，已收好','知识有了自己的位置','留下了自己的理解','完成了一次小小输出'];
-const doneCopies=['收集区域已点亮 · 1 份示例原文','知识库已点亮 · 1 条示例知识','学习区域已点亮 · 1 次模拟练习','输出区域已点亮 · 1 份示例草稿'];
-function currentContent(i){
- if(i===0)return `<h2>${titles[i]}</h2><p class="intro">一段摘录、一个念头，都可以成为起点。<br>先放入一段练习资料，亲手点亮第一块地图。</p><div class="input-label"><label for="material">想留下的内容</label><button data-do="sample">放入一段示例</button></div><textarea class="material-text" id="material" placeholder="从一小段文字开始…">${escape(state.material)}</textarea><div class="region-actions"><small>仅保留在这次原型体验中</small><button class="primary" data-do="save" ${!state.material.trim()?'disabled':''}>收好这份灵感 ${icon('arrow')}</button></div>`;
- if(i===1)return `<h2>${titles[i]}</h2><p class="intro">刚才收下的文字，现在有了一个可以再次找到的位置。<br>打开这条示例知识，看看原文怎样变成学习的起点。</p><div class="source-preview"><small>来自你刚才收集的文字</small><p>${escape(state.material)}</p></div><button class="knowledge-choice" data-do="open" aria-expanded="${state.opened}">${icon('layers')}<span><strong>从“眼熟”到“想得起”</strong><small>示例知识 · 点击展开</small></span>${icon('arrow')}</button>${state.opened?'<div class="read-note"><small>预设内容 · 未调用 AI</small>合上资料，主动回想；再对照原文，发现遗漏。<br>接下来，用自己的话解释一次。</div>':''}<div class="region-actions"><small>${state.opened?'已探索：知识与来源的关系':'打开知识后，才能继续探索'}</small><button class="primary" data-do="learn" ${!state.opened?'disabled':''}>带着它去学习 ${icon('arrow')}</button></div>`;
- if(i===2)return `<h2>${titles[i]}</h2><p class="intro">这里不急着给你更多内容。先停一下，试着回想刚才的发现。</p><p class="question">如果只会“看着很熟”，你会怎样<br>确认自己真的理解了？</p><div class="input-label"><label for="answer">用自己的话说一遍</label><button data-do="sample-answer">填入示例回答</button></div><textarea class="answer-text" id="answer" placeholder="我会试着…">${escape(state.answer)}</textarea>${state.answered?'<div class="feedback">这段回答已留在本次体验里。<br>原型只展示交互，不批改，也不判断是否掌握。</div>':''}<div class="region-actions"><small>${state.answered?'你的回答，是下一步输出的起点':'可以随意写一句，也可以使用示例'}</small><button class="primary" data-do="${state.answered?'finish-learning':'answer'}" ${!state.answer.trim()?'disabled':''}>${state.answered?'解锁输出区域':'留下我的理解'} ${icon('arrow')}</button></div>`;
- return `<h2>${titles[i]}</h2><p class="intro">把自己的理解整理成一张小卡片。<br>一次完整的探索，从收集开始，到真正用起来。</p>${!state.generated?`<label class="output-select"><input type="checkbox" id="source-choice" ${state.selected?'checked':''}><span>引用「从眼熟到想得起」<br><small class="region-note">带上刚才留下的理解</small></span></label>`:`<article class="output-paper"><h3>下一次阅读，我会这样做</h3><p>${escape(state.answer)}</p><small>引用：从“眼熟”到“想得起” · 预设排版，未调用 AI</small></article>`}<div class="region-actions"><small>${state.generated?'一张属于这次探索的知识卡片':'选择来源后，才能生成示例卡片'}</small><button class="primary" data-do="${state.generated?'finish':'generate'}" ${!state.selected?'disabled':''}>${state.generated?'完成这次探索':'生成我的小卡片'} ${icon('arrow')}</button></div>`;
-}
-function region(i){
- const complete=i<state.done,detail=state.view===i;
- return `<section class="region ${complete?'completed':'active'} ${detail?'has-detail':''}" data-region="${i}" data-number="0${i+1}" aria-label="${names[i]}区域"><header class="region-header"><span class="region-name">${icon(symbols[i])}${names[i]}<span class="region-number">/ 0${i+1}</span></span><span class="region-status">${complete?'✓ 已探索':'正在探索'}</span></header>${complete?`<h2>${doneTitles[i]}</h2><p>${doneCopies[i]}</p><button class="revisit" data-view="${i}" aria-expanded="${detail}">${detail?'收起':'回看'} ↗</button>${detail?`<div class="complete-detail">${escape(i===0?state.material:i===1?'示例知识：合上资料主动回想，再对照原文发现遗漏。':state.answer)}</div>`:''}`:currentContent(i)}</section>`;
-}
-function map(){
- const finished=state.done===4;
- return `<header class="page-heading"><div><div class="eyebrow">YOUR WORLD, UNFOLDING</div><h1>${finished?'你的知识世界，展开了。':'每一次探索，都有新发现。'}</h1><p>${{A:'让工作台随你的脚步，一块一块生长。',B:'一次只走进一个章节，慢慢认识整个知序。',C:'沿着自己的来路，把一处处发现连成地图。'}[variant]}</p></div><div class="discovery-count"><strong>${state.done}</strong><span>/ 4 已探索</span></div></header><div class="mini-route" aria-label="探索进度">${names.map((_,i)=>`${i?`<span class="route-link ${i<=state.done?'done':''}"></span>`:''}<span class="route-dot ${i<state.done?'done':i===state.done?'current':''}" aria-label="${i<state.done?names[i]+'已完成':i===state.done?names[i]+'当前探索':'尚未解锁'}">${i<state.done?'✓':i===state.done?'0'+(i+1):'·'}</span>`).join('')}</div><div class="map-board">${Array.from({length:Math.min(4,state.done+1)},(_,i)=>region(i)).join('')}${finished?`<div class="completion-banner">${icon('leaf')}<div><h2>从一片空白，到一条自己的路。</h2><p>收集、整理、学习、输出。四块区域，因你的探索而点亮。</p></div><button class="secondary" data-do="reset">再走一遍</button></div>`:`<div class="frontier">${icon('spark')}下一片区域，藏在这一步完成之后。</div>`}</div>`;
+async function begin(){if(state.started)return;state.started=true;const version=++serial;++guideSerial;motion.hide();updateAccess();const expected=guideSerial;await unveil(0);if(version===serial&&expected===guideSerial)locate();}
+async function complete(i){
+ if(state.done!==i)return;state.done++;const version=++serial;++guideSerial;motion.cancel();updateAccess();
+ if(state.done<4){flash(names[i]+'已点亮 · 继续探索'+names[state.done]);const expected=guideSerial;await unveil(state.done);if(version===serial&&expected===guideSerial)locate();}
+ else{motion.hide();flash('地图已点亮，继续使用就好。');}
+ guidance();
 }
 function guidance(){
  let copy,target;
- if(!state.started){copy='不用先记住所有入口。点「开始探索」，我们从一小块地方开始。';target='[data-do="start"]';}
- else if(state.done===0){copy=state.material.trim()?'灵感已经放好了。亲手收好它，知识库就会展开。':'点「放入一段示例」，再收好它。完成这一步，下一片区域才会出现。';target=state.material.trim()?'[data-do="save"]':'[data-do="sample"]';}
- else if(state.done===1){copy=state.opened?'现在能看见知识和来源的关系了。把它带去学习，解锁下一站。':'知识库已经展开。点开这条知识，发现刚才的文字去了哪里。';target=state.opened?'[data-do="learn"]':'[data-do="open"]';}
- else if(state.done===2){copy=state.answered?'自己的理解已经留下了。接下来，让它变成可以用的小卡片。':state.answer.trim()?'写好了，就留下这段理解。这里只演示，不会评判你的答案。':'试着写一句自己的理解。也可以填入示例，先体验探索的节奏。';target=state.answered?'[data-do="finish-learning"]':state.answer.trim()?'[data-do="answer"]':'[data-do="sample-answer"]';}
- else if(state.done===3){copy=state.generated?'这是你刚才的理解。确认完成，看看已经点亮的整张地图。':state.selected?'来源已经选好。生成一张示例卡片，走完这条小路。':'最后一站，输出。先选中刚才的知识，把自己的理解带出来。';target=state.generated?'[data-do="finish"]':state.selected?'[data-do="generate"]':'#source-choice';}
- else {copy='四个区域都认识了。可以从侧栏回看，也可以换一种展开方式，再体验一次。';target='[data-do="reset"]';}
- $('#guide-copy').textContent=copy;$('#guide-kicker').textContent=state.started&&state.done<4?`小叶子 · 第 ${state.done+1} 片区域 / ${names[state.done]}`:'小叶子 · 探索向导';
- return $(target);
+ if(!state.started){copy='地图早已在这里。点亮第一片区域，我们从收下一段文字开始。';target='#begin';}
+ else if(state.done===0){copy=$('#material').value.trim()?'把这段文字收进知识库。收集框会一直留在原处，随时可以再用。':'先放入一段示例，再收进知识库。走过的区域会一直亮着。';target=$('#material').value.trim()?'[data-do="save"]':'[data-do="sample"]';}
+ else if(state.done===1){copy=state.read?'看过原文了。把它加入今日学习，下一片区域就会亮起。':'右上方是知识库。打开刚才的资料；左边的收集区仍然能继续使用。';target=state.read?'[data-do="learn"]':'[data-source]';}
+ else if(state.done===2){copy=$('#answer').value.trim()?'把自己的理解留下来。学习区会保持原样，之后还可以继续写。':'左下方是今日学习。试着写一句理解，或先用示例体验。';target=$('#answer').value.trim()?'[data-do="answer"]':'[data-do="example-answer"]';}
+ else if(state.done===3){copy=$('#output').value.trim()?'这张卡片可以直接编辑。存为草稿，就走完了第一次探索。':'最后是右下方的输出。引用刚才的理解，整理成自己的小卡片。';target=$('#output').value.trim()?'[data-do="draft"]':'[data-do="generate"]';}
+ else{copy='四个区域都留在原来的位置。继续收集、阅读、练习或编辑草稿，我就在这里。';target='[data-do="sample"]';}
+ $('#guide-kicker').textContent=state.done===4?'小叶子 · 随时陪你':'小叶子 · '+(!state.started?'从这里出发':names[state.done]);$('#guide-copy').textContent=copy;return $(target);
 }
-async function locate(frame=false){
- const token=++guideEpoch,target=guidance();if(!target)return;
- await motion.retract();if(token!==guideEpoch||!target.isConnected)return;
- await motion.scroll(target);if(token!==guideEpoch||!target.isConnected)return;
- await motion.move(target);if(token!==guideEpoch||!target.isConnected)return;
- if(frame)await motion.frame(target);motion.pulse();
-}
-async function render({reveal=false,reset=false}={}){
- const token=++epoch,plannedGuide=++guideEpoch;motion.cancel();
- const oldRects=new Map($$('[data-region]').map(n=>[n.dataset.region,n.getBoundingClientRect()]));
- document.body.dataset.variant=variant;$('#variant-label').textContent=`${variant} · ${variants[variant]}`;
- $('#main').innerHTML=state.started?map():welcome();nav();guidance();report();
- if(reset)window.scrollTo({top:0,behavior:'instant'});
- const current=$('.region.active')||$('.welcome')||$('.completion-banner');
- const animations=[];
- if(reveal){
-  if(current&&state.started){const r=current.getBoundingClientRect(),floor=$('#guide').getBoundingClientRect().top;if(r.top<110||r.bottom>floor)current.scrollIntoView({block:'start',behavior:'instant'});}
-  animations.push(animateIn(current,true));
-  const n=$(`[data-nav="${state.done}"]`);if(n)animations.push(animateIn(n));
- }
- if(!reduced()&&variant==='A')$$('[data-region]').forEach(n=>{const old=oldRects.get(n.dataset.region);if(!old||n===current)return;const r=n.getBoundingClientRect(),dy=old.top-r.top;if(Math.abs(dy)>4)animations.push(n.animate([{transform:`translateY(${Math.max(-50,Math.min(50,dy))}px)`},{transform:'none'}],{duration:450,easing:'cubic-bezier(.16,1,.3,1)'}).finished.catch(()=>{}));});
- await Promise.all(animations);if(token!==epoch)return;
- if(reveal)current?.querySelector('button:not(:disabled)')?.focus({preventScroll:true});
- if(guideEpoch===plannedGuide)await locate();
-}
-function advance(){state.done++;state.view=null;flash(`${names[state.done-1]}已探索${state.done<4?' · '+names[state.done]+'区域已解锁':' · 地图已全部点亮'}`);render({reveal:true});}
-function reset(){++epoch;++guideEpoch;motion.hide();state=fresh();$('#toast').hidden=true;render({reveal:true,reset:true});}
+async function locate(frame=false){const token=++guideSerial,target=guidance();if(!target||target.disabled)return;await motion.retract();if(token!==guideSerial)return;await motion.scroll(target);if(token!==guideSerial)return;await motion.move(target);if(token!==guideSerial)return;if(frame)await motion.frame(target);if(token===guideSerial)motion.pulse();}
+function reset(){++serial;++guideSerial;motion.hide();document.getAnimations().forEach(a=>a.cancel());state=fresh();$$('.fog-hole').forEach(n=>n.style.opacity='1');$('#material').value='';$('#answer').value='';$('#output').value='';$('[data-do="save"]').disabled=true;$('[data-do="answer"]').disabled=true;$('[data-do="draft"]').disabled=true;$('#study-question').textContent='用自己的话，解释刚才的发现。';$('#toast').hidden=true;updateAccess();updateData();window.scrollTo({top:0,behavior:'instant'});locate();}
+$('#begin').onclick=begin;
 $('#main').addEventListener('click',event=>{
- const view=event.target.closest('[data-view]');if(view){state.view=state.view===Number(view.dataset.view)?null:Number(view.dataset.view);render();return;}
+ const row=event.target.closest('[data-source]');if(row&&enabled(1)){state.selected=Number(row.dataset.source);state.read=true;updateData();locate();return;}
  const button=event.target.closest('[data-do]');if(!button||button.disabled)return;
  switch(button.dataset.do){
- case 'start':if(!state.started){state.started=true;render({reveal:true});}break;
- case 'sample':if(state.done===0){state.material=sample;render();}break;
- case 'save':if(state.done===0&&state.material.trim())advance();break;
- case 'open':if(state.done===1){state.opened=!state.opened;render();if(state.opened)animateIn($('.read-note'));}break;
- case 'learn':if(state.done===1&&state.opened)advance();break;
- case 'sample-answer':if(state.done===2){state.answer=sampleAnswer;state.answered=false;render();}break;
- case 'answer':if(state.done===2&&state.answer.trim()){state.answered=true;render();animateIn($('.feedback'));}break;
- case 'finish-learning':if(state.done===2&&state.answered&&state.answer.trim())advance();break;
- case 'generate':if(state.done===3&&state.selected){state.generated=true;render();animateIn($('.output-paper'),true);}break;
- case 'finish':if(state.done===3&&state.generated)advance();break;
- case 'reset':reset();break;
- }
+ case 'sample':if(enabled(0)){$('#material').value=sample;$('[data-do="save"]').disabled=false;guidance();locate();}break;
+ case 'save':{const text=$('#material').value.trim();if(!enabled(0)||!text)break;const id=state.sources.length+1;state.sources.unshift({id,title:text===sample?'从“眼熟”到“想得起”':text.split('\n')[0].slice(0,24),text});$('#material').value='';button.disabled=true;updateData();if(state.done===0)complete(0);else flash('资料已收好，仍可继续收集。');break;}
+ case 'learn':if(enabled(1)&&state.read){const source=state.sources.find(s=>s.id===state.selected);$('#study-question').textContent='关于「'+source.title+'」，你会怎样用自己的话解释？';if(state.done===1)complete(1);else{flash('已选为当前学习资料。');zone(2).querySelector('textarea').focus({preventScroll:true});}}break;
+ case 'example-answer':if(enabled(2)){$('#answer').value=example;$('[data-do="answer"]').disabled=false;guidance();locate();}break;
+ case 'answer':{const answer=$('#answer').value.trim();if(!enabled(2)||!answer)break;state.answers.push({source:state.selected,text:answer});updateData();if(state.done===2)complete(2);else flash('理解已保存；没有进行 AI 批改。');break;}
+ case 'generate':if(enabled(3)&&state.answers.length){$('#output').value='下一次阅读，我会这样做\n\n'+state.answers.at(-1).text;$('[data-do="draft"]').disabled=false;guidance();locate();}break;
+ case 'draft':{const text=$('#output').value.trim();if(!enabled(3)||!text)break;state.drafts.push({text,source:state.selected});updateData();if(state.done===3)complete(3);else flash('已存为本页草稿，编辑区保持不变。');break;}
+ }report();
 });
-$('#main').addEventListener('input',event=>{
- if(event.target.id==='material'){state.material=event.target.value;$('[data-do="save"]').disabled=!state.material.trim();}
- if(event.target.id==='answer'){state.answer=event.target.value;state.answered=false;$('.feedback')?.remove();const button=$('.region.active .primary');button.dataset.do='answer';button.innerHTML=`留下我的理解 ${icon('arrow')}`;button.disabled=!state.answer.trim();}
- guidance();report();
-});
-$('#main').addEventListener('change',event=>{if(event.target.id==='source-choice'){state.selected=event.target.checked;$('[data-do="generate"]').disabled=!state.selected;guidance();report();locate();}});
-$('#navigation').addEventListener('click',async event=>{const button=event.target.closest('[data-nav]');if(!button)return;const id=button.dataset.nav;if(id==='home'){window.scrollTo({top:0,behavior:reduced()?'instant':'smooth'});return;}const n=Number(id);if(n<state.done){state.view=n;await render();}const el=$(`[data-region="${n}"]`);if(el){el.scrollIntoView({block:'center',behavior:reduced()?'instant':'smooth'});animateIn(el);}});
-function switchVariant(direction){const keys=Object.keys(variants);variant=keys[(keys.indexOf(variant)+direction+keys.length)%keys.length];const url=new URL(location.href);url.searchParams.set('variant',variant);history.replaceState(null,'',url);state.view=null;motion.hide();render({reveal:true,reset:true});}
-$('#previous').onclick=()=>switchVariant(-1);$('#next').onclick=()=>switchVariant(1);$('#variant-label').onclick=()=>switchVariant(1);$('#restart').onclick=reset;$('#locate').onclick=()=>locate(true);
-$('#theme').onclick=()=>{const dark=document.documentElement.classList.toggle('dark');$('#theme').innerHTML=icon(dark?'sun':'moon');};
+$('#main').addEventListener('input',event=>{const action={material:'save',answer:'answer',output:'draft'}[event.target.id];if(action)$('[data-do="'+action+'"]').disabled=!event.target.value.trim();guidance();report();});
+$('#navigation').addEventListener('click',event=>{const button=event.target.closest('[data-nav]');if(!button||button.disabled)return;if(button.dataset.nav==='home'){window.scrollTo({top:0,behavior:reduced()?'instant':'smooth'});return;}const el=zone(Number(button.dataset.nav));el.scrollIntoView({block:'nearest',behavior:reduced()?'instant':'smooth'});el.querySelector('textarea,button:not(:disabled)')?.focus({preventScroll:true});});
+$('#restart').onclick=reset;$('#locate').onclick=()=>locate(true);$('#theme').onclick=()=>{const dark=document.documentElement.classList.toggle('dark');$('#theme').innerHTML=icon(dark?'sun':'moon');};
 $('#state-toggle').onclick=()=>{$('#state').hidden=!$('#state').hidden;$('#state-toggle').setAttribute('aria-expanded',String(!$('#state').hidden));report();};
-document.addEventListener('keydown',event=>{if(event.target.closest('input,textarea,select,[contenteditable]')||event.isComposing||event.ctrlKey||event.altKey||event.metaKey)return;if(event.key==='ArrowLeft'||event.key==='ArrowRight'){event.preventDefault();switchVariant(event.key==='ArrowLeft'?-1:1);}if(event.key==='Escape'){$('#state').hidden=true;$('#state-toggle').setAttribute('aria-expanded','false');motion.retract();}});
+document.addEventListener('keydown',event=>{if(event.key==='Escape'){$('#state').hidden=true;$('#state-toggle').setAttribute('aria-expanded','false');motion.retract();}});
 window.addEventListener('scroll',()=>motion.track(),{passive:true});window.addEventListener('resize',()=>motion.track());
-matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change',()=>{document.getAnimations().forEach(a=>a.cancel());motion.cancel();locate();});
-render({reveal:true});
+matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change',()=>{if(reduced())document.getAnimations().forEach(a=>a.cancel());motion.cancel();locate();});
+updateAccess();updateData();locate();
