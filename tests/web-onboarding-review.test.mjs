@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {destination} from '../public/web/onboarding-model.mjs';
 import {isReviewSession,resolveReviewSession,reviewGuide} from '../public/web/onboarding-review.mjs';
+import {readFile} from 'node:fs/promises';
+import vm from 'node:vm';
 
 const proof={roles:{explain:'chosen',currentSession:'saved-review'},clock:{now:'2026-10-07T00:30:00Z',timezone:'Asia/Shanghai'}};
 const session=()=>({id:'live-review',noteId:'chosen',createdAt:'2026-10-06T18:00:00Z',status:'reading',turns:[]});
@@ -49,4 +51,14 @@ test('pool targeting stays on the selected knowledge and never highlights anothe
  input.route='study/other';assert.equal(reviewGuide(input).target,null);
  input.route='study/live-review';input.session.noteId='other';assert.equal(reviewGuide(input).target,null);
  input.session=session();nodes.set('dialog[open]',[{}]);assert.equal(reviewGuide(input).target,null);
+});
+
+test('feedback replacing a hinted waiting target allows the next hint to frame the finish action',async()=>{
+ const source=await readFile(new URL('../public/web/onboarding.mjs',import.meta.url),'utf8'),finish={};let frames=0;
+ const motion={target:{},framed:true,scroll:async()=>{},track:async()=>{},move:async target=>{motion.target=target;motion.framed=false;},frame:async()=>{frames++;return true;},pulse(){}};
+ const context=vm.createContext({target:()=>finish,motion,active:true,travelling:false,hinting:true,step:()=>({id:'review-finish',kind:'action'}),card:{contains:()=>false},settle:async()=>{},changed(){},render(){}});
+ const show=source.slice(source.indexOf('async function showTarget()'),source.indexOf('async function openCard()'));
+ const hint=source.slice(source.indexOf('async function hint()'),source.indexOf('function schedulePoll()'));
+ vm.runInContext(show+hint+'\nthis.show=showTarget;this.hint=hint;',context);
+ await context.show();await context.hint();assert.equal(frames,1);assert.equal(context.hinting,true);
 });
