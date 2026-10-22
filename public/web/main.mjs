@@ -1,3 +1,4 @@
+import { unavailableHTML, mountUnavailable } from './today-unavailable.mjs';
 import {createWebOnboarding} from './onboarding.mjs';
 import { installInputModality } from './input-modality.mjs';
 import { api, endpoint, pendingPlan, capturePayload } from './api.mjs';
@@ -14,7 +15,8 @@ import { createManagement, initializeAccent } from './management.mjs';
 import { createFocus } from './focus.mjs';
 import { watchStudyFeedback, feedbackPending } from './study-feedback.mjs';
 import { aidUsed, markAid, clearAid } from './study-aid.mjs';
-import { batchImport } from './batch-import.mjs';
+import { batchImport, prepareTexts } from './batch-import.mjs';
+import { captureFilesHTML, mountCaptureFiles } from './capture-files.mjs';
 
 installInputModality(document.documentElement, document);
 
@@ -113,9 +115,9 @@ function todayPage() {
   return {html:`<section class="page-heading"><div><div class="eyebrow">A LITTLE LEARNING, EVERY DAY</div><h1><span>把今天的理解，</span><span>再往前推一点。</span></h1><p>${items.length?`今天有 ${items.length} 件小事，留一点时间，慢慢想清楚。`:'今天可以从容一点，给新的理解留一点空间。'}</p></div><div class="date"><strong>${date.day}</strong>${e(date.label)}</div></section>
     <div class="dashboard"><section class="learning" aria-label="今日学习"><article class="hero"><div class="hero-label">${icon('spark')} ${first?'今天的第一步 · '+e(kinds[first.kind]||'学习'):'从一个问题开始'}</div><h2>${first?'先想起来，再回到原文。':'留点余地，让理解慢慢生长。'}</h2><p>${first?e(first.title):'留下一段文字、一个摘录，或还没想清的问题。'}</p><div class="actions">${first?btn(`开始 ${e(first.minutes)} 分钟学习 ${icon('arrow')}`,'start-plan','primary',`data-id="${e(first.id)}"`):link(`留下一个新起点 ${icon('plus')}`,'capture','primary')}${first?btn('稍后再学','defer','text-button',`data-id="${e(first.id)}"`):btn('安排今日学习','generate','text-button')}</div><div class="hero-mark" aria-hidden="true"><svg viewBox="0 0 160 160"><path d="M80 136C78 98 92 59 119 27M82 112C46 111 26 88 22 61c35-1 57 17 60 51ZM89 87c3-31 20-50 48-52-2 29-20 47-48 52ZM97 66c-21-11-30-31-26-54 22 11 31 30 26 54Z"/><path d="M82 112 40 78m49 9 34-38M97 66 77 27"/></svg></div></article>
     <div class="section-title"><h2>今日安排 <small>${items.length} 项待学</small></h2>${link('查看学习池 ↗','study','text-button')}</div>${rows||'<div class="empty"><h3>今天的安排暂时是空的</h3><p>已有正在学习的知识，可以重新生成安排。</p></div>'}<div class="plan-footer"><p class="footer-note">先解释，再看答案。完成练习不等于已经掌握。</p>${btn('重新安排','generate','text-button')}</div>
-    ${list(state.boot.today?.items).some(p=>p.state==='skip')?details('今日暂时跳过的安排',list(state.boot.today.items).filter(p=>p.state==='skip').map(p=>`<div class="knowledge-row"><span>${e(p.title)}</span>${btn('恢复今日安排','plan-action','text-button',`data-id="${e(p.id)}" data-value="resume"`)}</div>`).join('')):''}${list(state.boot.settings?.pausedIds).length?details('暂停的知识',list(state.boot.settings.pausedIds).map(id=>`<div class="knowledge-row"><span>${e(noteTitle(id))}</span>${btn('恢复安排','resume-note','text-button',`data-id="${e(id)}"`)}</div>`).join('')):''}${list(state.boot.today?.unavailable).length?`<details class="quiet-details"><summary>为什么有些知识还没有安排？</summary>${list(state.boot.today.unavailable).map(item=>`<p>${e(item.title)}：${e(item.reason)} ${link('查看',`read/${item.noteId}`,'text-button')}</p>`).join('')}</details>`:''}</section>
+    ${list(state.boot.today?.items).some(p=>p.state==='skip')?details('今日暂时跳过的安排',list(state.boot.today.items).filter(p=>p.state==='skip').map(p=>`<div class="knowledge-row"><span>${e(p.title)}</span>${btn('恢复今日安排','plan-action','text-button',`data-id="${e(p.id)}" data-value="resume"`)}</div>`).join('')):''}${list(state.boot.settings?.pausedIds).length?details('暂停的知识',list(state.boot.settings.pausedIds).map(id=>`<div class="knowledge-row"><span>${e(noteTitle(id))}</span>${btn('恢复安排','resume-note','text-button',`data-id="${e(id)}"`)}</div>`).join('')):''}${unavailableHTML(list(state.boot.today?.unavailable))}</section>
     <aside class="aside-stack"><section class="budget"><h2>给今天留一点空间</h2><div id="budget-summary"><div class="budget-values"><span>已安排</span><strong>${minutes}</strong><span>分钟</span></div><div class="budget-sub"><span>可用 ${budget} 分钟</span><span>${minutes>budget?'超出':'留白'} ${Math.abs(budget-minutes)} 分钟</span></div><div class="budget-meter">${Array.from({length:10},(_,i)=>`<span class="${i<Math.ceil(minutes/Math.max(1,budget)*10)?'filled':''}"></span>`).join('')}</div><p>按自己的节奏，不必填满。</p></div><div id="focus-home" hidden></div><div class="budget-entry">${btn('调整可用时间 ↗','budget','text-button')}${btn('番茄钟','focus-start','text-button')}</div></section><section class="seed"><h2>随手留下下一个起点</h2>${link(`${icon('plus')}<span><strong>收集资料</strong><small>文字、摘录，或还没想清的问题</small></span>`,'capture','seed-button')}${link(`${icon('search')}<span><strong>找回一个想法</strong><small>从已有知识中继续探索</small></span>`,'search','seed-button')}</section><section class="reflection"><small>今日提醒</small><p>说清楚哪里还不懂，<br>也是一次进步。</p></section></aside></div>
-    <section class="recent"><div class="section-title"><h2>思考还在继续</h2>${link('查看全部 ↗','library','text-button')}</div><div class="recent-items">${recent.map(note=>link(`${icon(note.kind==='source'?'file':'book')}<span><strong>${e(note.title)}</strong><small>${e(note.meta?.topic||'我的知识空间')} · ${e(kind(note.kind))}</small></span>`,`read/${note.id}`,'recent-item')).join('')||'<p class="muted">第一份资料，会成为下次思考的起点。</p>'}</div></section>${jobs.length?`<div class="activity-strip"><span>${jobs.length} 项处理动态</span><span class="muted">实际进度与等待原因都保留在这里。</span>${link('查看进度 ↗','jobs','text-button')}</div>`:''}`};
+    <section class="recent"><div class="section-title"><h2>思考还在继续</h2>${link('查看全部 ↗','library','text-button')}</div><div class="recent-items">${recent.map(note=>link(`${icon(note.kind==='source'?'file':'book')}<span><strong>${e(note.title)}</strong><small>${e(note.meta?.topic||'我的知识空间')} · ${e(kind(note.kind))}</small></span>`,`read/${note.id}`,'recent-item')).join('')||'<p class="muted">第一份资料，会成为下次思考的起点。</p>'}</div></section>${jobs.length?`<div class="activity-strip"><span>${jobs.length} 项处理动态</span><span class="muted">实际进度与等待原因都保留在这里。</span>${link('查看进度 ↗','jobs','text-button')}</div>`:''}`,bind(){mountUnavailable(document.querySelector('[data-unavailable]'),list(state.boot.today?.unavailable));}};
 }
 function capturePage() {
   return {html:heading('COLLECT A THOUGHT','先留下，再慢慢想清楚。','一段文字、一篇文章，或一个还没有答案的问题。')+`<div class="capture-layout"><form id="capture-form" class="capture-paper">
@@ -124,24 +126,29 @@ function capturePage() {
     <details class="capture-origin"><summary>添加出处与主题</summary><div class="form-grid">${field('来自哪里','platform',{placeholder:'书籍、网页、对话……'})}${field('主题','topic',{placeholder:'这份材料与你关心的什么有关？'})}${field('原始链接','url',{type:'url',placeholder:'https://…'})}${field('作者','author')}${field('资料日期','date',{type:'date'})}${field('原文定位','locator',{placeholder:'页码、章节或段落'})}</div></details>
     <div class="capture-options"><label class="check"><input type="checkbox" name="process"> 保存后用 AI 拆解</label><label class="check dependent"><input type="checkbox" name="research" disabled> 同时联网核验</label><p class="form-note">AI 拆解会将所需原文发送给你配置的服务，可能计费。仅保存不会调用 AI。</p></div>
     <footer class="paper-footer"><span id="character-count" class="muted small">原文会完整保留</span><button class="primary" type="submit">保存这个起点 ${icon('arrow')}</button></footer><p id="capture-receipt" role="status"></p>
-    </form><aside class="capture-aside"><p class="eyebrow">A PLACE TO BEGIN</p><h2>不用整理完整，<br>先把它留下来。</h2><p>资料和理解之间，可以留一点距离。</p><ol class="capture-steps"><li><span>01</span><div><strong>留下原文</strong><p>保留完整内容，以及它从哪里来。</p></div></li><li><span>02</span><div><strong>读出自己的问题</strong><p>在书桌里阅读，再决定哪些值得继续。</p></div></li><li><span>03</span><div><strong>形成自己的解释</strong><p>拆解是建议，理解由你亲自确认。</p></div></li></ol><label class="file-drop">${icon('file')}<strong>从文本或 Markdown 开始</strong><span>选择一份读入编辑区，多份预览后批量保存</span><input id="text-file" type="file" multiple accept=".txt,.md,.markdown"></label></aside></div>`,
+    </form><aside class="capture-aside"><p class="eyebrow">A PLACE TO BEGIN</p><h2>不用整理完整，<br>先把它留下来。</h2><p>资料和理解之间，可以留一点距离。</p><ol class="capture-steps"><li><span>01</span><div><strong>留下原文</strong><p>保留完整内容，以及它从哪里来。</p></div></li><li><span>02</span><div><strong>读出自己的问题</strong><p>在书桌里阅读，再决定哪些值得继续。</p></div></li><li><span>03</span><div><strong>形成自己的解释</strong><p>拆解是建议，理解由你亲自确认。</p></div></li></ol>${captureFilesHTML()}</aside></div>`,
     bind() {
       const form=$('#capture-form');watchForm(form);
-      const fileArea=document.createElement('section');
-      fileArea.className='capture-file-area';
-      fileArea.innerHTML=`<details><summary>或者，保存图片、PDF、Word 原件</summary><p class="form-note">每份最多 50 MB。文件只发送到本机，保存不调用 AI。Word 正文转换后请核对。</p><input type="file" id="attachment-file" accept=".png,.jpg,.jpeg,.gif,.webp,.pdf,.doc,.docx" aria-label="选择原始文件"><button type="button" class="secondary" id="save-file" disabled>上传并保存原件</button><p id="file-receipt" role="status"></p></details>`;
-      form.after(fileArea);
-      let uploadId='',selectedFile;
-      $('#attachment-file').onchange=event=>{selectedFile=event.target.files[0];uploadId=crypto.randomUUID();$('#save-file').disabled=!selectedFile;};
-      $('#save-file').onclick=event=>busy(event.currentTarget,async()=>{if(!selectedFile)return;if(selectedFile.size>50000000)throw new Error('每份原件最多 50 MB。');await api.upload(selectedFile,uploadId);const result=await api.post('/api/file-import',{uploadId});$('#file-receipt').innerHTML=`原件已保存。${link('打开资料 ↗',`read/${result.note.id}`,'text-button')}`;$('#attachment-file').value='';selectedFile=null;await refreshBoot();shell();});
+      mountCaptureFiles(document.querySelector('#capture-files'), {
+        api, state, afterSave:async()=>{await refreshBoot();shell();},
+        onPending:pending=>{state.dirty=pending||form.dataset.dirty==='true';},
+        onTexts:async files=>{
+          if(files.length>1){await batchImport(files,context);return;}
+          const [row]=await prepareTexts(files);
+          if(!form.isConnected)return;
+          if(form.dataset.dirty==='true'&&!await confirm('替换编辑区的内容？','尚未保存的文字会被所选文本替换。','替换文字'))return;
+          if(!form.isConnected)return;
+          form.elements.body.value=row.body;form.elements.title.value ||= row.title;
+          form.dataset.dirty='true';state.dirty=true;form.elements.body.oninput();
+        }
+      });
       const process=form.elements.process,research=form.elements.research;
       process.onchange=()=>{research.disabled=!process.checked;if(!process.checked)research.checked=false;};
       form.elements.body.oninput=()=>{$('#character-count').textContent=`${form.elements.body.value.length.toLocaleString()} 字 · 原文会完整保留`;};
-      $('#text-file').onchange=async event=>{const files=[...event.target.files];if(files.length>1){try{await batchImport(files,context);}catch(error){notify(error.message,true);}event.target.value='';return;}const file=files[0];if(!file)return;if(file.size>2*1024*1024){notify('文本超过 2 MB，请拆分后收集。',true);return;}if(state.dirty&&!await confirm('替换编辑区的内容？','尚未保存的文字会被所选文本替换。','替换文字'))return;form.elements.body.value=await file.text();form.elements.title.value ||= file.name.replace(/\.[^.]+$/,'');state.dirty=true;form.elements.body.oninput();};
       submit(form,async values=>{
         const snapshot=JSON.stringify(formData(form));
         const result=await api.post('/api/import',capturePayload({...values,process:process.checked,research:research.checked}));
-        if(JSON.stringify(formData(form))===snapshot){savedForm(form);form.reset();research.disabled=true;}
+        if(JSON.stringify(formData(form))===snapshot){savedForm(form);state.dirty ||= Boolean(document.querySelector('#capture-files [data-pending]'));form.reset();research.disabled=true;}
         const source=result.notes?.[0];$('#capture-receipt').innerHTML=`已保存：${e(source?.title||'原始资料')} ${source?link('现在打开书桌 ↗',`read/${source.id}`,'text-button'):''}`;
         $('#character-count').textContent='原文会完整保留';notify('原文已完整保存。');await refreshBoot();shell();
       });
