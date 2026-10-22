@@ -11,6 +11,7 @@ function harness(){
  const page=async()=>({html:'reader'});
  const sandbox={state,window,document:{documentElement:{classList:{toggle(){},remove(){}}}},history:{pushState(){},replaceState(){}},matchMedia:()=>({matches:true}),CustomEvent:class{},api:{getContext:()=>context,get:async()=>({})},onboarding:{travelling:false,prepareRoute:async()=>{}},focus:{capture(){},mount(){}},shell(){},$:()=>main,$$:()=>[],notify(){},confirm:async()=>true,empty:(_title,message)=>{throw Error(message);},btn(){},link(){},springEnter(){},parity:{library:async()=>{counts.library++;return {html:'library',bind(){counts.bind++;}};}},management:{},readPage:page};
  for(const name of ['todayPage','capturePage','editPage','studyPage','topicsPage','outputPage','settingsPage'])sandbox[name]=page;
+ sandbox.readerData={peek:()=>null};
  vm.createContext(sandbox);vm.runInContext(source.slice(source.indexOf('let stopStudyFeedback'),source.indexOf('function watchForm'))+';globalThis.goPage=go;globalThis.refresh=refreshBoot;',sandbox);
  return {sandbox,counts,context,main,window};
 }
@@ -23,6 +24,12 @@ test('successful writes, space changes and explicit refresh invalidate the libra
  const h=harness();await h.sandbox.goPage('library');await h.sandbox.goPage('read/one');h.context.revision++;await h.sandbox.goPage('library');assert.equal(h.counts.library,2);
  await h.sandbox.goPage('read/one');h.context.version++;await h.sandbox.goPage('library');assert.equal(h.counts.library,3);
  await h.sandbox.refresh();await h.sandbox.goPage('library');assert.equal(h.counts.library,4);
+});
+
+test('opening known full text never inserts a loading screen or runs a reading entrance animation',async()=>{
+ const h=harness();h.sandbox.readerData.peek=()=>({note:{body:'完整正文'}});h.sandbox.matchMedia=()=>({matches:false});
+ let animations=0;h.sandbox.springEnter=()=>animations++;
+ await h.sandbox.goPage('read/one');assert.equal(h.counts.loading,0);assert.equal(animations,0);assert.equal(h.main.childNodes[0].html,'reader');
 });
 test('client content revision changes on successful writes, not reads or rejected writes',async()=>{
  let fail=false;const client=createClient(async p=>({ok:!fail,status:fail?409:200,json:async()=>p==='/api/session'?{csrf:'synthetic'}:fail?{error:'conflict',code:'CONFLICT'}:{ok:true}}));
