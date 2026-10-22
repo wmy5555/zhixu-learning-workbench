@@ -4,10 +4,10 @@ import { installInputModality } from './input-modality.mjs';
 import { api, endpoint, pendingPlan, capturePayload } from './api.mjs';
 import { escape as e, markdown } from './markdown.mjs';
 import { $, $$, icon, button as btn, routeButton as link, field, area, empty, heading, kind, stage, jobState, calendar, notify, modal, confirm, busy } from './ui.mjs';
-import { reader } from './reader.mjs';
+import { reader, updateReader } from './reader.mjs';
+import { createReaderData, sameReaderData } from './reader-data.mjs';
 import { learningReadiness, learningHelp, readerMenu, credibilityNotice } from './reader-actions.mjs';
 import { processOutcome } from './process-outcome.mjs';
-import { relatedReadingNotes } from './reading-content.mjs';
 import { springEnter } from './cds/motion-bridge.mjs';
 import { mountNoteEditor, noteEditSession } from './note-editor.mjs';
 import { createParity, feedbackHTML, completionHTML, evidenceHTML, paginate, details } from './parity.mjs';
@@ -25,6 +25,7 @@ const state = { boot:null, route:'today', sequence:0, dirty:false, saving:0, rea
 const context={api,state,go,refreshBoot,formModal,submit,watchForm,savedForm,processSource,noteCard:note=>noteCard(note)};
 const parity=createParity(context),management=createManagement(context,initializeAccent()),focus=createFocus(context);
 const onboarding=createWebOnboarding({api,state,go,refreshBoot,beforeLeave});
+const readerData=createReaderData(api);
 async function beforeLeave(){
  if(state.saving){notify('正在保存，请等操作返回后继续。');return false;}
  for(const d of [...$$('dialog[open]')].reverse())if(d.beforeClose&&!await d.beforeClose())return false;
@@ -75,7 +76,8 @@ async function go(route, { replace = false, force = false, guide = false, speed 
   if (replace) history.replaceState(null,'',`#${state.route}`); else history.pushState(null,'',`#${state.route}`);
   shell();
   delete $('#main').dataset.route;
-  if(!cachedLibrary)$('#main').innerHTML = '<div class="page-loading" role="status"><span></span>正在把内容放到书桌上…</div>';
+  const immediateReader=state.route.startsWith('read/')&&readerData.peek(state.route.split('/')[1],state.boot);
+  if(!cachedLibrary&&!immediateReader)$('#main').innerHTML = '<div class="page-loading" role="status"><span></span>正在把内容放到书桌上…</div>';
   try {
     const [view,id] = state.route.split('/');
     const page = cachedLibrary?null:await ({ today:todayPage, capture:capturePage, library:parity.library, read:()=>readPage(id), edit:()=>editPage(id), study:()=>studyPage(id), topics:topicsPage, search:parity.search, output:outputPage, settings:settingsPage, jobs:parity.jobs, relations:parity.relations, history:parity.history, manage:()=>management.page(id), focus:focus.page }[view] || todayPage)();
@@ -88,7 +90,7 @@ async function go(route, { replace = false, force = false, guide = false, speed 
     $('#main').focus({preventScroll:true});
     window.scrollTo({top:state.scroll.get(route)||0,behavior:'instant'});
     if(ghost){main.style.opacity='';const out=ghost.animate([{opacity:1},{opacity:0}],{duration:460/speed,fill:'forwards',easing:'ease-in-out'}),incoming=main.animate([{opacity:0,transform:'translateY(8px)'},{opacity:1,transform:'none'}],{duration:600/speed,easing:'cubic-bezier(.22,1,.36,1)'});await Promise.allSettled([out.finished,incoming.finished]);ghost.remove();}
-    else if(!reduce&&!cachedLibrary)springEnter(main,undefined,6,.998);
+    else if(!reduce&&!cachedLibrary&&view!=='read')springEnter(main,undefined,6,.998);
     window.dispatchEvent(new CustomEvent('zhixu:web-page'));
     return true;
   } catch(error) {
@@ -160,12 +162,23 @@ async function libraryPage() {
     `<div class="library-toolbar"><div class="segmented" aria-label="内容类型">${[['all','全部'],['source','原始资料'],['knowledge','知识'],['mistake','错题']].map(([value,label])=>btn(label,'library-filter','',`data-kind="${value}" aria-pressed="${value==='all'}"`)).join('')}</div><label class="inline-search">${icon('search')}<input id="library-query" type="search" placeholder="在这些想法里找一找" aria-label="筛选知识库"></label></div><div id="library-notes" class="library-grid">${notes.map(noteCard).join('')||empty('书架还空着','从一份真正想理解的材料开始。',link('收集第一份资料','capture','primary'))}</div>`,
     bind(){let selected='all';const update=()=>{const query=$('#library-query').value.trim().toLowerCase();const visible=notes.filter(n=>(selected==='all'||n.kind===selected)&&`${n.title}\n${n.body}\n${n.meta?.topic||''}`.toLowerCase().includes(query));$('#library-notes').innerHTML=visible.map(noteCard).join('')||empty('这里暂时没有找到','换一个词，或者看看其他内容分类。');};$$('[data-action="library-filter"]').forEach(b=>{b.onclick=()=>{selected=b.dataset.kind;$$('[data-action="library-filter"]').forEach(other=>other.setAttribute('aria-pressed',String(other===b)));update();};});$('#library-query').oninput=update;}};
 }
-async function readPage(id) {
-  const sequence = state.sequence;
-  const [note, related] = await Promise.all([api.get(endpoint('notes', id)), api.get('/api/relations')]);
-  const readiness = note.kind === 'knowledge' ? await readReadiness(note) : null;
-  if (sequence === state.sequence) { state.note = note; state.readiness = readiness; }
-  return reader(note, list(state.boot.notes), state.readerReturn, relatedReadingNotes(note, list(state.boot.notes), list(related.relations)), readiness);
+function readPage(id) {
+  const sequence=state.sequence,boot=state.boot,key=libraryKey();
+  const current=()=>sequence===state.sequence&&boot===state.boot&&key===libraryKey();
+  const display=data=>{
+    if(current()){state.note=data.note;state.readiness=data.readiness;}
+    return reader(data.note,list(boot.notes),state.readerReturn,data.related,data.readiness);
+  };
+  const initial=readerData.peek(id,boot);
+  if(!initial)return readerData.load(id,boot).then(display);
+  return {...display(initial),bind(){
+    const root=$('.reader-shell');
+    readerData.load(id,boot).then(data=>{
+      if(!current()||!root.isConnected)return;
+      if(sameReaderData(initial,data)){state.note=data.note;state.readiness=data.readiness;return;}
+      updateReader(root,display(data).html);
+    }).catch(error=>{if(current()&&root.isConnected)notify(error.message);});
+  }};
 }
 async function editPage(id) {
   const note=await api.get(endpoint('notes',id));

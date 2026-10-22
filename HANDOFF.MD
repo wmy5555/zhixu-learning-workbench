@@ -28,3 +28,14 @@
 - 浏览器几何断言要等叶子实际抵达目标或停靠位；页面路由切换、元素出现或两帧等待不代表动效已结束。
 - 定向验证：`node --test tests/web-onboarding-output.test.mjs tests/web-onboarding-polish.test.mjs tests/web-onboarding-review.test.mjs tests/web-onboarding-scroll.test.mjs tests/web-onboarding-next.test.mjs`。页面验收使用随机临时资料与离线受控模型，不重置正式练习进度。
 - 性能保持事件驱动、滚动合帧，不增加轮询或网络请求。此次合成 Chrome 以宽屏常规动效、窄屏减少动效验证；60 次滚动事件处理约 12ms，未观察到超过 50ms 的长任务，不视为其他设备的性能保证。
+
+
+## 材料即时阅读（2026-10-22）
+
+- `/api/bootstrap` 的 notes 已含完整公开正文。阅读不应先清空页面并等待详情、relations、evidence；直接显示已取得正文，再并行核对详情。缺失材料仍走正常读取，不能拿摘要充当全文。
+- 初始原文子知识从 input sources / processKey 推导；详情补齐保留结构目录与核验提示。学习、编辑和保存继续实时请求既有接口，不把显示缓存当作授权或编辑版本。
+- 详情缓存限六项，仅在内存中，以空间 version、成功写入 revision 和 bootstrap 对象共同隔离；在途去重，迟到结果不能回填新上下文或覆盖另一页。
+- 补齐时保留 `.reading-scroll`、字号/专注状态、details 展开、焦点及未变正文；有选中文本时保留正文和对应目录，新的结构在下次打开生效。相同详情跳过完整 Markdown 解析。
+- 不主动预取全库，不加轮询、依赖或额外 AI 调用。请求数量沿用旧阅读路径，知识 evidence 改为并行。
+- 正式与 main 可有独立增量：基于 main 保存任务补丁，正式只应用这次三个网页文件，不覆盖收集/引导等并发修复，不重启服务。发布前重读 config/HEAD/进程，保留回退，再核对磁盘/HTTP/启动器。
+- 真实 Chrome 的后台截图可能超时；将合成验收页带到前台后截图。减少动效用 `chrome-use set media dark reduced-motion`，不要省略 `set`。Windows junction 的目标必须使用绝对路径。
