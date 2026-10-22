@@ -1,7 +1,7 @@
 // Static, loopback-only prototype. No backend, proxy, database or credentials.
 import {createServer} from 'node:http';
 import {readFile} from 'node:fs/promises';
-const files=new Set(['index.html','prototype.css','prototype.mjs','ui.mjs','onboarding-motion.mjs','onboarding-model.mjs','onboarding-motion.css','cds/ClaudeMotionPresets.mjs']);
+const files=new Set(['index.html','architecture.html','prototype.css','prototype.mjs','ui.mjs','onboarding-motion.mjs','onboarding-model.mjs','onboarding-motion.css','cds/ClaudeMotionPresets.mjs']);
 const types={html:'text/html; charset=utf-8',css:'text/css; charset=utf-8',mjs:'text/javascript; charset=utf-8'};
 const port=Number(process.env.PROTOTYPE_PORT||4349);
 createServer(async(req,res)=>{

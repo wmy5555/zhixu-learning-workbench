@@ -1,33 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="color-scheme" content="light dark">
-  <meta name="darkreader-lock">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; base-uri 'none'; form-action 'none'">
-  <title>知序 · 地图早已在这里</title>
-  <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="./prototype.css">
-  <link rel="stylesheet" href="./onboarding-motion.css">
-</head>
-<body>
-  <a class="skip" href="#main">跳到探索区域</a>
-  <aside class="sidebar" aria-label="已解锁的区域">
-    <div class="brand"><span class="brand-icon" data-icon="leaf"></span><span>知序<small>让思考，有迹可循</small></span></div>
-    <div class="space-label">我的空间 <span>探索中</span></div>
-    <nav id="navigation"></nav>
-    <div class="sidebar-bottom"><div class="seed-progress" id="seed-progress"></div><p>走过的地方，<br>会一直亮着。</p><div class="profile"><span>初</span><div>初来乍到<small>我的练习空间</small></div></div></div>
-  </aside>
-  <div class="workspace">
-    <header class="topbar"><div class="breadcrumb"><span>我的空间</span><i>/</i><strong>今日</strong></div><div class="header-actions"><span class="prototype-tag">交互原型 · 示例数据</span><button id="theme" class="icon-button" aria-label="切换深浅模式" data-icon="moon"></button></div></header>
-    <main id="main" tabindex="-1"></main>
-  </div>
-  <aside class="guide-dock" id="guide" aria-label="当前探索提示"><span class="guide-symbol" data-icon="leaf"></span><div class="guide-copy"><span id="guide-kicker">小叶子 · 探索向导</span><p id="guide-copy"></p></div><button class="text-button" id="locate">带我定位 <span data-icon="arrow"></span></button></aside>
-  <div class="prototype-tools"><span>原型 02 · 固定地图</span><span class="tool-divider"></span><button id="restart">重新探索</button><button id="state-toggle" aria-expanded="false">状态</button></div>
-  <pre id="state" hidden aria-label="原型状态"></pre>
-  <div id="announcement" class="sr-only" role="status" aria-live="polite"></div>
-  <div id="toast" role="status" hidden></div>
-  <script type="module" src="./prototype.mjs"></script>
-</body>
-</html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="darkreader-lock"><meta http-equiv="Content-Security-Policy" content="default-src 'self';connect-src 'none';img-src 'self' data:;style-src 'self' 'unsafe-inline';script-src 'self';base-uri 'none';form-action 'none'"><title>知序 · 认知地图</title><link rel="icon" href="data:,"><link rel="stylesheet" href="./prototype.css"><link rel="stylesheet" href="./onboarding-motion.css"></head>
+<body><a class="skip" href="#main">跳到认知地图</a><aside class="sidebar"><div class="brand"><span class="brand-icon" data-icon="leaf"></span><div><strong>知序</strong><small>ZHIXU</small></div></div><button class="atlas-nav" id="map-home"><span data-icon="network"></span>认知地图</button><div class="nav-label">我的知识旅程</div><nav id="navigation" aria-label="知识旅程"></nav><div class="sidebar-bottom"><button class="system-entry" data-support="0"><span data-icon="settings"></span>系统与连接</button><p class="sidebar-note">让思考，有迹可循。</p><div class="profile"><span>知</span><div>我的空间<small>本地 · 自己的节奏</small></div></div></div></aside>
+<div class="workspace"><header class="topbar"><div class="breadcrumb"><span>我的空间</span><i>/</i><strong>认知地图</strong></div><div class="top-actions"><span class="prototype-tag">交互原型</span><button class="icon-button" id="theme" aria-label="切换深浅模式" data-icon="moon"></button></div></header>
+<main id="main" tabindex="-1"><header class="page-heading"><div><h1>从资料，走向自己的理解。</h1></div><div class="page-actions"><span class="progress-label"><b id="completed">0</b> / 5 已探索</span><div class="segmented" aria-label="地图模式"><button data-mode="explore" aria-pressed="true">探索</button><button data-mode="overview" aria-pressed="false">全图</button></div></div></header><div class="atlas-layout"><section class="map-arena" aria-label="从底层向上的功能架构地图"><div class="map-world" id="map-world"></div><div class="map-direction">从下向上探索</div><div class="map-key"><i></i><span id="map-key">当前探索</span></div></section><aside class="detail-pane" id="detail" aria-label="所选区域的功能与体验"></aside></div><footer class="prototype-footer"><span>原型 03 · 演示数据仅保留在本页</span><div class="tools"><button id="restart">重新探索</button><button id="state-toggle" aria-expanded="false">查看状态</button><a href="./architecture.html" target="_blank" rel="noopener">层级与导航说明 ↗</a></div></footer></main></div><pre id="state" hidden></pre><div id="announcement" class="sr-only" role="status" aria-live="polite"></div><div id="toast" role="status" hidden></div><script type="module" src="./prototype.mjs"></script></body></html>
