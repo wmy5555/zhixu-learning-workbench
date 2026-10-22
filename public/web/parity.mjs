@@ -20,7 +20,7 @@ export function feedbackHTML(feedback) {
   if(!feedback)return '';
   const labels={correct:'回答正确',partial:'仍有遗漏',incorrect:'需要修正',ambiguous:'存在不确定性'};
   const section=(title,value)=>value?`<section>${title?`<h3>${title}</h3>`:''}<div class="article-prose">${markdown(readable(value)).html}</div></section>`:'';
-  return `<div class="learning-feedback"><p class="nav-label">${e(labels[feedback.assessment]||feedback.assessment)}</p>${section('',feedback.feedback)}${details('查看解析',section('关键缺口',feedback.omission)+section('修正与依据',feedback.correction)+section('可修改的建议',feedback.suggestion)+section('后续练习',feedback.nextQuestion))}</div>`;
+  return `<div class="learning-feedback"><p class="nav-label">AI 反馈 · ${e(labels[feedback.assessment]||feedback.assessment)}</p>${section('',feedback.feedback)}${details('查看解析',section('关键缺口',feedback.omission)+section('修正与依据',feedback.correction)+section('可修改的建议',feedback.suggestion)+section('后续练习',feedback.nextQuestion))}</div>`;
 }
 export function completionHTML(completion) {
   if(!completion)return '';
