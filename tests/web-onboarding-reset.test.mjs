@@ -11,7 +11,7 @@ function harness({accepted=true,leave=true,busy=false,pending=0,failure,material
  const context=vm.createContext({proof,travelling:false,polling:null,pollTimer:1,sequence:4,active:false,index:27,sessionId:'stale-session',pendingGoal:'output',requestedRoute:'output',signature:'old',error:'stale',hinting:true,detail:true,speed:1,state:{note:{id:'old-note'},session:{id:'old-session'}},
   api:{getContext:()=>({pending}),setContext:id=>events.push(['context',id])},
   confirm:async(...args)=>{events.push(['confirm',...args]);return accepted;},beforeLeave:async()=>{events.push('leave');return leave;},
-  call:async(action,body)=>{events.push(['call',action,body]);if(failure)throw failure;return fresh;},adopt:value=>{context.proof=value;},
+  call:async(action,body={})=>{events.push(['call',action,body]);if(failure)throw failure;return fresh;},adopt:value=>{context.proof=value;},
   motion:{hide:()=>events.push('hide')},refreshBoot:async()=>events.push('bootstrap'),go:async(route,options)=>events.push(['go',route,options]),navigate:async index=>events.push(['navigate',index]),
   clearTimeout:()=>events.push('stop-poll'),render:()=>events.push('render'),schedulePoll:()=>events.push('poll'),notify:(message)=>events.push(['notify',message]),
  });
@@ -46,7 +46,7 @@ test('successful reset switches to the returned practice and rebuilds today befo
  assert.equal(h.context.travelling,false);
 });
 
-test('custom reset forwards the saved material, and an API error retains the old context and dialog',async()=>{
- const custom=harness({materialId:'custom'});await custom.context.reset(custom.dialog);assert.equal(custom.events.find(e=>e[0]==='call')[2].customMaterial.title,'我的材料');
+test('custom reset lets the server retain its material, and an API error retains the old context and dialog',async()=>{
+ const custom=harness({materialId:'custom'});await custom.context.reset(custom.dialog);assert.deepEqual(Object.keys(custom.events.find(e=>e[0]==='call')[2]),[]);
  const failure=Error('controlled failure'),failed=harness({failure});await assert.rejects(failed.context.reset(failed.dialog),error=>error===failure);assert.equal(failed.context.proof.practiceId,'old-practice');assert.equal(failed.context.travelling,false);assert.equal(failed.events.includes('close'),false);assert.equal(failed.events.some(e=>e[0]==='context'),false);assert.equal(failed.events.at(-1),'poll');
 });

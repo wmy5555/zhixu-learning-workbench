@@ -99,7 +99,7 @@ export function createWebOnboarding({api,state,go,refreshBoot,beforeLeave}){
   if(proof.busy||api.getContext().pending){notify('请先等当前操作完成，再重置进度。',true);return;}
   travelling=true;clearTimeout(pollTimer);render();
   try{
-   adopt(await call('reset',proof.materialId==='custom'?{customMaterial:proof.customSample}:{}));
+   adopt(await call('reset'));
    sequence++;active=true;index=0;sessionId='';pendingGoal=null;requestedRoute=null;signature='';error='';hinting=false;detail=false;
    motion.hide();dialog.close();api.setContext(proof.practiceId);state.note=null;state.session=null;
    await refreshBoot();await go('today',{force:true,guide:true,replace:true,speed});
