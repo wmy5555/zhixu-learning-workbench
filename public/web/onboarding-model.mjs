@@ -37,7 +37,8 @@ export function destination(step,proof,sessionId){
  if(id==='study-permission'||id==='study-confirm')return `read/${roles.explain}`;
  if(['study-plan','review-clock-due','complete-review','setup-welcome'].includes(id))return 'today';
  if(id.startsWith('study-')&&!['study-start'].includes(id))return sessionId?`study/${sessionId}`:'study';
- if(id==='study-start'||id==='review-finish')return 'study';
+ if(id==='review-finish')return sessionId?`study/${sessionId}`:'study';
+ if(id==='study-start')return 'study';
  if(id==='search-keyword')return 'search';
  if(id.startsWith('output-'))return 'output';
  return 'library';
