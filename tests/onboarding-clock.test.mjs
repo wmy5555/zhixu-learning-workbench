@@ -339,7 +339,7 @@ test('research expiry uses learning time while research cache timestamps stay re
   service.promote(note.id, { stage: 'learning', reason: '练习复查到期' });
   assert.equal(service.getNote(note.id).meta.promotedAt, '2040-01-01T00:00:00.000Z');
   simulated += 31 * 86400000;
-  assert.throws(() => service.startStudy({ noteId: note.id }), { code: 'RESEARCH_REQUIRED' });
+  assert.match(service.startStudy({ noteId: note.id }).materialWarnings.join(' '), /需要重新研究/);
   assert.match(service.noteEvidence(note.id).limitations.join(' '), /需要重新研究/);
 });
 

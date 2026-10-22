@@ -544,17 +544,20 @@ function parityHarness(factory, seed, config, eligibility) {
   return { learning: factory(dependencies), state, store };
 }
 test('frozen portable core retains baseline planner/topic behavior and complete graded settlement rules', () => {
+  // The frozen Android snapshot predates the web-only, empty warning metadata.
+  // Remove only that known empty addition; retain every planner and settlement field.
+  const frozenShape = value => JSON.parse(JSON.stringify(value, (key, item) => key === 'materialWarnings' && Array.isArray(item) && !item.length ? undefined : item));
   const knowledge = [note(1, { depth: 'aware' }), note(2, { prerequisites: [id(1)], depth: 'apply' }), note(3, { topic: '关注主题' })];
   const topic = note(90, { noteIds: [id(1), id(2)], prerequisites: [], minutes: 20 }, 'topic');
   const seed = { notes: [...knowledge, topic], settings: {}, guide: {}, records: { reviews: { [id(3)]: { noteId: id(3), interval: 4, dueAt: '2026-10-07T00:00:00.000Z', lastSuccessfulDay: '2026-10-01' } } } };
   const config = { dailyMinutes: 25, timezone: 'Asia/Shanghai', focusTopics: ['关注主题'], pausedIds: [] };
   const baseline = parityHarness(createBaselineCore, seed, structuredClone(config)), portable = parityHarness(createPortableCore, seed, structuredClone(config));
-  assert.deepEqual(portable.learning.today(), baseline.learning.today());
+  assert.deepEqual(portable.learning.today(), frozenShape(baseline.learning.today()));
   assert.deepEqual(portable.learning.topics(), baseline.learning.topics());
   const exercise = { id: 'same-session', noteId: id(3), status: 'feedback', sourceHash: knowledge[2].hash, depth: 'apply', turns: [{ id: 'same-turn', requestId: 'same-request', answer: '完整合成回答', hintUsed: false, feedback: { assessment: 'correct' } }], createdAt: timestamp };
   baseline.store.put('sessions', exercise.id, exercise); portable.store.put('sessions', exercise.id, exercise);
-  assert.deepEqual(portable.learning.finishStudy(exercise.id), baseline.learning.finishStudy(exercise.id));
-  assert.deepEqual(portable.state, baseline.state);
+  assert.deepEqual(portable.learning.finishStudy(exercise.id), frozenShape(baseline.learning.finishStudy(exercise.id)));
+  assert.deepEqual(portable.state, frozenShape(baseline.state));
   assert.equal(portable.state.records.reviews[id(3)].interval, 8);
   assert.equal(portable.state.records.studyEvidence[exercise.id].independent, true);
   assert.equal(portable.state.records.studyEvidence[exercise.id].spacedRecall, true);

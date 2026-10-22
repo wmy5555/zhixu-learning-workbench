@@ -83,3 +83,18 @@ test('legacy explicit user deletion is recoverable; ChatGPT undo and external di
  const b=source(store);store.delete(b.id,b.hash,{undoId:'separate-owner'});assert.equal(bin.list().items.length,0);
  const c=source(store);fs.unlinkSync(path.join(store.vaultDir,c.path));store.scan();assert.equal(bin.list().items.length,0);
 });
+
+test('single purge isolates other recycled history, shared attachments, knowledge and prior pending cleanup',t=>{
+ const {store,bin}=setup(t),file=png();writeAttachment(store.vaultDir,file);
+ let a=source(store);a=store.update(a.id,{expectedHash:a.hash,meta:{attachments:[file.descriptor]}});
+ let b=source(store);b=store.update(b.id,{expectedHash:b.hash,meta:{attachments:[file.descriptor]}});
+ const knowledge=store.create({kind:'knowledge',title:'retained knowledge',body:'synthetic',meta:{sources:[{id:a.id}]}});
+ store.delete(a.id,a.hash);store.delete(b.id,b.hash);const before=bin.list(),entry=before.items.find(x=>x.id===a.id),bHistory=store.history(b.id);
+ store.put('recyclePurge','prior',{id:'prior',files:[]});const revision=bin.list().revision;
+ assert.throws(()=>bin.purge(a.id,entry.versionId,{confirmed:true,revision:before.revision}),{code:'RECYCLE_CONFLICT'});
+ assert.throws(()=>bin.purge(a.id,'wrong',{confirmed:true,revision}),{code:'RECYCLE_CONFLICT'});
+ assert.deepEqual(bin.purge(a.id,entry.versionId,{confirmed:true,revision}),{cleared:1});
+ assert.equal(store.history(a.id).length,0);assert.deepEqual(store.history(b.id),bHistory);assert.equal(bin.list().items[0].id,b.id);
+ assert.ok(store.read(knowledge.id));assert.ok(fs.existsSync(attachmentPath(store.vaultDir,file.descriptor.id)));assert.ok(store.get('recyclePurge','prior'));
+ bin.restore(b.id,bin.list().items[0].versionId);assert.ok(store.read(b.id));
+});

@@ -292,3 +292,40 @@ test('unclosed summary envelopes and unrelated fenced text remain literal', () =
   assert.equal(tags(unrelated, 'h1').length, 0);
   assert.equal(tags(unrelated, 'pre').length, 1);
 });
+
+test('private ChatGPT citation tokens in captured prose and tables become readable missing-source notices', () => {
+  const { render } = browser();
+  const token='\uE200cite\uE202turn908413view0\uE202turn460882search6\uE202turn460882search2\uE201';
+  const body='## 会话原文（按收到的顺序保留）\n\n### 4. ChatGPT\n\n```text\n段落。'+token+'\n\n| 项目 | 来源 |\n| --- | --- |\n| 示例 | '+token+' |\n```';
+  const original=body,root=render(body,{conversation:true});
+  assert.equal(root.textContent.includes('\uE200'),false);assert.equal(root.textContent.includes('turn908413view0'),false);
+  assert.ok(root.textContent.includes('来源信息未随原文导入'));assert.ok(tags(root,'td').some(n=>n.textContent.includes('来源信息未随原文导入')));
+  assert.equal(tags(root,'a').length,0);assert.equal(body,original);
+});
+
+test('private citations use only explicit unambiguous safe URL metadata, with a fallback for unmapped references', () => {
+  const { render } = browser(),token='\uE200cite\uE202turn908413view0\uE202turn460882search6\uE201';
+  const root=render('依据'+token,{citationSources:[{id:'turn908413view0',url:'https://example.com/actual-source',title:'真实来源'}]});
+  assert.equal(tags(root,'a').length,1);assert.equal(attribute(tags(root,'a')[0],'href'),'https://example.com/actual-source');
+  assert.equal(tags(root,'a')[0].textContent,'真实来源');assert.ok(root.textContent.includes('来源信息未随原文导入'));
+  for(const sources of [
+    [{id:'turn908413view0',url:'javascript:alert(1)'}],
+    [{id:'turn908413view0',url:'https://user:secret@example.com/private'}],
+    [{id:'turn908413view0',url:'https://example.com/a'},{id:'turn908413view0',url:'https://example.com/b'}],
+  ])assert.equal(tags(render(token,{citationSources:sources}),'a').length,0);
+});
+
+test('literal private citation examples stay exact inside inline and fenced code, including captured message wrappers', () => {
+  const { render } = browser(),token='\uE200cite\uE202turn908413view0\uE201';
+  const body='## 会话原文（按收到的顺序保留）\n\n### 1. ChatGPT\n\n````text\n`'+token+'`\n\n```js\nconst token = "'+token+'";\n```\n````';
+  const root=render(body,{conversation:true});assert.ok(tags(root,'code').some(n=>n.textContent===token));
+  assert.equal(tags(root,'pre')[0].textContent,'const token = "'+token+'";\n');assert.equal(root.textContent.includes('来源信息未随原文导入'),false);
+});
+
+test('plain or malformed citation-like text is preserved and citation metadata cannot create nested links', () => {
+  const { render } = browser();
+  for(const value of ['cite turn908413view0','turn460882search6','\uE200cite\uE202not-a-reference\uE201','\\uE200cite\\uE202turn908413view0\\uE201'])assert.equal(render(value).textContent,value);
+  const token='\uE200cite\uE202turn908413view0\uE201';
+  const root=render('['+token+'](https://example.com/outer)',{citationSources:[{id:'turn908413view0',url:'https://example.com/inner',title:'来源'}]});
+  assert.equal(tags(root,'a').length,1);
+});

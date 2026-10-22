@@ -75,3 +75,10 @@ Obsidian 的自动链接只写在有校验记录的管理区。更新前检查�
 AI 关联、AI 发现和学习包建议同样在入队时固定知识资料的身份与哈希。执行时跳过新增、修改或删除的比较材料；关联主知识已变化则停止，请重新探索。AI 发现内部的关联细查沿用同一清单，不在后续请求中扩大范围。没有快照的旧外部任务等待主动重试，明确重试才按当前资料重新固定范围；自动本地发现仍不外发。
 
 每日安排优先到期复习与开放误解，并考虑主题前置顺序。结束练习结算一次，跨日按设置中的时区统计，同日追加练习不连续翻倍。自动发现仅进行有界、轮换的本地比较；AI 查询扩展、语义召回与细查需主动勾选。
+
+
+## 知识结构 v2
+
+`sourceStructures` 记录复用现有 SQLite 记录与 JSON 备份流程。内容单元引用已有知识 ID，完整内容仍由原 Markdown 管理，不为多个主题复制事实。`units` 保留 shortTitle、dimensions、roles、sourceRefs 和 eventTime；`topics` 保存可修订导航及 original/ai/user 来源；主题 parent 仅指主题 ID，与语义边完全分离。原文定位使用 sourceId 和未经改写正文的 UTF-16 `[start,end)`，逐字 quote 用于复核，重复引文必须指定位置。
+
+`edges` 保存 from/to/type/label、from-to 方向约定、condition、exceptions、explicit/inferred/user/pending 来源状态与原文定位。程序检查端点、引用、循环和条件字段；不能据此判定语义或事实正确，semanticCheck 保持 pending，缺口保留在 gaps。无依据的边不绘制。用户修改带结构 revision，旧版本拒绝；人工结构重新分析生成 pendingCandidate，不覆盖。保存修订保留前一结构快照 previousRevision；备份仍应按既有方式保留。结构不是新的事实真值来源。

@@ -232,7 +232,7 @@ test('official SDK discovers the ChatGPT tools and stores a real temporary Markd
   const client = new Client({ name: 'zhixu-chatgpt-test', version: '0.1.0' });
   await client.connect(transport); t.after(() => client.close());
   const tools = (await client.listTools()).tools;
-  assert.deepEqual(tools.map(tool => tool.name).sort(), ['get_zhixu_status', 'save_chatgpt_conversation', 'import_chatgpt_history_snapshot', 'import_chatgpt_history_batch', 'preview_chatgpt_capture_undo', 'preview_chatgpt_capture_restore', 'search_knowledge', 'read_note', 'read_source', 'related_knowledge'].sort());
+  assert.deepEqual(tools.map(tool => tool.name).sort(), ['get_zhixu_status', 'save_chatgpt_conversation', 'import_chatgpt_history_snapshot', 'import_chatgpt_history_batch', 'preview_chatgpt_capture_undo', 'preview_chatgpt_capture_restore', 'search_knowledge', 'read_note', 'read_source', 'read_source_structure', 'related_knowledge'].sort());
   assert.ok(!tools.some(tool => /confirm/.test(tool.name)));
   assert.equal(tools.find(tool => tool.name === 'import_chatgpt_history_batch').inputSchema.properties.baseRevision, undefined);
   assert.equal(tools.find(tool => tool.name === 'save_chatgpt_conversation').annotations.readOnlyHint, false);
@@ -256,7 +256,15 @@ test('official SDK discovers the ChatGPT tools and stores a real temporary Markd
   const updateSync = await call('save_chatgpt_conversation', { ...incremental, requestId: randomUUID(), summary: 'SDK 更新摘要',
     sync: { ...incremental.sync, snapshotId: 'sdk-next', mode: 'delta', baseRevision: 1 } });
   assert.equal(updateSync.structuredContent.status, 'updated'); assert.equal(updateSync.structuredContent.noteId, initialSync.structuredContent.noteId);
+  const v2 = { ...incremental, requestId: randomUUID(), sync: { ...incremental.sync, conversationId:'sdk-structure-v2' },
+    structured: { version:2, items:[{id:'item',title:'合成分类',body:'保留上下文',type:'knowledge',sourceMessageIds:['sdk-message'],uncertainties:[]}],
+      units:[{id:'item',shortTitle:'原文',dimensions:['conceptual'],roles:['definition'],sourceRefs:[{messageId:'sdk-message',quote:'合成 SDK 增量原文'}]}],topics:[],edges:[] } };
+  const v2Reply = (await call('save_chatgpt_conversation',v2)).structuredContent;
+  assert.equal(v2Reply.structure.status,'verified');
+  const graph = (await call('read_source_structure',{id:v2Reply.noteId})).structuredContent;
+  assert.equal(JSON.parse(graph.body).units[0].dimensions[0],'conceptual');
   f.enable(false); assert.equal((await call('read_source', { id })).isError, true);
+  assert.equal((await call('read_source_structure',{id:v2Reply.noteId})).isError,true);
   assert.equal((await call('save_chatgpt_conversation', payload)).structuredContent.duplicate, true);
   assert.ok(!stderr.includes(f.token())); assert.ok(!JSON.stringify(saved).includes(f.token()));
   await client.close();

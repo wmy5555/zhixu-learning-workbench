@@ -131,7 +131,8 @@ for (const materialId of [...materials.map(item => item.id), 'custom']) test(`${
   assert.equal(current.learningCandidates.length, 2);
   const knowledgeId = current.learningCandidates.find(note => note.depth === 'explain').id;
   if (f.fact) {
-    await guide('select-knowledge', { noteId: knowledgeId }, 409);
+    await guide('select-knowledge', { noteId: knowledgeId });
+    assert.ok((await practice(`notes/${knowledgeId}/evidence`)).limitations.length, 'selecting learning material does not clear credibility warnings');
     await request('/api/settings', { search: { enabled: true }, fetch: { enabled: true } }, 'PUT');
     await guide('test', { capability: 'search' }); await guide('test', { capability: 'fetch' });
     await practice(`notes/${source.id}/process`, { research: true }); await pump();
