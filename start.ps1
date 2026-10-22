@@ -26,7 +26,8 @@ function Test-WorkbenchReady {
     $request.ReadWriteTimeout = 1500
     $response = $request.GetResponse()
     $reader = [IO.StreamReader]::new($response.GetResponseStream())
-    return [int]$response.StatusCode -eq 200 -and $reader.ReadToEnd().Contains('app.mjs')
+    $body = $reader.ReadToEnd()
+    return [int]$response.StatusCode -eq 200 -and ($body.Contains('app.mjs') -or $body.Contains('web/main.mjs'))
   } catch { return $false }
   finally {
     $socket.Dispose()

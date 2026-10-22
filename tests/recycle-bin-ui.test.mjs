@@ -5,8 +5,8 @@ const code=fs.readFileSync(new URL('../public/recycle-bin.mjs',import.meta.url),
 function harness({items=[{id:'s',versionId:'v',title:'合成资料',attachmentCount:1}],confirm=true,purgeEnabled=true,ownerToken='synthetic-owner',onPrompt=()=>{},failClear='',failReads=0,onClear=()=>{},onRead=()=>{}}={}){
  let context={version:1,practiceId:''}, calls=[], confirmation, active=true, reads=0, confirmations=0, pendingCleanup=0; const errors=[];
  const node=(tag,options={},children=[])=>({tag,...options,children:Array.isArray(children)?children:[children],append(...n){this.children.push(...n);}});
- const main={replaceChildren(n){this.body=n;}},api={getContext:()=>context,recycleBin:async()=>{await onRead(++reads);if(reads>1&&failReads-->0)throw new Error('synthetic refresh failure');return {items,revision:'revision',pendingCleanup,purgeEnabled};},clearRecycleBin:async (r,token)=>{assert.equal(token,ownerToken);calls.push(['clear',r]);await onClear();if(failClear==='partial'){items=[];pendingCleanup=1;}if(failClear)throw new Error('synthetic '+failClear+' failure');items=[];return {cleared:1};},restoreRecycled:async(id,v)=>{calls.push(['restore',id,v]);items=[];}};
- const render=new Function('api','el','button','emptyState','formatDate','confirmAction','promptAction','toast',code+'; return renderRecycleBin;')(api,node,(text,o)=>node('button',{text,...o}),(...args)=>node('empty',{args}),String,async o=>{confirmation=o;confirmations++;return confirm;},async o=>{assert.equal(o.secret,true);await onPrompt();return ownerToken;},()=>{});
+ const main={replaceChildren(n){this.body=n;}},api={getContext:()=>context,recycleBin:async()=>{await onRead(++reads);if(reads>1&&failReads-->0)throw new Error('synthetic refresh failure');return {items,revision:'revision',pendingCleanup,purgeEnabled};},purgeRecycled:async(id,v,r,token)=>{assert.equal(token,ownerToken);calls.push(['purge',id,v,r]);await onClear();if(failClear)throw new Error('synthetic '+failClear+' failure');items=items.filter(x=>x.id!==id);return {cleared:1};},clearRecycleBin:async (r,token)=>{assert.equal(token,ownerToken);calls.push(['clear',r]);await onClear();if(failClear==='partial'){items=[];pendingCleanup=1;}if(failClear)throw new Error('synthetic '+failClear+' failure');items=[];return {cleared:1};},restoreRecycled:async(id,v)=>{calls.push(['restore',id,v]);items=[];}};
+ const render=new Function('api','el','button','emptyState','formatDate','confirmAction','promptAction','toast',code+'; return renderRecycleBin;')(api,node,(text,o)=>node('button',{text,...o}),(...args)=>node('empty',{args}),String,async o=>{confirmation=o;confirmations++;await onPrompt();return confirm;},async o=>{assert.equal(o.secret,true);await onPrompt();return ownerToken;},()=>{});
  const find=text=>{const visit=n=>n.text===text?n:(n.children||[]).map(visit).find(Boolean);return visit(main.body);};
  return {main,calls,find,errors,get confirmations(){return confirmations;},get confirmation(){return confirmation;},render:()=>render({main,refresh:async()=>{},onError:e=>errors.push(e.message),isActive:()=>active}),switchContext(){context={version:2,practiceId:'other'};},leave(){active=false;}};
 }
@@ -37,8 +37,8 @@ test('unknown clear result and failed refresh keep explicit read retry; retry ne
 });
 
 for(const change of ['switchContext','leave'])test('late failed clear cannot update another context or page: '+change,async()=>{
- let finish;const waiting=new Promise(resolve=>{finish=resolve;});const h=harness({failClear:'network',onClear:()=>waiting});await h.render();
- const action=h.find('一键清空回收站').onClick();await Promise.resolve();await Promise.resolve();await Promise.resolve();const before=h.main.body;h[change]();finish();await action;
+ let finish,started;const waiting=new Promise(resolve=>{finish=resolve;}),reached=new Promise(resolve=>{started=resolve;});const h=harness({failClear:'network',onClear:()=>{started();return waiting;}});await h.render();
+ const action=h.find('一键清空回收站').onClick();await reached;const before=h.main.body;h[change]();finish();await action;
  assert.equal(h.main.body,before);assert.equal(h.errors.length,0);assert.equal(h.calls.length,1);
 });
 
@@ -56,13 +56,39 @@ for(const change of ['switchContext','leave'])test('late reconciliation cannot r
  assert.equal(h.main.body,nextPage);assert.equal(h.errors.length,1);assert.equal(h.calls.length,1);
 });
 
-for(const enabled of [false,undefined])test('disabled or absent owner configuration prevents clear UI: '+enabled,async()=>{
- const h=harness({purgeEnabled:enabled===undefined?null:enabled});await h.render();assert.equal(h.find('一键清空回收站').disabled,true);
- await h.find('一键清空回收站').onClick();assert.equal(h.confirmations,0);assert.deepEqual(h.calls,[]);assert.ok(h.find('恢复'));
+
+test('single delete confirms exact object, cancel preserves it, success sends exact scope and owner credential',async()=>{
+ const cancel=harness({confirm:false});await cancel.render();await cancel.find('永久删除').onClick();assert.deepEqual(cancel.calls,[]);
+ const h=harness();await h.render();await h.find('永久删除').onClick();assert.deepEqual(h.calls,[['purge','s','v','revision']]);
+ assert.match(h.confirmation.message,/合成资料.*资料 ID：s.*全部版本.*无法从回收站恢复.*只处理这一份/);
 });
-for(const token of [null,''])test('cancelled or empty owner prompt never clears: '+token,async()=>{
- const h=harness({ownerToken:token});await h.render();await h.find('一键清空回收站').onClick();assert.deepEqual(h.calls,[]);assert.ok(h.find('恢复'));
+test('confirmation and request are mutually exclusive with duplicate, clear and restore actions',async()=>{
+ let finish;const waiting=new Promise(r=>finish=r);const h=harness({onPrompt:()=>waiting});await h.render();
+ const action=h.find('永久删除').onClick();assert.equal(h.find('恢复').disabled,true);
+ await h.find('永久删除').onClick();await h.find('恢复').onClick();await h.find('一键清空回收站').onClick();
+ assert.equal(h.confirmations,1);assert.deepEqual(h.calls,[]);finish();await action;assert.equal(h.calls.length,1);
 });
-test('context change while owner prompt is open prevents purge',async()=>{
- const h=harness({onPrompt:()=>h.switchContext()});await h.render();await h.find('一键清空回收站').onClick();assert.deepEqual(h.calls,[]);
+for(const change of ['switchContext','leave'])test('context change during single confirmation sends no purge: '+change,async()=>{
+ const h=harness({onPrompt:()=>h[change]()});await h.render();await h.find('永久删除').onClick();assert.deepEqual(h.calls,[]);
+});
+test('failed single delete refreshes only; another request needs fresh confirmation',async()=>{
+ const h=harness({failClear:'network',failReads:1});await h.render();await h.find('永久删除').onClick();
+ assert.equal(h.find('永久删除').disabled,true);await h.find('刷新列表').onClick();assert.equal(h.calls.length,1);
+ await h.find('永久删除').onClick();assert.equal(h.calls.length,2);assert.equal(h.confirmations,2);
+});
+test('help boundary explanation is a linked guide rather than a front-page notice',async()=>{
+ const h=harness();await h.render();assert.equal(h.find('回收站帮助').href,'/guide.html#recycle-bin');
+ assert.equal(h.main.body.children.some(n=>n.text?.includes('其他内容的版本历史')),false);
+});
+
+for(const enabled of [false,undefined])test('default disabled blocks both purge controls but retains restore: '+enabled,async()=>{
+ const h=harness({purgeEnabled:enabled===undefined?null:enabled});await h.render();
+ assert.equal(h.find('永久删除').disabled,true);assert.equal(h.find('一键清空回收站').disabled,true);assert.equal(h.find('恢复').disabled,false);
+ await h.find('永久删除').onClick();await h.find('一键清空回收站').onClick();assert.equal(h.confirmations,0);assert.deepEqual(h.calls,[]);
+});
+for(const action of ['永久删除','一键清空回收站'])test('cancelled owner credential sends no permanent deletion: '+action,async()=>{
+ const h=harness({ownerToken:null});await h.render();await h.find(action).onClick();assert.deepEqual(h.calls,[]);assert.equal(h.find('恢复').disabled,false);
+});
+test('library switch during owner credential prompt cannot send a purge to the new context',async()=>{
+ let prompts=0;const h=harness({onPrompt:()=>{if(++prompts===2)h.switchContext();}});await h.render();await h.find('永久删除').onClick();assert.deepEqual(h.calls,[]);
 });

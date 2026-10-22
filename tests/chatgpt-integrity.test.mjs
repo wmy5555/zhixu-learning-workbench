@@ -227,7 +227,7 @@ test('status separates receiver and MCP build identities and reports the actuall
   assert.equal(status.mcp.build.sha256, status.build.sha256);
   assert.deepEqual(status.mcp.toolNames.toSorted(), tools.tools.map(tool => tool.name).toSorted());
   assert.deepEqual(status.toolNames.toSorted(), status.mcp.toolNames.toSorted());
-  assert.deepEqual(status.protocol, { historySnapshot: 1, historyBatch: 1, captureUndo: 1, structured: 1, saveVerification: 1 });
+  assert.deepEqual(status.protocol, { historySnapshot: 1, historyBatch: 1, captureUndo: 1, structured: 2, saveVerification: 1 });
   assert.equal(status.limits.maxMessages, 200); assert.equal(status.limits.maxCharacters, 500000);
   assert.ok(!JSON.stringify(status).includes(f.config.dataDir)); assert.ok(!JSON.stringify(status).includes(f.config.vaultDir));
 });

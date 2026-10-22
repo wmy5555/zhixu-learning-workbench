@@ -6,6 +6,16 @@ import { createService } from '../src/service.mjs';
 import { normalizeStructure, structureRecord } from '../src/source-structure.mjs';
 import { layoutSourceMap } from '../public/source-map.mjs';
 
+test('concept is-a ranks parent above child without reversing semantic endpoints', () => {
+  const edge = { from: 'square', to: 'rectangle', type: 'is-a' };
+  const layout = layoutSourceMap([{id:'square'}, {id:'rectangle'}], [edge], [], 'concept');
+  const child = layout.positions.get('square'), parent = layout.positions.get('rectangle');
+  assert.ok(parent.y < child.y);
+  assert.equal(edge.from, 'square'); assert.equal(edge.to, 'rectangle');
+  assert.ok(layout.routes[0].d.startsWith(`M${child.x + layout.cardWidth/2},${child.y} `));
+  assert.ok(layout.routes[0].d.endsWith(`L${parent.x + layout.cardWidth/2},${parent.y+layout.cardHeight}`));
+});
+
 test('dense captions, cycles and long edges avoid one another and every node', () => {
   const nodes = Array.from({ length: 8 }, (_, i) => ({ id: String(i), title: `合成节点 ${i}` }));
   const overlap = (a,b) => a.x < b.x+b.width && a.x+a.width > b.x && a.y < b.y+b.height && a.y+a.height > b.y;

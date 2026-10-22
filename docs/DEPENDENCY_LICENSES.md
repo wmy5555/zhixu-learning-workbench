@@ -1,3 +1,7 @@
+## 2026-10-22 MCP SDK 安全更新
+
+@modelcontextprotocol/sdk 从 1.31.0 固定升级至 1.32.0；实际包 metadata 与随附 LICENSE 均为 MIT。包管理器生成锁文件，固定 pnpm 11.19.0 frozen 安装通过。清除 GHSA-22jm-h49p-29qw 与 GHSA-46jr-4wx8-v453 的依赖门禁告警；本项目 MCP 均为 stdio，未配置上游 HTTP transport 或 taskStore。
+
 # 第三方依赖与工具许可证清单
 
 审计日期：2026-09-20。主分支基线：`f7f95e78a1fd87f33554cf9a12608e54bc656e6f`。本文件记录第三方声明和来源，不为知序项目本身选择许可证。

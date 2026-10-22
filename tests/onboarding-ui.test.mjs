@@ -619,16 +619,16 @@ test('custom material validates locally, retains typed text across preview choic
   ui.tutorial.dispose();
 });
 
-test('verification help expands on hover without unlocking candidates or submitting research', async () => {
+test('verification help keeps candidates selectable without submitting research', async () => {
   const ui = await tutorialBrowser({ currentStepId: 'library-explain' });
   ui.setState({ materialId: 'course', roles: { capturedSource: 'source' }, learningCandidates: [{ id: 'pending', title: '待核验事实', limitations: ['尚未核验'] }] });
   await ui.tutorial.open();
   const help = descend(ui.body).find(node => node.classList.contains('onboarding-verification-help'));
   assert.ok(help);
   assert.equal(help.open, false);
-  assert.match(help.children[0].textContent, /为什么待核验的事实不能进入主线/);
-  assert.match(help.children[1].textContent, /反复练习会加深错误理解/);
-  assert.match(help.children[1].textContent, /联网返回的结果也需要你判断/);
+  assert.match(help.children[0].textContent, /先学习与事实已核验有什么区别/);
+  assert.match(help.children[1].textContent, /练习表现不代表事实成立/);
+  assert.match(help.children[1].textContent, /结果仍需你判断/);
   const requests = ui.requests.length;
   help.events.mouseenter(); assert.equal(help.open, true);
   help.events.mouseleave(); assert.equal(help.open, false);
@@ -653,7 +653,7 @@ test('verification help expands on hover without unlocking candidates or submitt
   help.events.mouseenter(); help.events.focusout({ relatedTarget: null });
   assert.equal(help.open, true, 'pointer still inside keeps the temporary explanation readable');
   assert.equal(ui.requests.length, requests);
-  assert.equal(descend(ui.body).find(node => node.value === 'pending').disabled, true);
+  assert.equal(descend(ui.body).find(node => node.value === 'pending').disabled, false);
   await click(findButton(ui.body, '前往联网核验'));
   assert.equal(ui.navigations.at(-1), 'process-research');
   assert.ok(!ui.requests.some(call => call.action === 'process'));

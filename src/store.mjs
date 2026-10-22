@@ -548,6 +548,16 @@ export class Store {
     this.syncMirrors(); this.completeFileOperation(operation); return { deleted: true };
   }
   history(id) { this.assertAvailable(); return this.db.prepare('SELECT id as versionId,noteId,path,hash,raw,reason,createdAt FROM versions WHERE noteId=? ORDER BY createdAt DESC').all(id); }
+  deletedNotes() {
+    this.scan();
+    return this.records('deleted').flatMap(item=>{
+      if(this.row(item.id))return [];
+      const version=this.history(item.id)[0];if(!version)return [];
+      const note=parse(version.raw);
+      // Sources retain their dedicated recycle-bin recovery and purge boundary.
+      return note.meta.kind==='knowledge'?[{id:item.id,title:note.meta.title,deletedAt:item.deletedAt,versionId:version.versionId}]:[];
+    });
+  }
   restoreVersion(id, versionId, expectedHash) {
     const version = this.db.prepare('SELECT * FROM versions WHERE id=? AND noteId=?').get(versionId, id);
     if (!version) fail('找不到历史版本。', 'NOT_FOUND', 404);
