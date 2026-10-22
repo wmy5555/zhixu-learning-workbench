@@ -24,10 +24,10 @@ try{
     await page.evaluate(async()=>{
       const {createFocus}=await import('/web/focus.mjs');
       const {freshClock,transition}=await import('/web/focus-model.mjs');
-      const key='zhixu-focus-v1-focus-regression',now=Date.now();
+      const storageName='zhixu-focus-v1-focus-regression',now=Date.now();
       let clock=transition(freshClock(),{type:'start',kind:'break',minutes:5,id:'synthetic-break'},now-300001);
       clock=transition(clock,{type:'tick'},now);clock.active.pendingNotice=false;
-      localStorage.setItem(key,JSON.stringify(clock));
+      localStorage.setItem(storageName,JSON.stringify(clock));
       window.focusUnderTest=createFocus({state:{route:'today',boot:{settings:{vaultDir:'focus-regression'}}},go(){}});
       document.addEventListener('click',event=>{const control=event.target.closest('[data-action]');if(control)window.focusUnderTest.handle(control).catch(error=>{throw error;});});
       window.focusUnderTest.mount();
