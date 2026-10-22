@@ -6,7 +6,7 @@ import {guideSteps,complete,prerequisite,destination,selectors,speeds,intents,su
 import {createGuideMotion} from './onboarding-motion.mjs';
 import {materials,materialSample} from '../onboarding-materials.mjs';
 import {escape as e} from './markdown.mjs';
-import {icon,modal,notify} from './ui.mjs';
+import {icon,modal,confirm,notify} from './ui.mjs';
 const $=s=>document.querySelector(s),all=s=>[...document.querySelectorAll(s)];
 const readPreference=(key,fallback)=>{try{return localStorage.getItem(key)||fallback;}catch{return fallback;}};
 const savePreference=(key,value)=>{try{localStorage.setItem(key,String(value));}catch{}};
@@ -34,11 +34,12 @@ export function createWebOnboarding({api,state,go,refreshBoot,beforeLeave}){
  function visible(n){if(!n||!n.isConnected||!n.getClientRects().length)return false;for(let p=n;p;p=p.parentElement){const style=getComputedStyle(p);if(p.hidden||p.inert||style.visibility==='hidden'||style.display==='none')return false;}return true;}
  function review(){return reviewGuide({root:document,route:state.route,proof,session:state.session,visible});}
  function output(){return outputGuide({root:document,route:state.route,proof,step:step(),visible});}
- function proofSignature(){return JSON.stringify([step().id,proof.progress?.[step().id],proof.learningCandidates?.map(n=>n.id),error,Boolean(target()),step().id==='review-finish'?review().phase:step().id.startsWith('output-')?output().phase:null]);}
+ function proofSignature(){return JSON.stringify([step().id,proof.progress?.[step().id],proof.learningCandidates?.map(n=>n.id),proof.busy,error,Boolean(target()),step().id==='review-finish'?review().phase:step().id.startsWith('output-')?output().phase:null]);}
  function target(){if(step()?.id==='library-explain')return learningTarget({root:document,route:state.route,noteId:proof?.roles?.explain,visible});if(step()?.id==='review-finish')return review().target;if(step()?.id.startsWith('output-'))return output().target;if(requestedRoute&&state.route!==requestedRoute&&!(requestedRoute==='study'&&state.route.startsWith('study/')&&state.session?.noteId===proof?.roles?.explain))return null;const list=selectors(step(),proof);const dialog=all('dialog[open]').at(-1);for(const selector of list){const n=all(selector).find(n=>visible(n)&&(!dialog||dialog.contains(n)));if(n)return n;}return null;}
  const hintButton=()=>button(bulb,'hint','class="onboard-icon" aria-label="提示操作位置" title="提示操作位置"');
  const speedButton=()=>button(speed+'x','speed',`class="onboard-speed" aria-label="引导速度 ${speed}x，点击切换倍速" title="0.75x · 1x · 1.5x · 2x" ${travelling?'disabled':''}`);
  function render(){
+  all('.guide-welcome-dialog [data-guide="reset"]').forEach(n=>n.disabled=Boolean(travelling||proof?.busy));
   document.body.dataset.guideMode=mode;document.body.classList.toggle('onboard-active',active);card.dataset.mode=mode;card.dataset.travelling=String(travelling);
   banner.hidden=!active;banner.innerHTML=`<span>${icon('leaf')} ${api.getContext().practiceId?'独立练习空间':'共用 AI 设置'} <small>${api.getContext().practiceId?'练习资料与正式库分开保存':'配置同时供正式库与练习使用'}</small></span>${button('暂停并回正式库','pause')}`;
   resume.hidden=!proof?.practiceId||active;card.hidden=!active||(mode==='A'&&!detail);if(!active){motion.hide();return;}
@@ -88,7 +89,24 @@ export function createWebOnboarding({api,state,go,refreshBoot,beforeLeave}){
   }finally{if(token===sequence){travelling=false;render();await openCard();placeCard();}}
  }
  async function begin(dialog){if(!await beforeLeave())return;dialog.close();if(polling)await polling;adopt(await call(proof?.practiceId?'resume':'start',proof?.practiceId?{}:{materialId:selectedMaterial}));active=true;const saved=steps.findIndex(s=>s.id===proof.currentStepId);index=Math.max(0,saved);if(pendingGoal){const wanted=steps.findIndex(s=>s.id===intents[pendingGoal].start),missing=prerequisite(steps[wanted],proof);index=missing?steps.findIndex(s=>s.id===missing.id):wanted;pendingGoal=null;}await navigate(index);schedulePoll();}
- function welcome(){const dialog=modal('从一个想法，走向自己的理解。',welcomeBody({mode,materialId:selectedMaterial,practiceId:proof?.practiceId,index,customTitle:proof?.customSample?.title}));dialog.classList.add('guide-welcome-dialog');}
+ async function reset(dialog){
+  if(!proof?.practiceId)return;
+  if(polling)await polling;
+  if(proof.busy||api.getContext().pending){notify('请先等当前操作完成，再重置进度。',true);return;}
+  if(!await confirm('重置新手引导进度？','将清空本次独立练习库及其练习记录。正式资料、AI 配置和密钥会保留。','重置并从头开始'))return;
+  if(!await beforeLeave())return;
+  if(polling)await polling;
+  if(proof.busy||api.getContext().pending){notify('请先等当前操作完成，再重置进度。',true);return;}
+  travelling=true;clearTimeout(pollTimer);render();
+  try{
+   adopt(await call('reset',proof.materialId==='custom'?{customMaterial:proof.customSample}:{}));
+   sequence++;active=true;index=0;sessionId='';pendingGoal=null;requestedRoute=null;signature='';error='';hinting=false;detail=false;
+   motion.hide();dialog.close();api.setContext(proof.practiceId);state.note=null;state.session=null;
+   await refreshBoot();await go('today',{force:true,guide:true,replace:true,speed});
+  }finally{travelling=false;render();schedulePoll();}
+  await navigate(0);
+ }
+ function welcome(){const dialog=modal('从一个想法，走向自己的理解。',welcomeBody({mode,materialId:selectedMaterial,practiceId:proof?.practiceId,index,customTitle:proof?.customSample?.title,busy:proof?.busy}));dialog.classList.add('guide-welcome-dialog');}
  async function next(){if(travelling)return;if(!target()&&!done()){error='当前步骤的位置暂时不可见，请先重新定位。';render();await hint();return;}adopt(await call('checkpoint',{stepId:step().id,mode:step().kind==='read'?'read':'check'}));if(!done()){error=proof.progress?.[step().id]?.reason||'还没有这一步的完成记录，请先完成操作，再检查。';render();await hint();return;}if(index===steps.length-1){await leave();notify('核心体验已完成，练习记录已保留。');return;}await navigate(index+1);}
  async function leave(){if(!await beforeLeave())return;if(polling)await polling;if(proof?.busy){notify('练习任务仍在处理，请等待完成或先取消任务。',true);return;}adopt(await call('pause'));api.setContext('');active=false;sequence++;travelling=false;motion.hide();detail=false;state.note=null;state.session=null;await refreshBoot();render();await go('today',{force:true,replace:true});clearTimeout(pollTimer);}
  function routeMap(){modal('你的完整路线',`<p>已完成的操作保留记录；尚未满足的前置条件会明确提示。</p><div class="onboard-map">${steps.map((s,i)=>button(`<span>${complete(proof?.progress?.[s.id])?'✓':String(i+1).padStart(2,'0')}</span>${e(s.title)}`,'jump',`data-index="${i}" ${travelling?'disabled':''}`)).join('')}</div>`);}
@@ -104,6 +122,7 @@ export function createWebOnboarding({api,state,go,refreshBoot,beforeLeave}){
   if(action==='material'){if(proof?.practiceId)return;if(!materials.some(m=>m.id===el.dataset.material))return;selectedMaterial=el.dataset.material;const dialog=el.closest('dialog');dialog.querySelector('.dialog-body').innerHTML=welcomeBody({mode,materialId:selectedMaterial,index});return;}
   if(action==='suggest-goal'){propose(el.closest('dialog'),el.dataset.goal);return;}
   if(action==='begin'){await begin(el.closest('dialog'));return;}
+  if(action==='reset'){await reset(el.closest('dialog'));return;}
   if(action==='welcome-ask'){el.closest('dialog').close();assistant();return;}
   if(action==='goal'){if(!intents[el.dataset.goal])return;el.closest('dialog').close();if(!active){pendingGoal=el.dataset.goal;welcome();return;}const start=steps.findIndex(s=>s.id===intents[el.dataset.goal].start),missing=prerequisite(steps[start],proof);await navigate(missing?steps.findIndex(s=>s.id===missing.id):start);return;}
   if(action==='speed'){speed=speeds[(speeds.indexOf(speed)+1)%speeds.length];savePreference('zhixu.guide.speed',speed);render();card.querySelector('[data-guide="speed"]')?.focus({preventScroll:true});placeCard();return;}
