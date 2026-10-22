@@ -14,7 +14,8 @@ import { createManagement, initializeAccent } from './management.mjs';
 import { createFocus } from './focus.mjs';
 import { watchStudyFeedback, feedbackPending } from './study-feedback.mjs';
 import { aidUsed, markAid, clearAid } from './study-aid.mjs';
-import { batchImport } from './batch-import.mjs';
+import { batchImport, prepareTexts } from './batch-import.mjs';
+import { captureFilesHTML, mountCaptureFiles } from './capture-files.mjs';
 
 installInputModality(document.documentElement, document);
 
@@ -124,24 +125,29 @@ function capturePage() {
     <details class="capture-origin"><summary>添加出处与主题</summary><div class="form-grid">${field('来自哪里','platform',{placeholder:'书籍、网页、对话……'})}${field('主题','topic',{placeholder:'这份材料与你关心的什么有关？'})}${field('原始链接','url',{type:'url',placeholder:'https://…'})}${field('作者','author')}${field('资料日期','date',{type:'date'})}${field('原文定位','locator',{placeholder:'页码、章节或段落'})}</div></details>
     <div class="capture-options"><label class="check"><input type="checkbox" name="process"> 保存后用 AI 拆解</label><label class="check dependent"><input type="checkbox" name="research" disabled> 同时联网核验</label><p class="form-note">AI 拆解会将所需原文发送给你配置的服务，可能计费。仅保存不会调用 AI。</p></div>
     <footer class="paper-footer"><span id="character-count" class="muted small">原文会完整保留</span><button class="primary" type="submit">保存这个起点 ${icon('arrow')}</button></footer><p id="capture-receipt" role="status"></p>
-    </form><aside class="capture-aside"><p class="eyebrow">A PLACE TO BEGIN</p><h2>不用整理完整，<br>先把它留下来。</h2><p>资料和理解之间，可以留一点距离。</p><ol class="capture-steps"><li><span>01</span><div><strong>留下原文</strong><p>保留完整内容，以及它从哪里来。</p></div></li><li><span>02</span><div><strong>读出自己的问题</strong><p>在书桌里阅读，再决定哪些值得继续。</p></div></li><li><span>03</span><div><strong>形成自己的解释</strong><p>拆解是建议，理解由你亲自确认。</p></div></li></ol><label class="file-drop">${icon('file')}<strong>从文本或 Markdown 开始</strong><span>选择一份读入编辑区，多份预览后批量保存</span><input id="text-file" type="file" multiple accept=".txt,.md,.markdown"></label></aside></div>`,
+    </form><aside class="capture-aside"><p class="eyebrow">A PLACE TO BEGIN</p><h2>不用整理完整，<br>先把它留下来。</h2><p>资料和理解之间，可以留一点距离。</p><ol class="capture-steps"><li><span>01</span><div><strong>留下原文</strong><p>保留完整内容，以及它从哪里来。</p></div></li><li><span>02</span><div><strong>读出自己的问题</strong><p>在书桌里阅读，再决定哪些值得继续。</p></div></li><li><span>03</span><div><strong>形成自己的解释</strong><p>拆解是建议，理解由你亲自确认。</p></div></li></ol>${captureFilesHTML()}</aside></div>`,
     bind() {
       const form=$('#capture-form');watchForm(form);
-      const fileArea=document.createElement('section');
-      fileArea.className='capture-file-area';
-      fileArea.innerHTML=`<details><summary>或者，保存图片、PDF、Word 原件</summary><p class="form-note">每份最多 50 MB。文件只发送到本机，保存不调用 AI。Word 正文转换后请核对。</p><input type="file" id="attachment-file" accept=".png,.jpg,.jpeg,.gif,.webp,.pdf,.doc,.docx" aria-label="选择原始文件"><button type="button" class="secondary" id="save-file" disabled>上传并保存原件</button><p id="file-receipt" role="status"></p></details>`;
-      form.after(fileArea);
-      let uploadId='',selectedFile;
-      $('#attachment-file').onchange=event=>{selectedFile=event.target.files[0];uploadId=crypto.randomUUID();$('#save-file').disabled=!selectedFile;};
-      $('#save-file').onclick=event=>busy(event.currentTarget,async()=>{if(!selectedFile)return;if(selectedFile.size>50000000)throw new Error('每份原件最多 50 MB。');await api.upload(selectedFile,uploadId);const result=await api.post('/api/file-import',{uploadId});$('#file-receipt').innerHTML=`原件已保存。${link('打开资料 ↗',`read/${result.note.id}`,'text-button')}`;$('#attachment-file').value='';selectedFile=null;await refreshBoot();shell();});
+      mountCaptureFiles(document.querySelector('#capture-files'), {
+        api, state, afterSave:async()=>{await refreshBoot();shell();},
+        onPending:pending=>{state.dirty=pending||form.dataset.dirty==='true';},
+        onTexts:async files=>{
+          if(files.length>1){await batchImport(files,context);return;}
+          const [row]=await prepareTexts(files);
+          if(!form.isConnected)return;
+          if(form.dataset.dirty==='true'&&!await confirm('替换编辑区的内容？','尚未保存的文字会被所选文本替换。','替换文字'))return;
+          if(!form.isConnected)return;
+          form.elements.body.value=row.body;form.elements.title.value ||= row.title;
+          form.dataset.dirty='true';state.dirty=true;form.elements.body.oninput();
+        }
+      });
       const process=form.elements.process,research=form.elements.research;
       process.onchange=()=>{research.disabled=!process.checked;if(!process.checked)research.checked=false;};
       form.elements.body.oninput=()=>{$('#character-count').textContent=`${form.elements.body.value.length.toLocaleString()} 字 · 原文会完整保留`;};
-      $('#text-file').onchange=async event=>{const files=[...event.target.files];if(files.length>1){try{await batchImport(files,context);}catch(error){notify(error.message,true);}event.target.value='';return;}const file=files[0];if(!file)return;if(file.size>2*1024*1024){notify('文本超过 2 MB，请拆分后收集。',true);return;}if(state.dirty&&!await confirm('替换编辑区的内容？','尚未保存的文字会被所选文本替换。','替换文字'))return;form.elements.body.value=await file.text();form.elements.title.value ||= file.name.replace(/\.[^.]+$/,'');state.dirty=true;form.elements.body.oninput();};
       submit(form,async values=>{
         const snapshot=JSON.stringify(formData(form));
         const result=await api.post('/api/import',capturePayload({...values,process:process.checked,research:research.checked}));
-        if(JSON.stringify(formData(form))===snapshot){savedForm(form);form.reset();research.disabled=true;}
+        if(JSON.stringify(formData(form))===snapshot){savedForm(form);state.dirty ||= Boolean(document.querySelector('#capture-files [data-pending]'));form.reset();research.disabled=true;}
         const source=result.notes?.[0];$('#capture-receipt').innerHTML=`已保存：${e(source?.title||'原始资料')} ${source?link('现在打开书桌 ↗',`read/${source.id}`,'text-button'):''}`;
         $('#character-count').textContent='原文会完整保留';notify('原文已完整保存。');await refreshBoot();shell();
       });
