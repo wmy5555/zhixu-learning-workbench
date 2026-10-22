@@ -1,4 +1,5 @@
 import {learningTarget} from './onboarding-targets.mjs';
+import {reviewGuide,resolveReviewSession} from './onboarding-review.mjs';
 import {welcomeBody,assistantBody,proposalBody,goalLabels} from './onboarding-dialogs.mjs';
 import {guideSteps,complete,prerequisite,destination,selectors,speeds,intents,suggestGoals,intersection} from './onboarding-model.mjs';
 import {createGuideMotion} from './onboarding-motion.mjs';
@@ -30,7 +31,9 @@ export function createWebOnboarding({api,state,go,refreshBoot,beforeLeave}){
  const context=()=>({version:1,active,mode,speed,currentStepId:step()?.id,position:index+1,total:steps.length,completed:steps.filter(s=>complete(proof?.progress?.[s.id])).map(s=>s.id),missing:prerequisite(step(),proof)?.id||null,scope:api.getContext().practiceId?'practice':'shared-settings',targetVisible:Boolean(target()),aiConnected:false});
  function publicEvent(type){window.dispatchEvent(new CustomEvent('zhixu:guide-event',{detail:{type,...context()}}));}
  function visible(n){if(!n||!n.isConnected||!n.getClientRects().length)return false;for(let p=n;p;p=p.parentElement){const style=getComputedStyle(p);if(p.hidden||p.inert||style.visibility==='hidden'||style.display==='none')return false;}return true;}
- function target(){if(step()?.id==='library-explain')return learningTarget({root:document,route:state.route,noteId:proof?.roles?.explain,visible});if(requestedRoute&&state.route!==requestedRoute&&!(requestedRoute==='study'&&state.route.startsWith('study/')&&state.session?.noteId===proof?.roles?.explain))return null;const list=selectors(step(),proof);const dialog=all('dialog[open]').at(-1);for(const selector of list){const n=all(selector).find(n=>visible(n)&&(!dialog||dialog.contains(n)));if(n)return n;}return null;}
+ function review(){return reviewGuide({root:document,route:state.route,proof,session:state.session,visible});}
+ function proofSignature(){return JSON.stringify([step().id,proof.progress?.[step().id],proof.learningCandidates?.map(n=>n.id),error,Boolean(target()),step().id==='review-finish'?review().phase:null]);}
+ function target(){if(step()?.id==='library-explain')return learningTarget({root:document,route:state.route,noteId:proof?.roles?.explain,visible});if(step()?.id==='review-finish')return review().target;if(requestedRoute&&state.route!==requestedRoute&&!(requestedRoute==='study'&&state.route.startsWith('study/')&&state.session?.noteId===proof?.roles?.explain))return null;const list=selectors(step(),proof);const dialog=all('dialog[open]').at(-1);for(const selector of list){const n=all(selector).find(n=>visible(n)&&(!dialog||dialog.contains(n)));if(n)return n;}return null;}
  const hintButton=()=>button(bulb,'hint','class="onboard-icon" aria-label="提示操作位置" title="提示操作位置"');
  const speedButton=()=>button(speed+'x','speed',`class="onboard-speed" aria-label="引导速度 ${speed}x，点击切换倍速" title="0.75x · 1x · 1.5x · 2x" ${travelling?'disabled':''}`);
  function render(){
@@ -43,11 +46,12 @@ export function createWebOnboarding({api,state,go,refreshBoot,beforeLeave}){
   const actions=`<div class="onboard-actions">${button(back,'back',`class="onboard-icon" aria-label="上一步" ${index===0||travelling?'disabled':''}`)}${button(nextLabel+(!travelling?icon('arrow'):''),'next',`class="primary" ${pending?'disabled':''}`)}</div>`;
   const progress=`<div class="onboard-progress" role="progressbar" aria-label="整体引导进度" aria-valuemin="0" aria-valuemax="${steps.length}" aria-valuenow="${position}" aria-valuetext="第 ${position} 步，共 ${steps.length} 步"><span style="width:${position/steps.length*100}%"></span></div>`;
   const foot=`<footer>${button(icon('chat')+' 我有疑问','ask','class="onboard-text"')}${button('查看路线','map','class="onboard-text"')}${mode==='A'?button('收起说明','collapse','class="onboard-text"'):speedButton()}</footer>`;
-  const copy=`<div class="onboard-meta">${index+1} / ${steps.length} · ${e(({setup:'初识与准备',capture:'收集与加工',process:'整理与核对',library:'选择知识',study:'学习与理解',review:'到期复习',discover:'检索',output:'输出',complete:'回顾'})[step().chapterId]||'核心体验')}</div><h2>${e(step().title)}</h2><p>${e(step().instruction)}</p>`;
+  const instruction=step().id==='review-finish'?review().instruction:step().instruction;
+  const copy=`<div class="onboard-meta">${index+1} / ${steps.length} · ${e(({setup:'初识与准备',capture:'收集与加工',process:'整理与核对',library:'选择知识',study:'学习与理解',review:'到期复习',discover:'检索',output:'输出',complete:'回顾'})[step().chapterId]||'核心体验')}</div><h2>${e(step().title)}</h2><p>${e(instruction)}</p>`;
   const help=`<p class="onboard-status" role="status">${e(status)}</p>${blocked?button('先完成这一步','prerequisite','class="onboard-text"'):''}${extras}${!target()&&!travelling&&!done()?button('重新定位当前步骤','relocate','class="onboard-text"'):''}`;
   card.innerHTML=mode==='A'?`<header><span>${icon('leaf')} 与你一步一步</span><div>${speedButton()}${hintButton()}${button(pauseIcon,'pause','class="onboard-icon" aria-label="暂停引导"')}</div></header>${progress}<div class="onboard-content">${copy}${help}<details><summary>怎样才算完成？</summary><p>${e(step().expected)}</p></details>${actions}</div>${foot}`:`<div class="onboard-dialogue"><span class="onboard-avatar">${icon('leaf')}</span><div class="onboard-copy">${copy}${help}</div><div class="onboard-dock-actions">${hintButton()}${actions}${button(pauseIcon,'pause','class="onboard-icon" aria-label="暂停引导"')}</div></div>${progress}${foot}`;
   if(travelling){card.querySelectorAll('[data-guide]').forEach(n=>n.disabled=true);banner.querySelector('button').disabled=true;}motion.leaf.setAttribute('aria-expanded',String(detail));
-  signature=JSON.stringify([step().id,proof.progress?.[step().id],proof.learningCandidates?.map(n=>n.id),error,Boolean(target())]);
+  signature=proofSignature();
  }
  function placeCard(){if(card.hidden||mode==='C'||motion.panelMoving)return;card.style.removeProperty('max-height');const t=card.contains(target())?null:target()?.getBoundingClientRect(),m=motion.leaf.getBoundingClientRect(),rightRoom=innerWidth-(t?.right||0)-32,width=Math.min(rightRoom>=280?Math.min(340,rightRoom):340,innerWidth-32);card.style.width=width+'px';const height=card.offsetHeight;if(innerWidth<850){card.style.left='16px';card.style.top=Math.max(80,innerHeight-height-18)+'px';return;}
   const candidates=[{x:m.right+14,y:m.top-20},{x:m.left-width-14,y:m.top-20},{x:innerWidth-width-16,y:innerHeight-height-24},{x:16,y:90}].map(p=>({x:Math.max(16,Math.min(innerWidth-width-16,p.x)),y:Math.max(80,Math.min(innerHeight-height-20,p.y)),w:width,h:height}));
@@ -56,7 +60,7 @@ export function createWebOnboarding({api,state,go,refreshBoot,beforeLeave}){
  async function settle(){await document.fonts.ready;await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);}
  async function showTarget(){const el=target();if(!el){motion.hide();render();return;}if(card.contains(el)){motion.hide();return;}await motion.scroll(el);await settle();if(!active||target()!==el){changed();return;}await motion.move(el);if(step().kind==='read')await motion.frame(el);motion.pulse();}
  async function openCard(){if(mode==='A'&&active){detail=true;render();placeCard();if(innerWidth<850){card.style.visibility='hidden';await motion.scroll(target());await motion.track();card.style.visibility='';}await motion.panel(card,true);}}
- async function refreshProof(){if(!active||travelling||motion.moving||polling)return;const token=sequence;polling=api.get('/api/onboarding/state');try{const value=await polling;if(token!==sequence||!active)return;adopt(value);const next=JSON.stringify([step().id,proof.progress?.[step().id],proof.learningCandidates?.map(n=>n.id),error,Boolean(target())]);if(next!==signature){if(done())error='';render();placeCard();}}catch(err){if(token===sequence){error=err.message;render();}}finally{polling=null;}}
+ async function refreshProof(){if(!active||travelling||motion.moving||polling)return;const token=sequence;polling=api.get('/api/onboarding/state');try{const value=await polling;if(token!==sequence||!active)return;adopt(value);const next=proofSignature();if(next!==signature){if(done())error='';render();placeCard();}}catch(err){if(token===sequence){error=err.message;render();}}finally{polling=null;}}
  async function navigate(to){
   if(travelling||!active)return false;travelling=true;const candidate=steps[Math.max(0,Math.min(to,steps.length-1))],nextScope=['setup-model','setup-save','setup-test','setup-budget'].includes(candidate.id)?'':proof.practiceId,wouldLeave=destination(candidate,proof,sessionId||state.session?.id)!==state.route||nextScope!==api.getContext().practiceId;if(wouldLeave&&!await beforeLeave()){travelling=false;return false;}if(polling)await polling;
   const token=++sequence,alive=()=>active&&token===sequence;travelling=true;hinting=false;error='';render();
@@ -68,6 +72,11 @@ export function createWebOnboarding({api,state,go,refreshBoot,beforeLeave}){
    if(contextChange){api.setContext(scope);state.note=null;state.session=null;sessionId='';await refreshBoot();}
    if(step().id.startsWith('study-')&&!['study-plan','study-start'].includes(step().id)){
     const sessions=(await api.get('/api/study')).sessions||[];sessionId=sessions.filter(s=>s.noteId===proof.roles.explain).sort((a,b)=>String(b.startedAt||b.createdAt||'').localeCompare(String(a.startedAt||a.createdAt||'')))[0]?.id||'';
+   }
+   if(step().id==='review-finish'){
+    const current=state.route===`study/${state.session?.id}`?state.session:null;
+    const saved=await resolveReviewSession({proof,current,read:id=>api.get('/api/study/'+encodeURIComponent(id))});
+    sessionId=saved?.id||'';
    }
    const route=destination(step(),proof,sessionId);requestedRoute=route;adopt(await call('checkpoint',{stepId:step().id,mode:'check'}));
    if(route!==state.route||contextChange){const nav=all('#sidebar [data-route]').find(n=>n.dataset.route===route.split('/')[0]&&visible(n));if(nav){await motion.move(nav);motion.pulse();}if(!alive())return false;
@@ -132,6 +141,7 @@ export function createWebOnboarding({api,state,go,refreshBoot,beforeLeave}){
   });
  }
  document.addEventListener('change',ev=>{if(ev.target.closest('dialog[data-guide-form="learning"]'))changed();});
+ document.addEventListener('input',ev=>{if(active&&step().id==='review-finish'&&ev.target.closest('#answer-form'))changed();});
  window.addEventListener('scroll',changed,{passive:true,capture:true});let resizeTimer;window.addEventListener('resize',()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(async()=>{if(active&&!travelling){placeCard();await motion.scroll(target());changed();}},120);});
  window.addEventListener('zhixu:web-page',()=>{if(!travelling)motion.hide();changed();});
  new MutationObserver(records=>{if(records.some(r=>[...r.addedNodes,...r.removedNodes].some(n=>n.nodeName==='DIALOG')))changed();}).observe(document.body,{childList:true});
