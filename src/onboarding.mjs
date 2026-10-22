@@ -308,7 +308,8 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
       const reviews = service.store.records('reviews').filter(r => {
         if (!exists(r.noteId) || paused.has(r.noteId) || r.presetCase) return false;
         const note = service.getNote(r.noteId);
-        return !note.meta.presetCase && !note.meta.supersededBy && ['learning', 'integrated', 'core'].includes(note.meta.stage) && !service.noteEvidence(note.id).limitations.length;
+        // Match study scheduling: material warnings remain visible, not a second eligibility gate.
+        return note.kind === 'knowledge' && !note.meta.presetCase && !note.meta.supersededBy && ['learning', 'integrated', 'core'].includes(note.meta.stage);
       });
       const mainReview = reviews.find(r => r.noteId === p.roles.explain);
       const due = (mainReview ? [mainReview] : reviews).map(r => Date.parse(r.dueAt)).filter(n => Number.isFinite(n));

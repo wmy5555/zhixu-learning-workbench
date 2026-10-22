@@ -3,3 +3,6 @@ c06c47fa2d0e11fd32bf3d7b63aeee114c585898:apps/ios/native/Sources/ZhixuStorage/Le
 
 # Historical synthetic browser localStorage key, not a credential. Exact finding only.
 0d1c18dca8536d32c116555092a84a9be12673ce:scripts/focus-next-browser.mjs:generic-api-key:27
+
+# Same synthetic localStorage fixture in the squash import on main. Exact finding only.
+35b8e2498b44c9dce48fac2ac85045c3454dfe91:scripts/focus-next-browser.mjs:generic-api-key:27
