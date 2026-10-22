@@ -1,5 +1,6 @@
 import {learningTarget} from './onboarding-targets.mjs';
 import {reviewGuide,resolveReviewSession} from './onboarding-review.mjs';
+import {outputGuide} from './onboarding-output.mjs';
 import {welcomeBody,assistantBody,proposalBody,goalLabels} from './onboarding-dialogs.mjs';
 import {guideSteps,complete,prerequisite,destination,selectors,speeds,intents,suggestGoals,intersection} from './onboarding-model.mjs';
 import {createGuideMotion} from './onboarding-motion.mjs';
@@ -32,8 +33,9 @@ export function createWebOnboarding({api,state,go,refreshBoot,beforeLeave}){
  function publicEvent(type){window.dispatchEvent(new CustomEvent('zhixu:guide-event',{detail:{type,...context()}}));}
  function visible(n){if(!n||!n.isConnected||!n.getClientRects().length)return false;for(let p=n;p;p=p.parentElement){const style=getComputedStyle(p);if(p.hidden||p.inert||style.visibility==='hidden'||style.display==='none')return false;}return true;}
  function review(){return reviewGuide({root:document,route:state.route,proof,session:state.session,visible});}
- function proofSignature(){return JSON.stringify([step().id,proof.progress?.[step().id],proof.learningCandidates?.map(n=>n.id),error,Boolean(target()),step().id==='review-finish'?review().phase:null]);}
- function target(){if(step()?.id==='library-explain')return learningTarget({root:document,route:state.route,noteId:proof?.roles?.explain,visible});if(step()?.id==='review-finish')return review().target;if(requestedRoute&&state.route!==requestedRoute&&!(requestedRoute==='study'&&state.route.startsWith('study/')&&state.session?.noteId===proof?.roles?.explain))return null;const list=selectors(step(),proof);const dialog=all('dialog[open]').at(-1);for(const selector of list){const n=all(selector).find(n=>visible(n)&&(!dialog||dialog.contains(n)));if(n)return n;}return null;}
+ function output(){return outputGuide({root:document,route:state.route,proof,step:step(),visible});}
+ function proofSignature(){return JSON.stringify([step().id,proof.progress?.[step().id],proof.learningCandidates?.map(n=>n.id),error,Boolean(target()),step().id==='review-finish'?review().phase:step().id.startsWith('output-')?output().phase:null]);}
+ function target(){if(step()?.id==='library-explain')return learningTarget({root:document,route:state.route,noteId:proof?.roles?.explain,visible});if(step()?.id==='review-finish')return review().target;if(step()?.id.startsWith('output-'))return output().target;if(requestedRoute&&state.route!==requestedRoute&&!(requestedRoute==='study'&&state.route.startsWith('study/')&&state.session?.noteId===proof?.roles?.explain))return null;const list=selectors(step(),proof);const dialog=all('dialog[open]').at(-1);for(const selector of list){const n=all(selector).find(n=>visible(n)&&(!dialog||dialog.contains(n)));if(n)return n;}return null;}
  const hintButton=()=>button(bulb,'hint','class="onboard-icon" aria-label="提示操作位置" title="提示操作位置"');
  const speedButton=()=>button(speed+'x','speed',`class="onboard-speed" aria-label="引导速度 ${speed}x，点击切换倍速" title="0.75x · 1x · 1.5x · 2x" ${travelling?'disabled':''}`);
  function render(){
@@ -46,7 +48,7 @@ export function createWebOnboarding({api,state,go,refreshBoot,beforeLeave}){
   const actions=`<div class="onboard-actions">${button(back,'back',`class="onboard-icon" aria-label="上一步" ${index===0||travelling?'disabled':''}`)}${button(nextLabel+(!travelling?icon('arrow'):''),'next',`class="primary" ${pending?'disabled':''}`)}</div>`;
   const progress=`<div class="onboard-progress" role="progressbar" aria-label="整体引导进度" aria-valuemin="0" aria-valuemax="${steps.length}" aria-valuenow="${position}" aria-valuetext="第 ${position} 步，共 ${steps.length} 步"><span style="width:${position/steps.length*100}%"></span></div>`;
   const foot=`<footer>${button(icon('chat')+' 我有疑问','ask','class="onboard-text"')}${button('查看路线','map','class="onboard-text"')}${mode==='A'?button('收起说明','collapse','class="onboard-text"'):speedButton()}</footer>`;
-  const instruction=step().id==='review-finish'?review().instruction:step().instruction;
+  const instruction=step().id==='review-finish'?review().instruction:step().id.startsWith('output-')?output().instruction:step().instruction;
   const copy=`<div class="onboard-meta">${index+1} / ${steps.length} · ${e(({setup:'初识与准备',capture:'收集与加工',process:'整理与核对',library:'选择知识',study:'学习与理解',review:'到期复习',discover:'检索',output:'输出',complete:'回顾'})[step().chapterId]||'核心体验')}</div><h2>${e(step().title)}</h2><p>${e(instruction)}</p>`;
   const help=`<p class="onboard-status" role="status">${e(status)}</p>${blocked?button('先完成这一步','prerequisite','class="onboard-text"'):''}${extras}${!target()&&!travelling&&!done()?button('重新定位当前步骤','relocate','class="onboard-text"'):''}`;
   card.innerHTML=mode==='A'?`<header><span>${icon('leaf')} 与你一步一步</span><div>${speedButton()}${hintButton()}${button(pauseIcon,'pause','class="onboard-icon" aria-label="暂停引导"')}</div></header>${progress}<div class="onboard-content">${copy}${help}<details><summary>怎样才算完成？</summary><p>${e(step().expected)}</p></details>${actions}</div>${foot}`:`<div class="onboard-dialogue"><span class="onboard-avatar">${icon('leaf')}</span><div class="onboard-copy">${copy}${help}</div><div class="onboard-dock-actions">${hintButton()}${actions}${button(pauseIcon,'pause','class="onboard-icon" aria-label="暂停引导"')}</div></div>${progress}${foot}`;
@@ -58,7 +60,7 @@ export function createWebOnboarding({api,state,go,refreshBoot,beforeLeave}){
   if(t)candidates.sort((a,b)=>(intersection(a,{x:t.x,y:t.y,w:t.width,h:t.height})+intersection(a,{x:m.x,y:m.y,w:m.width,h:m.height})*20)-(intersection(b,{x:t.x,y:t.y,w:t.width,h:t.height})+intersection(b,{x:m.x,y:m.y,w:m.width,h:m.height})*20));const p=candidates[0];card.style.left=p.x+'px';card.style.top=p.y+'px';
  }
  async function settle(){await document.fonts.ready;await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);}
- async function showTarget(){const el=target();if(!el){motion.hide();render();return;}if(card.contains(el)){motion.hide();return;}if(step().id==='review-finish'&&motion.target!==el)hinting=false;await motion.scroll(el);await settle();if(!active||target()!==el){changed();return;}await motion.move(el);if(step().kind==='read')await motion.frame(el);motion.pulse();}
+ async function showTarget(){const el=target();if(!el){motion.hide();render();return;}if(card.contains(el)){motion.hide();return;}if(motion.target!==el)hinting=false;await motion.scroll(el);await settle();if(!active||target()!==el){changed();return;}await motion.move(el);if(step().kind==='read')await motion.frame(el);motion.pulse();}
  async function openCard(){if(mode==='A'&&active){detail=true;render();placeCard();if(innerWidth<850){card.style.visibility='hidden';await motion.scroll(target());await motion.track();card.style.visibility='';}await motion.panel(card,true);}}
  async function refreshProof(){if(!active||travelling||motion.moving||polling)return;const token=sequence;polling=api.get('/api/onboarding/state');try{const value=await polling;if(token!==sequence||!active)return;adopt(value);const next=proofSignature();if(next!==signature){if(done())error='';render();placeCard();}}catch(err){if(token===sequence){error=err.message;render();}}finally{polling=null;}}
  async function navigate(to){
@@ -135,17 +137,18 @@ export function createWebOnboarding({api,state,go,refreshBoot,beforeLeave}){
     // Card actions already stay in view; rebuilding them on scroll loses focus and repeats layout.
     if(card.contains(el)){if(!motion.layer.firstElementChild.hidden)motion.hide();if(!dialog)placeCard();return;}
     if(hostChanged||motion.layer.firstElementChild.hidden||motion.target!==el){
-     await showTarget();if(!dialog){render();placeCard();}
+     await showTarget();render();if(!dialog)placeCard();
     }else{await motion.track();if(!dialog)placeCard();}
    }finally{following=false;}
   });
  }
- document.addEventListener('change',ev=>{if(ev.target.closest('dialog[data-guide-form="learning"]'))changed();});
- document.addEventListener('input',ev=>{if(active&&step().id==='review-finish'&&ev.target.closest('#answer-form'))changed();});
+ document.addEventListener('change',ev=>{if(ev.target.closest('dialog[data-guide-form="learning"],#output-form,dialog[data-draft-id]'))changed();});
+ document.addEventListener('input',ev=>{if(active&&(step().id==='review-finish'&&ev.target.closest('#answer-form')||step().id.startsWith('output-')&&ev.target.closest('#output-form,dialog[data-draft-id]')))changed();});
+ document.addEventListener('toggle',ev=>{if(active&&step().id.startsWith('output-')&&ev.target.closest('[data-output-citations]'))changed();},true);
  window.addEventListener('scroll',changed,{passive:true,capture:true});let resizeTimer;window.addEventListener('resize',()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(async()=>{if(active&&!travelling){placeCard();await motion.scroll(target());changed();}},120);});
  window.addEventListener('zhixu:web-page',()=>{if(!travelling)motion.hide();changed();});
  new MutationObserver(records=>{if(records.some(r=>[...r.addedNodes,...r.removedNodes].some(n=>n.nodeName==='DIALOG')))changed();}).observe(document.body,{childList:true});
- new MutationObserver(changed).observe($('#main'),{subtree:true,childList:true,attributes:true,attributeFilter:['hidden','open','inert']});
+ new MutationObserver(changed).observe($('#main'),{subtree:true,childList:true,attributes:true,attributeFilter:['hidden','open','inert','aria-busy']});
  document.addEventListener('keydown',ev=>{if(ev.key==='Escape'&&!ev.isComposing&&!$('dialog[open]')&&active){ev.preventDefault();ev.stopImmediatePropagation();detail=false;render();}},true);
  async function initialize(){adopt(await api.get('/api/onboarding/state'));index=Math.max(0,steps.findIndex(s=>s.id===proof.currentStepId));if(proof.practiceId&&proof.status==='active'){active=true;const shared=['setup-model','setup-save','setup-test','setup-budget'].includes(step().id);api.setContext(shared?'':proof.practiceId);}render();}
  async function ready(){if(active){await navigate(index);schedulePoll();}else if(new URL(location).searchParams.get('onboarding')==='start')welcome();}
