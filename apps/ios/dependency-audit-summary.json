@@ -1,0 +1,44 @@
+{
+  "checkedDate": "2026-10-22",
+  "command": "pnpm audit --prod --audit-level high",
+  "result": "FAILED",
+  "vulnerabilities": {
+    "info": 0,
+    "low": 0,
+    "moderate": 1,
+    "high": 2,
+    "critical": 0
+  },
+  "dependencies": 537,
+  "devDependencies": 0,
+  "optionalDependencies": 24,
+  "totalDependencies": 561,
+  "advisories": [
+    {
+      "module": "node-forge",
+      "severity": "high",
+      "title": "node-forge RSA PKCS#1 v1.5 signature verification accepts extra nested DigestAlgorithm elements",
+      "url": "https://github.com/advisories/GHSA-86w9-cpqp-85rv",
+      "registryPatchRange": ">=1.4.1",
+      "installedVersions": [
+        "1.4.0"
+      ],
+      "examplePaths": [
+        ".>expo>@expo/cli>@expo/code-signing-certificates>node-forge",
+        ".>expo>@expo/cli>node-forge"
+      ]
+    },
+    {
+      "module": "braces",
+      "severity": "high",
+      "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+      "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+      "registryPatchRange": ">=3.0.4",
+      "installedVersions": [
+        "3.0.3"
+      ],
+      "examplePaths": []
+    }
+  ],
+  "note": "Registry patch ranges were not installable during this run; no invented overrides or audit suppression. Upstream versions and advisories must be rechecked before release."
+}

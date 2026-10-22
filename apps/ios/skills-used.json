@@ -1,0 +1,31 @@
+{
+  "expo": {
+    "repo": "https://github.com/expo/skills",
+    "commit": "0d035556e37737de83199d8e623641bad7a7cced",
+    "skills": [
+      "expo-web-to-native",
+      "expo-native-ui",
+      "expo-ui",
+      "expo-router",
+      "expo-animation",
+      "expo-data-fetching",
+      "expo-project-structure",
+      "expo-module"
+    ]
+  },
+  "callstack": {
+    "repo": "https://github.com/callstackincubator/agent-skills",
+    "commit": "59e9d17446a248b21d86f078fcd0bd2d36db1ca4",
+    "skills": [
+      "assess-react-native-migration",
+      "react-native-best-practices"
+    ]
+  },
+  "applied": [
+    "Native Expo Router tabs and native controls; no product WebView",
+    "Shared business rules with platform adapters",
+    "Local persistence, keyboard-aware forms, draft and conflict protection",
+    "Device verification explicitly deferred; source checks are not device acceptance"
+  ],
+  "selection": "User chose Expo + React Native; the initially downloaded SwiftUI skill is not the implementation route."
+}

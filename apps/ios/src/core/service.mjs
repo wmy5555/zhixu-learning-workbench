@@ -1,0 +1,1315 @@
+// Frozen desktop business rules; platform import adaptation only unless documented.
+import { importedContext, readImportedView } from './chatgpt-structure.mjs';
+import fs from '../platform/fs.js';
+import path from '../platform/path.js';
+import { randomUUID } from '../platform/crypto.js';
+import { DatabaseSync } from '../platform/sqlite.js';
+import { Store, now, hash, fail } from './store.mjs';
+import { createSecrets } from '../platform/secrets.js';
+import { validateSettings, credentialBinding } from './settings-validation.mjs';
+import { assertBackupSize } from './backup-contract.mjs';
+import { createAI } from './ai.mjs';
+import { createCapabilityTests } from './capability-test.mjs';
+import { createCallLedger } from './call-ledger.mjs';
+import { promptDefaults, renderPrompt, validatePromptOverrides, sourceExtractionStructure, sourceTitleContract, extractionResearchContract, effectivePromptTemplate } from './prompts.mjs';
+import { createLearning } from './learning.mjs';
+import { createLifecycle } from './knowledge-lifecycle.mjs';
+import { createChatgptBridge } from './chatgpt.mjs';
+import { createChatgptUndo } from './chatgpt-undo.mjs';
+import { buildUsageReport } from './usage.mjs';
+import { callPurpose, callPurposes } from './call-purpose.mjs';
+import { structureBasis, structureRecord, structureView } from './source-structure.mjs';
+import { createSourceFiles } from './source-files.mjs';
+import { assertTextSource, processingText } from './attachments.mjs';
+import { outboundText, outboundTitle } from './outbound-text.mjs';
+import { searchContext } from './search-index.mjs';
+import { performance } from '../platform/perf_hooks.js';
+
+export const defaults = {
+  dailyMinutes: 25, timezone: 'Asia/Shanghai', scheduleTime: '08:00', focusTopics: [], pausedIds: [],
+  ai: { enabled: false, baseUrl: '', model: '', timeoutMs: 180000, dailyCallLimit: 500, sourceCallLimit: 120, monthlyBudget: 0, inputPrice: null, outputPrice: null, cachedInputPrice: null },
+  embedding: { enabled: false, baseUrl: '', model: '', inputPrice: null },
+  search: { enabled: false, baseUrl: 'https://api.tavily.com', requestPrice: null }, fetch: { enabled: false },
+  mcp: { enabled: false, allowProposals: false, chatgptEnabled: false, chatgptAllowRead: false }, discoveryDays: 7, prompts: {},
+};
+const stages = ['reference','candidate','learning','integrated','core','retired'];
+const depths = ['aware','find','explain','apply'];
+const usable = (n, timestamp) => n.kind === 'knowledge' && !['retired'].includes(n.meta.stage) && !n.meta.supersededBy && !(n.meta.researchLimitations?.length) && (!n.meta.reviewAfter || n.meta.reviewAfter >= timestamp);
+const practicePurpose = 'onboarding-practice';
+const practicePreferences = ['dailyMinutes','timezone','scheduleTime','focusTopics','pausedIds','discoveryDays','prompts'];
+const externalCapabilities = ['ai','embedding','search','fetch'];
+const localDay = (date, timezone) => new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
+function parseJSON(text) { try { return JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, '')); } catch { fail('模型没有返回要求的数据结构；原始资料已保存，可重试。', 'MODEL_FORMAT', 422); } }
+function cosine(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return 0;
+  let dot = 0, na = 0, nb = 0; for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i] ** 2; nb += b[i] ** 2; } return dot / (Math.sqrt(na * nb) || 1);
+}
+
+// Mirror the reader's bounded container traversal without rendering or changing source text.
+function titleTextLines(lines, depth = 0) {
+  if (depth >= 16) return [];
+  const visible = [];
+  for (let i = 0; i < lines.length;) {
+    const line = lines[i], marker = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    if (marker && !(marker[1][0] === '`' && marker[2].includes('`'))) {
+      i++;
+      while (i < lines.length) {
+        const close = lines[i++].match(/^ {0,3}(`{3,}|~{3,})[ \t]*$/);
+        if (close && close[1][0] === marker[1][0] && close[1].length >= marker[1].length) break;
+      }
+      visible.push('');
+      continue;
+    }
+    if (/^ {0,3}>/.test(line)) {
+      const quote = [];
+      while (i < lines.length && /^ {0,3}>/.test(lines[i])) quote.push(lines[i++].replace(/^ {0,3}> ?/, ''));
+      visible.push('');
+      for (const value of titleTextLines(quote, depth + 1)) visible.push(value);
+      visible.push('');
+      continue;
+    }
+    const item = line.match(/^( {0,3})(?:[-+*]|\d{1,9}[.)])[ \t]+(.*)$/);
+    if (item) {
+      const itemLines = [item[2].replace(/^\[[ xX]\][ \t]+/, '')], width = item[0].length - item[2].length;
+      i++;
+      while (i < lines.length) {
+        if (!lines[i].trim()) { itemLines.push(''); i++; continue; }
+        const indent = lines[i].match(/^ */)[0].length;
+        if (indent <= item[1].length) break;
+        itemLines.push(lines[i++].slice(Math.min(indent, width)));
+      }
+      visible.push('');
+      for (const value of titleTextLines(itemLines, depth + 1)) visible.push(value);
+      visible.push('');
+      continue;
+    }
+    visible.push(line); i++;
+  }
+  return visible;
+}
+
+// A local display hint only: preserve the body and keep AI title generation pending.
+function sourceTitlePlaceholder(body) {
+  const visible = titleTextLines(body.replace(/\r\n?/g, '\n').split('\n'));
+  const plain = value => value
+    .replace(/^\s*(?:>\s*)+/, '').replace(/^\s*(?:[-+*]|\d+[.)])\s+(?:\[[ xX]\]\s*)?/, '')
+    .replace(/!?\[([^\]\n]*)\]\([^\n]*?\)/g, '$1')
+    .replace(/(`+)(.*?)\1/g, '$2').replace(/(\*\*|__|~~)(.*?)\1/g, '$2')
+    .replace(/(^|\s)[*_]([^*_]+)[*_](?=\s|$|[，。！？、])/g, '$1$2')
+    .replace(/\s+/gu, ' ').trim();
+  let heading = '', paragraph = [];
+  for (let i = 0; i < visible.length; i++) {
+    const line = visible[i], atx = line.match(/^ {0,3}#{1,6}\s+(.+?)(?:\s+#+)?\s*$/);
+    const setext = line.trim() && /^ {0,3}(?:=+|-+)\s*$/.test(visible[i + 1] || '');
+    if (atx || setext) {
+      heading = plain(atx ? atx[1] : line);
+      if (heading) break;
+    }
+  }
+  for (const line of visible) {
+    if (!line.trim() || /^\s*(?:[-*_]\s*){3,}$/.test(line)) {
+      if (paragraph.length) break;
+      continue;
+    }
+    const value = plain(line);
+    if (value) paragraph.push(value);
+  }
+  const text = heading || paragraph.join(' ') || '未命名资料';
+  const segments = [];
+  for (const { segment } of new Intl.Segmenter('zh', { granularity: 'grapheme' }).segment(text)) {
+    segments.push(segment);
+    if (segments.length > 36) break;
+  }
+  if (segments.length <= 36) return text;
+  let excerpt = segments.slice(0, 35).join('');
+  const sentence = excerpt.match(/^.*[。！？.!?](?=\s|[^\x00-\x7f]|$)/u);
+  if (sentence) excerpt = sentence[0];
+  else {
+    const boundary = excerpt.replace(/\s+\S*$/, '');
+    if ([...boundary].length >= 18) excerpt = boundary;
+  }
+  return excerpt.trimEnd() + '…';
+}
+
+export function createService({ dataDir, vaultDir, aiOverride, learningClock = () => new Date(), getExternalSettings, practice = false, getPracticeQuestion, receiveHistorySnapshot } = {}) {
+  if (practice && (!dataDir || !vaultDir)) fail('练习空间必须使用独立的数据与资料目录。', 'PRACTICE_PATH_REQUIRED');
+  if (typeof learningClock !== 'function' || getExternalSettings !== undefined && typeof getExternalSettings !== 'function') fail('学习时间或外部能力配置无效。');
+  dataDir ||= path.resolve('.data');
+  const learningDate = () => {
+    const date = learningClock();
+    if (!(date instanceof Date) || !Number.isFinite(date.getTime())) fail('学习时间无效。', 'INVALID_LEARNING_TIME');
+    return new Date(date.getTime());
+  };
+  const learningNow = () => learningDate().toISOString();
+  if (!vaultDir && fs.existsSync(path.join(dataDir, 'learning.sqlite'))) {
+    const db = new DatabaseSync(path.join(dataDir, 'learning.sqlite'), { readOnly: true });
+    try { vaultDir = JSON.parse(db.prepare("SELECT json FROM records WHERE namespace='settings' AND key='main'").get()?.json || '{}').vaultDir; } finally { db.close(); }
+  }
+  vaultDir ||= path.resolve('vault');
+  let store = new Store({ dataDir, vaultDir, backupPurpose: practice ? practicePurpose : undefined });
+  let sourceFiles;
+  let jobRevision = randomUUID();
+  let jobSnapshot = 0;
+  const secret = practice ? { has: () => false, get: () => '' } : createSecrets(dataDir, { db: store.db, getBinding: capability => {
+    const group = capability === 'model' ? 'ai' : capability;
+    return credentialBinding({ ...defaults[group], ...store.get('settings', 'main', {})[group] });
+  } });
+  const settings = () => {
+    const saved = store.get('settings', 'main', {});
+    const value = { ...defaults, ...saved };
+    for (const group of ['ai','embedding','search','fetch','mcp']) value[group] = { ...defaults[group], ...saved[group], hasKey: secret.has(group === 'ai' ? 'model' : group) };
+    for (const key of ['enabled', 'allowProposals', 'chatgptEnabled', 'chatgptAllowRead']) value.mcp[key] = value.mcp[key] === true;
+    if (value.mcp.chatgptEnabled !== true) value.mcp.chatgptAllowRead = false;
+    if (value.mcp.enabled !== true) value.mcp.allowProposals = false;
+    if (practice) {
+      const external = getExternalSettings?.() || {};
+      for (const group of externalCapabilities) {
+        const allowed = [...Object.keys(defaults[group]), 'hasKey', ...(group === 'fetch' ? ['testUrl'] : [])];
+        value[group] = { ...defaults[group], hasKey: false, ...Object.fromEntries(allowed.filter(key => Object.hasOwn(external[group] || {}, key)).map(key => [key, external[group][key]])) };
+      }
+      value.mcp = { ...defaults.mcp, hasKey: false };
+    }
+    return { ...value, vaultDir: store.vaultDir, dataDir: store.dataDir };
+  };
+  const usage = () => {
+    const calls = store.records('calls'), day = localDay(new Date(), settings().timezone), month = day.slice(0,7);
+    const monthly = calls.filter(c => localDay(new Date(c.createdAt), settings().timezone).startsWith(month));
+    return { callsToday: calls.filter(c => localDay(new Date(c.createdAt), settings().timezone) === day).length, costMonth: monthly.some(c => c.cost == null) ? null : monthly.reduce((s,c) => s + c.cost, 0), knownCostMonth: monthly.reduce((s,c) => s + (c.cost || 0), 0), unknownCostCalls: monthly.filter(c => c.cost == null).length };
+  };
+  const callLedger = createCallLedger({ getStore: () => store });
+  const ai = aiOverride || createAI({ getSettings: settings, getSecret: (capability, config) => secret.get(capability === 'ai' ? 'model' : capability, config), getUsage: usage, recordCall: call => store.put('calls', randomUUID(), { ...call, createdAt: now() }), callLedger });
+  const capabilityTests = createCapabilityTests({ settings, defaults, ai, save: updateSettings,
+    revision: () => hash(JSON.stringify([settings(), store.db.prepare('SELECT * FROM encrypted_credentials ORDER BY capability').all()])),
+  });
+  const callRecovery = () => ({ pending: callLedger.listPending().filter(record => !record.active) });
+  function recoverCall(id, input = {}) {
+    if (practice) fail('请返回正式库核对调用。', 'PRACTICE_SETTINGS_LOCKED', 409);
+    if (processing || activeOperations || pausing) fail('请等待当前操作结束后核对调用。', 'BUSY', 409);
+    if (input.action === 'recover') callLedger.recover(id);
+    else if (input.action === 'confirm') callLedger.confirm(id, { cost: input.cost, reason: input.reason });
+    else fail('调用恢复操作无效。');
+    return callRecovery();
+  }
+  const callsWithPurpose = () => store.records('calls').map(call => {
+    const ledger = typeof call.id === 'string' ? store.get('callLedger', call.id) : null;
+    const jobId = typeof ledger?.jobId === 'string' ? ledger.jobId : '';
+    const job = jobId ? store.get('jobs', jobId) : null;
+    const request = jobId.startsWith('ask:') ? store.get('askRequests', jobId.slice(4)) : null;
+    const purpose = callPurpose(call, { ledger, job, request });
+    return { ...call, purpose, purposeLabel: callPurposes[purpose] || '历史用途未记录' };
+  });
+  const usageReport = ({ period, capability, model, purpose } = {}) => {
+    const config = settings(), report = buildUsageReport(callsWithPurpose(), { period, capability, model, purpose, timezone: config.timezone });
+    // Malformed imported dates must not turn a broken budget ledger into a zero balance.
+    const budget = report.invalidDateCalls ? { unavailable: true } : usage();
+    return { ...report, budget: { ...budget, dailyCallLimit: config.ai.dailyCallLimit, monthlyBudget: config.ai.monthlyBudget } };
+  };
+  function updateUsageSettings(input) {
+    const current = settings();
+    for (const key of ['dailyCallLimit','monthlyBudget']) if (Object.hasOwn(input.ai || {}, key)) {
+      const value = input.ai[key];
+      if (!['number','string'].includes(typeof value) || String(value).trim() === '' || !Number.isFinite(+value) || +value < 0) fail('调用预算必须为非负数。');
+    }
+    for (const group of ['ai','embedding','search']) {
+      const expected = input.pricingFor?.[group];
+      if (!expected || expected.baseUrl !== current[group].baseUrl || expected.model !== (current[group].model || '')) fail('服务或模型已变化，请刷新用量页面后重新设置单价。', 'PRICING_CHANGED', 409);
+    }
+    const pick = (group, keys) => Object.fromEntries(keys.filter(key => Object.hasOwn(input[group] || {}, key)).map(key => [key, input[group][key]]));
+    return updateSettings({ ai: pick('ai', ['dailyCallLimit','sourceCallLimit','monthlyBudget','inputPrice','outputPrice','cachedInputPrice']), embedding: pick('embedding', ['inputPrice']), search: pick('search', ['requestPrice']) });
+  }
+  const promptText = (key, values={}) => renderPrompt(key,values,settings().prompts);
+  function getPrompts() {
+    const overrides=settings().prompts;
+    return {prompts:Object.entries(promptDefaults).map(([key,p])=>({key,...p,defaultTemplate:p.template,template:effectivePromptTemplate(key,overrides)}))};
+  }
+  function updatePrompts({prompts}={}) {
+    const changes=validatePromptOverrides(prompts);
+    updateSettings({prompts:{...settings().prompts,...changes}});
+    return getPrompts();
+  }
+  let processing = false, controller = null, currentJob = null, stopped = false, pausing = false, activeOperations = 0, pausePromise = null;
+  const tracked = operation => async (...args) => {
+    if (stopped || pausing) fail('练习正在暂停，请稍后继续。', 'BUSY', 409);
+    activeOperations++;
+    try { return await operation(...args); } finally { activeOperations--; }
+  };
+  const putJob = job => store.put('jobs', job.id, { ...job, updatedAt: now() });
+  const getNote = id => { store.scan(); return store.read(id); };
+  const privacyFor = n => store.outboundPrivacy(n);
+  const materialLimitations = n => {
+    const issues = [...(n.meta.researchLimitations || [])];
+    if (n.meta.reviewAfter && n.meta.reviewAfter < learningNow()) issues.push('材料可能陈旧，需要重新研究。');
+    if (n.meta.processKey) { const [sourceId,sourceHash] = n.meta.processKey.split(':'); if (store.row(sourceId)?.hash !== sourceHash) issues.push('底层原始资料已修改或删除，需要重新加工。'); }
+    return issues;
+  };
+  const eligible = n => usable(n, learningNow()) && !materialLimitations(n).length;
+  // Practising a material does not certify its claims for retrieval or generated answers.
+  const learnable = n => n.kind === 'knowledge' && n.meta.stage !== 'retired' && !n.meta.supersededBy;
+  const needsMaterialScope = (type, payload) => type === 'index' || type === 'topics' || ['relate','discover'].includes(type) && payload?.useAI === true;
+  const validMaterialSnapshots = snapshots => Array.isArray(snapshots) && snapshots.every(n => typeof n?.noteId === 'string' && n.noteId && typeof n.hash === 'string' && n.hash);
+  function materialSnapshots(type) {
+    store.scan();
+    return store.list().filter(note => type === 'index' || note.kind === 'knowledge').map(note => ({ noteId: note.id, hash: note.hash }));
+  }
+  function materialScope(job) {
+    if (!validMaterialSnapshots(job.payload.snapshots)) fail('任务缺少点击时的资料版本；请主动重试以使用当前资料。', 'OUTBOUND_INTENT_REQUIRED');
+    return new Map(job.payload.snapshots.map(n => [n.noteId, n.hash]));
+  }
+  function queue(type, payload, dedupKey) {
+    if (pausing || stopped) fail('当前任务正在暂停，请稍后继续。', 'BUSY', 409);
+    const existing = store.records('jobs').find(j => j.dedupKey === dedupKey && ['queued','running','waiting'].includes(j.state));
+    if (existing && dedupKey) return existing;
+    if (needsMaterialScope(type, payload)) payload = { ...payload, snapshots: materialSnapshots(type) };
+    return putJob({ id: randomUUID(), type, outboundIntentVersion: 1, state: 'queued', payload, dedupKey, progress: 0, error: '', createdAt: now(), attempts: 0 });
+  }
+  function updateSettings(input) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) fail('设置须为键值对象。');
+    if (practice && ['vaultDir','dataDir','ai','embedding','search','fetch','mcp','apiKey','clearKey'].some(key => Object.hasOwn(input, key))) fail('练习空间不能更改目录、连接凭据或外部能力；请返回正式设置配置。', 'PRACTICE_SETTINGS_LOCKED', 409);
+    if (practice && input.prompts !== undefined && (processing || activeOperations)) fail('请等待练习任务结束后调整提示词。', 'BUSY', 409);
+    const old = settings(), { next, credentials } = validateSettings(input, old, defaults);
+    const newVault = input.vaultDir ? path.resolve(input.vaultDir) : store.vaultDir;
+    if (newVault !== store.vaultDir) {
+      if (processing || activeOperations || pausing) fail('请等待当前处理任务结束后更换 Vault。', 'BUSY', 409);
+      if (store.list().some(n=>n.kind!=='report') || store.records('sessions').length) fail('当前库已有数据。为避免混淆学习记录，请先备份，使用独立数据目录启动另一个 Vault。', 'VAULT_NOT_EMPTY', 409);
+      if (newVault === path.parse(newVault).root || newVault === store.dataDir) fail('请选择专用的 Vault 文件夹。');
+      if (fs.existsSync(newVault) && (!fs.statSync(newVault).isDirectory() || fs.lstatSync(newVault).isSymbolicLink())) fail('Vault 须为专用文件夹且不能是链接。');
+    }
+    next.vaultDir = newVault;
+    const researchChanged = practice && Object.keys(promptDefaults).filter(key => key.startsWith('research')).some(key => (old.prompts[key] ?? promptDefaults[key].template) !== (next.prompts[key] ?? promptDefaults[key].template));
+    const prepared = credentials.length ? secret.prepare(credentials) : [];
+    const oldVault = store.vaultDir, oldConflicts = store.conflicts;
+    store.db.exec('BEGIN IMMEDIATE');
+    try {
+      if (newVault !== oldVault) {
+        fs.mkdirSync(newVault, { recursive: true });
+        store.vaultDir = newVault; store.scan();
+        if (store.conflicts.length) fail('新 Vault 存在冲突，请先处理后再切换。', 'VAULT_CONFLICT', 409);
+      }
+      store.put('settings', 'main', practice ? Object.fromEntries(practicePreferences.map(key => [key, next[key]])) : next);
+      if (prepared.length) secret.apply(prepared);
+      if (researchChanged) store.db.prepare("DELETE FROM records WHERE namespace='research'").run();
+      store.db.exec('COMMIT');
+    } catch (error) {
+      store.db.exec('ROLLBACK'); store.vaultDir = oldVault; store.conflicts = oldConflicts;
+      throw error;
+    }
+    if (newVault !== oldVault) jobRevision = randomUUID();
+    return settings();
+  }
+  const validExtraction = value => Array.isArray(value?.candidates) && value.candidates.length > 0 && value.candidates.length <= 8
+    && value.candidates.every(candidate => typeof candidate?.title === 'string' && typeof candidate.body === 'string'
+      && Array.isArray(candidate.claims) && candidate.claims.every(claim => typeof claim === 'string'));
+  const processJobs = (id, sourceHash) => store.records('jobs').filter(job => job.type === 'process'
+    && job.payload?.noteId === id && job.payload.hash === sourceHash && !job.presetCase && !job.payload.presetCase);
+  const processReply = (job, reused = false) => ({ ...publicJob(job), reused, jobRevision, jobSnapshot: ++jobSnapshot });
+  function processNote(id, { research = false, reuseExtracted = false, retryJobId } = {}) {
+    const source = getNote(id);
+    assertTextSource(source);
+    if (source.kind !== 'source') fail('请选择原始资料重新加工。');
+    const payload = { noteId: id, hash: source.hash, research: research === true, ...(needsTitle(source) ? { titleRequested: true } : {}) };
+    for (const task of store.records('jobs')) if (task.type === 'title' && task.payload.noteId === id && ['queued','waiting'].includes(task.state)) putJob({ ...task, state: 'cancelled', code: 'CANCELLED', error: '标题将与资料拆解一同生成。' });
+    const previous = processJobs(id, source.hash);
+    if (retryJobId !== undefined) {
+      const retry = previous.find(job => job.id === retryJobId);
+      if (!retry) fail('原文或任务已变化，请刷新后确认本次核验。', 'PROCESS_RETRY_CHANGED', 409);
+      const active = previous.find(job => ['queued','running'].includes(job.state));
+      if (active) return processReply(active, true);
+      if (retry.state === 'done') return processReply(retry, true);
+      if (!['waiting','failed','cancelled'].includes(retry.state)) fail('该任务当前不可重试。');
+      if (pausing || stopped) fail('当前任务正在暂停，请稍后继续。', 'BUSY', 409);
+      // An explicit retry is bound to the shown task and the current source version.
+      putJob({ ...retry, payload: { ...retry.payload, research: payload.research }, dedupKey: `process:${id}:${source.hash}${payload.research ? ':research' : ''}` });
+      return processReply(jobAction(retry.id, { action: 'retry' }), true);
+    }
+    const pending = previous.find(job => ['queued','running','waiting'].includes(job.state));
+    // Clicking AI decomposition is the current intent, including a retained pre-upgrade task.
+    if (pending) {
+      if (pending.state === 'waiting' && pending.outboundIntentVersion !== 1) {
+        if (pausing || stopped) fail('当前任务正在暂停，请稍后继续。', 'BUSY', 409);
+        putJob({ ...pending, payload: { ...pending.payload, research: payload.research }, dedupKey: `process:${id}:${source.hash}${payload.research ? ':research' : ''}` });
+        return processReply(jobAction(pending.id, { action: 'retry' }), true);
+      }
+      return processReply(pending, true);
+    }
+    if (['failed','cancelled'].includes(previous[0]?.state)) return processReply(previous[0], true);
+    // Repeated decomposition reuses its record, including errors that require an explicit task retry.
+    // The separate research action may refresh evidence, but still reuses the extracted candidates.
+    const matching = previous.filter(job => !payload.research || job.payload.research === true);
+    const existing = matching[0];
+    if (existing && (existing.state !== 'done' || !payload.research || reuseExtracted !== true)) return processReply(existing, true);
+    const extracted = previous.find(job => validExtraction(job.payload.extracted))?.payload.extracted;
+    if (extracted) payload.extracted = structuredClone(extracted);
+    return processReply(queue('process', payload, `process:${id}:${source.hash}${payload.research ? ':research' : ''}`));
+  }
+  const needsTitle = source => source.meta.titlePending === true && source.title === source.meta.titlePlaceholder;
+  const validSourceTitle = value => typeof value === 'string' && value.trim().length > 0 && value.trim().length <= 80 && !/[\r\n\u0000-\u001f\u007f\u2028\u2029]/u.test(value) && !/^[#>*\x60]|\x60/u.test(value.trim());
+  function titleJob(source, failure = false) {
+    const task = queue('title', { noteId: source.id, hash: source.hash }, `title:${source.id}:${source.hash}`);
+    return failure ? putJob({ ...task, state: 'failed', code: 'MODEL_FORMAT', error: '标题结果缺失或格式不正确；暂用原文片段，拆解结果已保留。' }) : task;
+  }
+  function saveSourceTitle(source, value, signal) {
+    if (signal.aborted) fail('任务已取消。', 'CANCELLED');
+    const current = getNote(source.id);
+    if (current.hash !== source.hash) fail('资料已修改，旧标题未写入。', 'SOURCE_CHANGED');
+    if (privacyFor(current) !== 'cloud') fail('资料或引用已变化，旧标题未写入。', 'PRIVACY_LOCAL');
+    if (!needsTitle(current)) fail('标题已经填写，保留当前标题。', 'TITLE_ALREADY_SET');
+    if (!validSourceTitle(value)) fail('标题结果缺失或格式不正确；原文与临时标题已保留。', 'MODEL_FORMAT');
+    const structure = store.get('sourceStructures', source.id), children = sourceChildren(source.id);
+    const structureCurrent = structure && JSON.stringify(structure.basis) === JSON.stringify(structureBasis(source, children));
+    const saved = store.update(source.id, { title: value.trim(), expectedHash: source.hash, meta: { titlePending: false, titleOrigin: 'ai' } });
+    // Only this strictly checked automatic title change can carry body-derived evidence forward.
+    const prefix = `${source.id}:${source.hash}:`, claims = new Set(), bindings = new Map();
+    for (const child of children.filter(note => note.meta.processKey?.startsWith(prefix))) {
+      for (const claim of child.meta.claims || []) claims.add(claim);
+      const processKey = child.meta.processKey.replace(prefix, `${source.id}:${saved.hash}:`);
+      const updated = store.update(child.id, { expectedHash: child.hash, meta: { processKey } });
+      bindings.set(child.id, { beforeHash: child.hash, afterHash: updated.hash });
+      // An explicit confirmation may append personal understanding while retaining the teaching snapshot.
+      for (const study of store.records('sessions')) if (study.noteId === child.id && study.status !== 'completed'
+        && study.sourceHash === child.hash) {
+        if (study.material !== child.body && study.confirmedNoteId !== child.id) continue;
+        store.put('sessions', study.id, { ...study, sourceHash: updated.hash });
+      }
+      for (const proposal of store.records('proposals')) if (proposal.noteId === child.id && proposal.expectedHash === child.hash && proposal.meta?.processKey === child.meta.processKey) {
+        store.put('proposals', proposal.id, { ...proposal, expectedHash: updated.hash, meta: { ...proposal.meta, processKey } });
+      }
+    }
+    // A stale endpoint outside this precise migration must keep the entire suggestion stale.
+    const currentVersions = new Map(store.list().map(note => [note.id, note.hash]));
+    const reboundHash = (id, expected) => {
+      const binding = bindings.get(id), current = currentVersions.get(id);
+      if (binding?.beforeHash === expected && binding.afterHash === current) return binding.afterHash;
+      return current === expected ? expected : null;
+    };
+    for (const relation of store.records('relations').filter(record => ['candidate','suggested'].includes(record.state))) {
+      const fromHash = reboundHash(relation.fromId, relation.fromHash), toHash = reboundHash(relation.toId, relation.toHash);
+      if (fromHash && toHash && (fromHash !== relation.fromHash || toHash !== relation.toHash)) {
+        store.put('relations', relation.id, { ...relation, fromHash, toHash });
+      }
+    }
+    for (const task of processJobs(source.id, source.hash)) {
+      task.payload.hash = saved.hash;
+      if (task.payload.savedCandidates?.hash === source.hash) task.payload.savedCandidates.hash = saved.hash;
+      task.dedupKey = `process:${source.id}:${saved.hash}${task.payload.research ? ':research' : ''}`;
+      putJob(task);
+    }
+    for (const claim of claims) {
+      const cached = store.get('research', hash(claim + ':' + source.hash));
+      if (cached) store.put('research', hash(claim + ':' + saved.hash), cached);
+    }
+    if (structureCurrent) store.put('sourceStructures', source.id, { ...structure, basis: structureBasis(saved, sourceChildren(source.id)) });
+    return saved;
+  }
+  async function generateSourceTitle(job, signal) {
+    const source = getNote(job.payload.noteId);
+    if (source.hash !== job.payload.hash) fail('资料已修改，请重试当前版本。', 'SOURCE_CHANGED');
+    if (!needsTitle(source)) fail('标题已经填写，保留当前标题。', 'TITLE_ALREADY_SET');
+    const result = parseJSON((await ai.generate({ system: promptText('serviceSystem'), privacy: privacyFor(source), signal, json: true, prompt: promptText('sourceTitle', { source: processingText(source) }) })).text);
+    const saved = saveSourceTitle(source, result?.sourceTitle, signal);
+    job.payload.resultHash = saved.hash;
+    putJob(job);
+  }
+  function importItems({ items, process = false, research = false }) {
+    if (!Array.isArray(items) || !items.length || items.length > 100) fail('每次请导入 1–100 份文本。');
+    const result = [], jobs = [];
+    for (const item of items) {
+      if (typeof item.body !== 'string' || !item.body.trim() || item.body.length > 500000) fail('每份文本须为 1–500000 字符。');
+      const fingerprint = hash(item.body.replaceAll('\r\n','\n').trim());
+      const existing = store.list().find(n => n.kind === 'source' && n.meta.fingerprint === fingerprint);
+      const origin = { platform: item.platform || '', author: item.author || '', url: item.url || '', date: item.date || '', locator: item.locator || '', ...(item.topic ? { topic: item.topic } : {}), acquiredAt: now() };
+      let note;
+      if (existing) {
+        note = store.update(existing.id, { expectedHash: existing.hash, meta: { origins: [...(existing.meta.origins || []), origin] } });
+        // A duplicate only appends provenance; pending requests use its resulting version.
+        if (needsTitle(note)) for (const task of store.records('jobs')) if (task.payload?.noteId === note.id && task.payload.hash === existing.hash && ['queued','waiting','failed'].includes(task.state)
+          && (task.type === 'title' || task.type === 'process' && !task.payload.extracted)) {
+          task.payload.hash = note.hash;
+          task.dedupKey = `${task.type}:${note.id}:${note.hash}${task.payload.research ? ':research' : ''}`;
+          putJob(task);
+        }
+      }
+      else {
+        const manualTitle = typeof item.title === 'string' ? item.title.trim() : '';
+        const title = manualTitle || sourceTitlePlaceholder(item.body);
+        note = store.create({ kind: 'source', title, body: item.body, meta: { ...(!manualTitle ? { titlePlaceholder: title } : {}), titlePending: !manualTitle, titleOrigin: manualTitle ? 'manual' : 'temporary', fingerprint, origins: [origin], ...origin, stage: 'reference' } });
+      }
+      result.push(note); if (process === true) jobs.push(processNote(note.id, { research }));
+    }
+    return { notes: result, jobs };
+  }
+  function listNotes(filters = {}) {
+    store.scan(); return store.list().filter(n => (!filters.kind || n.kind === filters.kind) && (!filters.stage || n.meta.stage === filters.stage) && (!filters.q || `${n.title}\n${n.body}`.toLowerCase().includes(filters.q.toLowerCase())));
+  }
+  const operationalIssue = text => /今日外部调用次数已达到上限|BUDGET|预算|请求次数.*上限/.test(text);
+  function publicNote(note) {
+    const n = structuredClone(note);
+    delete n.meta.privacy;
+    delete n.meta.effectivePrivacy;
+    delete n.meta.evidence;
+    if (n.kind === 'source' && n.meta.titlePending) n.meta.titlePending = needsTitle(note);
+    if (n.kind === 'source' && needsTitle(n)) {
+      const job = store.records('jobs').find(j => j.payload?.noteId === n.id && (j.type === 'title' || j.type === 'process' && j.payload.titleRequested));
+      n.titleGeneration = { state: job?.state || 'idle', code: job?.code || null };
+    } else if (n.meta.titleOrigin === 'ai') n.titleGeneration = { state: 'done' };
+    n.meta.sources = (n.meta.sources || []).filter(s => s.role === 'input' || !store.row(s.id) || !store.read(s.id).meta.excerptOnly);
+    n.meta.researchLimitations = [...new Set((n.meta.researchLimitations || []).map(l => operationalIssue(l) ? (l.match(/^“[^”]+”/)?.[0] || '该事实')+'尚待核验。' : l))];
+    if (n.meta.processKey && !n.meta.userEdited && (!n.meta.generatedBodyHash || hash(n.body) === n.meta.generatedBodyHash)) {
+      const original = n.body.split('\n\n## 证据与适用范围')[0];
+      const conclusions = (n.meta.researchConclusions || n.body.split('## 证据与适用范围\n\n')[1]?.split('\n\n- [')[0]?.split('### 研究范围')[0]?.split('## 尚需补充的研究')[0] || '').replace('此条未取得可引用的外部正文。','').trim();
+      n.body = `${original}${conclusions ? '\n\n## 核验结论\n\n'+conclusions : ''}`;
+    }
+    return n;
+  }
+  const parentIds = n => [...new Set([...(n.meta.sources || []).filter(s => s.role === 'input').map(s => s.id), n.meta.processKey?.split(':')[0]].filter(Boolean))];
+  const parentId = n => parentIds(n)[0];
+  const childOrder = (a,b) => (Number(a.meta.processKey?.split(':').at(-1)) || 0) - (Number(b.meta.processKey?.split(':').at(-1)) || 0);
+  const sourceChildren = id => store.list().filter(n => n.kind === 'knowledge' && !n.meta.excerptOnly && parentIds(n).includes(id)).sort(childOrder);
+  function requestSourceStructure(id) {
+    const source = getNote(id), notes = sourceChildren(id);
+    assertTextSource(source);
+    if (source.kind !== 'source' || source.meta.excerptOnly) fail('请选择原始资料。');
+    if (!notes.length) fail('请先拆解或手动整理资料，再分析逻辑关系。');
+    const basis = structureBasis(source, notes);
+    return processReply(queue('structure', { noteId: id, basis }, `structure:${id}:${hash(JSON.stringify(basis))}`));
+  }
+  async function analyzeSourceStructure(job, signal) {
+    const source = getNote(job.payload.noteId), notes = sourceChildren(source.id);
+    const assertCurrent = () => {
+      store.scan();
+      if (!store.row(source.id)) fail('原始资料已删除。', 'SOURCE_CHANGED');
+      const current = store.read(source.id), children = sourceChildren(source.id);
+      if (current.kind !== 'source' || current.meta.excerptOnly || !children.length) fail('资料组已变化，请先确认当前条目。', 'SOURCE_CHANGED');
+      if ([current, ...children].some(n => privacyFor(n) !== 'cloud')) fail('原文或参与分析的引用已变化，请重新核对。', 'PRIVACY_LOCAL');
+      if (JSON.stringify(structureBasis(current, children)) !== JSON.stringify(job.payload.basis)) fail('资料已变化，请重试以分析当前版本。', 'SOURCE_CHANGED');
+    };
+    assertCurrent();
+    const result = await ai.generate({ system: promptText('serviceSystem'), privacy: 'cloud', signal, json: true,
+      prompt: promptText('sourceStructure', { source: processingText(source), notes: JSON.stringify(notes.map(n => ({ id: n.id, title: outboundTitle(n), body: outboundText(n.body) }))) }) });
+    if (signal.aborted) fail('任务已取消。', 'CANCELLED');
+    assertCurrent();
+    const record = structureRecord(source, notes, parseJSON(result.text).structure);
+    if (record.state === 'missing') fail(record.message, 'MODEL_FORMAT');
+    const previous = store.get('sourceStructures', source.id);
+    if (previous?.userEdited && record.version !== 2) fail('新结果缺少可核对的知识结构；已有人工修订保留。', 'MODEL_FORMAT');
+    store.put('sourceStructures', source.id, previous?.userEdited ? { ...previous, pendingCandidate: record } : record);
+  }
+  function editSourceStructure(id, { structure, revision } = {}) {
+    const context = importedContext(store,getNote(id));
+    const source = context.source, notes = context.notes, previous = context.stored;
+    if (source.kind !== 'source' || !previous || hash(JSON.stringify(previous)) !== revision) fail('结构已变化，请重新打开后修改。', 'CONFLICT', 409);
+    const currentView = structureView(source, notes, previous);
+    const content = value => JSON.stringify([value?.units, value?.topics, value?.edges]);
+    if (currentView.state === 'stale' && (!currentView.pendingCandidate || content(structure) !== content(currentView.pendingCandidate))) fail('原文或条目已变化，请先核对新结构候选。', 'CONFLICT', 409);
+    if (structure?.version !== 2 || ![structure.units, structure.topics, structure.edges].every(Array.isArray) || [...structure.units, ...structure.topics, ...structure.edges].some(value => !value || typeof value !== 'object' || Array.isArray(value))) fail('结构格式无效。', 'MODEL_FORMAT');
+    const adoptingCandidate = currentView.pendingCandidate && content(structure) === content(currentView.pendingCandidate);
+    const edited = structuredClone(structure);
+    for (const edge of edited.edges || []) {
+      const old = previous.edges?.find(e => e.id === edge.id);
+      if (!adoptingCandidate && (!old || ['from','to','label','condition','exceptions','type','explanation','sourceRefs'].some(key => JSON.stringify(old[key]) !== JSON.stringify(edge[key])))) edge.status = 'user';
+    }
+    for (const topic of edited.topics || []) {
+      const old = previous.topics?.find(t => t.id === topic.id);
+      if (!adoptingCandidate && (!old || JSON.stringify(old) !== JSON.stringify(topic))) topic.origin = 'user';
+    }
+    const record = structureRecord(source, notes, edited, undefined, { user: true });
+    const importedMarker = (adoptingCandidate ? previous.pendingCandidate : previous)?.chatgptStructure;
+    if (importedMarker) record.chatgptStructure = importedMarker;
+    if (record.state === 'missing') fail(record.message, 'MODEL_FORMAT');
+    // Validation preserves unknowns and reports gaps; retain the previous revision for recovery.
+    store.put('sourceStructures', id, { ...record, userEdited: true, previousRevision: { ...previous, previousRevision: undefined, pendingCandidate: undefined } });
+    return readPublicNote(id);
+  }
+  function library(filters = {}) {
+    const all = listNotes().filter(n=>!n.meta.excerptOnly).map(publicNote), matching = new Set(listNotes(filters).filter(n=>!n.meta.excerptOnly).map(n => n.id)), grouped = new Set();
+    const groups = all.filter(n => n.kind === 'source').map(source => {
+      const children = all.filter(n => n.kind === 'knowledge' && parentIds(n).includes(source.id)).sort(childOrder);
+      children.forEach(n => grouped.add(n.id)); grouped.add(source.id);
+      return { source, children, jobs: store.records('jobs').filter(j => j.type === 'process' && j.payload.noteId === source.id).map(j => ({id:j.id,state:j.state,progress:j.progress})) };
+    }).filter(g => matching.has(g.source.id) || g.children.some(n => matching.has(n.id)));
+    return { groups, standalone: all.filter(n => !grouped.has(n.id) && matching.has(n.id)), matchingIds: [...matching] };
+  }
+  function readPublicNote(id) {
+    const note = getNote(id);
+    if (note.meta.excerptOnly) fail('内部核验资料不作为知识条目展示。', 'NOT_FOUND', 404);
+    if (note.kind !== 'source') return publicNote(note);
+    const context = importedContext(store,note), children = context.notes;
+    return { ...publicNote(note), children: children.map(publicNote), structure: structureView(context.source, children, context.stored) };
+  }
+  function noteEvidence(id) {
+    const note = getNote(id);
+    const evidence = (note.meta.evidence || []).map(ev => {
+      const ref = (note.meta.sources || []).find(s => s.role !== 'input' && store.row(s.id) && store.read(s.id).meta.url === ev.url);
+      return { sourceId: ref?.id, title: ev.title || ev.url || '来源摘录', url: ev.url, excerpt: ev.excerpt, locator: ev.locator, fetchedAt: ev.fetchedAt, role: ev.role, rationale: ev.rationale };
+    });
+    for (const ref of note.meta.sources || []) {
+      if (!store.row(ref.id) || evidence.some(e => e.sourceId === ref.id)) continue;
+      const source = store.read(ref.id);
+      evidence.push({ sourceId: source.id, title: source.title, url: source.meta.url, excerpt: source.body, locator: ref.locator || source.meta.locator, fetchedAt: source.meta.fetchedAt || source.meta.acquiredAt, role: ref.role, rationale: ref.rationale });
+    }
+    return { noteId: id, evidence, limitations: materialLimitations(note), researchedAt: note.meta.researchedAt };
+  }
+  function linksPreview(id) { getNote(id); return store.managedLinksPreview(id); }
+  function syncLinks(id, input) { getNote(id); return store.syncManagedLinks(id, input); }
+  function processSummary(job) {
+    if (job.type !== 'process') return {};
+    const expected = job.payload?.extracted?.candidates?.length || 0;
+    const current = store.row(job.payload?.noteId);
+    const prefix = job.payload?.noteId + ':' + job.payload?.hash + ':';
+    const savedCount = store.db.prepare("SELECT count(DISTINCT json_extract(json,'$.meta.processKey')) count FROM notes WHERE json_extract(json,'$.kind')='knowledge' AND substr(json_extract(json,'$.meta.processKey'),1,?)=?").get(prefix.length, prefix).count;
+    const extractionSaved = Boolean(expected && savedCount === expected && current?.hash === job.payload?.hash && !job.presetCase && !job.payload?.presetCase);
+    return { extractionSaved, savedCount, phase: extractionSaved ? job.phase || (job.payload.research ? 'research_pending' : 'complete') : 'extracting' };
+  }
+  function publicJob(job) {
+    const j = { ...structuredClone(job), ...processSummary(job) };
+    delete j.runtimeIssues;
+    if (['SOURCE_BUDGET','BUDGET_EXCEEDED','BUDGET_UNKNOWN'].includes(j.code) || operationalIssue(j.error || '')) j.error = '已保存，待继续。';
+    return j;
+  }
+  function jobStatuses() {
+    // Project small fields directly in SQLite; never return or parse stored model output here.
+    const jobs = store.db.prepare(`SELECT j.key AS id,
+      json_extract(j.json,'$.type') AS type, json_extract(j.json,'$.state') AS state, json_extract(j.json,'$.code') AS code,
+      json_extract(j.json,'$.payload.noteId') AS noteId, json_extract(j.json,'$.payload.research') AS research,
+      coalesce(json_extract(j.json,'$.presetCase'), json_extract(j.json,'$.payload.presetCase')) AS presetCase,
+      json_extract(j.json,'$.createdAt') AS createdAt, json_extract(j.json,'$.updatedAt') AS updatedAt,
+      substr(json_extract(n.json,'$.title'),1,70) AS title,
+      json_extract(j.json,'$.phase') AS phase, json_extract(j.json,'$.stopCode') AS stopCode,
+      json_extract(j.json,'$.researchProgress') AS researchProgress,
+      json_array_length(j.json,'$.payload.extracted.candidates') AS expectedCount,
+      n.hash = json_extract(j.json,'$.payload.hash') AS currentSource,
+      (SELECT count(DISTINCT json_extract(c.json,'$.meta.processKey')) FROM notes c WHERE json_extract(c.json,'$.kind')='knowledge'
+        AND substr(json_extract(c.json,'$.meta.processKey'),1,length(json_extract(j.json,'$.payload.noteId') || ':' || json_extract(j.json,'$.payload.hash') || ':')) =
+        json_extract(j.json,'$.payload.noteId') || ':' || json_extract(j.json,'$.payload.hash') || ':') AS savedCount
+      FROM records j LEFT JOIN notes n ON n.id=json_extract(j.json,'$.payload.noteId')
+      WHERE j.namespace='jobs' AND json_extract(j.json,'$.type') IN ('process','structure','title')
+      ORDER BY j.rowid DESC`).all().map(({ expectedCount, currentSource, researchProgress, ...job }) => ({ ...job,
+      research: job.research === 1, researchProgress: researchProgress ? JSON.parse(researchProgress) : null,
+      extractionSaved: Boolean(job.type === 'process' && currentSource && expectedCount && job.savedCount === expectedCount && !job.presetCase) }));
+    return { jobs, jobRevision, jobSnapshot: ++jobSnapshot };
+  }
+  function editNote(id, input) {
+    const old = getNote(id), meta = { ...(input.meta || {}) };
+    for (const key of ['sourceFile', 'textExtraction', 'attachments']) {
+      if (Object.hasOwn(meta, key)) fail('附件与转换来源只能通过专用导入接口更新。');
+    }
+    if (old.kind !== 'source' && String(input.body || '').includes('.zhixu-attachments/')) fail('非文本附件仅限第一层原始资料。', 'SOURCE_FILE_ONLY', 409);
+    const binding = input.attachmentUploadIds?.length ? sourceFiles.bindImages(old, input.attachmentUploadIds) : null;
+    if (binding) meta.attachments = binding.attachments;
+    // Content edits cannot impersonate a completed learning/confirmation action.
+    for (const k of ['titlePending','titlePlaceholder','titleOrigin','confirmedAt','confirmedBy','personalUnderstanding','researchLimitations','evidence','supersededBy','generatedBodyHash','userEdited','learningEvidence']) delete meta[k];
+    if (meta.stage && meta.stage !== old.meta.stage) fail('请通过晋级操作调整阶段。');
+    // Ignore legacy classification inputs without rewriting the stored rollback metadata.
+    delete meta.privacy;
+    if(meta.researchIntervalDays!==undefined && (!Number.isInteger(Number(meta.researchIntervalDays)) || Number(meta.researchIntervalDays)<1 || Number(meta.researchIntervalDays)>365))fail('核验有效天数应为1–365。');
+    if(meta.researchIntervalDays!==undefined)meta.researchIntervalDays=Number(meta.researchIntervalDays);
+    if (!input.expectedHash || input.expectedHash !== old.hash) fail('文件已发生变化。请查看当前版本，再合并你的修改。', 'CONFLICT', 409);
+    // Reconfirming unchanged fields must not create a new source version.
+    if ((input.title === undefined || input.title === old.title) && (input.body === undefined || input.body === old.body)
+      && Object.entries(meta).every(([key, value]) => JSON.stringify(value) === JSON.stringify(old.meta[key]))) { binding?.complete(); return old; }
+    const result = store.update(id, { ...input, meta: { ...meta, ...(old.kind === 'source' && input.title !== undefined && input.title !== old.title ? { titlePending: false, titleOrigin: 'manual' } : {}), ...(old.kind === 'knowledge' ? { userEdited: true } : {}) } });
+    binding?.complete();
+    if (old.kind === 'knowledge') requestRelations(id);
+    return result;
+  }
+  function promote(id, { stage, reason = '', depth = 'explain' }) {
+    const note = getNote(id); if (note.kind !== 'knowledge') fail('只有知识条目能进入学习阶段。');
+    if (!stages.includes(stage) || !depths.includes(depth)) fail('阶段或学习目标无效。');
+    if (['integrated','core'].includes(stage) && !note.meta.confirmedAt) fail('请先以自己的语言确认个人理解。');
+    return store.update(id, { expectedHash: note.hash, meta: { stage, depth, promotionReason: reason, promotedAt: learningNow() } });
+  }
+  function confirmNote(id, { body, expectedHash }) {
+    const note = getNote(id); if (note.kind !== 'knowledge') fail('请先把资料整理为知识条目。');
+    if (!String(body || '').trim()) fail('请填写你自己的理解。');
+    const managed = note.body.match(/<!-- zhixu-managed-links:start -->[\s\S]*?<!-- zhixu-managed-links:end -->/)?.[0] || '';
+    const original = managed ? note.body.replace(managed, '').trimEnd() : note.body;
+    const result = store.update(id, { expectedHash, meta: { stage: 'integrated', personalUnderstanding: body, confirmedAt: learningNow(), confirmedBy: 'user' }, body: `${original.split('\n## 我的理解（用户确认）')[0]}\n\n## 我的理解（用户确认）\n\n${body}${managed ? '\n\n'+managed : ''}` });
+    requestRelations(id); return result;
+  }
+  function extractNote(sourceId, { title, body, topic = '', reason = '', depth = 'explain', claimType = 'fact' }) {
+    const source = getNote(sourceId); if (source.kind !== 'source') fail('手动整理必须关联一份原始资料。');
+    assertTextSource(source);
+    if (String(body || '').includes('.zhixu-attachments/')) fail('非文本附件仅限第一层原始资料。', 'SOURCE_FILE_ONLY', 409);
+    if (!String(body || '').trim() || !String(title || '').trim()) fail('请填写待选学知识标题和正文。');
+    const limitation = claimType === 'opinion' ? [] : ['这份手工材料含需查证的事实；请对原始资料运行联网加工，再采用带证据的候选条目。'];
+    const note = store.create({ kind: 'knowledge', title, body, meta: { stage:'candidate', sources:[{id:sourceId,role:'input'}], topic, depth:depths.includes(depth)?depth:'explain', promotionReason:reason, userStructured:true, claimType, researchLimitations:limitation } });
+    requestRelations(note.id); return note;
+  }
+  function merge({ keepId, mergeId, expectedHash, mergeHash, preview = true }) {
+    const keep = getNote(keepId), other = getNote(mergeId); if (keepId === mergeId || keep.kind !== 'knowledge' || other.kind !== 'knowledge') fail('只能合并不同的知识条目。');
+    const body = `${keep.body}\n\n## 合并保留的观点：${other.title}\n\n${other.body}`;
+    if (preview) return { keepId, mergeId, before: keep.body, after: body, expectedHash: keep.hash, mergeHash: other.hash, warning: '将保留两份观点和全部来源；原条目标为被替代，可在历史中撤销。' };
+    if (keep.hash !== expectedHash || other.hash !== mergeHash) fail('合并预览后文件已变化。', 'CONFLICT', 409);
+    const sources = [...new Map([...(keep.meta.sources || []), ...(other.meta.sources || [])].map(s => [`${s.id}:${s.role}`,s])).values()];
+    // Retain conservative metadata for older versions; active operations no longer classify notes.
+    const result = store.update(keepId, { body, expectedHash, meta: { sources, privacy: keep.meta.privacy === 'cloud' && other.meta.privacy === 'cloud' ? 'cloud' : 'local', researchLimitations: [...(keep.meta.researchLimitations || []), ...(other.meta.researchLimitations || [])] } });
+    store.update(mergeId, { expectedHash: mergeHash, meta: { stage: 'retired', supersededBy: keepId } }); return result;
+  }
+  const searchPages = new Map();
+  function rebuildLocalSearch() {
+    const sync=store.scan(); store.searchIndex.rebuild(); searchPages.clear();
+    return { count: sync.count, conflicts: sync.conflicts.length, revision: store.searchIndex.revision() };
+  }
+  async function search(query, options = {}) {
+    const started = performance.now(), phases = {}, q = String(query || '').trim(), mode = options.mode || 'keyword';
+    if (q.length > 512) fail('检索词最多 512 个字符。', 'SEARCH_QUERY_TOO_LONG');
+    if (options.scope !== undefined && !Array.isArray(options.scope)) fail('检索范围须为类别列表。');
+    const limit = Math.max(1, Math.min(50, Math.floor(Number(options.limit) || 12)));
+    let stamp = started;
+    const mark = name => { const at = performance.now(); phases[name] = at - stamp; stamp = at; };
+    const sync = options.scan === false ? { mode: 'caller-synchronized', readFiles: 0 } : store.ensureFresh();
+    mark('syncMs');
+    const indexUpdated = store.searchIndex.sync(), revision = store.searchIndex.revision();
+    mark('indexMs');
+    const binding = hash(JSON.stringify([store.vaultDir,q,mode,options.scope,options.kind,options.browse === true,options.stage,options.topic,options.source,options.from,options.to,options.privacy,limit]));
+    for (const [id, page] of searchPages) if (Date.now()-page.at > 300_000) searchPages.delete(id);
+    let cached, cursor;
+    if (options.cursor) {
+      try {
+        if (typeof options.cursor !== 'string' || options.cursor.length > 2048) throw new Error();
+        cursor = JSON.parse(Buffer.from(options.cursor,'base64url').toString());
+        if (!cursor || typeof cursor.session !== 'string' || typeof cursor.id !== 'string' || !Number.isFinite(cursor.score)) throw new Error();
+      }
+      catch { fail('分页位置无效，请重新检索。', 'SEARCH_CURSOR_INVALID', 409); }
+      cached = searchPages.get(cursor.session);
+      if (!cached || cached.binding !== binding || cached.revision !== revision || !cached.ranked.some(r => r.note.id === cursor.id && r.rankScore === cursor.score)) fail('资料或检索条件已变化，请重新检索。', 'SEARCH_CURSOR_STALE', 409);
+    }
+    if (!q) return { results: [], nextCursor: null, total: 0, diagnostics: { mode, semanticUsed: false, limitations: [], phases, sync, indexUpdated, elapsedMs: performance.now()-started } };
+    const limitations = cached ? [...cached.limitations] : [], keyword = cached?.keyword || store.searchIndex.candidates(q, options);
+    mark('keywordMs');
+    let semantic = [], semanticUsed = false;
+    if (!cached && ['semantic','hybrid'].includes(mode)) {
+      if (options.privacy !== 'cloud') limitations.push('本次查询仅留本地，使用中文关键词查找；可单独允许查询外发以使用语义服务。');
+      else if (!settings().embedding.enabled) limitations.push('语义服务未配置，当前使用中文关键词查找。');
+      else {
+        try {
+          const embedQuery = () => ai.embed({ texts: [q], privacy: 'cloud' });
+          const queryVec = (await (ai.withPurpose ? ai.withPurpose('retrieval', embedQuery) : embedQuery())).vectors[0];
+          const notes = store.searchIndex.candidates(q, options, { all: true }).map(r => r.note);
+          const allowed = new Map(notes.filter(n => privacyFor(n) === 'cloud').map(n => [n.id,n]));
+          const chunks = store.db.prepare('SELECT * FROM index_chunks WHERE vector IS NOT NULL AND model=?').all(settings().embedding.model);
+          const best = new Map();
+          const validVector = vector => Array.isArray(vector) && vector.length > 0 && vector.every(Number.isFinite) && vector.some(n => n !== 0);
+          for (const c of chunks) if (allowed.has(c.noteId)) {
+            const vector = JSON.parse(c.vector);
+            if (!validVector(queryVec) || !validVector(vector) || queryVec.length !== vector.length) continue;
+            const score = cosine(queryVec, vector);
+            if (!best.has(c.noteId) || score > best.get(c.noteId).score) best.set(c.noteId, { note: allowed.get(c.noteId), score, via: ['semantic'], semanticOffset: Math.max(0, Number(c.id.slice(c.noteId.length+1)) - allowed.get(c.noteId).title.length - 1) });
+          }
+          semanticUsed = best.size > 0;
+          semantic = [...best.values()].filter(r => r.score > 0.2).sort((a,b) => b.score - a.score || (a.note.id < b.note.id ? 1 : -1));
+          const pending = store.missingEmbeddings({model:settings().embedding.model,noteIds:[...allowed.keys()]}).length;
+          if (!chunks.length) limitations.push('向量索引为空；请在系统页构建索引。');
+          else if (pending) limitations.push(`有 ${pending} 个片段尚待更新语义索引；本次仍结合现有关键词结果。`);
+        } catch (error) { semanticUsed = false; limitations.push(error.message); }
+      }
+    }
+    mark('semanticMs');
+    // An external edit while awaiting embedding must not hydrate old rankings
+    // with new bodies; subsequent pages also bind to this exact revision.
+    if (!cached && ['semantic','hybrid'].includes(mode) && options.privacy === 'cloud') {
+      store.ensureFresh(); store.searchIndex.sync();
+      if (store.searchIndex.revision() !== revision) fail('检索期间资料已变化，请重新检索。', 'SEARCH_CHANGED', 409);
+    }
+    const fused = new Map();
+    if (!cached) for (const list of (mode === 'semantic' && semantic.length ? [semantic] : [keyword, semantic])) list.forEach((r,i) => {
+      const prior = fused.get(r.note.id) || { ...r, score: 0, via: [] };
+      prior.score += 1 / (60 + i); prior.via.push(...r.via); fused.set(r.note.id, prior);
+    });
+    const ranked = cached?.ranked || [...fused.values()].map(r => ({...r,rankScore:r.score+(['integrated','core'].includes(r.note.meta.stage)?0.002:0)})).sort((a,b) => b.rankScore-a.rankScore || (a.note.id < b.note.id ? 1 : -1));
+    const remaining = cursor ? ranked.filter(r => r.rankScore < cursor.score || r.rankScore === cursor.score && r.note.id < cursor.id) : ranked;
+    const page = remaining.slice(0, limit);
+    mark('rankingMs');
+    const results = page.map(r => { const note = store.read(r.note.id); return { ...note, score: Number(r.score.toFixed(6)), via: [...new Set(r.via)], ...searchContext(note,q,r.semanticOffset), limitations: materialLimitations(note) }; });
+    mark('hydrateMs');
+    let session = cursor?.session, nextCursor = null;
+    if (remaining.length > limit) {
+      session ||= randomUUID();
+      if (!cached) { if (searchPages.size >= 8) searchPages.delete(searchPages.keys().next().value); searchPages.set(session,{binding,revision,at:Date.now(),ranked,keyword,semantic,semanticUsed,limitations}); }
+      const last = page.at(-1); nextCursor = Buffer.from(JSON.stringify({ session,score:last.rankScore,id:last.note.id })).toString('base64url');
+    }
+    return { results, nextCursor, total: ranked.length, diagnostics: { mode, semanticUsed: cached?.semanticUsed ?? semanticUsed, keywordIds: keyword.slice(0,12).map(r => r.note.id), semanticIds: (cached?.semantic || semantic).slice(0,12).map(r => r.note.id), scanned: sync.count, candidateCount: keyword.length, bodyReads: page.length, indexUpdated, revision, sync, phases, elapsedMs: performance.now() - started, limitations } };
+  }
+  const {today,planAction,session,startStudy,answerStudy,hintStudy,confirmStudy,finishStudy,mistakeAction,topics,createTopic,updateTopic,topicAction,grade} = createLearning({
+    get store(){return store;}, settings, getNote, eligible: learnable, limitationsFor: materialLimitations, privacyFor, queue, ai, promptText, parseJSON, confirmNote, updateSettings, learningClock: learningDate, practice, getPracticeQuestion: practice ? getPracticeQuestion : undefined
+  });
+  const {recommendations,recommendationAction} = createLifecycle({get store(){return store;},settings,materialLimitations,getNote,promote,merge});
+  function valuableRelation(r, left, right) {
+    const types = ['analogy','prerequisite','support','oppose','example','counterexample','application','correction'];
+    return types.includes(r.type) && r.highValue === true &&
+      ['explanation','use','boundary','sourceExcerpt','targetExcerpt'].every(k=>typeof r[k]==='string'&&r[k].trim()) &&
+      left.body.includes(r.sourceExcerpt) && right.body.includes(r.targetExcerpt) &&
+      r.fromHash===left.hash && r.toHash===right.hash &&
+      !(parentId(left) && parentId(left)===parentId(right)) &&
+      !materialLimitations(left).length && !materialLimitations(right).length;
+  }
+  function relationReview() {
+    store.scan();
+    const notes = new Map(store.list().filter(n=>n.kind==='knowledge'&&!n.meta.supersededBy&&n.meta.stage!=='retired').map(n=>[n.id,n]));
+    const accepted=[], pending=[], candidates=[];
+    for (const r of store.records('relations')) {
+      const left=notes.get(r.fromId), right=notes.get(r.toId);
+      if (!left || !right || left.id===right.id) continue;
+      const row={...r,fromTitle:left.title,toTitle:right.title};
+      if (r.state==='accepted') accepted.push(row);
+      else if (r.state==='suggested'&&valuableRelation(r,left,right)) pending.push(row);
+      else if (r.state==='candidate' && r.fromHash===left.hash && r.toHash===right.hash && !materialLimitations(left).length && !materialLimitations(right).length) candidates.push(row);
+    }
+    pending.sort((a,b)=>(Number(b.valueScore)||0)-(Number(a.valueScore)||0));
+    return {candidates:candidates.slice(0,12),relations:[...pending.slice(0,3),...accepted],deferredCount:Math.max(0,pending.length-3),reports:listNotes({kind:'report'})};
+  }
+  function relationAction(id, { action, reason = '' }) {
+    store.scan();
+    const r = store.get('relations', id); if (!r || !['accept','reject','remove'].includes(action)) fail('关系操作无效。');
+    if (action === 'remove' || (action === 'reject' && r.state === 'accepted')) {
+      store.scan();
+      for (const noteId of new Set([r.fromId,r.toId])) {
+        if (!store.row(noteId)) continue;
+        const note=store.read(noteId);
+        if (note.meta.relations?.some(x=>x.id===id)) {
+          store.update(note.id,{expectedHash:note.hash,meta:{relations:note.meta.relations.filter(x=>x.id!==id)}});
+          const preview=store.managedLinksPreview(note.id); if(preview.changed&&!preview.conflict)store.syncManagedLinks(note.id,{expectedHash:preview.expectedHash});
+        }
+      }
+      return store.put('relations',id,{...r,state:'rejected',removedAt:now(),updatedAt:now(),userReason:reason || '用户移除联系'});
+    }
+    const left = getNote(r.fromId), right = getNote(r.toId);
+    if (r.fromHash !== left.hash || r.toHash !== right.hash) fail('关系涉及的内容已有变化，请重新生成建议。', 'CONFLICT', 409);
+    r.state = action === 'accept' ? 'accepted' : 'rejected'; r.userReason = reason; r.updatedAt = now();
+    if (action === 'accept') {
+      const relations = [...(left.meta.relations || []).filter(x => x.id !== r.id), r];
+      store.update(left.id, { expectedHash: left.hash, meta: { relations } });
+      const preview=store.managedLinksPreview(left.id);
+      if(preview.changed&&!preview.conflict)store.syncManagedLinks(left.id,{expectedHash:preview.expectedHash});
+    }
+    if(action==='accept'){store.scan();return store.get('relations',id);}
+    return store.put('relations', id, r);
+  }
+  function related(id) {
+    getNote(id); const relations = store.records('relations').filter(r => (r.fromId === id || r.toId === id) && ['accepted','suggested','candidate'].includes(r.state));
+    const ids = new Set(relations.flatMap(r => [r.fromId,r.toId])); ids.delete(id);
+    return { relations, notes: store.list().filter(n => ids.has(n.id) && !n.meta.supersededBy && n.meta.stage !== 'retired') };
+  }
+  const activeAsks = new Set();
+  const askBasis = (input, prepared) => hash(JSON.stringify([input, prepared.references]));
+  const askCalls = id => (ai.getCallEvidence ? ai.getCallEvidence(`ask:${id}`) : callLedger.evidence(`ask:${id}`)).filter(call => call.phase !== 'cancelled');
+  const askContext = (id, step, input, operation, basisHash) => ai.withCallContext
+    ? ai.withCallContext({ key: `ask:${id}:${step}`, jobId: `ask:${id}`, turnId: `${hash(JSON.stringify(input))}${basisHash ? `:${basisHash}` : ''}`, purpose: input.mode, singleRequest: true }, operation) : operation();
+  function checkAskCalls(request, { fresh = false } = {}) {
+    const calls = askCalls(request.id);
+    if (calls.some(call => call.phase !== 'accounted')) fail('原请求仍有未决调用，请先完成本地记账或核对；备份中的完成状态不会替代本机证据。', 'CALL_RECOVERY_REQUIRED', 409);
+    const modelCalls = calls.filter(call => call.capability === 'model');
+    // A freshly returned test override may have no transport ledger. A restored
+    // completed record never inherits that trust from missing evidence.
+    if ((modelCalls.length || request.callId || request.generated && !fresh) && (modelCalls.length !== 1 || modelCalls[0].id !== request.callId || !modelCalls[0].ok)) fail('此完成记录与本机调用证据不一致。请核对恢复前安全备份和输出草稿；不会将其他调用的草稿当作原请求结果，也不会重新发送。', 'CALL_RECOVERY_REQUIRED', 409);
+  }
+  function askResult(request, options) {
+    checkAskCalls(request, options);
+    const draft = store.get('drafts', request.draftId);
+    if (!draft) fail('原请求的草稿已不存在；不会重新调用模型。', 'ASK_RESULT_MISSING', 409);
+    return { requestId: request.id, answer: draft.body, citations: draft.citations, limitations: draft.limitations, draftId: draft.id, generated: request.generated };
+  }
+  function checkAskMaterials({ references, generated }) {
+    store.scan();
+    if (generated && !settings().ai.enabled) fail('模型能力已关闭；原请求尚未完成。', 'CAPABILITY_DISABLED', 403);
+    for (const reference of references) {
+      const note = store.row(reference.id) && store.read(reference.id);
+      if (!note || note.hash !== reference.hash || materialLimitations(note).length || generated && reference.cloud && privacyFor(note) !== 'cloud') fail('原请求的取材已变化；未应用旧回答，也不会重新调用。请检查材料后明确开始新请求。', 'SOURCE_CHANGED', 409);
+    }
+  }
+  async function ask({ question, scope = ['knowledge','source'], mode = 'answer', privacy = 'local', requestId = randomUUID() }) {
+    if (!String(question || '').trim()) fail('请填写问题或输出目标。');
+    if (typeof requestId !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(requestId)) fail('问答请求标识无效。');
+    if (typeof question !== 'string' || question.length > 500000 || !Array.isArray(scope) || !scope.length || scope.some(kind => !['knowledge','source'].includes(kind)) || !['answer','outline','draft'].includes(mode) || !['local','cloud'].includes(privacy)) fail('问答请求参数无效。');
+    const input = { question, scope: [...new Set(scope)].sort(), mode, privacy };
+    let request = store.get('askRequests', requestId);
+    if (request && JSON.stringify(request.input) !== JSON.stringify(input)) fail('此请求标识已用于其他输入；请明确开始一次新的生成。', 'ASK_REQUEST_CONFLICT', 409);
+    const priorCalls = askCalls(requestId);
+    if (request && priorCalls.some(call => call.turnId !== `${hash(JSON.stringify(input))}${call.capability === 'model' ? `:${request.basisHash}` : ''}`)) fail('原请求输入或取材与本机调用证据不一致；不会应用其他回答或再次发送。', 'ASK_REQUEST_CONFLICT', 409);
+    if (activeAsks.has(requestId)) fail('这次问答仍在执行，请等待后再重试。', 'BUSY', 409);
+    if (request?.completed) return askResult(request);
+    if (!request) {
+      // Restore may retain local billing evidence without the older operation.
+      // Missing input state must never turn a known intent into another charge.
+      if (priorCalls.length) fail('此请求已有调用，但准备状态缺失；请核对已有记录，不会重新发送。', 'CALL_RECOVERY_REQUIRED', 409);
+      request = store.put('askRequests', requestId, { id: requestId, input, draftId: randomUUID(), createdAt: now() });
+    }
+    activeAsks.add(requestId);
+    try {
+      if (!request.prepared) {
+        const prepared = await prepareAsk(requestId, input);
+        request = store.put('askRequests', requestId, { ...request, prepared, basisHash: askBasis(input, prepared) });
+      }
+      if (request.basisHash !== askBasis(input, request.prepared)) fail('原请求准备状态不一致；不会应用旧回答或再次发送。', 'ASK_REQUEST_CONFLICT', 409);
+      const { citations, limitations, references } = request.prepared;
+      let { answer, generated } = request.prepared;
+      let callId;
+      checkAskMaterials(request.prepared);
+      if (generated) {
+        const cloud = references.filter(n => n.cloud).map(n => store.read(n.id));
+        const prompt = promptText('ask',{question,mode,outputType:mode === 'answer' ? '回答' : mode === 'outline' ? '包含观点、证据、案例、反方、限制、未知的提纲' : '可编辑草稿',materials:JSON.stringify(cloud.map(n=>({id:n.id,kind:n.kind,stage:n.meta.stage,title:outboundTitle(n),body:outboundText(n.body).slice(0,6000),sources:n.meta.sources,evidence:n.meta.evidence,personalUnderstanding:n.meta.personalUnderstanding})))});
+        const response = await askContext(requestId, 'answer', input, () => ai.generate({ system: promptText('serviceSystem'), prompt, privacy: 'cloud', json: true }), request.basisHash);
+        const result = parseJSON(response.text); callId = response.callId;
+        const allowed = new Set(references.filter(n => n.cloud).map(n => n.id));
+        if (!Array.isArray(result.citationIds) || !result.citationIds.length || result.citationIds.some(id => !allowed.has(id)) || typeof result.answer !== 'string') fail('回答引用不符合实际检索材料；已拒绝保存。', 'INVALID_CITATION', 422);
+        const inline = [...result.answer.matchAll(/\[([^\]\n]+)\]/g)].map(m=>m[1]);
+        if (!inline.length || inline.some(id=>!allowed.has(id)) || result.citationIds.some(id=>!inline.includes(id))) fail('正文中的引用与材料清单不一致；已拒绝保存。','INVALID_CITATION',422);
+        answer = result.answer;
+        citations.splice(0, citations.length, ...citations.filter(c => result.citationIds.includes(c.id)));
+      }
+      checkAskMaterials(request.prepared);
+      checkAskCalls({ id: request.id, generated, callId }, { fresh: true });
+      store.db.exec('BEGIN IMMEDIATE');
+      try {
+        store.put('drafts', request.draftId, { id: request.draftId, mode, question, body: answer, citations, limitations, usedIds: [], createdAt: now() });
+        request = store.put('askRequests', requestId, { id: requestId, input, draftId: request.draftId, createdAt: request.createdAt, basisHash: request.basisHash, completed: true, generated, ...(callId ? { callId } : {}) });
+        store.db.exec('COMMIT');
+      } catch (error) { store.db.exec('ROLLBACK'); throw error; }
+      return askResult(request, { fresh: true });
+    } finally { activeAsks.delete(requestId); }
+  }
+  async function prepareAsk(requestId, input) {
+    const { question, scope, privacy } = input;
+    const result = await askContext(requestId, 'search', input, () => search(question, { scope, mode: 'hybrid', limit: 8, privacy }));
+    const usableResults = result.results.filter(n => !n.limitations.length), cloud = usableResults.filter(n => privacyFor(n) === 'cloud');
+    const citations = usableResults.map(n => ({ id: n.id, title: n.title, excerpt: n.snippet, sources: (n.meta.sources || []).map(s => { const source = store.row(s.id) ? store.read(s.id) : null; return { ...s, title: source?.title, url: source?.meta.url, excerpt: source?.body.slice(0,500) }; }) }));
+    const limitations = [...result.diagnostics.limitations];
+    const references = usableResults.map(n => ({ id: n.id, hash: n.hash, cloud: cloud.some(c => c.id === n.id) }));
+    for (const citation of citations) for (const source of citation.sources) if (store.row(source.id) && !references.some(n => n.id === source.id)) references.push({ id: source.id, hash: store.read(source.id).hash, cloud: false });
+    let answer, generated = false;
+    if (!usableResults.length) answer = '知识库中没有找到可直接支持这个问题的当前材料。请补充来源或调整查找范围。';
+    else if (privacy !== 'cloud' || !cloud.length || !settings().ai.enabled) { answer = '已找到以下材料，可在本地阅读。本次未启用 AI、模型未启用或材料引用不可用，尚未生成答案。\n\n' + citations.map(c => `- ${c.title} [${c.id}]\n${c.excerpt}`).join('\n\n'); limitations.push('未进行 AI 生成。'); }
+    else {
+      if (cloud.length < usableResults.length) limitations.push('引用不完整或已变化的资料未交给外部模型。');
+      generated = true;
+      limitations.push('AI 草稿需自行审阅，引用存在不等于每个主张都获支持。');
+    }
+    return { answer, generated, citations, limitations, references };
+  }
+  function updateDraft(id, { body, usedIds = [] }) {
+    const d = store.get('drafts', id); if (!d) fail('草稿不存在。', 'NOT_FOUND', 404);
+    const allowed = new Set(d.citations.map(c => c.id)); if (usedIds.some(id => !allowed.has(id))) fail('采用项须来自本草稿引用。');
+    for (const use of store.records('uses').filter(u => u.draftId === id && !usedIds.includes(u.noteId))) store.remove('uses', `${id}:${use.noteId}`);
+    for (const noteId of new Set(usedIds)) if (!store.get('uses', `${id}:${noteId}`)) store.put('uses', `${id}:${noteId}`, { draftId: id, noteId, actualUse: true, at: learningNow() });
+    const saved = store.put('drafts', id, { ...d, body: String(body ?? d.body), usedIds, updatedAt: now() });
+    return { ...saved, removedUseIds: (d.usedIds || []).filter(noteId => !usedIds.includes(noteId)) };
+  }
+  function propose({ noteId, body, reason, expectedHash }) {
+    if (!settings().mcp.allowProposals) fail('尚未启用 MCP 写入提案。', 'MCP_PROPOSALS_DISABLED', 403);
+    const n = getNote(noteId); if (!expectedHash || expectedHash !== n.hash) fail('提案基于旧版本。', 'CONFLICT', 409);
+    if (typeof body !== 'string' || !body.trim() || body.length > 500000) fail('提案正文无效。');
+    const id = randomUUID(); return store.put('proposals', id, { id, noteId, before: n.body, body, reason, expectedHash, state: 'pending', createdAt: now() });
+  }
+  function proposalAction(id, { action }) {
+    const p = store.get('proposals', id); if (!p || p.state !== 'pending') fail('提案不可操作。');
+    if (action === 'accept') {
+      const current = getNote(p.noteId);
+      const arrangement = p.meta?.processKey ? Object.fromEntries(['stage','depth','promotionReason','promotedAt','topic','prerequisites'].filter(key => current.meta[key] !== undefined).map(key => [key, key === 'stage' && ['integrated','core'].includes(current.meta.stage) ? 'learning' : current.meta[key]])) : {};
+      store.update(p.noteId, { body: p.body, expectedHash: p.expectedHash, ...(p.meta ? { meta: { ...p.meta, ...arrangement, userEdited: false, ...(p.meta.processKey ? { acceptedResearchProposal: p.id } : {}), personalUnderstanding: null, confirmedAt: null, confirmedBy: null } } : {}) });
+    } else if (action !== 'reject') fail('提案操作无效。');
+    return store.put('proposals', id, { ...p, state: action === 'accept' ? 'accepted' : 'rejected', updatedAt: now() });
+  }
+  async function processSource(job, signal) {
+    let source = getNote(job.payload.noteId);
+    assertTextSource(source);
+    // A preceding title-only task may have updated this version while processing was queued.
+    if (source.hash !== job.payload.hash && store.records('jobs').some(task => task.type === 'title' && task.state === 'done' && task.payload.noteId === source.id && task.payload.hash === job.payload.hash && task.payload.resultHash === source.hash)) {
+      job.payload.hash = source.hash; job.dedupKey = `process:${source.id}:${source.hash}${job.payload.research ? ':research' : ''}`; putJob(job);
+    }
+    if (source.hash !== job.payload.hash) fail('资料已修改，请对新版本重新加工。', 'SOURCE_CHANGED');
+    // Also cover retained jobs queued before another task saved the same source extraction.
+    let extracted = validExtraction(job.payload.extracted) ? job.payload.extracted
+      : processJobs(source.id, source.hash).find(previous => previous.id !== job.id && validExtraction(previous.payload.extracted))?.payload.extracted;
+    if (!extracted) {
+      extracted = parseJSON((await ai.generate({ system: `${promptText('serviceSystem')}\n${sourceExtractionStructure}\n${extractionResearchContract}${needsTitle(source) ? '\n'+sourceTitleContract : ''}`, privacy: privacyFor(source), signal, json: true, prompt: promptText('sourceExtract',{source:processingText(source)}) })).text);
+      if (!Array.isArray(extracted.candidates) || !extracted.candidates.length || extracted.candidates.length > 8) fail('拆解结果格式不正确。', 'MODEL_FORMAT');
+    }
+    if (signal.aborted) fail('任务已取消。', 'CANCELLED');
+    if (getNote(source.id).hash !== source.hash) fail('资料已修改，请对新版本重新加工。', 'SOURCE_CHANGED');
+    for (const candidate of extracted.candidates) if (typeof candidate.title !== 'string' || typeof candidate.body !== 'string' || !Array.isArray(candidate.claims) || candidate.claims.some(x => typeof x !== 'string')) fail('待选学知识格式不正确。', 'MODEL_FORMAT');
+    if (needsTitle(source)) {
+      // Older custom extraction templates remain usable even if they omit sourceTitle.
+      if (validSourceTitle(extracted.sourceTitle) && !job.payload.savedCandidates?.ids?.some(Boolean)) {
+        source = saveSourceTitle(source, extracted.sourceTitle, signal);
+        job.payload.hash = source.hash;
+        job.dedupKey = `process:${source.id}:${source.hash}${job.payload.research ? ':research' : ''}`;
+      } else if (!store.records('jobs').some(task => task.type === 'title' && task.payload.noteId === source.id && task.state !== 'cancelled')) titleJob(source, true);
+    }
+    const retained = [job, ...processJobs(source.id, source.hash)].find(previous => previous.payload?.savedCandidates?.hash === source.hash)?.payload.savedCandidates;
+    job.payload.savedCandidates = retained ? structuredClone(retained) : { hash: source.hash, ids: extracted.candidates.map((_, i) => store.list().find(n => n.meta.processKey === `${source.id}:${source.hash}:${i}`)?.id || null) };
+    job.payload.extracted = structuredClone(extracted); putJob(job);
+    for (const candidate of extracted.candidates) candidate.claims = [...new Set(candidate.claims.map(c=>c.trim()).filter(Boolean))];
+    const requestedResearch = job.payload.research === true;
+    const shared = new Map(), changedClaims = new Set(), runtimeIssues = [];
+    const claims = [...new Set(extracted.candidates.flatMap(candidate => candidate.claims))];
+    const keyFor = claim => hash(claim + ':' + source.hash);
+    function assertCurrent() {
+      if (signal.aborted) fail('任务已取消。', 'CANCELLED');
+      const current = getNote(source.id);
+      if (current.hash !== source.hash) fail('资料已修改，请对新版本重新加工。', 'SOURCE_CHANGED');
+      if (privacyFor(current) !== 'cloud') fail('资料或引用已变化，后续处理已停止。', 'PRIVACY_LOCAL');
+      if (job.payload.savedCandidates.ids.some(id => id && !store.row(id))) fail('拆解条目已删除，核验已停止；不会自动重建已删除内容。', 'CANDIDATE_REMOVED');
+    }
+    function updateProgress() {
+      const cached = claims.map(claim => store.get('research', keyFor(claim)));
+      job.researchProgress = { total: claims.length,
+        covered: cached.filter(c => c?.coverage === 'searched' || c && !c.coverage && !c.result.limitations?.some(text => /未纳入本轮|尚未轮到/.test(text))).length,
+        verified: cached.filter(c => c?.result.evidence?.length && !c.result.limitations?.length && Date.now() - Date.parse(c.at) < 7*86400000).length };
+      job.progress = requestedResearch && claims.length ? Math.round(job.researchProgress.covered / claims.length * 100) : 100;
+      putJob(job);
+    }
+    async function saveResults(research) {
+      assertCurrent();
+      for (let i=0;i<extracted.candidates.length;i++) {
+        if (signal.aborted) throw new Error('任务已取消');
+        const candidate = extracted.candidates[i];
+        if (research && !candidate.claims.some(claim => changedClaims.has(claim))) continue;
+        if (typeof candidate.title !== 'string' || typeof candidate.body !== 'string' || !Array.isArray(candidate.claims) || candidate.claims.some(x => typeof x !== 'string')) fail('待选学知识格式不正确。', 'MODEL_FORMAT');
+        const evidence = [], limitations = [], conclusions = [], notices = [];
+        for (const claim of candidate.claims) {
+          if (!research) { limitations.push(`“${claim}”尚待核验（未执行联网检验）。`); continue; }
+          try {
+            const result = shared.get(claim) || { evidence: [], limitations: ['该事实尚待核验。'] };
+            evidence.push(...result.evidence); limitations.push(...result.limitations); if(result.conclusion)conclusions.push(result.conclusion);if(result.notice)notices.push(result.notice);
+            if (!result.evidence.length) limitations.push(`“${claim}”尚无可读取的外部证据。`);
+          } catch (error) { runtimeIssues.push({code:error.code,message:error.message}); limitations.push(`“${claim}”：尚待核验。`); }
+        }
+        if (signal.aborted) fail('任务已取消。','CANCELLED');
+        const sourceRefs = [{ id: source.id, role: 'input' }];
+        for (const ev of evidence) {
+          const existing = store.list().find(n => n.kind === 'source' && n.meta.url === ev.url && n.meta.excerptHash === hash(ev.excerpt));
+          const e = existing || store.create({ kind: 'source', title: ev.title || ev.url, body: ev.excerpt, meta: { url: ev.url, locator: ev.locator, fetchedAt: ev.fetchedAt, excerptHash: hash(ev.excerpt), excerptOnly: true } });
+          sourceRefs.push({ id: e.id, role: ['support','oppose','limit'].includes(ev.role) ? ev.role : 'support', locator: ev.locator });
+        }
+        const processKey = `${source.id}:${source.hash}:${i}`, savedId = job.payload.savedCandidates.ids[i];
+        const existing = store.list().find(n => savedId ? n.id === savedId : n.meta.processKey === processKey);
+        const body = `## 原资料拆解（AI 整理）\n\n${candidate.body}\n\n## 证据与适用范围\n\n${conclusions.join('\n\n')}\n\n${evidence.map(e => `- [${e.title || e.url}](${e.url})（${e.role}，读取于 ${e.fetchedAt}）\n  ${e.excerpt}${e.rationale ? '\n  对应关系：'+e.rationale : ''}`).join('\n\n') || '此条未取得可引用的外部正文。'}${notices.length ? '\n\n### 研究范围\n'+notices.join('\n') : ''}${limitations.length ? '\n\n## 尚需补充的研究\n'+limitations.map(l=>`- ${l}`).join('\n') : ''}`;
+        const meta = { stage: 'candidate', sources: sourceRefs, topic: candidate.topic || '', prerequisites: candidate.prerequisites || [], promotionReason: candidate.reason || '', depth: depths.includes(candidate.depth) ? candidate.depth : 'explain', claims: candidate.claims, evidence, researchConclusions: conclusions.join('\n\n'), researchLimitations: limitations, researchedAt: research ? now() : null, reviewAfter: research && candidate.claims.length ? new Date(learningDate().getTime()+(Number.isInteger(source.meta.researchIntervalDays)&&source.meta.researchIntervalDays>=1&&source.meta.researchIntervalDays<=365?source.meta.researchIntervalDays:30)*86400000).toISOString() : null, processKey, generatedBodyHash: hash(body) };
+        if (existing && !research) continue;
+        const activeStudy = existing && store.records('sessions').some(session => session.noteId === existing.id && session.status !== 'completed');
+        const wasEdited = existing && (existing.meta.userEdited || existing.meta.acceptedResearchProposal || existing.meta.confirmedAt || activeStudy || !existing.meta.generatedBodyHash || hash(existing.body) !== existing.meta.generatedBodyHash);
+        if (existing && existing.body === body && JSON.stringify(existing.meta.evidence || []) === JSON.stringify(evidence) && JSON.stringify(existing.meta.researchLimitations || []) === JSON.stringify(limitations)) { continue; }
+        if (wasEdited) {
+          const proposalId = hash(`research-update:${existing.id}:${existing.hash}:${hash(body)}`);
+          for (const previous of store.records('proposals')) if (previous.id !== proposalId && previous.noteId === existing.id && previous.state === 'pending' && previous.meta?.processKey === processKey) {
+            store.put('proposals', previous.id, { ...previous, state: 'superseded', supersededBy: proposalId, updatedAt: now() });
+          }
+          const previous = store.get('proposals', proposalId);
+          if (!previous || previous.state === 'superseded') store.put('proposals', proposalId, { id: proposalId, noteId: existing.id, before: existing.body, body, meta, reason: '核验更新已保存为建议，保留人工内容和正在进行的练习。接受后保留学习安排；原来的个人理解保留在历史中，需依据新材料重新确认。', expectedHash: existing.hash, state:'pending', createdAt:previous?.createdAt || now() });
+          continue;
+        }
+        const arrangement = existing ? Object.fromEntries(['stage','depth','promotionReason','promotedAt','topic','prerequisites'].filter(key => existing.meta[key] !== undefined).map(key => [key, existing.meta[key]])) : {};
+        const note = existing ? store.update(existing.id, { body, meta: { ...meta, ...arrangement }, expectedHash: existing.hash }) : store.create({ kind:'knowledge', title:candidate.title, body, meta });
+        if (!job.payload.savedCandidates.ids[i]) { job.payload.savedCandidates.ids[i] = note.id; putJob(job); }
+        if (eligible(note)) requestRelations(note.id);
+      }
+      // Structure is a derived view: never rewrite the source or user-edited knowledge to save it.
+      store.scan();
+      if (store.row(source.id)?.hash === source.hash) {
+        const children = sourceChildren(source.id);
+        const keys = new Map(extracted.candidates.flatMap((candidate, index) => {
+          const note = children.find(n => n.meta.processKey === `${source.id}:${source.hash}:${index}`);
+          return note && note.body.includes(candidate.body) ? [[String(index), note.id]] : [];
+        }));
+        const previous = store.get('sourceStructures', source.id);
+        if (!previous || !previous.userEdited && structureView(source, children, previous).state === 'stale') {
+          store.put('sourceStructures', source.id, structureRecord(source, children, extracted.structure, keys));
+        }
+      }
+    }
+    // Persist extraction independently; a later network failure cannot erase this checkpoint.
+    await saveResults(false);
+    job.extractionSaved = true; job.savedCount = extracted.candidates.length;
+    job.phase = requestedResearch && claims.length ? 'research' : 'complete';
+    job.runtimeIssues = []; job.stopCode = null; updateProgress();
+    if (!requestedResearch || !claims.length) return;
+    const pending = [];
+    for (const claim of claims) {
+      const cached = store.get('research', keyFor(claim));
+      const fresh = cached && Date.now() - Date.parse(cached.at) < 7*86400000;
+      if (cached) {
+        shared.set(claim, fresh ? cached.result : { ...cached.result, limitations: [...new Set([...(cached.result.limitations || []), `“${claim}”的核验缓存已过期，尚待重新核验。`])] });
+        if (!fresh) changedClaims.add(claim);
+      }
+      if (fresh && cached.result.evidence?.length && !cached.result.limitations?.length) changedClaims.add(claim);
+      else pending.push(claim);
+    }
+    // Unvisited claims precede unsuccessful earlier groups; later retries rotate fairly.
+    const attempts = claim => { const c = store.get('research', keyFor(claim)); return c?.attempts ?? (c && !c.result.limitations?.some(text => /未纳入本轮|尚未轮到/.test(text)) ? 1 : 0); };
+    pending.sort((a,b) => attempts(a) - attempts(b));
+    await saveResults(true); changedClaims.clear();
+    async function checkpoint(results) {
+      assertCurrent(); changedClaims.clear();
+      for (let result of results) {
+        if (!pending.includes(result.claim) || result.coverage === 'unsearched' && !result.stopCode) continue;
+        const key = keyFor(result.claim), previous = store.get('research', key);
+        const attemptCoverage = result.coverage || 'searched';
+        const coverage = previous?.coverage === 'searched' ? 'searched' : attemptCoverage;
+        if (previous?.result.evidence?.length && !result.evidence?.length) result = { ...previous.result, claim: result.claim, limitations: [...new Set([...(previous.result.limitations || []), ...(result.limitations || [])])], coverage };
+        store.put('research', key, { result, at: now(), coverage, attempts: (previous?.attempts || 0) + (attemptCoverage === 'unsearched' ? 0 : 1) });
+        shared.set(result.claim, result); changedClaims.add(result.claim);
+      }
+      await saveResults(true); updateProgress();
+    }
+    const hints = job.payload.extracted.candidates.flatMap(candidate => (Array.isArray(candidate.claimChecks) ? candidate.claimChecks : []).flatMap(hint =>
+      Number.isInteger(hint?.claimIndex) && candidate.claims[hint.claimIndex] && ['formal','empirical','attribution'].includes(hint.kind) && typeof hint.subject === 'string'
+        ? [{ claim: candidate.claims[hint.claimIndex].trim(), kind: hint.kind, subject: hint.subject.slice(0,180) }] : []));
+    try {
+      if (pending.length && ai.researchBatch) {
+        const delivered = new Set();
+        const batch = await ai.researchBatch({ claims: pending, topic: outboundTitle(source), privacy: privacyFor(source), signal, prompts: settings().prompts, hints,
+          checkCurrent: assertCurrent, onBatch: async results => { await checkpoint(results); results.forEach(r => delivered.add(r.claim)); } });
+        await checkpoint(batch.results.filter(result => !delivered.has(result.claim)));
+        runtimeIssues.push(...(batch.issues || []));
+      } else for (const claim of pending) {
+        assertCurrent();
+        await checkpoint([{ ...await ai.research({ claim, privacy: privacyFor(source), signal, prompts: settings().prompts }), claim }]);
+      }
+    } catch (error) {
+      if (signal.aborted || ['PRIVACY_LOCAL','SOURCE_CHANGED','CANDIDATE_REMOVED'].includes(error.code)) throw error;
+      runtimeIssues.push({ code: error.code || 'RESEARCH_FAILED', message: error.message });
+    }
+    job.runtimeIssues = runtimeIssues; job.stopCode = runtimeIssues[0]?.code || null;
+    updateProgress();
+    job.phase = job.researchProgress.verified === claims.length ? 'complete' : 'research_pending'; putJob(job);
+    if (job.phase === 'research_pending') fail('拆解已保存，部分事实尚待核验；可先阅读，按需继续核验。', 'RESEARCH_INCOMPLETE');
+  }
+  function requestRelations(id, {useAI=false}={}) {
+    const note=getNote(id); if(note.kind!=='knowledge') fail('请选择知识条目探索联系。');
+    return queue('relate',{noteId:id,useAI:useAI===true},`relate:${id}:${note.hash}:${useAI===true}`);
+  }
+  async function relate(job, signal) {
+    const scope=job.payload.useAI===true ? materialScope(job) : null;
+    const inScope=n=>!scope||scope.get(n.id)===n.hash;
+    if(scope) {
+      store.scan();
+      if(!store.row(job.payload.noteId))fail('探索前知识已删除，请重新探索。','SOURCE_CHANGED');
+    }
+    const note=job.snapshot || getNote(job.payload.noteId);
+    if(!inScope(note))fail('探索前知识已有变化，请重新探索。','SOURCE_CHANGED');
+    if(!eligible(note)) { if(job.payload.useAI===true)fail('这条知识仍有待研究内容，请先处理依据。','RESEARCH_INCOMPLETE'); return; }
+    const res=await search(`${note.title} ${note.meta.topic || ''}`,{mode:'keyword',limit:7,scan:false});
+    const bridges=store.list().filter(n=>n.id!==note.id&&eligible(n)&&n.meta.topic!==note.meta.topic)
+      .sort((a,b)=>hash(`${note.id}:${a.id}`).localeCompare(hash(`${note.id}:${b.id}`))).slice(0,3);
+    let candidates=[...new Map([...res.results.filter(n=>n.id!==note.id&&eligible(n)).slice(0,4),...bridges].filter(inScope).map(n=>[n.id,n])).values()];
+    for(const n of candidates) {
+      const id=hash([note.id,n.id].sort().join(':')), old=store.get('relations',id);
+      if(!old||old.state==='candidate')store.put('relations',id,{id,fromId:note.id,toId:n.id,fromHash:note.hash,toHash:n.hash,type:'similarity',state:'candidate',explanation:'本地召回的比较材料，尚不能视为机制相同。',use:'可比较术语与适用条件。',boundary:'文字相似或同属关注领域不能证明因果或迁移关系。',evidence:[note.id,n.id],createdAt:now()});
+    }
+    if(job.payload.useAI!==true)return;
+    if(privacyFor(note)!=='cloud')fail('资料或引用不可用，请先核对。','PRIVACY_LOCAL');
+    if(!settings().ai.enabled)fail('AI 未启用；本地候选已保留。','AI_DISABLED');
+    const assertCurrent = notes => {
+      store.scan();
+      for(const before of notes) {
+        if(!store.row(before.id))fail('探索时知识已删除，请重新探索。','SOURCE_CHANGED');
+        const current=store.read(before.id);
+        if(!inScope(current))fail('探索时知识不再匹配点击时的版本，请重新探索。','SOURCE_CHANGED');
+        if(privacyFor(current)!=='cloud')fail('探索时资料或引用已变化，已停止后续请求。','PRIVACY_LOCAL');
+        if(current.hash!==before.hash)fail('探索时知识已有变化，请重新探索。','SOURCE_CHANGED');
+      }
+    };
+    assertCurrent([note]);
+    const current=JSON.stringify({id:note.id,title:outboundTitle(note),body:outboundText(note.body).slice(0,4500)});
+    const expanded=parseJSON((await ai.generate({system:promptText('serviceSystem'),privacy:'cloud',signal,json:true,prompt:promptText('relationQueries',{current})})).text);
+    if(!Array.isArray(expanded.queries)||expanded.queries.some(q=>typeof q!=='string'))fail('关联检索短语格式无效，本地候选已保留。','MODEL_FORMAT');
+    const retrieved=[];
+    for(const query of expanded.queries.slice(0,2)) {
+      assertCurrent([note]);
+      const result=await search(outboundText(query).slice(0,120),{mode:settings().embedding.enabled?'hybrid':'keyword',privacy:'cloud',scope:['knowledge'],limit:6});
+      retrieved.push(...result.results);
+    }
+    candidates=[...new Map([...retrieved,...candidates].filter(n=>n.id!==note.id&&inScope(n)&&privacyFor(n)==='cloud'&&eligible(n)).map(n=>[n.id,n])).values()].slice(0,10);
+    if(!candidates.length)return;
+    assertCurrent([note,...candidates]);
+    const parsed=parseJSON((await ai.generate({system:promptText('serviceSystem'),privacy:'cloud',signal,json:true,prompt:promptText('relate',{current,candidates:JSON.stringify(candidates.map(n=>({id:n.id,title:outboundTitle(n),body:outboundText(n.body).slice(0,3000)})))})})).text);
+    if(!Array.isArray(parsed.relations))fail('关联结果格式无效，本地候选已保留。','MODEL_FORMAT');
+    if(getNote(note.id).hash!==note.hash)fail('探索时知识已有变化，请重新探索。','SOURCE_CHANGED');
+    for(const r of parsed.relations.slice(0,2)) {
+      const target=candidates.find(n=>n.id===r.toId);if(!target||!store.row(target.id)||getNote(target.id).hash!==target.hash)continue;
+      const id=hash([note.id,target.id].sort().join(':')),old=store.get('relations',id);
+      if(old&&!['suggested','candidate'].includes(old.state))continue;
+      const proposed={...r,id,fromId:note.id,fromHash:note.hash,toHash:target.hash,state:'suggested',evidence:[note.id,target.id],createdAt:now()};
+      if(valuableRelation(proposed,note,target))store.put('relations',id,proposed);
+    }
+  }
+  async function discover(job, signal) {
+    const scope=job.payload.useAI===true ? materialScope(job) : null;
+    store.scan(); const notes=store.list().filter(n=>n.kind==='knowledge'&&n.meta.stage!=='retired');
+    const relations=store.records('relations').filter(r=>r.state==='accepted'), linked=new Set(relations.flatMap(r=>[r.fromId,r.toId]));
+    const isolated=notes.filter(n=>!linked.has(n.id)), unused=notes.filter(n=>!store.records('uses').some(u=>u.noteId===n.id));
+    let body=`# 知识结构检查\n\n检查时间：${now()}\n知识条目：${notes.length}；已确认关系：${relations.length}。\n\n## 孤立节点\n${isolated.slice(0,30).map(n=>`- ${n.title}（${n.id}）`).join('\n') || '无'}\n\n## 尚无实际输出使用记录\n${unused.slice(0,30).map(n=>`- ${n.title}`).join('\n') || '无'}\n\n以上只是导航线索，不以曝光次数判断价值。`;
+    const changed=new Set(store.records('changed').map(n=>n.id));
+    let discoveryIssue=null;
+    const selected=[...notes.filter(n=>changed.has(n.id)),...isolated,...notes].filter((n,i,a)=>(!scope||scope.get(n.id)===n.hash)&&privacyFor(n)==='cloud'&&a.findIndex(v=>v.id===n.id)===i).slice(0,16);
+    if(job.payload.useAI===true&&settings().ai.enabled&&selected.length){try {const answer=await ai.generate({system:promptText('serviceSystem'),privacy:'cloud',signal,prompt:promptText('discover',{notes:JSON.stringify(selected.map(n=>({id:n.id,title:outboundTitle(n),topic:n.meta.topic,summary:outboundText(n.body).slice(0,900)})))})});body+=`\n\n## AI 发现建议（待审阅）\n${answer.text}`;}catch(error){discoveryIssue=error;body+=`\n\n## AI 探索未完成\n${error.message}`;}}else body+='\n\n## 探索限制\n当前为本地结构检查；没有选择付费 AI 探索或没有可用的摘要，尚未生成跨领域语义发现。';
+    const cursor=store.get('schedule','discoveryCursor',{offset:0}).offset, available=notes.filter(eligible);
+    const batch=[...available.slice(cursor),...available.slice(0,cursor)].slice(0,16);
+    for(const n of batch)await relate({payload:{noteId:n.id,useAI:false},snapshot:n},signal);
+    store.put('schedule','discoveryCursor',{offset:available.length?(cursor+batch.length)%available.length:0});
+    if(job.payload.useAI===true&&!discoveryIssue)for(const n of selected.filter(eligible).slice(0,2)){try{await relate({payload:{noteId:n.id,useAI:true,snapshots:job.payload.snapshots}},signal);}catch(error){discoveryIssue=error;body+=`\n\n## 关联细查未完成\n${error.message}`;break;}}
+    body+=`\n\n本次本地比较 ${batch.length} 条；AI 细查最多2条。每次轮换覆盖，不能视为全库穷尽。`;
+    const actions=recommendations().suggestions;
+    body+='\n\n## 可处理的建议\n'+(actions.map(a=>`- ${a.title}：${a.reason}`).join('\n') || '暂无有记录依据的阶段调整建议。');
+    store.create({kind:'report',title:`AI 整理建议 ${localDay(learningDate(),settings().timezone)}`,body,meta:{privacy:'local',generated:true,recommendationIds:actions.map(a=>a.id),relationIds:store.records('relations').filter(r=>['suggested','candidate'].includes(r.state)).map(r=>r.id)}});
+    store.put('schedule','discovery',{at:learningNow()});for(const n of selected)store.remove('changed',n.id);
+    if(discoveryIssue)throw discoveryIssue;
+  }
+  async function rebuildIndex(job, signal) {
+    const snapshots = job.payload.snapshots;
+    if (!validMaterialSnapshots(snapshots)) fail('索引任务缺少点击时的资料版本；请主动重试以使用当前资料。', 'OUTBOUND_INTENT_REQUIRED');
+    const ids=snapshots.map(n=>n.noteId);
+    for(let i=0;i<ids.length;i++) {
+      store.scan(); if(!store.row(ids[i]))continue;
+      const n=store.read(ids[i]), model=settings().embedding.model;
+      store.index(n.id,`${n.title}\n${n.body}`);
+      if(n.hash===snapshots[i].hash&&settings().embedding.enabled&&privacyFor(n)==='cloud'&&['knowledge','source','topic'].includes(n.kind)&&n.meta.stage!=='retired'&&!n.meta.supersededBy) {
+        const chunks=store.missingEmbeddings({model,noteIds:[n.id]});
+        if(chunks.length) {
+          // Mask the whole source before slicing overlapping chunks. Keep local
+          // chunk text/IDs intact while no partial image reference can escape.
+          const outgoing=outboundTitle(n,{preserveOffsets:true})+'\n'+outboundText(n.body,{preserveOffsets:true});
+          const vectors=(await ai.embed({texts:chunks.map(c=>{const start=Number(c.id.slice(n.id.length+1));return outgoing.slice(start,start+c.body.length);}),privacy:'cloud',signal})).vectors;
+          if(vectors.length!==chunks.length || vectors.some(v=>!Array.isArray(v)||!v.length||v.some(x=>!Number.isFinite(x))))fail('向量结果与检索片段不一致。');
+          store.scan();
+          // The material or its references may change while the external request is running.
+          if(store.row(n.id)?.hash===n.hash&&privacyFor(store.read(n.id))==='cloud'&&model===settings().embedding.model) {
+            for(let j=0;j<chunks.length;j++)store.db.prepare('UPDATE index_chunks SET vector=?,model=? WHERE id=? AND noteId=? AND body=?').run(JSON.stringify(vectors[j]),model,chunks[j].id,n.id,chunks[j].body);
+          }
+        }
+      }
+      job.progress=Math.round((i+1)/ids.length*100);putJob(job);
+    }
+  }
+  async function suggestTopics(job, signal) {
+    const scope=materialScope(job); store.scan();
+    const notes=store.list().filter(n=>scope.get(n.id)===n.hash&&eligible(n)&&privacyFor(n)==='cloud'&&n.meta.stage!=='retired').slice(0,24);
+    if(!notes.length)fail('没有可交给外部模型的当前知识材料；你仍可手工建立主题。','PRIVACY_LOCAL');
+    const parsed=parseJSON((await ai.generate({system:promptText('serviceSystem'),privacy:'cloud',signal,json:true,prompt:promptText('topics',{focusTopics:settings().focusTopics.join('、') || '由材料自然组织',notes:JSON.stringify(notes.map(n=>({id:n.id,title:outboundTitle(n),topic:n.meta.topic,body:outboundText(n.body).slice(0,1200),prerequisites:n.meta.prerequisites})))}) })).text);
+    if(!Array.isArray(parsed.packages)||!parsed.packages.length)fail('模型没有给出学习包。','MODEL_FORMAT');
+    for(const p of parsed.packages)if(!Array.isArray(p.noteIds)||p.noteIds.some(id=>!notes.some(n=>n.id===id)))fail('学习包包含不存在的材料。','INVALID_CITATION');
+    const body=`# 学习包建议（待你调整确认）\n\n${parsed.packages.map(p=>`## ${p.title}\n\n问题：${p.problem}\n\n顺序：\n${p.noteIds.map((id,i)=>`${i+1}. ${store.read(id).title}（${id}）`).join('\n')}\n\n前置缺口：${(p.prerequisites||[]).join('；')||'未指出'}\n\n预计 ${p.minutes} 分钟`).join('\n\n')}\n\n可在主题页选择这些知识，合并、拆分、调整顺序后确认。此报告没有将任何知识标为已掌握。`;
+    store.create({kind:'report',title:'AI 学习包建议',body,meta:{privacy:'local',generated:true,packages:parsed.packages}});
+  }
+  async function runJobs() {
+    if(processing||stopped||pausing)return;
+    const job=store.records('jobs').reverse().find(j=>j.state==='queued');if(!job)return;
+    processing=true;currentJob=job.id;controller=new AbortController();job.state='running';job.attempts++;job.error='';job.code=null;job.runtimeIssues=[];job.stopCode=null;putJob(job);
+    const execute = async () => { if(job.type==='process')await (ai.withBudget ? ai.withBudget({limit:settings().ai.sourceCallLimit,sourceId:job.payload.noteId},()=>processSource(job,controller.signal)) : processSource(job,controller.signal));else if(job.type==='title')await (ai.withBudget ? ai.withBudget({limit:settings().ai.sourceCallLimit,sourceId:job.payload.noteId},()=>generateSourceTitle(job,controller.signal)) : generateSourceTitle(job,controller.signal));else if(job.type==='structure')await (ai.withBudget ? ai.withBudget({limit:settings().ai.sourceCallLimit,sourceId:job.payload.noteId},()=>analyzeSourceStructure(job,controller.signal)) : analyzeSourceStructure(job,controller.signal));else if(job.type==='grade')await grade(job,controller.signal);else if(job.type==='relate')await (ai.withBudget ? ai.withBudget({limit:settings().ai.sourceCallLimit,sourceId:job.payload.noteId},()=>relate(job,controller.signal)) : relate(job,controller.signal));else if(job.type==='discover')await (ai.withBudget ? ai.withBudget({limit:settings().ai.sourceCallLimit,sourceId:'discovery'},()=>discover(job,controller.signal)) : discover(job,controller.signal));else if(job.type==='index')await rebuildIndex(job,controller.signal);else if(job.type==='topics')await suggestTopics(job,controller.signal);else fail('未知任务类型。'); };
+    try {
+      if (job.outboundIntentVersion !== 1 && !localJob(job)) fail('旧任务尚未按当前操作规则启动，请在任务页主动重试。', 'OUTBOUND_INTENT_REQUIRED');
+      const context = { key: 'job:' + job.id + ':' + (job.payload.hash || job.payload.turnId || ''), jobId: job.id, turnId: job.payload.turnId, purpose: job.type, singleRequest: job.type === 'grade' };
+      if (ai.withCallContext) await ai.withCallContext(context, execute); else await execute();
+      if(store.get('jobs',job.id)?.state!=='cancelled')putJob({...job,state:'done',progress:100});
+    }
+    catch(error){if(store.get('jobs',job.id)?.state!=='cancelled')putJob({...job,state:['OUTBOUND_INTENT_REQUIRED','PRIVACY_LOCAL','DISABLED','NOT_CONFIGURED','BUDGET_EXCEEDED','SOURCE_BUDGET','BUDGET_UNKNOWN','RESEARCH_INCOMPLETE','AI_DISABLED','MISSING_KEY','CAPABILITY_DISABLED','MISSING_CREDENTIALS','CALL_RECOVERY_REQUIRED','CALL_ACCOUNTING_FAILED','CALL_RESULT_SAVE_FAILED','CALL_PERSISTENCE_FAILED','CALL_RESULT_MISSING'].includes(error.code)?'waiting':'failed',error:String(error.message).slice(0,800),code:error.code||'TASK_FAILED'});}
+    finally{processing=false;controller=null;currentJob=null;}
+  }
+  function jobAction(id,{action}){if(pausing||stopped)fail('任务正在暂停，请稍后继续。','BUSY',409);const job=store.get('jobs',id);if(!job)fail('任务不存在。','NOT_FOUND',404);if(action==='cancel'){if(currentJob===id)controller?.abort();return putJob({...job,state:'cancelled',error:'用户取消；已保存的输入和回答保留。'});}if(action==='retry'){if(job.type==='structure'&&!['running','done'].includes(job.state)){const source=getNote(job.payload.noteId);job.payload.basis=structureBasis(source,sourceChildren(source.id));job.dedupKey=`structure:${source.id}:${hash(JSON.stringify(job.payload.basis))}`;const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}if(['running','done'].includes(job.state))fail('该任务当前不可重试。');if(job.type==='title'){const source=getNote(job.payload.noteId);if(!needsTitle(source))fail('标题已经填写，保留当前标题。','TITLE_ALREADY_SET');job.payload={noteId:source.id,hash:source.hash};job.dedupKey=`title:${source.id}:${source.hash}`;const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}if(job.type==='process'){const source=getNote(job.payload.noteId);if(source.hash!==job.payload.hash){job.payload={noteId:source.id,hash:source.hash,research:job.payload.research===true,...(needsTitle(source)?{titleRequested:true}:{})};job.dedupKey=`process:${source.id}:${source.hash}${job.payload.research ? ':research' : ''}`;job.progress=0;}const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}if(needsMaterialScope(job.type,job.payload))job.payload={...job.payload,snapshots:materialSnapshots(job.type)};return putJob({...job,outboundIntentVersion:1,state:'queued',error:'',code:null});}fail('任务操作无效。');}
+  function pauseJobs() {
+    if (pausePromise) return pausePromise;
+    pausing = true;
+    const interruptedId = currentJob;
+    controller?.abort();
+    pausePromise = (async () => {
+      while (processing || activeOperations) await new Promise(resolve => setTimeout(resolve, 20));
+      for (const job of store.records('jobs')) if (['queued','running'].includes(job.state) || job.id === interruptedId && job.state === 'failed') {
+        putJob({ ...job, state: 'waiting', code: 'PRACTICE_PAUSED', error: '练习已暂停；输入与回答已保存，请确认后手动重试。' });
+      }
+      return { paused: true };
+    })().finally(() => { pausing = false; pausePromise = null; });
+    return pausePromise;
+  }
+  function tick(){if(practice)return runJobs();store.ensureFresh();const cfg=settings(),date=learningDate(),time=new Intl.DateTimeFormat('en-GB',{timeZone:cfg.timezone,hour:'2-digit',minute:'2-digit',hour12:false}).format(date);if(time>=cfg.scheduleTime)today();const last=store.get('schedule','discovery');if(store.list().some(n=>n.kind==='knowledge')&&(!last||date.getTime()-Date.parse(last.at)>cfg.discoveryDays*86400000))queue('discover',{},`discovery:${localDay(date,cfg.timezone)}`);return runJobs();}
+  function demo(){const existing=store.list().filter(n=>n.meta.demo);if(existing.length)return{notes:existing};const source=store.create({kind:'source',title:'演示资料 · 小林的读书项目',body:'【虚构演示，不代表用户真实经历】小林正在整理一份读书报告。他保存了原始摘录，希望用自己的话说明观点，再找到能支持或反对它的材料。此条用于体验输入、查找和编辑。',meta:{demo:true,privacy:'local',platform:'内置演示'}});const note=store.create({kind:'knowledge',title:'演示知识 · 给读书报告保留出处',body:'【演示设定】为小林的读书报告记录：一句观点、对应原文、页码，以及哪些条件会限制该观点。\n\n练习：假设你是小林，请用自己的话说明报告中为何要保留出处。这个练习仅针对上述虚构任务，没有预先记录任何学习成绩。',meta:{demo:true,privacy:'local',stage:'candidate',topic:'读书与表达',depth:'explain',sources:[{id:source.id,role:'input'}],promotionReason:'用于试用学习流程，可自行加入学习。'}});return{notes:[source,note]};}
+  function diagnostics() {
+    store.scan();
+    const notes=store.list(), allowed=notes.filter(n=>privacyFor(n)==='cloud'&&['knowledge','source','topic'].includes(n.kind)&&n.meta.stage!=='retired'&&!n.meta.supersededBy);
+    const chunks=store.db.prepare('SELECT COUNT(*) count,SUM(CASE WHEN vector IS NOT NULL AND model=? THEN 1 ELSE 0 END) vectors FROM index_chunks').get(settings().embedding.model);
+    const pending=store.missingEmbeddings({model:settings().embedding.model,noteIds:allowed.map(n=>n.id)}).length;
+    const pendingLinks=store.pendingManagedLinks().map(p=>({id:p.id,title:store.read(p.id).title,conflict:p.conflict}));
+    return {usage:usage(),calls:callsWithPurpose().slice(0,100),index:{...chunks,pending,notes:notes.length,method:'中文关键词与可选语义检索；现有片段保留，缺失向量需手动更新，保存资料不会自动外发'},mcp:{...settings().mcp,transport:'stdio',tools:['search_knowledge','read_note','read_source','related_knowledge','propose_change'],events:store.records('mcpCalls').slice(0,30)},storage:{vaultDir:store.vaultDir,dataDir:store.dataDir,conflicts:store.conflicts,pendingLinks,retention:'删除移除当前文件与检索缓存；历史版本和你此前导出的备份仍保留。JSON备份包含Markdown、运行记录及笔记/历史引用的受管理附件；完整JSON最多100 MB（100,000,000字节）。外部附件和.obsidian仍需另存整个Vault；撤销上传不删除字节。'},sessions:store.records('sessions').slice(0,20)};
+  }
+  function backup(){const config=settings(), result={...store.backup(),...(practice?{purpose:practicePurpose}:{}),preferences:practice?Object.fromEntries(practicePreferences.map(key=>[key,config[key]])):config};assertBackupSize(result);return result;}
+  function restore({backup:input,preview=true,token}) {
+    if (practice !== (input?.purpose === practicePurpose)) fail(practice ? '练习空间只能恢复新手练习备份。' : '新手练习备份不能恢复到正式知识库。', 'BACKUP_PURPOSE_MISMATCH', 409);
+    if (processing || activeOperations || pausing) fail('请等待或取消正在运行的任务后恢复。', 'BUSY', 409);
+    if (!input || typeof input !== 'object' || Array.isArray(input)) fail('备份须为键值对象。');
+    const digest = hash(assertBackupSize(input));
+    if (input.preferences !== undefined && (!input.preferences || typeof input.preferences !== 'object' || Array.isArray(input.preferences))) fail('备份偏好设置须为键值对象。');
+    const preferences = practice ? Object.fromEntries(practicePreferences.filter(key => Object.hasOwn(input.preferences || {}, key)).map(key => [key, input.preferences[key]])) : { ...input.preferences };
+    delete preferences.vaultDir; delete preferences.dataDir;
+    if (!practice) for (const group of ['ai','embedding','search']) {
+      if (preferences[group] && (Object.hasOwn(preferences[group], 'apiKey') || Object.hasOwn(preferences[group], 'clearKey'))) fail('备份不能包含密钥或更改本机凭据。');
+    }
+    // Validate the supplied switches before forcing safe defaults; invalid types are not hidden.
+    const currentConfig = settings(), { next } = validateSettings(preferences, currentConfig, defaults);
+    const safeEndpoint = value => { if (!value) return ''; try { const url = new URL(value); return `${url.origin}${url.pathname}`; } catch { return '无效地址'; } };
+    const mcpFlags = config => Object.fromEntries(Object.keys(defaults.mcp).map(key => [key, config[key]]));
+    const settingsPreview = practice ? { notice: '练习备份只恢复学习偏好；外部能力继续继承正式设置。' } : {
+      providers: ['ai','embedding','search'].map(group => ({ capability: group === 'ai' ? '模型' : group === 'embedding' ? '语义服务' : '搜索',
+        current: { baseUrl: safeEndpoint(currentConfig[group].baseUrl), model: currentConfig[group].model || '' },
+        backup: { baseUrl: safeEndpoint(next[group].baseUrl), model: next[group].model || '' } })),
+      permissions: ['ai','embedding','search','fetch','mcp'].map(group => ({ capability: group, current: currentConfig[group].enabled, backup: next[group].enabled, afterRestore: false })),
+      mcpPermissions: { current: mcpFlags(currentConfig.mcp), backup: mcpFlags(next.mcp), afterRestore: { ...defaults.mcp } },
+      allExternalCapabilitiesDisabled: true,
+      notice: '恢复后模型、语义、搜索、网页读取和 MCP 均保持关闭。本机凭据保留；变更地址或模型后须重新配置对应密钥。',
+    };
+    if (!practice) {
+      for (const group of externalCapabilities) next[group].enabled = false;
+      next.mcp = { ...defaults.mcp };
+    }
+    next.vaultDir = store.vaultDir;
+    const restoredSettings = practice ? Object.fromEntries(practicePreferences.map(key => [key, next[key]])) : next;
+    const info = store.validateBackup(input);
+    if (preview) {
+      const pendingTasksRequiringConfirmation = input.records.filter(record => record.namespace === 'jobs' && ['queued','running'].includes(JSON.parse(record.json)?.state)).length;
+      const token = randomUUID(); store.put('restore', token, { digest, at: now() });
+      return { ...info, settingsChanges: settingsPreview, pendingTasksRequiringConfirmation, taskNotice: '恢复的排队与运行任务等待确认，不会自动执行；请在任务页手动重试。', token };
+    }
+    const saved = store.get('restore', token);
+    if (!saved || saved.digest !== digest || Date.now() - Date.parse(saved.at) > 600000) fail('恢复预览已过期或内容改变，请重新预览。', 'CONFLICT', 409);
+    const records = input.records.map(record => {
+      if (record.namespace !== 'jobs') return record;
+      const job = JSON.parse(record.json);
+      return ['queued','running'].includes(job?.state) ? { ...record, json: JSON.stringify({ ...job, state: 'waiting', code: 'RESTORE_CONFIRMATION_REQUIRED', error: '备份任务已恢复；为避免重复计费，请确认后手动重试。', updatedAt: now() }) } : record;
+    });
+    const result = store.restore({ ...input, records }, { settings: restoredSettings });
+    jobRevision = randomUUID();
+    return result;
+  }
+  const localJob = job => ['discover','relate'].includes(job.type) && job.payload?.useAI !== true;
+  function recoverJobs({ restored = false } = {}) {
+    for (const job of store.records('jobs')) {
+      const legacyOutbound = !localJob(job) && (job.outboundIntentVersion !== 1 || needsMaterialScope(job.type,job.payload) && !validMaterialSnapshots(job.payload.snapshots));
+      if (job.state === 'running' || job.state === 'queued' && (restored || practice || legacyOutbound)) {
+        putJob({ ...job, state: 'waiting', ...(legacyOutbound ? { code: 'OUTBOUND_INTENT_REQUIRED' } : {}), error: legacyOutbound
+          ? '旧任务不会因升级自动外发；需要继续时，请主动运行 AI 操作或重试任务。'
+          : '服务曾停止或备份已恢复；为避免重复计费，请在任务页主动重试。' });
+      }
+    }
+  }
+  recoverJobs();
+  const undoAuthority = Symbol('local CSRF confirmed capture undo');
+  const undoController = createChatgptUndo({ getStore: () => store, localAuthority: undoAuthority });
+  const requireCapture = () => { if (settings().mcp.chatgptEnabled !== true) fail('ChatGPT 接入尚未启用。', 'CHATGPT_DISABLED', 403); };
+  const chatgptUndo = {
+    list() { return { requests: settings().mcp.chatgptEnabled ? undoController.list() : [] }; },
+    preview(input) { requireCapture(); return undoController.preview(input); },
+    previewRestore(input) { requireCapture(); return undoController.previewRestore(input); },
+    confirmUndo(input) { requireCapture(); return undoController.confirmUndo(input, undoAuthority); },
+    confirmRestore(input) { requireCapture(); return undoController.confirmRestore(input, undoAuthority); },
+  };
+  const chatgpt = createChatgptBridge({ getStore: () => store, settings, search: tracked(search), getNote, readStructure: id => readImportedView(store,getNote(id)), related, undo: chatgptUndo, receiveSnapshot: receiveHistorySnapshot });
+  sourceFiles = createSourceFiles({ store, getNote });
+  const uploadFile = input => sourceFiles.receive(input);
+  const revertUpload = id => sourceFiles.revert(id);
+  const commitFile = tracked(input => sourceFiles.commit(input));
+  const readFile = (id, assetId) => sourceFiles.read(id, assetId);
+  const pendingUploads = () => sourceFiles.pending();
+  return { get store(){return store;}, get processing(){return processing;}, get hasPendingOperations(){return processing||activeOperations>0||pausing;}, chatgpt, chatgptUndo, learningNow, settings, updateSettings, capabilityTests, getPrompts, updatePrompts, usage, usageReport, updateUsageSettings, callRecovery, recoverCall, ai, importItems, processNote, requestSourceStructure, editSourceStructure, listNotes, publicNote, publicJob, library, readPublicNote, noteEvidence, linksPreview, syncLinks, getNote, editNote, extractNote, promote, confirmNote, merge, search:tracked(search), today, planAction, startStudy, session, answerStudy, hintStudy, confirmStudy, finishStudy, mistakeAction, topics, createTopic, updateTopic, topicAction, recommendations, recommendationAction, requestRelations, relationReview, relationAction, related, ask:tracked(ask), updateDraft, propose, proposalAction, queue, runJobs, pauseJobs, jobAction, tick, demo, diagnostics, backup, restore,
+    jobStatuses, rebuildLocalSearch,
+    bootstrap(){return{settings:settings(),stats:{notes:store.list().filter(n=>!n.meta.excerptOnly).length,sources:store.list().filter(n=>n.kind==='source'&&!n.meta.excerptOnly).length,knowledge:store.list().filter(n=>n.kind==='knowledge').length,pending:store.records('jobs').filter(j=>['waiting','failed'].includes(j.state)).length},today:today(),notes:listNotes().filter(n=>!n.meta.excerptOnly).map(publicNote),jobs:store.records('jobs').map(publicJob),jobRevision,jobSnapshot:++jobSnapshot,conflicts:store.conflicts,capabilities:{offline:true,model:settings().ai.enabled,embedding:settings().embedding.enabled,search:settings().search.enabled}};},
+    uploadFile, revertUpload, commitFile, readFile, pendingUploads,
+    async close(){stopped=true;if(practice)await pauseJobs();else{controller?.abort();while(processing||activeOperations)await new Promise(resolve=>setTimeout(resolve,20));}store.close();}
+  };
+}

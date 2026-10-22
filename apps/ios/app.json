@@ -1,0 +1,33 @@
+{
+  "expo": {
+    "name": "知序",
+    "slug": "zhixu-ios",
+    "version": "0.1.0",
+    "scheme": "zhixu",
+    "platforms": [
+      "ios"
+    ],
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.zhixu.learning",
+      "infoPlist": {
+        "UIFileSharingEnabled": false,
+        "LSSupportsOpeningDocumentsInPlace": false,
+        "CADisableMinimumFrameDurationOnPhone": true,
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": false
+        }
+      }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-sqlite",
+      "expo-document-picker",
+      "expo-sharing"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
