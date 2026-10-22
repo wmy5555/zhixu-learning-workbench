@@ -87,6 +87,57 @@ test('practice clock advances actual review rules while main dates, files and AP
   assert.equal(h.main.store.records('studyEvidence').length, 0);
 });
 
+test('next review retains material warnings after a settled practice and personal confirmation', async t => {
+  const h = harness(t, { ai: {
+    async test() { return { message: 'controlled offline' }; },
+    async generate() { return { text: JSON.stringify({ assessment: 'incorrect', feedback: '受控反馈：需要再练', nextQuestion: '再说明一次条件。' }) }; },
+  } });
+  const started = h.manager.start(); await h.ready();
+  const p = h.manager.currentService, id = started.roles.explain;
+  p.store.update(id, { expectedHash: p.getNote(id).hash, meta: { claimType: 'fact', researchLimitations: ['合成事实尚待核验。'] } });
+  p.promote(id, { stage: 'learning', depth: 'explain', reason: '受控练习' });
+  const session = p.startStudy({ noteId: id });
+  p.answerStudy(session.id, { answer: '受控回答，保留待核验提醒。', requestId: randomUUID() });
+  for (let i = 0; i < 15 && p.store.records('jobs').some(job => job.state === 'queued'); i++) await h.manager.pump();
+  const finished = p.finishStudy(session.id);
+  assert.equal(finished.completion.reviewSettled, true);
+  assert.equal(finished.completion.evidence.assessment, 'needs_practice');
+  p.confirmNote(id, { body: '我亲自确认的合成理解。', expectedHash: p.getNote(id).hash });
+  for (let i = 0; i < 15 && p.store.records('jobs').some(job => job.state === 'queued'); i++) await h.manager.pump();
+  const dueAt = p.store.get('reviews', id).dueAt, mainDay = h.main.today().date;
+  const advanced = h.manager.advance(started.practiceId, 'next');
+  assert.ok(Date.parse(advanced.clock.now) > Date.parse(dueAt));
+  assert.equal(advanced.progress['review-clock-due'].status, 'done');
+  assert.equal(advanced.progress['review-finish'].status, 'pending', 'advancing time is not completed review evidence');
+  const plan = p.today().items.find(item => item.noteId === id && item.state === 'pending');
+  assert.equal(plan.kind, 'review');
+  assert.deepEqual(plan.materialWarnings, ['合成事实尚待核验。']);
+  assert.deepEqual(p.noteEvidence(id).limitations, ['合成事实尚待核验。']);
+  assert.equal(h.main.today().date, mainDay);
+  assert.equal(h.main.store.records('reviews').length, 0);
+});
+
+test('next review still excludes paused, retired, superseded and preset material', async t => {
+  const h = harness(t), started = h.manager.start(); await h.ready();
+  const p = h.manager.currentService, id = started.roles.explain;
+  const original = p.getNote(id), dueAt = new Date(Date.parse(started.clock.now) + 86400000).toISOString();
+  const review = { noteId: id, dueAt };
+  for (const change of [
+    { meta: { stage: 'retired' } },
+    { meta: { stage: 'candidate' } },
+    { meta: { supersededBy: 'replacement' } },
+    { meta: { presetCase: 'hints' } },
+    { paused: true },
+    { presetReview: true },
+  ]) {
+    p.store.update(id, { expectedHash: p.getNote(id).hash, meta: { ...original.meta, stage: 'learning', supersededBy: null, presetCase: null, ...change.meta } });
+    p.updateSettings({ pausedIds: change.paused ? [id] : [] });
+    p.store.put('reviews', id, { ...review, ...(change.presetReview ? { presetCase: 'hints' } : {}) });
+    assert.throws(() => h.manager.advance(started.practiceId, 'next'), { code: 'NO_REVIEW' });
+    assert.equal(h.manager.state().progress['review-clock-due'].status, 'pending');
+  }
+});
+
 test('pause, restart and resume keep unstarted paid jobs waiting and preserve the simulated date', async t => {
   const h = harness(t); const start = h.manager.start(); await h.ready();
   const p = h.manager.currentService;
