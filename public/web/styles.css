@@ -105,9 +105,6 @@ input[type="file"]:disabled::file-selector-button { cursor:default; }
 .check { display:flex; align-items:center; gap:9px; font-size:13px; line-height:1.8; cursor:pointer; }
 .check:has(input:disabled) { opacity:.45; cursor:not-allowed; }
 .capture-layout { display:grid; grid-template-columns:minmax(0,1fr) 260px; gap:58px; align-items:start; }
-.capture-file-area { grid-column:1; grid-row:2; padding:20px; border-top:1px solid var(--line); font-size:13px; }
-.capture-file-area summary { cursor:pointer; }
-.capture-file-area input,.capture-file-area p { margin:14px 0; }
 .capture-aside { grid-column:2; grid-row:1 / span 2; }
 .reader-menu { display:grid; gap:20px; min-width:0; }
 .reader-menu-title { margin:0; color:var(--secondary); font-size:13px; line-height:1.7; overflow-wrap:anywhere; }
@@ -164,10 +161,6 @@ input[type="file"]:disabled::file-selector-button { cursor:default; }
 .capture-steps li > span { font:italic 20px Georgia,serif; color:var(--accent-ink); opacity:.7; }
 .capture-steps strong { font:500 17px var(--font-editorial); }
 .capture-steps p { font-size:12px; color:var(--secondary); margin-top:7px; line-height:1.8; }
-.file-drop { display:grid; gap:10px; border-top:1px solid var(--line); padding-top:24px; cursor:pointer; }
-.file-drop > svg { color:var(--accent); }
-.file-drop strong { font-size:14px; font-weight:500; }
-.file-drop span { font-size:12px; color:var(--secondary); }
 .library-toolbar { display:flex; align-items:center; justify-content:space-between; gap:20px; border-bottom:1px solid var(--line); padding:0 0 23px; margin-bottom:28px; }
 .segmented { display:flex; align-items:center; padding:4px; border-radius:9px; gap:5px; background:var(--soft); width:fit-content; max-width:100%; }
 .segmented button,.segmented label { padding:8px 16px; font-size:13px; border-radius:6px; white-space:nowrap; cursor:pointer; }
@@ -494,3 +487,37 @@ input[type="file"]:disabled::file-selector-button { cursor:default; }
 
 /* Optional arrangement reason: hide the hint while typing. */
 dialog textarea[name="reason"]:focus::placeholder { color:transparent; }
+
+/* Unified capture picker: quiet surfaces, local feedback and existing CDS motion. */
+.capture-files { border-top:1px solid var(--line); padding-top:24px; min-width:0; }
+.capture-drop { display:grid; justify-items:start; gap:12px; padding:20px; border:1px dashed var(--line); border-radius:12px; background:var(--canvas); transition:background-color .18s var(--easing),border-color .18s var(--easing); }
+.capture-drop strong { font-size:16px; font-weight:500; }
+.capture-drop p { font-size:12px; margin:0; color:var(--secondary); }
+.capture-file-icon { color:var(--accent); }
+.capture-drop .secondary { min-height:40px; padding:8px 16px; }
+.capture-drop.is-dragging { border-color:var(--accent); background:color-mix(in srgb,var(--accent) 7%,var(--canvas)); }
+.capture-drop.has-error { border-color:var(--danger); }
+.capture-file-formats { font-size:12px; line-height:1.8; color:var(--secondary); }
+.capture-file-formats { margin-top:12px; }
+.capture-file-formats summary { cursor:pointer; }
+.capture-file-formats p { margin:8px 0; }
+.capture-file-feedback { display:flex; align-items:start; gap:8px; margin-top:14px; padding:14px; border-radius:10px; background:color-mix(in srgb,var(--danger) 8%,var(--canvas)); color:var(--danger); }
+.capture-file-feedback[hidden],.capture-save-files[hidden] { display:none; }
+.capture-file-feedback > div { flex:1; min-width:0; }
+.capture-file-feedback strong { font-size:13px; font-weight:500; }
+.capture-file-feedback p,.capture-file-row p { font-size:12px; line-height:1.7; margin:5px 0 0; overflow-wrap:anywhere; }
+.capture-file-feedback button,.capture-file-row > button { flex:none; padding:4px; color:inherit; }
+.capture-file-row { display:flex; align-items:start; gap:8px; border-bottom:1px solid var(--line); padding:14px 0; }
+.capture-file-row > div { flex:1; min-width:0; }
+.capture-file-row strong { display:block; font-size:13px; font-weight:500; overflow-wrap:anywhere; }
+.capture-file-row small { display:block; margin-top:4px; font-size:11px; color:var(--secondary); }
+.capture-file-row p { color:var(--danger); }
+.capture-file-row .text-button { font-size:12px; }
+.capture-save-files { margin-top:14px; width:100%; }
+.capture-file-status { font-size:12px; line-height:1.7; overflow-wrap:anywhere; }
+@media(prefers-reduced-motion:reduce) { .capture-drop { transition:none; } }
+
+@media(max-width:1000px) {
+  .capture-aside { display:block; grid-column:1; grid-row:auto; padding-top:0; }
+  .capture-aside > :not(.capture-files) { display:none; }
+}
