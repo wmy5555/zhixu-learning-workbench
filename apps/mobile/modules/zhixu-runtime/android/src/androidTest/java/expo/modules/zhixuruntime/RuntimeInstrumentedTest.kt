@@ -58,7 +58,8 @@ class RuntimeInstrumentedTest {
   }
   @Test fun keystoreRoundTripRejectsTamperingAndMissingKeys() {
     val secrets = DeviceSecrets(alias)
-    val a = secrets.seal("合成凭据"), b = secrets.seal("合成凭据")
+    val a = secrets.seal("合成凭据")
+    val b = secrets.seal("合成凭据")
     assertNotEquals(a, b)
     assertEquals("合成凭据", secrets.open(a))
     val tampered = Base64.decode(a, Base64.DEFAULT)

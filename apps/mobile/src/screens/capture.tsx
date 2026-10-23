@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { router } from "expo-router";
 import { useWorkbench, useDraftFlush } from "../services/app-state";
 import {
@@ -12,6 +12,7 @@ import {
 } from "../components/workbench-ui";
 import { pickFile } from "../services/files";
 import runtime from "../platform/runtime.native.js";
+import { afterTextSave } from "../services/capture-state.mjs";
 function CaptureForm() {
   const { api, working } = useWorkbench();
   const [title, setTitle] = useState(""),
@@ -23,15 +24,19 @@ function CaptureForm() {
     [pendingFile, setPendingFile] = useState<any>(null),
     [metadata, setMetadata] = useState<any>({}),
     [showMetadata, setShowMetadata] = useState(false);
+  const currentDraft = useRef({ title, body, metadata, pendingFile });
+  useLayoutEffect(() => {
+    currentDraft.current = { title, body, metadata, pendingFile };
+  }, [title, body, metadata, pendingFile]);
   const flushDraft = useCallback(
     () =>
       hydrated
         ? api.put("/api/draft-work", {
             id: "capture",
-            value: { title, body, metadata, pendingFile },
+            value: currentDraft.current,
           })
         : Promise.resolve(),
-    [api, hydrated, title, body, metadata, pendingFile],
+    [api, hydrated],
   );
   useDraftFlush(flushDraft);
   useEffect(() => {
@@ -54,21 +59,27 @@ function CaptureForm() {
       void flushDraft().catch((e) => setError(e.message));
     }, 700);
     return () => clearTimeout(timer);
-  }, [flushDraft, hydrated]);
+  }, [flushDraft, hydrated, title, body, metadata, pendingFile]);
   async function save() {
     setError("");
     try {
+      const submitted = currentDraft.current;
       const result = await api.post("/api/import", {
         items: [{ title, body, ...metadata }],
         process,
         research: process && research,
       });
-      setBody("");
-      setTitle("");
+      const next = afterTextSave(submitted, currentDraft.current);
+      currentDraft.current = next.draft;
+      if (!next.changed) {
+        setBody("");
+        setTitle("");
+      }
       setProcess(false);
       setResearch(false);
-      await api.remove("/api/draft-work", { id: "capture" });
-      if (result.notes?.[0]) openNote(result.notes[0].id);
+      await api.put("/api/draft-work", { id: "capture", value: next.draft });
+      if (next.changed) setError("提交时的原文已保存，后续输入仍保留在这里。");
+      else if (result.notes?.[0]) openNote(result.notes[0].id);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -181,8 +192,12 @@ function CaptureForm() {
             secondary
             disabled={working}
             onPress={async () => {
-              await api.remove("/api/uploads/" + pendingFile.uploadId);
-              setPendingFile(null);
+              try {
+                await api.remove("/api/uploads/" + pendingFile.uploadId);
+                setPendingFile(null);
+              } catch (e) {
+                setError((e as Error).message);
+              }
             }}
           />
         </Card>

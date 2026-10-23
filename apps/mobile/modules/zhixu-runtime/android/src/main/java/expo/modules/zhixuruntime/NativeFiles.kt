@@ -64,8 +64,8 @@ internal class NativeFiles(val root: File) {
       (file.listFiles() ?: throw RuntimeFailure("EACCES", "无法读取目录")).forEach {
         remove(checked(it.path), true)
       }
-      Os.rmdir(file.path)
-    } else Os.unlink(file.path)
+      Os.remove(file.path)
+    } else Os.remove(file.path)
   }
 
   fun call(operation: String, args: JSONObject): Any {
@@ -100,7 +100,10 @@ internal class NativeFiles(val root: File) {
         notRoot(file)
         if (statOrNull(file) == null && args.optBoolean("force")) JSONObject.NULL
         else {
-          if (operation == "unlink") Os.unlink(file.path) else remove(file, args.optBoolean("recursive"))
+          if (operation == "unlink") {
+            if (OsConstants.S_ISDIR(Os.lstat(file.path).st_mode)) throw RuntimeFailure("EISDIR", "不能用 unlink 删除目录")
+            Os.remove(file.path)
+          } else remove(file, args.optBoolean("recursive"))
           JSONObject.NULL
         }
       }

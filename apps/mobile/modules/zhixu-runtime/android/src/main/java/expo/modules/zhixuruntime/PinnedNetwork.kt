@@ -68,9 +68,11 @@ internal class PinnedNetwork {
     }
     request.header("Accept-Encoding", "identity").header("Connection", "close")
       .method(method, if (method == "POST") bytes.toRequestBody(null) else null)
-    val client = base.newBuilder().dns(Dns { hostname ->
-      if (!hostname.equals(url.host, true)) throw IOException("Unexpected hostname")
-      listOf(pinned)
+    val client = base.newBuilder().dns(object : Dns {
+      override fun lookup(hostname: String): List<InetAddress> {
+        if (!hostname.equals(url.host, true)) throw IOException("Unexpected hostname")
+        return listOf(pinned)
+      }
     }).build()
     return client.newCall(request.build())
   }

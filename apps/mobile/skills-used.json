@@ -27,5 +27,13 @@
     "Local persistence, keyboard-aware forms, draft and conflict protection",
     "Device verification explicitly deferred; source checks are not device acceptance"
   ],
-  "selection": "User chose Expo + React Native; the initially downloaded SwiftUI skill is not the implementation route."
+  "selection": "Android reuses the authorized Expo/React Native iOS candidate and current 4318 baseline. iOS-only prior verification is retained separately.",
+  "androidApplied": [
+    "expo-module",
+    "expo-native-ui",
+    "expo-ui",
+    "expo-router",
+    "expo-data-fetching",
+    "lean-verification"
+  ]
 }
