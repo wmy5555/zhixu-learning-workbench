@@ -39,3 +39,14 @@
 - 首版 cd746c031ee0887380fab0ee76df4f0a29a48035 已通过 CI39939771940 并实际安装；最终 APK SHA256 d22c58f11dbe299423ba8f60db9b434155261fe418852f75fbe6c79818824551。非 debuggable，沿用开发签名，未发布应用商店。五个导航图标/标签可见，升级前编辑的合成笔记保留。
 - 基本收集/阅读/编辑保存、系统返回未保存确认、继续编辑/放弃、重启保留已经实际操作通过；输入法开启时第一下 Back 先关输入法，下一下才触发页面返回。最终图标改动复用此前有效业务验证，只补安装和显示确认。真实 AI、实体手机、万条性能与自动中断恢复没有宣称通过；两项构建依赖 high 告警仍在。
 - PowerShell ConvertTo-Json 输出的新验收 JSON 需显式保存为 LF；本仓库 diff --check 将未归一的 CRLF 识别为行末空白。只归一新文件，不全库格式化。
+
+## Android 组合原型落地（2026-10-23）
+
+- 用户已明确授权依托 D 组合原型开始正式 Android 实现，并要求实际使用 Emil skills 修正细节。保留原 iOS 页面文件，Android 使用 .android.tsx；五个页面对应及具体原则见 apps/mobile/ANDROID_UI.md。没有更改正式 4318 或业务数据存储、网络/授权机制。
+- 安全区放在 Android 主导航外壳，不让大标题直接进入状态栏。主页面始终由左上角知序打开侧栏；全部次级功能保留真实入口。系统返回先关闭原生 Modal 侧栏，详情仍走既有原生 Stack 与未保存保护。
+- 已安装 Expo 58 的 JS Tabs 不是旧 React Navigation 签名：BottomTabBarProps 是 emitter/navigateToTab，不是 navigation；initialRouteName 已不接受，首页由 index 路由确定。以真实 installed types/source 为准，不能只复制旧示例。
+- Reanimated CSS 动效的曲线需 cubicBezier(...) 对象，不接受 CSS cubic-bezier 字符串；RN0.88 原生 ref 用 React.ComponentRef<typeof View>。只对 transform/opacity 动画，未对列表或 Tab 页面加 slide。
+- 图标用本地原创 SVG + 已安装 expo-image，不再依赖 Material 字体异步转图。无新增依赖，避免扩大打包和安全审计范围。
+- 原型的示例学习数据不能照搬。Today使用真实计划；Study优先当前已读历史页的未结束会话，再使用真实今日pending，统计来自已读服务字段。
+- 收集/应用草稿hydration和离开flush保留。输出提交在await保存前固定完整请求快照，旧请求结果与错误不能覆盖后来输入；3个延迟Promise用例与2个原文保存回归共5项通过。Typecheck/lint、85模块native检查通过，后续只按新增问题补验证。
+- Android versionCode递增至2，版本名仍0.1.0；沿用独立包名与签名，不卸载主App、不清数据。APK构建和设备结果另补，不能把本地通过当作原生交付。

@@ -1,18 +1,21 @@
 import React from "react";
+import { Platform } from "react-native";
+import { SafeAreaProvider, SafeAreaView, initialWindowMetrics } from "react-native-safe-area-context";
 import { Stack } from "expo-router/stack";
 import { StatusBar } from "expo-status-bar";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { WorkbenchProvider, useWorkbench } from "@/services/app-state";
 import { Body, Label, usePalette } from "@/components/workbench-ui";
+import { AndroidDesignProvider } from "@/components/android-design";
 function Routes() {
   const { ready, startupError, practiceId } = useWorkbench(),
     c = usePalette();
   if (!ready)
     return (
-      <Body>
+      <SafeAreaView style={{ flex: 1, backgroundColor: c.background }}><Body>
         <Label>{startupError || "正在打开资料库…"}</Label>
-      </Body>
+      </Body></SafeAreaView>
     );
   return (
     <>
@@ -49,7 +52,7 @@ function Routes() {
   );
 }
 export default function Layout() {
-  return (
+  const content = (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <KeyboardProvider>
         <WorkbenchProvider>
@@ -58,4 +61,5 @@ export default function Layout() {
       </KeyboardProvider>
     </GestureHandlerRootView>
   );
+  return Platform.OS === "android" ? <SafeAreaProvider initialMetrics={initialWindowMetrics}><AndroidDesignProvider>{content}</AndroidDesignProvider></SafeAreaProvider> : content;
 }
