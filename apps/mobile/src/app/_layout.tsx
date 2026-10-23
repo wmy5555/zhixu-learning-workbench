@@ -27,6 +27,12 @@ function Routes() {
       <Stack.Screen name="note/[id]" options={{ title: "阅读" }} />
       <Stack.Screen name="session/[id]" options={{ title: "学习" }} />
       <Stack.Screen name="section/[name]" options={{ title: "知序" }} />
+      <Stack.Screen name="search" options={{ title: "检索" }} />
+      <Stack.Screen name="focus" options={{ title: "专注" }} />
+      <Stack.Screen name="batch" options={{ title: "批量导入" }} />
+      <Stack.Screen name="structure" options={{ title: "资料结构" }} />
+      <Stack.Screen name="merge" options={{ title: "合并知识" }} />
+      <Stack.Screen name="appearance" options={{ title: "外观" }} />
       <Stack.Screen
         name="form"
         options={{
