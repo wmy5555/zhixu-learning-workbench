@@ -1,6 +1,6 @@
 import { escape as e, markdown } from './markdown.mjs';
 import { $, button as btn, routeButton as link, field, area, heading, modal, confirm, busy, notify } from './ui.mjs';
-import { list, select, details, facts, paginate } from './parity.mjs';
+import { list, details, facts } from './parity.mjs';
 import { endpoint } from './api.mjs';
 
 export const validAccent = value => /^#[\da-f]{6}$/i.test(value||'');
@@ -29,9 +29,6 @@ export function initializeAccent() {
   new MutationObserver(()=>applyAccent(saved)).observe(document.documentElement,{attributes:true,attributeFilter:['class']});
   window.addEventListener('storage',ev=>{if(ev.key===accentKey){saved=validAccent(ev.newValue)?ev.newValue:null;applyAccent(saved);}});
   return {get:()=>saved,save:value=>{if(value!==null&&!validAccent(value))throw Error('颜色代码无效。');if(value===null)localStorage.removeItem(accentKey);else localStorage.setItem(accentKey,value);saved=value;applyAccent(value);}};
-}
-function download(name,text,mime='application/json') {
-  const url=URL.createObjectURL(new Blob([text],{type:mime})),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 export function createManagement(ctx,appearance) {
   const {api,state,go,refreshBoot,submit,watchForm,savedForm}=ctx;
@@ -85,34 +82,7 @@ export function createManagement(ctx,appearance) {
     const data=await api.get('/api/prompts');
     return {html:heading('A THOUGHTFUL ASSISTANT','让提示词，贴近你的思考。','保留模板中的必需变量；保存不会调用 AI。',link('回到设置','settings','text-button'))+nav()+list(data.prompts).map(p=>details(p.label||p.name||p.key,`<form data-prompt="${e(p.key)}">${area('模板','template',{value:p.template,rows:12})}<p class="form-note">${e(p.description||'')}</p>${facts([['变量',p.variables]])}<div class="actions"><button class="primary" type="submit">保存模板</button><button type="button" class="text-button" data-default>恢复默认内容</button></div></form>`)).join(''),bind(){document.querySelectorAll('[data-prompt]').forEach(form=>{const p=data.prompts.find(p=>p.key===form.dataset.prompt);watchForm(form);form.querySelector('[data-default]').onclick=()=>{form.elements.template.value=p.defaultTemplate;form.dispatchEvent(new Event('input',{bubbles:true}));};submit(form,async values=>{await api.put('/api/prompts',{prompts:{[p.key]:values.template}});savedForm(form);notify('模板已保存。');});});}};
   }
-  async function usage() {
-    let [report,s]=await Promise.all([api.get('/api/usage?period=month'),api.get('/api/settings')]);
-    const labels={calls:'调用次数',failedCalls:'失败调用',totalTokens:'已知 Token',inputTokens:'输入 Token',outputTokens:'输出 Token',cachedInputTokens:'缓存输入',cost:'费用合计',knownCost:'已知费用',unknownCostCalls:'费用未知调用',unknownTokenCalls:'Token 未知调用',pendingCalls:'未结算调用',unknownResultCalls:'结果未明确调用'};
-    const table=(rows,fields)=>'<div class="data-table-wrap"><table><thead><tr>'+fields.map(([,l])=>'<th>'+l+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+fields.map(([k])=>'<td>'+e(r[k]??'未知')+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>';
-    const price=(group,name,label)=>field(label,group+'.'+name,{type:'number',value:s[group]?.[name]??'',extra:'min="0" step="any"'});
-    const fields=[['createdAt','时间'],['model','模型'],['purposeLabel','用途'],['inputTokens','输入'],['outputTokens','输出'],['cost','费用']];
-    return {html:heading('KNOW THE COST','看清工具用了多少。','缺失的用量与价格保留未知。历史费用不会按新单价重算。',link('回到设置','settings','text-button'))+nav()+
-      '<div class="advanced-settings"><form id="usage-filter"><div class="form-grid">'+select('时间范围','period',[['today','今天'],['7d','近 7 天'],['30d','近 30 天'],['month','本月']],'month')+select('调用能力','capability',[['','全部能力'],['model','文本模型'],['embedding','语义嵌入'],['search','联网搜索'],['fetch','网页读取']])+select('模型','model',[['','全部模型'],...list(report.availableModels).map(x=>[x,x])])+select('用途','purpose',[['','全部用途'],...list(report.availablePurposes)])+'</div><button class="secondary" type="submit">更新统计</button></form><section id="usage-summary"></section><section><h2>每日趋势</h2><div id="usage-daily"></div></section><section><h2>按模型统计</h2><div id="usage-models"></div></section><section><h2>价格与预算</h2><form id="pricing"><div class="form-grid">'+field('每日调用上限','dailyCallLimit',{type:'number',value:s.ai.dailyCallLimit,extra:'min="0"'})+field('每月预算（0 表示不限）','monthlyBudget',{type:'number',value:s.ai.monthlyBudget,extra:'min="0" step="any"'})+price('ai','inputPrice','文本输入单价 / 百万 Token')+price('ai','outputPrice','文本输出单价 / 百万 Token')+price('ai','cachedInputPrice','缓存输入单价 / 百万 Token')+price('embedding','inputPrice','嵌入单价 / 百万 Token')+price('search','requestPrice','每次搜索价格')+'</div><button class="primary" type="submit">保存价格与预算</button></form></section><section><h2>近期调用明细</h2><p class="form-note" id="usage-detail-scope"></p>'+btn('导出当前明细 CSV','export-usage','secondary')+'<div id="usage-calls"></div></section></div>',
-      bind(){
-        const render=()=>{
-          $('#usage-summary').innerHTML='<h2>范围概览</h2>'+facts([['统计区间',report.from+' — '+report.to],['统计时区',report.timezone],...Object.entries(labels).map(([key,label])=>[label,report.totals?.[key]??'未知']),['无效日期记录',report.invalidDateCalls]]);
-          $('#usage-daily').innerHTML=table(list(report.daily),[['date','日期'],['calls','调用'],['totalTokens','已知 Token'],['cost','费用'],['unknownTokenCalls','Token 未知调用']]);
-          $('#usage-models').innerHTML=table(list(report.models),[['model','模型'],['capability','能力'],['calls','调用'],['totalTokens','已知 Token'],['cost','费用']]);
-          $('#usage-detail-scope').textContent='当前范围最近 '+(report.recentLimit||100)+' 条明细；汇总覆盖完整范围。导出仅含这里返回的明细。';
-          paginate($('#usage-calls'),list(report.recentCalls),r=>table([r],fields));
-        };render();
-        submit($('#usage-filter'),async values=>{const route=state.sequence,result=await api.get('/api/usage?'+new URLSearchParams(values));if(route!==state.sequence)return;report=result;render();});
-        $('[data-action="export-usage"]').onclick=()=>{
-          const cell=v=>'"'+String(v??'未知').replace(/^[=+\-@]/,"'$&").replaceAll('"','""')+'"';
-          download('知序-当前调用明细.csv','\uFEFF'+[fields.map(([,l])=>cell(l)).join(','),...list(report.recentCalls).map(r=>fields.map(([k])=>cell(r[k])).join(','))].join('\r\n'),'text/csv;charset=utf-8');
-        };
-        const form=$('#pricing');watchForm(form);submit(form,async values=>{
-          const payload={pricingFor:Object.fromEntries(['ai','embedding','search'].map(k=>[k,{baseUrl:s[k].baseUrl,model:s[k].model||''}])),ai:{dailyCallLimit:Number(values.dailyCallLimit),monthlyBudget:Number(values.monthlyBudget)},embedding:{},search:{}};
-          for(const [key,value] of Object.entries(values))if(key.includes('.')){const [g,k]=key.split('.');payload[g][k]=value===''?null:Number(value);}
-          await api.put('/api/usage/settings',payload);savedForm(form);notify('预算与当前模型价格已保存。');
-        });
-      }};
-  }
+  async function usage() { const { createUsagePage } = await import('./usage-dashboard.mjs'); return createUsagePage(ctx,nav); }
   async function maintenance(){
     const [d,p]=await Promise.all([api.get('/api/diagnostics'),api.get('/api/proposals')]);
     return {html:heading('KEEP THINGS IN ORDER','照顾资料，也保留分歧。','维护操作不会自动接受写入建议。',link('回到设置','settings','text-button'))+nav()+`<div class="advanced-settings"><section><h2>检索索引</h2>${facts(Object.entries(d.index||{}))}<div class="actions">${btn('重建本地文字索引','index-local','secondary')}${btn('增量更新语义索引','index-update','text-button')}${btn('重建语义索引','index-rebuild','text-button')}</div></section><section><h2>写入提案</h2>${list(p.proposals).map(x=>`<article class="parity-card"><h3>${e(x.reason||x.noteId)}</h3><p>${e(x.state)}</p>${link('核对当前资料',`read/${x.noteId}`,'text-button')}${details('对比修改',`<h3>提案基准正文</h3><pre class="preserve-text">${e(x.before||'')}</pre><h3>提议版本</h3><pre class="preserve-text">${e(x.body||'')}</pre>`)}${x.state==='pending'?`<div class="actions">${btn('接受提案','proposal','secondary',`data-id="${e(x.id)}" data-value="accept"`)}${btn('拒绝','proposal','text-button',`data-id="${e(x.id)}" data-value="reject"`)}</div>`:''}</article>`).join('')||'<p class="muted">没有写入提案。</p>'}</section><section><h2>文件冲突与待同步链接</h2><p class="form-note">先核对当前正文和历史版本，再手动合并；不静默覆盖外部编辑。</p>${[...list(d.storage?.conflicts),...list(d.storage?.pendingLinks)].map(x=>`<article class="parity-card"><pre class="parity-json">${e(JSON.stringify(x,null,2))}</pre>${x.id?link('查看当前资料',`read/${x.id}`,'text-button'):''}</article>`).join('')||'<p class="muted">未发现待处理冲突。</p>'}</section></div>`};
