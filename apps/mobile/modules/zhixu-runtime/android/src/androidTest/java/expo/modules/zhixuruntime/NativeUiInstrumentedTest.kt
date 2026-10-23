@@ -2,7 +2,6 @@ package expo.modules.zhixuruntime
 
 import android.content.Intent
 import android.os.SystemClock
-import android.view.KeyEvent
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
@@ -51,11 +50,11 @@ class NativeUiInstrumentedTest {
   private fun enter(label: String, value: String) {
     val field = find(By.desc(label))
     field.click()
-    device.pressKeyCode(KeyEvent.KEYCODE_A, KeyEvent.META_CTRL_ON)
+    device.executeShellCommand("input keycombination KEYCODE_CTRL_LEFT KEYCODE_A")
     // Real keyboard events exercise React Native's change handler. Unicode
     // input has a separate device acceptance; keep this driver IME-independent.
     require(value.matches(Regex("[A-Za-z0-9 ._-]+")))
-    device.executeShellCommand("input text '" + value.replace(" ", "%s") + "'")
+    device.executeShellCommand("input text " + value.replace(" ", "%s"))
     assertTrue("Input was not applied: $label", device.wait(Until.hasObject(By.desc(label).text(value)), 5000))
   }
   private fun hideKeyboard() {

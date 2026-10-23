@@ -27,3 +27,4 @@
 - Android 15 实测系统返回直接离开 Activity，JS 未收到返回事件，未保存保护也无法执行。React Native 当前的预测返回兼容缺口有同样的上游复现（https://github.com/react/react-native/issues/58407）；关闭 predictiveBackGestureEnabled，保留普通系统返回与未保存确认。以后重开必须在 API 33-35 真正验收，不能用 Android 16 结果代替。
 - 模拟器接硬键盘时输入框并不一定弹出软键盘。测试只能在 mInputShown=true 时用返回关闭键盘，否则会执行真实页面返回。系统返回缺口与这个测试假设叠加，早期旧标题日志不能用于断言表单丢字；已用实际 ASCII/中文输入读回和原文检索核对。
 - 恢复预览须显示资料、版本、附件数量及将改变的服务配置，并明确外部能力关闭规则；“预览通过”一行不能代替可核对的恢复范围。
+- UiAutomation.executeShellCommand 不是完整 shell：给 input text 包单引号会把引号也输入字段。测试先限制合成 ASCII 字符，空格编码为 %s，再直接传参数；不套用 PowerShell/终端的引用规则。实际失败字段读回确认过两端的单引号。
