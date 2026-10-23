@@ -2,7 +2,7 @@
 // frozen curriculum's real operation evidence; a page visit never passes a step.
 const instructions = {
   "setup-welcome":
-    "底部依次是今日、收集、知识库、学习和输出。设置与任务在今日页进入。",
+    "底部依次是今日、收集、知识库、学习和应用。设置与任务在今日页进入。",
   "setup-model":
     "在设置的外部服务中打开模型配置，填写 HTTPS 地址、模型和密钥，再启用。密钥只填在服务配置中。",
   "setup-save":

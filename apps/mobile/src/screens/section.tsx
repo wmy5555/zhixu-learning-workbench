@@ -607,7 +607,7 @@ export default function Section() {
               disabled={working}
               onPress={async () => {
                 try {
-                  const f = await pickFile();
+                  const f = await pickFile({ maxBytes: 100_000_000 });
                   if (!f) return;
                   const backup = JSON.parse(await f.file.text());
                   const preview = await api.post("/api/restore", {

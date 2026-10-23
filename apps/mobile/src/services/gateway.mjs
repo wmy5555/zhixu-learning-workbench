@@ -554,9 +554,16 @@ export function createGateway({ root, aiOverride } = {}) {
       exclusive(() => dispatch(p, o), isImmediateLocalRequest(p, o)),
     pump: () =>
       exclusive(async () => {
-        if (paused) return;
+        if (paused) return { hasMore: false };
+        const queued = () => [mainService, onboarding.currentService].filter(Boolean)
+          .flatMap(service => service.store.records("jobs").filter(job => job.state === "queued").map(job => job.id)).sort();
+        const before = queued();
         await mainService.tick();
-        await onboarding.pump();
+        if (!paused) await onboarding.pump();
+        const after = queued();
+        // Drain only runnable queued work. Waiting/failed/unknown-cost jobs need
+        // another explicit user decision; a non-progressing practice queue stops.
+        return { hasMore: !paused && after.length > 0 && JSON.stringify(before) !== JSON.stringify(after) };
       }),
     pause: async () => {
       paused = true;

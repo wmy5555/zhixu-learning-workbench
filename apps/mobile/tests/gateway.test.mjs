@@ -13,6 +13,33 @@ function setup(t) {
   return gateway;
 }
 const req = (g, p, b) => g.request(p, { method: "POST", body: b });
+
+test("foreground pumping drains queued jobs without retrying waiting work", async (t) => {
+  const g = setup(t);
+  await req(g, "/api/import", { process: true, items: [
+    { title: "合成一", body: "第一个合成任务，模型未启用。" },
+    { title: "合成二", body: "第二个合成任务，模型未启用。" },
+  ] });
+  assert.equal((await g.pump()).hasMore, true);
+  assert.equal((await g.pump()).hasMore, false);
+  const before = await g.request("/api/jobs");
+  assert.equal(before.jobs.filter(job => job.state === "queued").length, 0);
+  assert.equal(before.jobs.filter(job => job.attempts === 1).length, 2);
+  await g.pump();
+  assert.deepEqual((await g.request("/api/jobs")).jobs.map(job => job.attempts), before.jobs.map(job => job.attempts));
+});
+
+test("suspending the app leaves queued tasks waiting for a user decision", async (t) => {
+  const g = setup(t);
+  await req(g, "/api/import", { process: true, items: [{ title: "合成暂停", body: "暂停不触发模型。" }] });
+  await g.pause();
+  assert.equal((await g.pump()).hasMore, false);
+  g.resume();
+  assert.equal((await g.pump()).hasMore, false);
+  const job = (await g.request("/api/jobs")).jobs[0];
+  assert.equal(job.state, "waiting");
+  assert.equal(job.attempts, 0);
+});
 test("portable backups exclude device drafts and restoration preserves them", async (t) => {
   const g = setup(t);
   await g.request("/api/draft-work", {

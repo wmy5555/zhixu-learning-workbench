@@ -124,8 +124,9 @@ export function Toggle({
   onChange: (value: boolean) => void;
   disabled?: boolean;
 }) {
+  const c = usePalette();
   return (
-    <Host matchContents>
+    <Host matchContents seedColor={c.accent}>
       <Switch
         label={label}
         value={value}

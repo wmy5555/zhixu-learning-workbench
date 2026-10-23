@@ -45,7 +45,7 @@ jobs:
         run: pnpm prebuild:android
       - name: Compile standalone candidate and native tests
         working-directory: apps/mobile/android
-        run: bash gradlew --no-daemon --max-workers=2 :app:assembleRelease :zhixu-runtime:testDebugUnitTest :zhixu-runtime:assembleDebugAndroidTest :app:lintRelease -PreactNativeArchitectures=arm64-v8a,x86_64
+        run: bash gradlew --no-daemon --build-cache --max-workers=2 '-Dorg.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=1g' :zhixu-runtime:compileDebugAndroidTestKotlin :zhixu-runtime:testDebugUnitTest :app:assembleRelease :zhixu-runtime:assembleDebugAndroidTest :app:lintRelease -PreactNativeArchitectures=arm64-v8a,x86_64
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

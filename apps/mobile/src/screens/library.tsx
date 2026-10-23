@@ -74,7 +74,7 @@ export default function Library() {
         renderItem={({ item: n }: any) => (
           <Row
             title={n.title}
-            detail={n.meta?.topic || n.kind}
+            detail={n.meta?.topic || undefined}
             onPress={() => wide ? setSelected(n.id) : openNote(n.id)}
           />
         )}

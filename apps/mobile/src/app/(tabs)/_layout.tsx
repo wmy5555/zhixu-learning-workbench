@@ -1,7 +1,9 @@
 import { NativeTabs } from "expo-router/native-tabs";
+import { usePalette } from "../../components/workbench-ui";
 export default function Tabs() {
+  const c = usePalette();
   return (
-    <NativeTabs sidebarAdaptable>
+    <NativeTabs sidebarAdaptable tintColor={c.accent} backgroundColor={c.surface}>
       {[
         ["index", "今日", "sun.max", "today"],
         ["capture", "收集", "plus.circle", "add_circle"],

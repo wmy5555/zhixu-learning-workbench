@@ -1,5 +1,7 @@
 # 知序 · 个人学习工作台
 
+Android/iOS 共用的原生候选位于 [apps/mobile](apps/mobile/README.md)，以当前 4318 固定快照复用 iOS 源码并补齐 Android 原生模块。旧 apps/android 是历史 WebView 实现。原生编译、设备与依赖验收边界见 [迁移记录](apps/mobile/MIGRATION.md)；尚未替换正式网页或旧 App。
+
 [![CI](https://github.com/wmy5555/zhixu-learning-workbench/actions/workflows/ci.yml/badge.svg)](https://github.com/wmy5555/zhixu-learning-workbench/actions/workflows/ci.yml)
 
 当前版本 **0.1.0 开发预览**。仓库已由所有者确认公开，尚未选择项目开源许可证或添加 LICENSE。

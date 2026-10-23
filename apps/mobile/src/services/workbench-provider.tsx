@@ -69,7 +69,7 @@ class WorkbenchClient {
             this.gateway.resume();
             void this.pump();
           } else {
-            void this.gateway.pause();
+            void this.gateway.pause().catch((e: Error) => this.emit({ startupError: e.message }));
             void this.flushDrafts().catch((e) =>
               this.emit({ startupError: e.message }),
             );
@@ -127,8 +127,13 @@ class WorkbenchClient {
     this.pumping = true;
     this.emit({ working: true });
     try {
-      await this.gateway.pump();
-      this.emit({ revision: this.state.revision + 1 });
+      while (this.active) {
+        const result = await this.gateway.pump();
+        this.emit({ revision: this.state.revision + 1 });
+        if (!result?.hasMore) break;
+        // Give renders, cancellation and queued reads a turn between jobs.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
     } catch (e) {
       this.emit({ startupError: (e as Error).message });
     } finally {

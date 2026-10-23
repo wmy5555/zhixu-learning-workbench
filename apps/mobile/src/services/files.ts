@@ -1,15 +1,17 @@
 import * as Picker from "expo-document-picker";
 import { File, Paths } from "expo-file-system";
 import * as Sharing from "expo-sharing";
-export async function pickFile() {
+export async function pickFile({ maxBytes = 50_000_000 } = {}) {
   const result = await Picker.getDocumentAsync({
     copyToCacheDirectory: true,
     multiple: false,
   });
   if (result.canceled) return null;
   const asset = result.assets[0];
-  if ((asset.size || 0) > 50000000) throw Error("每个文件最多 50 MB");
-  return { ...asset, file: new File(asset.uri) };
+  const file = new File(asset.uri);
+  const size = asset.size ?? file.size;
+  if (size > maxBytes) throw Error(`每个文件最多 ${maxBytes / 1_000_000} MB`);
+  return { ...asset, size, file };
 }
 export async function shareJSON(data: unknown, name = "zhixu-backup.json") {
   const file = new File(Paths.cache, name);
