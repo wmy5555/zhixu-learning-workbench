@@ -42,7 +42,7 @@ function fixture(t, offset = 0, temporaryTitle = false) {
   const parent = path.resolve(import.meta.dirname, '../.tmp');
   fs.mkdirSync(parent, { recursive: true });
   const root = fs.mkdtempSync(path.join(parent, 'managed-image-outbound-'));
-  let ai, reply = { candidates: [{ title: '合成观点', body: '合成手写观点。', claims: [], claimType: 'opinion' }], queries: [], relations: [] };
+  let ai, reply = { candidates: [{ title: '合成观点', body: '合成手写观点。', claims: [], claimType: 'opinion' }], findings: [], queries: [], relations: [] };
   const sent = [];
   const service = createService({ dataDir: path.join(root, 'data'), vaultDir: path.join(root, 'vault'), aiOverride: {
     generate: options => ai.generate(options), embed: options => ai.embed(options),
@@ -118,7 +118,7 @@ for (const [operation, offset] of [['decomposition', 0], ['structure', 0], ['tit
       const note = s.store.create({ kind: 'knowledge', title: '合成手写知识', body: h.body, meta: { stage: 'learning' } });
       if (operation === 'relations') {
         s.store.create({ kind: 'knowledge', title: '合成比较观点', body: 'HANDWRITTEN_BEFORE\n' + '乙'.repeat(2970) + h.markup, meta: { stage: 'integrated' } });
-        let count = 0; h.reply = () => ++count === 1 ? { queries: [] } : { relations: [] };
+        h.reply = { queries: [], relations: [] };
         await h.run(s.requestRelations(note.id, { useAI: true }));
       }
       if (operation === 'discovery') await h.run(s.queue('discover', { useAI: true }, 'synthetic-image-discovery'));

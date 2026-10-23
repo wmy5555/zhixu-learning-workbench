@@ -1,3 +1,4 @@
+import { discoveryFindings, discoveryMarkdown } from './discovery-guidance.mjs';
 import { importedContext, readImportedView } from './chatgpt-structure.mjs';
 import { makeLearningPractice, learningSourceIds } from './learning-guidance.mjs';
 import fs from 'node:fs';
@@ -1113,6 +1114,9 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     };
     assertCurrent([note]);
     const current=JSON.stringify({id:note.id,sourceIds:learningSourceIds(note),title:outboundTitle(note),body:outboundText(note.body).slice(0,4500)});
+    const available = store.list().filter(n=>n.id!==note.id&&inScope(n)&&privacyFor(n)==='cloud'&&eligible(n));
+    if(available.length<=10)candidates=available;
+    else {
     const expanded=parseJSON((await ai.generate({system:promptText('serviceSystem'),privacy:'cloud',signal,json:true,prompt:promptText('relationQueries',{current})})).text);
     if(!Array.isArray(expanded.queries)||expanded.queries.some(q=>typeof q!=='string'))fail('关联检索短语格式无效，本地候选已保留。','MODEL_FORMAT');
     const retrieved=[];
@@ -1122,6 +1126,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
       retrieved.push(...result.results);
     }
     candidates=[...new Map([...retrieved,...candidates].filter(n=>n.id!==note.id&&inScope(n)&&privacyFor(n)==='cloud'&&eligible(n)).map(n=>[n.id,n])).values()].slice(0,10);
+    }
     if(!candidates.length)return;
     assertCurrent([note,...candidates]);
     const parsed=parseJSON((await ai.generate({system:promptText('serviceSystem'),privacy:'cloud',signal,json:true,prompt:promptText('relate',{current,candidates:JSON.stringify(candidates.map(n=>({id:n.id,sourceIds:learningSourceIds(n),title:outboundTitle(n),body:outboundText(n.body).slice(0,3000)})))})})).text);
@@ -1144,16 +1149,25 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     const changed=new Set(store.records('changed').map(n=>n.id));
     let discoveryIssue=null;
     const selected=[...notes.filter(n=>changed.has(n.id)),...isolated,...notes].filter((n,i,a)=>(!scope||scope.get(n.id)===n.hash)&&privacyFor(n)==='cloud'&&a.findIndex(v=>v.id===n.id)===i).slice(0,16);
-    if(job.payload.useAI===true&&settings().ai.enabled&&selected.length){try {const answer=await ai.generate({system:promptText('serviceSystem'),privacy:'cloud',signal,prompt:promptText('discover',{notes:JSON.stringify(selected.map(n=>({id:n.id,sourceIds:learningSourceIds(n),title:outboundTitle(n),topic:n.meta.topic,useCount:store.records('uses').filter(u=>u.noteId===n.id).length,summary:outboundText(n.body).slice(0,900)})))})});body+=`\n\n## AI 发现建议（待审阅）\n${answer.text}`;}catch(error){discoveryIssue=error;body+=`\n\n## AI 探索未完成\n${error.message}`;}}else body+='\n\n## 探索限制\n当前为本地结构检查；没有选择付费 AI 探索或没有可用的摘要，尚未生成跨领域语义发现。';
+    let discoveryResult={findings:[],rejected:0},summaryStatus='not_requested',detailStatus='not_requested';
+    if(job.payload.useAI===true&&settings().ai.enabled&&selected.length){try {
+      const materials=selected.map(n=>({id:n.id,sourceIds:learningSourceIds(n),title:outboundTitle(n),topic:n.meta.topic,useCount:store.records('uses').filter(u=>u.noteId===n.id).length,summary:outboundText(n.body).slice(0,900)}));
+      const answer=await ai.generate({system:promptText('serviceSystem'),privacy:'cloud',signal,json:true,prompt:promptText('discover',{notes:JSON.stringify(materials)})});
+      store.scan();
+      if(selected.some(n=>store.row(n.id)?.hash!==n.hash||privacyFor(store.read(n.id))!=='cloud'))fail('生成发现时材料已变化，请重新核对已有结果。','SOURCE_CHANGED');
+      discoveryResult=discoveryFindings(parseJSON(answer.text),materials);summaryStatus='complete';
+      body+='\n\n## AI 发现建议（待审阅）\n'+discoveryMarkdown(discoveryResult);
+    }catch(error){summaryStatus='failed';discoveryIssue=error;body+='\n\n## AI 探索未完成\n'+error.message;}}
+    else body+='\n\n## 探索限制\n当前仅完成本地结构检查，没有生成 AI 发现建议。';
     const cursor=store.get('schedule','discoveryCursor',{offset:0}).offset, available=notes.filter(eligible);
     const batch=[...available.slice(cursor),...available.slice(0,cursor)].slice(0,16);
     for(const n of batch)await relate({payload:{noteId:n.id,useAI:false},snapshot:n},signal);
     store.put('schedule','discoveryCursor',{offset:available.length?(cursor+batch.length)%available.length:0});
-    if(job.payload.useAI===true&&!discoveryIssue)for(const n of selected.filter(eligible).slice(0,2)){try{await relate({payload:{noteId:n.id,useAI:true,snapshots:job.payload.snapshots}},signal);}catch(error){discoveryIssue=error;body+=`\n\n## 关联细查未完成\n${error.message}`;break;}}
+    if(job.payload.useAI===true&&!discoveryIssue)for(const n of selected.filter(eligible).slice(0,2)){try{detailStatus='complete';await relate({payload:{noteId:n.id,useAI:true,snapshots:job.payload.snapshots}},signal);}catch(error){detailStatus='incomplete';discoveryIssue=error;body+=`\n\n## 关联细查未完成\n${error.message}`;break;}}
     body+=`\n\n本次本地比较 ${batch.length} 条；AI 细查最多2条。每次轮换覆盖，不能视为全库穷尽。`;
     const actions=recommendations().suggestions;
     body+='\n\n## 可处理的建议\n'+(actions.map(a=>`- ${a.title}：${a.reason}`).join('\n') || '暂无有记录依据的阶段调整建议。');
-    store.create({kind:'report',title:`AI 整理建议 ${localDay(learningDate(),settings().timezone)}`,body,meta:{privacy:'local',generated:true,recommendationIds:actions.map(a=>a.id),relationIds:store.records('relations').filter(r=>['suggested','candidate'].includes(r.state)).map(r=>r.id)}});
+    store.create({kind:'report',title:`AI 整理建议 ${localDay(learningDate(),settings().timezone)}`,body,meta:{privacy:'local',generated:true,discoverySummary:{status:summaryStatus,...discoveryResult},relationDetail:{status:detailStatus},recommendationIds:actions.map(a=>a.id),relationIds:store.records('relations').filter(r=>['suggested','candidate'].includes(r.state)).map(r=>r.id)}});
     store.put('schedule','discovery',{at:learningNow()});for(const n of selected)store.remove('changed',n.id);
     if(discoveryIssue)throw discoveryIssue;
   }
