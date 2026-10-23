@@ -16,3 +16,9 @@
 - 移动端不能只调用一次 runJobs 后结束：每个前台批次处理后释放串行队列，再继续有进展的 queued 项；进入后台阻止下一项外发。waiting/failed/未知费用仍须人工决定，不能自动重试。
 - 保存文本不能移除包含 pendingFile 的整个设备草稿，也不能清除排队期间新输入；当前保存只消费实际提交的文本。
 - 大库夹具只有合成原文。LibraryBenchmarkTest 需显式 syntheticBenchmark=true，且仅对本任务新安装的可丢弃候选库运行，禁止用于用户已有资料。
+- Expo 58 独立 Android 包曾出现全局 router 未绑定：原生标签正常，但保存后 router.push 报 first render。组件导航改用 useRouter 所绑定的上下文；不能因 Hermes 导出、APK 启动成功就跳过实际页面跳转验收。
+- CI 的模块测试 APK 使用每个运行器生成的调试签名，升级可能签名不兼容。先归档证据，只替换本任务测试包；主 App 数据和旧 App 保留。MuMu 的 adb 曾在打印 Failure 后返回 0，安装与 instrumentation 必须读实际 Success/OK 及失败计数。
+- UiAutomator 应通过 content-desc 查找未选中的 NativeTabs，不能假定所有标签都有可见文字；长表单需要实际滚动。By.desc 接受 Pattern，2.3 版没有 By.descMatches。
+- 连续处理队列时仅首轮调用 tick，后续调用 runJobs；每次都 tick 会重复推进发现调度，可能重建刚失败的发现任务。
+- 空库启动不能证明已迁移 SQLite：检索首次同步会用 iterate 和 lastInsertRowid；Expo 分别提供 getEachSync 和 lastInsertRowId，必须适配，保留游标提前退出时的释放。1000 条恢复后重启曾因此失败，已增加实际索引重建的契约回归。
+- 文件 stat 不能只返回 size：补齐 Date、inode、设备号与纳秒修改/状态时间，防止同长度改动被扫描缓存误认为未变化。Android API 27 起提供 StructTimespec，低版本保留明确秒级回退。

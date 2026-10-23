@@ -1,6 +1,7 @@
 package expo.modules.zhixuruntime
 
 import android.system.ErrnoException
+import android.os.Build
 import android.system.Os
 import android.system.OsConstants
 import android.util.Base64
@@ -109,12 +110,16 @@ internal class NativeFiles(val root: File) {
       }
       "stat" -> {
         val stat = Os.lstat(file.path)
+        val mtimeNs = if (Build.VERSION.SDK_INT >= 27) stat.st_mtim.tv_sec * 1_000_000_000L + stat.st_mtim.tv_nsec else stat.st_mtime * 1_000_000_000L
+        val ctimeNs = if (Build.VERSION.SDK_INT >= 27) stat.st_ctim.tv_sec * 1_000_000_000L + stat.st_ctim.tv_nsec else stat.st_ctime * 1_000_000_000L
         mapOf("kind" to when {
           OsConstants.S_ISLNK(stat.st_mode) -> "symlink"
           OsConstants.S_ISDIR(stat.st_mode) -> "directory"
           else -> "file"
         }, "size" to stat.st_size, "nlink" to stat.st_nlink,
-          "mtimeMs" to stat.st_mtime.toDouble() * 1000)
+          "dev" to stat.st_dev.toString(), "ino" to stat.st_ino.toString(),
+          "mtimeNs" to mtimeNs.toString(), "ctimeNs" to ctimeNs.toString(),
+          "mtimeMs" to mtimeNs.toDouble() / 1_000_000)
       }
       "list" -> (file.list()?.sorted() ?: throw RuntimeFailure("ENOTDIR", "无法读取目录"))
       "realpath" -> file.path

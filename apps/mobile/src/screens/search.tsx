@@ -9,10 +9,10 @@ import {
   Label,
   Row,
   Toggle,
-  openNote,
-  openSection,
+  useWorkbenchNavigation,
 } from "../components/workbench-ui";
 export default function Search() {
+  const { openNote, openSection } = useWorkbenchNavigation();
   const { api, working } = useWorkbench(),
     [q, setQ] = useState(""),
     [mode, setMode] = useState("keyword"),

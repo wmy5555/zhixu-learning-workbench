@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import * as Clipboard from "expo-clipboard";
 import { Alert, View } from "react-native";
-import { router, useLocalSearchParams } from "expo-router";
+import { useLocalSearchParams } from "expo-router";
 import { useResource, useWorkbench } from "../services/app-state";
 import {
   Body,
@@ -12,9 +12,7 @@ import {
   Label,
   Row,
   Status,
-  openForm,
-  openNote,
-  openSection,
+  useWorkbenchNavigation,
 } from "../components/workbench-ui";
 import { Markdown } from "../components/native-markdown";
 import { pickFile, shareJSON, shareText } from "../services/files";
@@ -52,6 +50,7 @@ const titles: any = {
   appearance: "外观",
 };
 export default function Section() {
+  const { router, openForm, openNote, openSection } = useWorkbenchNavigation();
   const { name, id = "" } = useLocalSearchParams<{
       name: string;
       id: string;

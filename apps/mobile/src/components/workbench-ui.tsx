@@ -9,7 +9,7 @@ import {
   useColorScheme,
 } from "react-native";
 import { Host, Button as SystemButton, Switch } from "@expo/ui";
-import { router } from "expo-router";
+import { useRouter } from "expo-router";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAppearance } from "../services/appearance";
@@ -303,9 +303,14 @@ export function Status({
     </>
   );
 }
-export const openNote = (id: string) =>
-  router.push({ pathname: "/note/[id]", params: { id } } as any);
-export const openSection = (name: string) =>
-  router.push({ pathname: "/section/[name]", params: { name } } as any);
-export const openForm = (kind: string, id = "") =>
-  router.push({ pathname: "/form", params: { kind, id } } as any);
+export function useWorkbenchNavigation() {
+  // Bind to the mounted router context. The exported global router can remain
+  // unbound in a standalone native build while tab navigation already works.
+  const router = useRouter();
+  return {
+    router,
+    openNote: (id: string) => router.push({ pathname: "/note/[id]", params: { id } } as any),
+    openSection: (name: string) => router.push({ pathname: "/section/[name]", params: { name } } as any),
+    openForm: (kind: string, id = "") => router.push({ pathname: "/form", params: { kind, id } } as any),
+  };
+}

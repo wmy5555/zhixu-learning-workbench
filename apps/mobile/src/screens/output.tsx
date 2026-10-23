@@ -9,14 +9,13 @@ import {
   Label,
   Row,
   Toggle,
-  openNote,
-  openSection,
-  openForm,
+  useWorkbenchNavigation,
 } from "../components/workbench-ui";
 import { Markdown } from "../components/native-markdown";
 import runtime from "../platform/runtime.native.js";
 
 export default function Output() {
+  const { openNote, openSection, openForm } = useWorkbenchNavigation();
   const { api, working } = useWorkbench();
   const [question, setQuestion] = useState(""),
     [mode, setMode] = useState("answer");

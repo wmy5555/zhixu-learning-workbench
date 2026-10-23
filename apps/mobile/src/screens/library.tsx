@@ -9,11 +9,12 @@ import {
   Label,
   Row,
   Status,
-  openNote,
+  useWorkbenchNavigation,
   usePalette,
 } from "../components/workbench-ui";
 import { NoteContent } from "./note";
 export default function Library() {
+  const { openNote } = useWorkbenchNavigation();
   const [q, setQ] = useState(""),
     [kind, setKind] = useState("");
   const [selected, setSelected] = useState("");

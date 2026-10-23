@@ -13,7 +13,7 @@ import {
   Row,
   Status,
   Toggle,
-  openNote,
+  useWorkbenchNavigation,
 } from "../components/workbench-ui";
 import { relationTypes } from "../core/knowledge-structure.mjs";
 import runtime from "../platform/runtime.native.js";
@@ -50,6 +50,7 @@ const relationNames: any = {
   condition: "条件",
 };
 function StructureEditor({ resource }: { resource: any }) {
+  const { openNote } = useWorkbenchNavigation();
   const { id } = useLocalSearchParams<{ id: string }>(),
     r = resource,
     { api, working } = useWorkbench(),

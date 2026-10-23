@@ -1,6 +1,6 @@
 import React from "react";
 import { Alert, View } from "react-native";
-import { router, useLocalSearchParams } from "expo-router";
+import { useLocalSearchParams } from "expo-router";
 import { useResource, useWorkbench } from "../services/app-state";
 import {
   Body,
@@ -9,8 +9,7 @@ import {
   Label,
   Row,
   Status,
-  openForm,
-  openNote,
+  useWorkbenchNavigation,
 } from "../components/workbench-ui";
 import { Markdown } from "../components/native-markdown";
 import { shareAttachment } from "../services/files";
@@ -19,6 +18,7 @@ export default function Note() {
   return <NoteContent id={id} />;
 }
 export function NoteContent({ id }: { id: string }) {
+  const { router, openForm, openNote } = useWorkbenchNavigation();
   const r = useResource("/api/notes/" + encodeURIComponent(id)),
     { api, working } = useWorkbench(),
     n = r.data;

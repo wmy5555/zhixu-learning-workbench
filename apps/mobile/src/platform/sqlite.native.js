@@ -1,5 +1,6 @@
 import * as SQLite from 'expo-sqlite';
 import {basename,dirname} from './path.native.js';
+import { sqliteStatement } from './sqlite-contract.mjs';
 export class DatabaseSync {
   constructor(file, { readOnly = false } = {}) {
     this.db = file === ':memory:' ? SQLite.openDatabaseSync(':memory:', {useNewConnection:true}) : SQLite.openDatabaseSync(basename(file), {useNewConnection:true}, dirname(file));
@@ -8,7 +9,7 @@ export class DatabaseSync {
   exec(sql) { this.db.execSync(sql); }
   prepare(sql) {
     // Expo helpers finalize each statement; no native statement handles leak between renders.
-    return { run: (...args) => this.db.runSync(sql, args), get: (...args) => this.db.getFirstSync(sql, args) ?? undefined, all: (...args) => this.db.getAllSync(sql, args) };
+    return sqliteStatement(this.db, sql);
   }
   close() { this.db.closeSync(); }
 }

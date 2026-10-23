@@ -552,13 +552,16 @@ export function createGateway({ root, aiOverride } = {}) {
   return {
     request: (p, o) =>
       exclusive(() => dispatch(p, o), isImmediateLocalRequest(p, o)),
-    pump: () =>
+    pump: ({ continueOnly = false } = {}) =>
       exclusive(async () => {
         if (paused) return { hasMore: false };
         const queued = () => [mainService, onboarding.currentService].filter(Boolean)
           .flatMap(service => service.store.records("jobs").filter(job => job.state === "queued").map(job => job.id)).sort();
         const before = queued();
-        await mainService.tick();
+        // Only the first pass advances the scheduler. Further passes drain the
+        // existing queue instead of creating another failed discovery request.
+        if (continueOnly) await mainService.runJobs();
+        else await mainService.tick();
         if (!paused) await onboarding.pump();
         const after = queued();
         // Drain only runnable queued work. Waiting/failed/unknown-cost jobs need

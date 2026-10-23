@@ -21,7 +21,7 @@ test("foreground pumping drains queued jobs without retrying waiting work", asyn
     { title: "合成二", body: "第二个合成任务，模型未启用。" },
   ] });
   assert.equal((await g.pump()).hasMore, true);
-  assert.equal((await g.pump()).hasMore, false);
+  assert.equal((await g.pump({ continueOnly: true })).hasMore, false);
   const before = await g.request("/api/jobs");
   assert.equal(before.jobs.filter(job => job.state === "queued").length, 0);
   assert.equal(before.jobs.filter(job => job.attempts === 1).length, 2);

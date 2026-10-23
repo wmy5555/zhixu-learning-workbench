@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { router } from "expo-router";
 import { useWorkbench, useDraftFlush } from "../services/app-state";
 import {
   Body,
@@ -8,12 +7,13 @@ import {
   Field,
   Label,
   Toggle,
-  openNote,
+  useWorkbenchNavigation,
 } from "../components/workbench-ui";
 import { pickFile } from "../services/files";
 import runtime from "../platform/runtime.native.js";
 import { afterTextSave } from "../services/capture-state.mjs";
 function CaptureForm() {
+  const { router, openNote } = useWorkbenchNavigation();
   const { api, working } = useWorkbench();
   const [title, setTitle] = useState(""),
     [body, setBody] = useState(""),

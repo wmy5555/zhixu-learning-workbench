@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Alert } from "react-native";
-import { router, useLocalSearchParams } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { useNavigation, usePreventRemove } from "expo-router/react-navigation";
 import { useWorkbench, useDraftFlush } from "../services/app-state";
 import {
@@ -23,6 +23,7 @@ const depths: [string, string][] = [
   ["apply", "迁移应用"],
 ];
 export default function Form() {
+  const router = useRouter();
   const { kind, id = "" } = useLocalSearchParams<{
       kind: string;
       id: string;

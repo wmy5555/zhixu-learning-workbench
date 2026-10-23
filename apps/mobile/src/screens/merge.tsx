@@ -9,10 +9,11 @@ import {
   Label,
   Row,
   Status,
-  openNote,
+  useWorkbenchNavigation,
 } from "../components/workbench-ui";
 import { Markdown } from "../components/native-markdown";
 export default function Merge() {
+  const { openNote } = useWorkbenchNavigation();
   const { id } = useLocalSearchParams<{ id: string }>(),
     r = useResource("/api/notes?kind=knowledge"),
     { api, working } = useWorkbench(),

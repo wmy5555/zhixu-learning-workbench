@@ -1,6 +1,5 @@
 import React from "react";
 import { View } from "react-native";
-import { router } from "expo-router";
 import { useResource, useWorkbench } from "../services/app-state";
 import {
   Body,
@@ -9,10 +8,10 @@ import {
   Label,
   Row,
   Status,
-  openNote,
-  openSection,
+  useWorkbenchNavigation,
 } from "../components/workbench-ui";
 export default function Today() {
+  const { router, openNote, openSection } = useWorkbenchNavigation();
   const r = useResource("/api/today"),
     { api, working, practiceId } = useWorkbench();
   const d = r.data;

@@ -1,5 +1,4 @@
 import React, { useState } from "react";
-import { router } from "expo-router";
 import { useResource } from "../services/app-state";
 import {
   Body,
@@ -7,9 +6,10 @@ import {
   Label,
   Row,
   Status,
-  openSection,
+  useWorkbenchNavigation,
 } from "../components/workbench-ui";
 export default function Study() {
+  const { router, openSection } = useWorkbenchNavigation();
   const [offset, setOffset] = useState(0);
   const r = useResource("/api/study?limit=30&offset=" + offset);
   return (

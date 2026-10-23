@@ -12,11 +12,12 @@ import {
   Field,
   Label,
   Status,
-  openForm,
+  useWorkbenchNavigation,
 } from "../components/workbench-ui";
 import { Markdown } from "../components/native-markdown";
 import runtime from "../platform/runtime.native.js";
 export default function Session() {
+  const { openForm } = useWorkbenchNavigation();
   const { id } = useLocalSearchParams<{ id: string }>(),
     r = useResource("/api/study/" + id),
     { api, working } = useWorkbench();

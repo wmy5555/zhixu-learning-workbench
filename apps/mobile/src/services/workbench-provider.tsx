@@ -127,10 +127,12 @@ class WorkbenchClient {
     this.pumping = true;
     this.emit({ working: true });
     try {
+      let continueOnly = false;
       while (this.active) {
-        const result = await this.gateway.pump();
+        const result = await this.gateway.pump({ continueOnly });
         this.emit({ revision: this.state.revision + 1 });
         if (!result?.hasMore) break;
+        continueOnly = true;
         // Give renders, cancellation and queued reads a turn between jobs.
         await new Promise((resolve) => setTimeout(resolve, 0));
       }

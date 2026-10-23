@@ -37,6 +37,10 @@ class RuntimeInstrumentedTest {
     files.call("rename", args("原文.md").put("to", File(root, "版本.md").path))
     assertFalse(File(root, "原文.md").exists())
     assertEquals("合成资料\n保留原文", File(root, "版本.md").readText())
+    val metadata = files.call("stat", args("版本.md")) as Map<*, *>
+    assertTrue((metadata["ino"] as String).toLong() > 0)
+    assertTrue((metadata["mtimeNs"] as String).toLong() > 0)
+    assertTrue((metadata["ctimeNs"] as String).toLong() > 0)
   }
   @Test fun refusesTraversalAndSymbolicLinks() {
     val outside = File(root.parentFile, "outside-" + UUID.randomUUID()).apply { writeText("untouched") }

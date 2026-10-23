@@ -10,9 +10,10 @@ import {
   Card,
   Label,
   Row,
-  openNote,
+  useWorkbenchNavigation,
 } from "../components/workbench-ui";
 export default function Batch() {
+  const { openNote } = useWorkbenchNavigation();
   const { api, working } = useWorkbench(),
     [rows, setRows] = useState<any[]>([]),
     [running, setRunning] = useState(false),

@@ -1,5 +1,6 @@
 import runtime from './runtime.native.js';
 import { Buffer } from 'buffer';
+import { fileStat } from './file-stat.mjs';
 function call(op, args) {
   const result = JSON.parse(runtime.files(op, JSON.stringify(args)));
   if (result.error) throw Object.assign(new Error(result.error.message), { code: result.error.code });
@@ -19,12 +20,12 @@ export const linkSync = (from, to) => call('link', { path: path(from), to: path(
 export const unlinkSync = file => call('unlink', { path: path(file) });
 export const rmSync = (file, options = {}) => call('remove', { path: path(file), recursive: options.recursive === true, force: options.force === true });
 export const realpathSync = file => call('realpath', { path: path(file) });
-function stat(file, follow) {
+function stat(file, follow, options) {
   const s = call('stat', { path: path(file), follow });
-  return { ...s, isFile: () => s.kind === 'file', isDirectory: () => s.kind === 'directory', isSymbolicLink: () => s.kind === 'symlink' };
+  return fileStat(s, options);
 }
-export const statSync = file => stat(file, true);
-export const lstatSync = file => stat(file, false);
+export const statSync = (file, options) => stat(file, true, options);
+export const lstatSync = (file, options) => stat(file, false, options);
 export const readdirSync = (file, options = {}) => call('list', { path: path(file) }).map(name => options.withFileTypes ? { name, ...lstatSync(path(file) + '/' + name) } : name);
 export const opendirSync = file => { const rows = readdirSync(file, { withFileTypes: true }); let index = 0; return { readSync: () => rows[index++] ?? null, closeSync() {} }; };
 // The handle is a validated path. Durable flush opens and fsyncs the actual file natively.
