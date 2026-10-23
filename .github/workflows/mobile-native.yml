@@ -1,0 +1,56 @@
+name: Native mobile candidate
+on:
+  push:
+    branches: [feat/android-native-20261023]
+    paths: ['apps/mobile/**', '.github/workflows/mobile-native.yml']
+  pull_request:
+    paths: ['apps/mobile/**', '.github/workflows/mobile-native.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: mobile-native-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  android:
+    name: Native Android build and contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: apps/mobile
+    env:
+      EXPO_NO_TELEMETRY: '1'
+      CI: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        with:
+          version: '11.19.0'
+          package_json_file: apps/mobile/package.json
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Native project generation
+        run: pnpm prebuild:android
+      - name: Compile standalone candidate and native tests
+        working-directory: apps/mobile/android
+        run: bash gradlew --no-daemon --max-workers=2 :app:assembleRelease :zhixu-runtime:testDebugUnitTest :zhixu-runtime:assembleDebugAndroidTest :app:lintRelease -PreactNativeArchitectures=arm64-v8a,x86_64
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: zhixu-native-android-candidate
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            apps/mobile/android/app/build/outputs/apk/release/*.apk
+            apps/mobile/android/app/build/reports/lint-results-release.*
+            apps/mobile/modules/zhixu-runtime/android/build/outputs/apk/androidTest/**/*.apk
+            apps/mobile/modules/zhixu-runtime/android/build/test-results/testDebugUnitTest/*.xml

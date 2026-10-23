@@ -1,0 +1,177 @@
+{
+  "sourceCommit": "7aa1d780c4f8af1de3e53699c1395b775f9a2557",
+  "sourceTree": "bd7e8dcddc91b5b9dc4d0861146bf0761666c30f",
+  "archiveSha256": "911b7eba223626de7a5e33b09d58b9405f60f2d46fc7f91599d14dfe6c9b6257",
+  "files": [
+    {
+      "file": "src/store.mjs",
+      "sha256": "74c2fb662953b106a841536eeae7db8d1ebeeb0004b5957dc7c9d7c436cf3958"
+    },
+    {
+      "file": "src/service.mjs",
+      "sha256": "657154e2579c19441abdc3c56b903ae15a3d21b2884f3c6d7858d3f484cc5292"
+    },
+    {
+      "file": "src/learning.mjs",
+      "sha256": "c173eae3d67483861aff165de90a34b0c0e1f1b359166af3a9cd9e7ec714922b"
+    },
+    {
+      "file": "src/knowledge-lifecycle.mjs",
+      "sha256": "773c89b66c74fa3bb8281893715458ba69d1f1c5873ab61757c38b573f0e40c2"
+    },
+    {
+      "file": "src/knowledge-structure.mjs",
+      "sha256": "8b9527fc19dfa3b15e407d146fba8abd4d2583242d7450ccbd9c45f53a85ae4c"
+    },
+    {
+      "file": "src/source-structure.mjs",
+      "sha256": "d8d3e8bb1c253f8cc304df577b8bce8dee78fef5128135d4dd2ad4c050a5d464"
+    },
+    {
+      "file": "src/source-files.mjs",
+      "sha256": "22832b9867f404e5f10347acf60cd98ba6b3b273e12bb610997551aee5d62d50"
+    },
+    {
+      "file": "src/attachments.mjs",
+      "sha256": "64a9920018409770f7f7abbac318c6d1921e4636f739a3b077f347f8538e278e"
+    },
+    {
+      "file": "src/attachment-backup.mjs",
+      "sha256": "9feefb82267774908ac7361521834a0c70cd93ab6642109b44f6a7415c99adb0"
+    },
+    {
+      "file": "src/backup-contract.mjs",
+      "sha256": "ec19c856d3682cfb58853acbe7203b724d0a25d496bb60445fe8a2eebf6fa4d3"
+    },
+    {
+      "file": "src/search-index.mjs",
+      "sha256": "6d3502f873fc4167c9c1c562067ce89c54ea1f6d2e6aa80468692a50d759ec99"
+    },
+    {
+      "file": "src/settings-validation.mjs",
+      "sha256": "495418b871c8844dc4a8daf3957b5239fbf704e2ec83a4d08921448cf61f524e"
+    },
+    {
+      "file": "src/ai.mjs",
+      "sha256": "cdd11f35ebc053d335f5f07257271355e4e69bffd7eaeeb14606d52f7f948a5f"
+    },
+    {
+      "file": "src/capability-test.mjs",
+      "sha256": "2519006be19b04429ce4cefedef29cd434f7bb4d6b9adad3915b52e6b2d849f1"
+    },
+    {
+      "file": "src/call-ledger.mjs",
+      "sha256": "55d9feec0ab29b378721d8e316dfe072e7206402641eecddc4b98dd9522bb23b"
+    },
+    {
+      "file": "src/call-purpose.mjs",
+      "sha256": "19efbd10943fa4465c274d40be814e144de711450e52ae7128a37f94bf9784ad"
+    },
+    {
+      "file": "src/token-usage.mjs",
+      "sha256": "733a791a0ca101815c095b703366ade2614292a580155b09f6cd117f0a6a1775"
+    },
+    {
+      "file": "src/usage.mjs",
+      "sha256": "77e6a0e191770fa09f552768f5c472846effa7caa5d2073419308c6f974ff63d"
+    },
+    {
+      "file": "src/prompts.mjs",
+      "sha256": "3bfc0fe275235b4b222d63a1f76802d21607d200b0e51210d56892c1b87d03e8"
+    },
+    {
+      "file": "src/outbound-text.mjs",
+      "sha256": "abb4db7325df30e9c0f0924c97d7490d55a62e6840c06bee32d079f566b540f1"
+    },
+    {
+      "file": "src/recycle-bin.mjs",
+      "sha256": "b641e4ef479f0bec5de33321b2ac977fff05ccc57c75e54191a86ed35cc92c4b"
+    },
+    {
+      "file": "src/onboarding.mjs",
+      "sha256": "1eda9302c1845f42c1dad090885af1173dbe61e423f2ef16a83d588ade24227a"
+    },
+    {
+      "file": "src/onboarding-cases.mjs",
+      "sha256": "ddfd6c316215e0d2eace4ec9dbd14048ae13041427c3875eebb858556c05fef9"
+    },
+    {
+      "file": "src/chatgpt.mjs",
+      "sha256": "8472eba06c58a064f25882ff6705a5741cdeb3fa5f500150f751299d54414819"
+    },
+    {
+      "file": "src/chatgpt-sync.mjs",
+      "sha256": "d6381100f48a2f39b0c49653eb5bea03a320ce7a0a0e2953e2c6e57abb127c8d"
+    },
+    {
+      "file": "src/chatgpt-integrity.mjs",
+      "sha256": "e99154ee03ba0af10396580154dabbf52450f4dd21168d43e7cd7e8a90551ef5"
+    },
+    {
+      "file": "src/chatgpt-structure.mjs",
+      "sha256": "c32bc59b115eb16e5bde002eb9b81b13a47651b512ad85bd5da4b936d327ac22"
+    },
+    {
+      "file": "src/chatgpt-source-metadata.mjs",
+      "sha256": "a532eefbdde679f354e4192cc12657667dc6fabdb93b87f101eeceee31736612"
+    },
+    {
+      "file": "src/chatgpt-history-batch.mjs",
+      "sha256": "65b6ebb6cb7a6d536c14db2456322250cc8f996b3b1b432c8c71ded88fd432ad"
+    },
+    {
+      "file": "src/chatgpt-history-batch-store.mjs",
+      "sha256": "4dba066a462e6c99c6e7a9309e04cb5cd99f886a64cca2d64e314cefc47a15c1"
+    },
+    {
+      "file": "src/chatgpt-undo.mjs",
+      "sha256": "c39a5eab8fa9aa3fac9e55ebe384a99c9cffdc22922b09e263185ebb3075fb5f"
+    },
+    {
+      "file": "src/chatgpt-history-snapshot.mjs",
+      "sha256": "fc409fecafd54415e564208775705422c18d16a32b8165512cfa0e377bc37dbb"
+    },
+    {
+      "file": "src/chatgpt-history-auth.mjs",
+      "sha256": "bdc4f7b06be64ae2f27a1371758e3b7d8f5926b570f71084ba78bc5fc0e58a75"
+    },
+    {
+      "file": "src/chatgpt-build.mjs",
+      "sha256": "eef60ee87d986ab0938128b158589e5dde93b23e4f50fe7a1d2ecf409ad811a4"
+    },
+    {
+      "file": "src/secrets.mjs",
+      "sha256": "3fe4dfc87d7c3ba7378011f2f9d8275ac07d3fe0318c23c92e39650afb06584a"
+    }
+  ],
+  "referenceSources": [
+    {
+      "file": "public/onboarding-curriculum.mjs",
+      "sha256": "8f6d715bf101d632441983e6991e6b5803fa66ed8f02cd36a98c1bb9cf79801e"
+    },
+    {
+      "file": "public/onboarding-materials.mjs",
+      "sha256": "f9dd442c66a2caa1b784679586343287eaf57f984a5dedc5d38f94e33c8d9981"
+    },
+    {
+      "file": "public/source-file-limits.mjs",
+      "sha256": "1657dbf83ee268d59ef56d48d5b468e994a37308c1e5d846d1223ccc2d7ff401"
+    },
+    {
+      "file": "public/markdown-reader.mjs",
+      "sha256": "85caec41e5cb7a538dc9b82542d9612bedd8654f440ea19bb3ca820102671d95"
+    },
+    {
+      "file": "public/web/focus-model.mjs",
+      "sha256": "d040cb950896ad727e475c8c70aabecd917299e0b02f99718c44e52135d8f593"
+    },
+    {
+      "file": "public/web/styles.css",
+      "sha256": "ac9cd68a8024ca924b1593fc9f97558fb77030dd8fa2bb5644bb2daabe63bbca"
+    },
+    {
+      "file": "public/web/management.mjs",
+      "sha256": "7e5864463fc7817025fb6f9d969f194c6ef12d50eab93e2c043138605a12c070"
+    }
+  ]
+}

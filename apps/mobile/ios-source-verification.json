@@ -1,0 +1,46 @@
+{
+  "date": "2026-10-22",
+  "environment": "Windows, Node 24.21.0, pnpm 11.19.0",
+  "executed": {
+    "frozenInstall": {
+      "status": "passed",
+      "scripts": "ignored"
+    },
+    "typecheck": "passed",
+    "lint": "passed",
+    "sourceCheck": {
+      "status": "passed",
+      "jsModules": 81
+    },
+    "tests": {
+      "passed": 23,
+      "failed": 0,
+      "skipped": 0,
+      "environment": "Node platform adapters and synthetic directories"
+    },
+    "autolinking": {
+      "status": "found",
+      "module": "ZhixuRuntimeModule",
+      "pod": "ZhixuRuntime"
+    },
+    "iosHermesExport": "passed",
+    "dependencyAudit": {
+      "status": "failed",
+      "high": 2,
+      "moderate": 1,
+      "critical": 0
+    },
+    "iosPrebuild": {
+      "status": "unsupported on Windows",
+      "generated": false
+    }
+  },
+  "unverified": [
+    "Swift/Xcode/CocoaPods compilation",
+    "Simulator/device UI and performance",
+    "Native SQLite/filesystem/Keychain/TLS behavior",
+    "Real vendor calls and billing",
+    "Signing, TestFlight and App Store"
+  ],
+  "reuse": "No main repository full-suite or historical CI result is claimed as iOS acceptance."
+}

@@ -1,0 +1,26 @@
+{
+  "checkedAt": "2026-10-23T05:28:32.231Z",
+  "auditExit": 1,
+  "vulnerabilities": {
+    "info": 0,
+    "low": 0,
+    "moderate": 0,
+    "high": 2,
+    "critical": 0
+  },
+  "findings": [
+    {
+      "module": "node-forge",
+      "severity": "high",
+      "patched": ">=1.4.1",
+      "url": "https://github.com/advisories/GHSA-86w9-cpqp-85rv"
+    },
+    {
+      "module": "braces",
+      "severity": "high",
+      "patched": ">=3.0.4",
+      "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+    }
+  ],
+  "releaseGatePassed": false
+}

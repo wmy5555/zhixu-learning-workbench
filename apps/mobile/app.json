@@ -1,0 +1,48 @@
+{
+  "expo": {
+    "name": "知序",
+    "slug": "zhixu-mobile",
+    "version": "0.1.0",
+    "scheme": "zhixu",
+    "platforms": [
+      "ios",
+      "android"
+    ],
+    "userInterfaceStyle": "automatic",
+    "android": {
+      "package": "com.zhixu.learning.nativeapp",
+      "versionCode": 1,
+      "allowBackup": false,
+      "softwareKeyboardLayoutMode": "resize",
+      "predictiveBackGestureEnabled": true,
+      "blockedPermissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.SYSTEM_ALERT_WINDOW"
+      ]
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.zhixu.learning",
+      "infoPlist": {
+        "UIFileSharingEnabled": false,
+        "LSSupportsOpeningDocumentsInPlace": false,
+        "CADisableMinimumFrameDurationOnPhone": true,
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": false
+        }
+      }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-sqlite",
+      "expo-document-picker",
+      "expo-sharing",
+      "./plugins/with-private-storage.cjs"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

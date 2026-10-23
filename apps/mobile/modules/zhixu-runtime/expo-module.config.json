@@ -1,0 +1,1 @@
+{"platforms":["apple","android"],"apple":{"modules":["ZhixuRuntimeModule"]},"android":{"modules":["expo.modules.zhixuruntime.ZhixuRuntimeModule"]}}

@@ -1,0 +1,10 @@
+{
+  "sourceCommit": "7aa1d780c4f8af1de3e53699c1395b775f9a2557",
+  "sourceTree": "bd7e8dcddc91b5b9dc4d0861146bf0761666c30f",
+  "snapshot": "4318-20261023-130455-7aa1d78",
+  "sourceArchiveSha256": "911b7eba223626de7a5e33b09d58b9405f60f2d46fc7f91599d14dfe6c9b6257",
+  "reusedIOSCommit": "5d233be775c554872feacdd4780043bf3a73bbac",
+  "reusedIOSFiles": 148,
+  "productBaseline": "apps/mobile/baseline.json",
+  "includesUserData": false
+}

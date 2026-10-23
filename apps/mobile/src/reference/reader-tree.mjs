@@ -1,0 +1,2 @@
+export function el(tag,options={},children=[]){const node={tag,options,children:options.text!==undefined?[String(options.text)]:[],append(...values){this.children.push(...values.flat().filter(v=>v!==null&&v!==undefined&&v!==false));}};node.append(...(Array.isArray(children)?children:[children]));return node;}
+export function safeExternalUrl(value){try{const url=new URL(value);return ['http:','https:'].includes(url.protocol)&&!url.username&&!url.password?url.href:'';}catch{return '';}}
