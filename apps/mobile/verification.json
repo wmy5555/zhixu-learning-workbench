@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 1,
+  "product": "知序 Android 原生首版",
+  "version": "0.1.0",
+  "status": "first-usable-candidate-delivered",
+  "snapshotCommit": "7aa1d780c4f8af1de3e53699c1395b775f9a2557",
+  "snapshotSha256": "911b7eba223626de7a5e33b09d58b9405f60f2d46fc7f91599d14dfe6c9b6257",
+  "reusedIOSCommit": "5d233be775c554872feacdd4780043bf3a73bbac",
+  "reusedIOSFiles": 148,
+  "build": {
+    "commit": "cd746c031ee0887380fab0ee76df4f0a29a48035",
+    "workflowRun": 39939771940,
+    "url": "https://github.com/wmy5555/zhixu-learning-workbench/actions/runs/39939771940",
+    "status": "success",
+    "apkSha256": "d22c58f11dbe299423ba8f60db9b434155261fe418852f75fbe6c79818824551",
+    "apkBytes": 66057611,
+    "package": "com.zhixu.learning.nativeapp",
+    "abis": [
+      "arm64-v8a",
+      "x86_64"
+    ],
+    "signing": "development signing key; release variant; not a store release",
+    "artifactSha256": "842475b968d7d3ab61052a660da3048e490af01d623c580ecd782f809af08fdc",
+    "jvmTests": [
+      {
+        "name": "expo.modules.zhixuruntime.PinnedNetworkTest",
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    ],
+    "androidLint": {
+      "warnings": 27,
+      "errors": 0
+    }
+  },
+  "localVerification": {
+    "distinctNodeTestsPassedAcrossTargetedRuns": 31,
+    "singleFinalFullRun": false,
+    "typecheck": "passed",
+    "lint": "passed",
+    "nativeSourceCheck": "84 modules passed",
+    "desktopFullVerify": "not run: unrelated to native candidate",
+    "evidenceReuse": "Unchanged business/core/native contracts reuse completed targeted checks; no claim of one final all-suite execution"
+  },
+  "androidRuntime": {
+    "device": "MuMu Android 15 x86_64 emulator; no physical device",
+    "syntheticOnly": true,
+    "nativeRuntimeTests": {
+      "commit": "a40894468f4b1f9c336f85c179dcc01e02b1b32d",
+      "passed": 6,
+      "failed": 0,
+      "scope": "private files, paths and links, Keystore tamper/missing key, bounded descriptors, checked scan/cache"
+    },
+    "manualCore": {
+      "commit": "0e7ea309721c21ef1e006aae55b4f64be7491c33",
+      "passed": [
+        "keyboard input and native source save",
+        "reader opens saved title and body",
+        "edit and Android system Back decision after IME closes",
+        "continue editing retains draft",
+        "discard retains original",
+        "force-stop/relaunch retains original",
+        "editing and saving an existing note updates reader body"
+      ],
+      "evidence": "manual-core-acceptance.txt"
+    },
+    "reusedEarlierDeviceEvidence": [
+      "Chinese input channel and local search on d5ccc26",
+      "1000 synthetic backup preview and committed restore on ddd3b9d"
+    ],
+    "finalApkInstallation": "passed: release variant installed over candidate; no DEBUGGABLE; native tabs and prior edited synthetic note visible",
+    "finalVisualCheck": "Actual screenshot checked: all five native drawable icons and labels visible; readable light theme and status bar"
+  },
+  "knownLimits": {
+    "dependencyAudit": {
+      "modules": [
+        "node-forge",
+        "braces"
+      ],
+      "scope": "Expo/Metro build dependency chain",
+      "moderate": 0,
+      "releaseGatePassed": false,
+      "high": 2
+    },
+    "performance": "10000-note restore failed on an older build due to descriptor leak; fix passed native regression, scale retest deferred at user request",
+    "historical1000": {
+      "notFinalBuildPerformance": true,
+      "coldReadyMs": 14905,
+      "restoreMs": 21913
+    },
+    "automaticCrashRecovery": "not accepted: old synthetic staging was archived and manually quarantined after every original hash and DB row matched",
+    "notVerified": [
+      "physical Android phone",
+      "real AI/search/embedding providers and billing",
+      "large-corpus performance after fix",
+      "long-term/background behavior",
+      "iOS Xcode build",
+      "application-store signing/release",
+      "every screen and edge case"
+    ],
+    "platformDifferences": [
+      "desktop stdio MCP, desktop import pipe and external-directory watching remain desktop-only",
+      "complex HTML and interactive diagrams do not have exact native rendering parity",
+      "backup exchange is not bidirectional sync"
+    ]
+  },
+  "scopeProtection": {
+    "desktop4318ChangedByThisTask": false,
+    "oldAndroidUninstalled": false,
+    "originalIOSDirectoryChanged": false,
+    "realDataReadOrMigrated": false,
+    "realProviderCalls": 0,
+    "rootEnabled": false
+  },
+  "delivery": {
+    "priority": "User requested first usable version and fewer tests; no further stress sweep",
+    "pullRequest": "deferred to daily 02:00 batch",
+    "cloudReview": "code and security requests deferred until that PR exists",
+    "merged": false,
+    "releaseGatePassed": false,
+    "completedAt": "2026-10-23T10:49:08.1369422+00:00"
+  }
+}

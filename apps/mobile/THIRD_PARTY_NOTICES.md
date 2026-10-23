@@ -1,6 +1,6 @@
 # Third-party notices
 
-Android reuse: OkHttp 4.12.0 and its Okio dependency use Apache-2.0. Material Symbols from @expo-google-fonts/material-symbols 0.4.50 are included by Expo Router for Android tab icons; the font license is retained in licenses/material-symbols-APACHE-2.0.txt. No new project license is granted. fflate is updated to 0.8.3 under MIT. Native test-only libraries are JUnit 4.13.2 (EPL-1.0), AndroidX Test (Apache-2.0), MockWebServer 4.12.0 (Apache-2.0), and JSON-java 20240303 (Public Domain).
+Android reuse: OkHttp 4.12.0 and its Okio dependency use Apache-2.0. Expo's Material Symbols dependency is @expo-google-fonts/material-symbols 0.4.50; its license is retained in licenses/material-symbols-APACHE-2.0.txt. The Android tabs use original local vector drawables instead of font-rendered images. No new project license is granted. fflate is updated to 0.8.3 under MIT. Native test-only libraries are JUnit 4.13.2 (EPL-1.0), AndroidX Test (Apache-2.0), MockWebServer 4.12.0 (Apache-2.0), and JSON-java 20240303 (Public Domain).
 
 This notice applies only to the Expo template and dependencies, not to the Zhixu project. The owner has not selected a project license.
 

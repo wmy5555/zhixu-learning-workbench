@@ -1,8 +1,8 @@
 # 知序原生移动端
 
-Expo 58 + React Native 0.88，共用 iOS 候选的业务核心、原生界面与数据契约。Android 使用 Kotlin 文件/密钥/网络模块和 Jetpack Compose 控件；iOS 保留 Swift 模块与 SwiftUI 控件。没有 WebView、桌面网页服务器或对电脑 4318 的运行依赖。
+Expo 58 + React Native 0.88，共用 iOS 候选的业务核心、原生界面与数据契约。Android 使用 Kotlin 文件/密钥/网络模块和 Jetpack Compose 控件；iOS 保留 Swift 模块与 SwiftUI 控件。页面未使用 WebView，不启动桌面网页服务器，可独立于电脑 4318 运行。
 
-这是独立原生候选。Android 应用标识为 `com.zhixu.learning.nativeapp`，可与旧 Android 并存。没有覆盖旧 App、导入个人数据、修改或重启正式 4318。源码基线与复用来源见 [android-baseline.json](android-baseline.json)。
+这是第一版独立原生试用包。Android 应用标识为 `com.zhixu.learning.nativeapp`，可与旧 Android 并存。本任务没有覆盖旧 App、导入个人数据、修改或重启正式 4318。源码基线固定于任务开始时快照；其他任务后续更新的 4318 不会自动进入此包。来源见 [android-baseline.json](android-baseline.json)。
 
 ## 开发和构建
 
@@ -32,4 +32,6 @@ Android 原文、SQLite 和草稿保存在 noBackupFilesDir；凭据由 Android 
 
 手机和电脑通过备份文件交换，先预览再确认恢复。这不是增量双向同步。桌面 stdio MCP、ChatGPT 桌面管道、Obsidian 外部目录监听仍在电脑运行。
 
-构建、设备、在线供应商和性能结果分别记录在 [迁移与验收](MIGRATION.md)。依赖审计的未解除告警不可视为发布通过。
+首次安装后可先离线收集、阅读和整理资料，再按需配置 AI。更新本候选时直接覆盖安装，卸载会移除设备密钥和私有资料。与电脑交换资料需主动导出备份、在手机预览确认恢复；请保留电脑原库。
+
+构建、设备、在线供应商和性能结果分别记录在 [迁移与验收](MIGRATION.md) 和 verification.json。按用户要求优先交付首版，停止扩大压力测试。实体手机、真实供应商和万条规模性能尚未验收；构建依赖仍有两项 high 告警，不称为应用商店发布版。
