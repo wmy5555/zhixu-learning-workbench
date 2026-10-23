@@ -55,3 +55,10 @@
 - 不主动预取全库，不加轮询、依赖或额外 AI 调用。请求数量沿用旧阅读路径，知识 evidence 改为并行。
 - 正式与 main 可有独立增量：基于 main 保存任务补丁，正式只应用这次三个网页文件，不覆盖收集/引导等并发修复，不重启服务。发布前重读 config/HEAD/进程，保留回退，再核对磁盘/HTTP/启动器。
 - 真实 Chrome 的后台截图可能超时；将合成验收页带到前台后截图。减少动效用 `chrome-use set media dark reduced-motion`，不要省略 `set`。Windows junction 的目标必须使用绝对路径。
+
+## AI 正式整合（2026-10-23）
+
+- 集成分支feat/ai-learning-formal-20261023，以正式7aa1d78为基线合入预览1f6f56d的增量，不整树替换。14338实验目录和数据独立保留。
+- allowUncertainContinuation只在14338的忽略启动器启用；正式createApp默认false，不复制实验启动器、状态或凭据。
+- 后端改动须检查主库和练习任务空闲后重启，保留正式配置与旧源码回退。Git CRLF冲突先用三方blob规范换行再合并，不选整份旧预览覆盖正式。
+- 39项定向回归和4项受控HTTP检查通过；旧实测超时边界不冒充解决。部署证据写入本任务.tmp/deployment.json与稳定入口running.json。

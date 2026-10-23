@@ -1,9 +1,10 @@
+import {bindGuideAssistant} from './onboarding-assistant.mjs';
 import {learningTarget} from './onboarding-targets.mjs';
 import {reviewGuide,resolveReviewSession} from './onboarding-review.mjs';
 import {outputGuide} from './onboarding-output.mjs';
 import {isStudyRelearn,currentStudyId,resolveRelearnSession,relearnProof,relearnStudyGuide} from './onboarding-relearn.mjs';
 import {welcomeBody,assistantBody,proposalBody,goalLabels} from './onboarding-dialogs.mjs';
-import {guideSteps,complete,prerequisite,destination,selectors,speeds,intents,suggestGoals,intersection} from './onboarding-model.mjs';
+import {guideSteps,complete,prerequisite,destination,selectors,speeds,intents,intersection} from './onboarding-model.mjs';
 import {createGuideMotion} from './onboarding-motion.mjs';
 import {materials,materialSample} from '../onboarding-materials.mjs';
 import {escape as e} from './markdown.mjs';
@@ -30,7 +31,7 @@ export function createWebOnboarding({api,state,go,refreshBoot,beforeLeave}){
  const motion=createGuideMotion({speed:()=>speed,bottom:()=>$('dialog[open]')?innerHeight-24:!card.hidden&&(mode==='C'||innerWidth<850)?card.getBoundingClientRect().top-24:innerHeight-24,onToggle:()=>{if(!travelling&&!handling&&!motion.moving&&mode==='A'){detail=!detail;render();placeCard();}}});
  function adopt(value){proof=value.onboarding||value;steps=guideSteps(proof.materialId);if(proof.materialId)selectedMaterial=proof.materialId;}
  const call=(action,data={})=>api.post('/api/onboarding/'+action,{practiceId:proof?.practiceId,...data});
- const context=()=>({version:1,active,mode,speed,currentStepId:step()?.id,position:index+1,total:steps.length,completed:steps.filter(s=>complete(proof?.progress?.[s.id])).map(s=>s.id),missing:prerequisite(step(),proof)?.id||null,scope:api.getContext().practiceId?'practice':'shared-settings',targetVisible:Boolean(target()),aiConnected:false});
+ const context=()=>({version:1,active,mode,speed,currentStepId:step()?.id,position:index+1,total:steps.length,completed:steps.filter(s=>complete(proof?.progress?.[s.id])).map(s=>s.id),missing:prerequisite(step(),proof)?.id||null,scope:api.getContext().practiceId?'practice':'shared-settings',targetVisible:Boolean(target()),aiConnected:proof?.modelReady===true});
  function publicEvent(type){window.dispatchEvent(new CustomEvent('zhixu:guide-event',{detail:{type,...context()}}));}
  function visible(n){if(!n||!n.isConnected||!n.getClientRects().length)return false;for(let p=n;p;p=p.parentElement){const style=getComputedStyle(p);if(p.hidden||p.inert||style.visibility==='hidden'||style.display==='none')return false;}return true;}
  function review(){return reviewGuide({root:document,route:state.route,proof,session:state.session,visible});}
@@ -122,9 +123,9 @@ export function createWebOnboarding({api,state,go,refreshBoot,beforeLeave}){
  async function next(){if(travelling)return;if(!target()&&!done()){error='当前步骤的位置暂时不可见，请先重新定位。';render();await hint();return;}adopt(await call('checkpoint',{stepId:step().id,mode:step().kind==='read'?'read':'check'}));if(!done()){error=proof.progress?.[step().id]?.reason||'还没有这一步的完成记录，请先完成操作，再检查。';render();await hint();return;}if(index===steps.length-1){await leave();notify('核心体验已完成，练习记录已保留。');return;}await navigate(index+1);}
  async function leave(){if(!await beforeLeave())return;if(polling)await polling;if(proof?.busy){notify('练习任务仍在处理，请等待完成或先取消任务。',true);return;}adopt(await call('pause'));api.setContext('');active=false;sequence++;travelling=false;motion.hide();detail=false;state.note=null;state.session=null;await refreshBoot();render();await go('today',{force:true,replace:true});clearTimeout(pollTimer);}
  function routeMap(){modal('你的完整路线',`<p>已完成的操作保留记录；尚未满足的前置条件会明确提示。</p><div class="onboard-map">${steps.map((s,i)=>button(`<span>${complete(proof?.progress?.[s.id])?'✓':String(i+1).padStart(2,'0')}</span>${e(s.title)}`,'jump',`data-index="${i}" ${travelling?'disabled':''}`)).join('')}</div>`);}
- function propose(dialog,goal){if(!Object.hasOwn(intents,goal))return;const wanted=steps.findIndex(s=>s.id===intents[goal].start),missing=prerequisite(steps[wanted],proof),start=missing?steps.findIndex(s=>s.id===missing.id):wanted;dialog.querySelector('[data-guide-reply]').textContent='可以，我们先确认路线，再按你当前的进度一步一步继续。';dialog.querySelector('#guide-suggestions').innerHTML=proposalBody({goal,steps,startIndex:start,reason:missing?missing.message:'已经保留本次练习的实际完成记录，按需要继续操作。'});}
+ function propose(dialog,goal,{keepAnswer=false}={}){if(!Object.hasOwn(intents,goal))return;const wanted=steps.findIndex(s=>s.id===intents[goal].start),missing=prerequisite(steps[wanted],proof),start=missing?steps.findIndex(s=>s.id===missing.id):wanted;if(!keepAnswer)dialog.querySelector('[data-guide-reply]').textContent='可以，我们先确认路线，再按你当前的进度一步一步继续。';dialog.querySelector('#guide-suggestions').innerHTML=proposalBody({goal,steps,startIndex:start,reason:missing?missing.message:'已经保留本次练习的实际完成记录，按需要继续操作。'});}
  function assistant(){const dialog=modal('你想从哪里继续？',assistantBody());dialog.classList.add('guide-assistant-dialog');const heading=dialog.querySelector('.dialog-heading h2');heading.innerHTML='<span class="eyebrow">GUIDANCE, WHEN YOU NEED IT</span><span>你想从哪里继续？</span>';
-  dialog.querySelector('form').onsubmit=ev=>{ev.preventDefault();if(ev.isComposing)return;const text=String(new FormData(ev.currentTarget).get('question')).trim();if(!text)return;const message=dialog.querySelector('.guide-user-message');message.hidden=false;message.textContent=text;const goals=suggestGoals(text);dialog.querySelector('#guide-suggestions').innerHTML='';if(goals.length===1){propose(dialog,goals[0]);return;}dialog.querySelector('[data-guide-reply]').textContent=goals.length>1?'这里有几个可能的方向。先选你现在最想解决的一件事，我再安排步骤。':'我还不能确定你想完成哪件事。可以选一个方向，或说得具体一点。';dialog.querySelector('.guide-goal-chips').innerHTML=(goals.length?goals:Object.keys(goalLabels)).map(id=>button(goalLabels[id],'suggest-goal',`data-goal="${id}"`)).join('');};
+  bindGuideAssistant({dialog,api,practiceId:proof?.practiceId,propose});
  }
  async function hint(){if(travelling)return;const el=target();if(!el){await navigate(index);return;}await motion.scroll(el);await motion.track();if(hinting||motion.framed){motion.pulse();return;}hinting=true;if(await motion.frame(el)&&active&&hinting)motion.pulse();}
  function schedulePoll(){clearTimeout(pollTimer);if(active)pollTimer=setTimeout(async()=>{await refreshProof();schedulePoll();},3500);}
