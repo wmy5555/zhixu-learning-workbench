@@ -625,6 +625,18 @@ export default function Section() {
             {restoring ? (
               <Card>
                 <Label>恢复预览已通过</Label>
+                <Label>即将恢复 {restoring.preview.notes} 条资料</Label>
+                <Label muted>
+                  {restoring.preview.versions} 个历史版本 · {restoring.preview.attachments || 0} 个附件
+                </Label>
+                {restoring.preview.settingsChanges?.providers?.filter((p: any) =>
+                  p.current.baseUrl !== p.backup.baseUrl || p.current.model !== p.backup.model
+                ).map((p: any) => (
+                  <Label key={p.capability}>
+                    {p.capability}配置将改为：{p.backup.model || "未设置模型"}，{p.backup.baseUrl || "未设置地址"}
+                  </Label>
+                ))}
+                <Label>{restoring.preview.settingsChanges?.notice}</Label>
                 <Label>{restoring.preview.taskNotice}</Label>
                 <Label muted>
                   确认后替换当前知识库内容。现有库会按恢复规则保留回退材料；排队任务等待人工确认。

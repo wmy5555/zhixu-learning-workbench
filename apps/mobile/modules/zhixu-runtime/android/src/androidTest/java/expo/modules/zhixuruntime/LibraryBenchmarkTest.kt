@@ -60,6 +60,7 @@ class LibraryBenchmarkTest {
       click(file)
       val previewStart = SystemClock.elapsedRealtime()
       assertTrue("Backup preview failed", device.wait(Until.hasObject(By.text("恢复预览已通过")), 120000))
+      assertTrue("Selected backup count differs", device.hasObject(By.text("即将恢复 $count 条资料")))
       val previewMs = SystemClock.elapsedRealtime() - previewStart
       val restoreStart = SystemClock.elapsedRealtime()
       click("确认恢复"); click("继续")
