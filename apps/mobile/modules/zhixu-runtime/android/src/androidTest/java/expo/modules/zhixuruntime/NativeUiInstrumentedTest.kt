@@ -37,8 +37,17 @@ class NativeUiInstrumentedTest {
   private fun click(text: String, bottom: Boolean = false) {
     val selector = if (device.hasObject(By.desc(text))) By.desc(text) else By.text(text)
     find(selector)
-    val nodes = device.findObjects(selector)
-    (if (bottom) nodes.maxBy { it.visibleBounds.bottom } else nodes.first()).click()
+    val deadline = SystemClock.elapsedRealtime() + 30000
+    var pressed = false
+    while (!pressed && SystemClock.elapsedRealtime() < deadline) {
+      val nodes = device.findObjects(selector)
+      var target = if (bottom) nodes.maxByOrNull { it.visibleBounds.bottom } else nodes.firstOrNull()
+      repeat(6) { if (target != null && !target!!.isClickable) target = target!!.parent }
+      if (target?.isEnabled == true && target?.isClickable == true) {
+        target!!.click(); pressed = true
+      } else SystemClock.sleep(100)
+    }
+    assertTrue("Control did not become enabled: $text", pressed)
     device.waitForIdle()
   }
   private fun launch() {
@@ -79,6 +88,7 @@ class NativeUiInstrumentedTest {
     device.takeScreenshot(File(output, "00-entered-input.png"))
     hideKeyboard()
     click("保存原文")
+    assertTrue("Capture must navigate to the reader", device.wait(Until.hasObject(By.text("阅读")), 30000))
     assertTrue("Saved title differs from entered input: $title", device.wait(Until.hasObject(By.text(title)), 15000))
     assertTrue(device.wait(Until.hasObject(By.textContains("Offline synthetic source")), 15000))
     assertTrue(device.takeScreenshot(File(output, "02-saved-note.png")))
