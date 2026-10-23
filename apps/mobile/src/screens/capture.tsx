@@ -113,6 +113,7 @@ function CaptureForm() {
       setError((e as Error).message);
     }
   }
+  if (!hydrated) return <Body><Label>{error || "正在恢复草稿…"}</Label></Body>;
   return (
     <Body form>
       <Label large>收集</Label>

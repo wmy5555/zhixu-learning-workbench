@@ -20,5 +20,7 @@
 - CI 的模块测试 APK 使用每个运行器生成的调试签名，升级可能签名不兼容。先归档证据，只替换本任务测试包；主 App 数据和旧 App 保留。MuMu 的 adb 曾在打印 Failure 后返回 0，安装与 instrumentation 必须读实际 Success/OK 及失败计数。
 - UiAutomator 应通过 content-desc 查找未选中的 NativeTabs，不能假定所有标签都有可见文字；长表单需要实际滚动。By.desc 接受 Pattern，2.3 版没有 By.descMatches。
 - 连续处理队列时仅首轮调用 tick，后续调用 runJobs；每次都 tick 会重复推进发现调度，可能重建刚失败的发现任务。
-- 空库启动不能证明已迁移 SQLite：检索首次同步会用 iterate 和 lastInsertRowid；Expo 分别提供 getEachSync 和 lastInsertRowId，必须适配，保留游标提前退出时的释放。1000 条恢复后重启曾因此失败，已增加实际索引重建的契约回归。
+- 空库启动不能证明已迁移 SQLite：检索首次同步会用 iterate 和 lastInsertRowid；Expo 分别提供 getEachSync 和 lastInsertRowId，必须适配，保留游标提前退出时的释放。设备用例首次重启暴露此缺口，已增加实际索引重建的契约回归。
 - 文件 stat 不能只返回 size：补齐 Date、inode、设备号与纳秒修改/状态时间，防止同长度改动被扫描缓存误认为未变化。Android API 27 起提供 StructTimespec，低版本保留明确秒级回退。
+- 恢复确认对话框会暂时隐藏后面的预览，不能以“预览文本消失”断言已恢复并立刻杀进程。等待实际提交回执“已恢复 N 条资料”，再重启、检查库内数据；早期大库失败日志未完成该验收，不能当作性能结果。
+- Android 自动化直接设置 accessibility 文本曾未形成有效的新输入；实际键盘输入可正常保存。用键盘文字事件并先读回字段，再检查保存后的原文；保留输入与失败截图。草稿加载完前不开放收集与作答输入，避免恢复数据覆盖新输入。

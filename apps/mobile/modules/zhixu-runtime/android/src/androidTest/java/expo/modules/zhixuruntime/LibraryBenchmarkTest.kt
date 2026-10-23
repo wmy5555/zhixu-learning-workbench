@@ -61,9 +61,9 @@ class LibraryBenchmarkTest {
       val previewStart = SystemClock.elapsedRealtime()
       assertTrue("Backup preview failed", device.wait(Until.hasObject(By.text("恢复预览已通过")), 120000))
       val previewMs = SystemClock.elapsedRealtime() - previewStart
-      click("确认恢复"); click("继续")
       val restoreStart = SystemClock.elapsedRealtime()
-      assertTrue("Restore did not complete", device.wait(Until.gone(By.text("恢复预览已通过")), 300000))
+      click("确认恢复"); click("继续")
+      assertTrue("Restore did not commit $count notes", device.wait(Until.hasObject(By.text("已恢复 $count 条资料")), 300000))
       val restoreMs = SystemClock.elapsedRealtime() - restoreStart
       device.executeShellCommand("am force-stop $packageName")
       val coldStart = SystemClock.elapsedRealtime()

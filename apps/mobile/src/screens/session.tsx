@@ -68,6 +68,7 @@ export default function Session() {
       setError((e as Error).message);
     }
   }
+  if (!hydrated) return <Body><Label>{error || "正在恢复草稿…"}</Label></Body>;
   return (
     <Status resource={r}>
       <Body form>

@@ -60,6 +60,7 @@ export default function Section() {
     [limit, setLimit] = useState(30),
     [filter, setFilter] = useState(""),
     [restoring, setRestoring] = useState<any>(null),
+    [restoreNotice, setRestoreNotice] = useState(""),
     [stepIndex, setStepIndex] = useState(-1),
     [custom, setCustom] = useState(false),
     [customTitle, setCustomTitle] = useState(""),
@@ -608,6 +609,7 @@ export default function Section() {
                 try {
                   const f = await pickFile({ maxBytes: 100_000_000 });
                   if (!f) return;
+                  setRestoreNotice("");
                   const backup = JSON.parse(await f.file.text());
                   const preview = await api.post("/api/restore", {
                     backup,
@@ -619,6 +621,7 @@ export default function Section() {
                 }
               }}
             />
+            {restoreNotice ? <Label>{restoreNotice}</Label> : null}
             {restoring ? (
               <Card>
                 <Label>恢复预览已通过</Label>
@@ -639,7 +642,10 @@ export default function Section() {
                           preview: false,
                           token: restoring.preview.token,
                         });
-                        if (v) setRestoring(null);
+                        if (v?.restored === true) {
+                          setRestoreNotice(`已恢复 ${restoring.preview.notes} 条资料`);
+                          setRestoring(null);
+                        }
                       },
                     )
                   }

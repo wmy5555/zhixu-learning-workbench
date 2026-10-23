@@ -2,6 +2,8 @@ package expo.modules.zhixuruntime
 
 import android.content.Intent
 import android.os.SystemClock
+import android.view.KeyCharacterMap
+import android.view.KeyEvent
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
@@ -47,26 +49,37 @@ class NativeUiInstrumentedTest {
     instrumentation.context.startActivity(intent)
     assertTrue("Workbench did not become ready", device.wait(Until.hasObject(By.textContains("今日预算")), 25000))
   }
+  private fun enter(label: String, value: String) {
+    val field = find(By.desc(label))
+    field.click()
+    device.pressKeyCode(KeyEvent.KEYCODE_A, KeyEvent.META_CTRL_ON)
+    // Keyboard text events exercise React Native's change handler; setting the
+    // accessibility node's text can bypass that handler on emulator builds.
+    assertTrue(instrumentation.uiAutomation.injectInputEvent(
+      KeyEvent(SystemClock.uptimeMillis(), value, KeyCharacterMap.VIRTUAL_KEYBOARD, 0), true))
+    assertTrue("Input was not applied: $label", device.wait(Until.hasObject(By.desc(label).text(value)), 5000))
+  }
   @Test fun offlineCaptureEditBackAndRestart() {
     val output = File(instrumentation.targetContext.getExternalFilesDir(null), "zhixu-native-acceptance").apply { mkdirs() }
     val started = SystemClock.elapsedRealtime()
+    device.executeShellCommand("am force-stop $packageName")
     launch()
     val readyMs = SystemClock.elapsedRealtime() - started
     assertTrue(device.takeScreenshot(File(output, "01-today.png")))
     val title = "合成原生验收 " + System.currentTimeMillis()
     val body = "这是一份合成验收资料。\n离线保存原文，并保留用户自己的回答。"
     click("收集", bottom = true)
-    device.findObject(By.desc("标题")).apply { click(); text = title }
-    device.findObject(By.desc("原始资料")).apply { click(); text = body }
+    enter("标题", title)
+    enter("原始资料", body)
+    File(output, "input.json").writeText(JSONObject().put("expectedTitle", title).put("expectedBody", body).toString())
+    device.takeScreenshot(File(output, "00-entered-input.png"))
     device.pressBack() // dismiss keyboard; the capture tab retains its input
     click("保存原文")
-    assertTrue(device.wait(Until.hasObject(By.text(title)), 15000))
+    assertTrue("Saved title differs from entered input: $title", device.wait(Until.hasObject(By.text(title)), 15000))
     assertTrue(device.wait(Until.hasObject(By.textContains("合成验收资料")), 15000))
     assertTrue(device.takeScreenshot(File(output, "02-saved-note.png")))
     click("编辑")
-    val editor = find(By.desc("正文"))
-    editor.click()
-    editor.text = body + "\n未保存的合成修改"
+    enter("正文", body + "\n未保存的合成修改")
     device.pressBack()
     if (!device.wait(Until.hasObject(By.text("继续编辑")), 700)) device.pressBack()
     assertTrue("Dirty edit must require a decision", device.wait(Until.hasObject(By.text("继续编辑")), 5000))
