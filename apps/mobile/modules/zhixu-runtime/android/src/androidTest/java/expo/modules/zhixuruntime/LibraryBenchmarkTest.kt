@@ -6,6 +6,7 @@ import android.os.SystemClock
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
+import androidx.test.uiautomator.Direction
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
 import org.json.JSONArray
@@ -15,6 +16,7 @@ import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.util.regex.Pattern
 
 /** Explicit opt-in: this test restores SYNTHETIC fixtures over a disposable
  * candidate library. Never run against a user's populated installation. */
@@ -24,8 +26,17 @@ class LibraryBenchmarkTest {
   private val device = UiDevice.getInstance(instrumentation)
   private val packageName = "com.zhixu.learning.nativeapp"
   private fun click(text: String) {
-    assertTrue("Missing: $text", device.wait(Until.hasObject(By.text(text)), 15000))
-    device.findObjects(By.text(text)).maxBy { it.visibleBounds.bottom }.click()
+    val selector = if (device.hasObject(By.desc(text))) By.desc(text) else By.text(text)
+    repeat(8) {
+      if (!device.hasObject(selector)) {
+        device.findObjects(By.scrollable(true)).maxByOrNull {
+          it.visibleBounds.width() * it.visibleBounds.height()
+        }?.scroll(Direction.DOWN, 0.7f)
+        device.waitForIdle()
+      }
+    }
+    assertTrue("Missing: $text", device.wait(Until.hasObject(selector), 15000))
+    device.findObjects(selector).maxBy { it.visibleBounds.bottom }.click()
     device.waitForIdle()
   }
   private fun open(route: String) {
@@ -41,7 +52,7 @@ class LibraryBenchmarkTest {
       click("选择备份并预览")
       val file = "zhixu-synthetic-$count.json"
       if (!device.wait(Until.hasObject(By.text(file)), 1500)) {
-        device.findObject(By.descMatches("Show roots|显示根目录|打开导航抽屉|打开导航栏"))?.click()
+        device.findObject(By.desc(Pattern.compile("Show roots|显示根目录|打开导航抽屉|打开导航栏")))?.click()
         val downloads = device.findObject(By.text("Downloads")) ?: device.findObject(By.text("下载"))
         assertNotNull("Open the Downloads provider", downloads)
         downloads!!.click()

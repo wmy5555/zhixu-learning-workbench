@@ -5,7 +5,10 @@ import android.os.SystemClock
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
+import androidx.test.uiautomator.BySelector
+import androidx.test.uiautomator.Direction
 import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -20,9 +23,21 @@ class NativeUiInstrumentedTest {
   private val instrumentation = InstrumentationRegistry.getInstrumentation()
   private val device = UiDevice.getInstance(instrumentation)
   private val packageName = "com.zhixu.learning.nativeapp"
+  private fun find(selector: BySelector): UiObject2 {
+    repeat(8) {
+      device.findObject(selector)?.let { return it }
+      val scroll = device.findObjects(By.scrollable(true)).maxByOrNull {
+        it.visibleBounds.width() * it.visibleBounds.height()
+      }
+      scroll?.scroll(Direction.DOWN, 0.7f)
+      device.waitForIdle()
+    }
+    return device.wait(Until.findObject(selector), 5000) ?: throw AssertionError("Missing control: $selector")
+  }
   private fun click(text: String, bottom: Boolean = false) {
-    assertTrue("Missing control: $text", device.wait(Until.hasObject(By.text(text)), 15000))
-    val nodes = device.findObjects(By.text(text))
+    val selector = if (device.hasObject(By.desc(text))) By.desc(text) else By.text(text)
+    find(selector)
+    val nodes = device.findObjects(selector)
     (if (bottom) nodes.maxBy { it.visibleBounds.bottom } else nodes.first()).click()
     device.waitForIdle()
   }
@@ -49,8 +64,7 @@ class NativeUiInstrumentedTest {
     assertTrue(device.wait(Until.hasObject(By.textContains("合成验收资料")), 15000))
     assertTrue(device.takeScreenshot(File(output, "02-saved-note.png")))
     click("编辑")
-    assertTrue(device.wait(Until.hasObject(By.desc("正文")), 5000) || device.hasObject(By.desc("Markdown 正文")))
-    val editor = device.findObject(By.desc("Markdown 正文")) ?: device.findObject(By.desc("正文"))
+    val editor = find(By.desc("正文"))
     editor.click()
     editor.text = body + "\n未保存的合成修改"
     device.pressBack()
