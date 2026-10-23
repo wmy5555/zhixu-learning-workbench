@@ -8,7 +8,7 @@ import { $, $$, icon, button as btn, routeButton as link, field, area, empty, he
 import { reader, updateReader } from './reader.mjs';
 import { createReaderData, sameReaderData } from './reader-data.mjs';
 import { learningReadiness, learningHelp, readerMenu, credibilityNotice } from './reader-actions.mjs';
-import { processOutcome } from './process-outcome.mjs';
+import { processOutcome, createProcessOutcomeRenderer } from './process-outcome.mjs';
 import { springEnter } from './cds/motion-bridge.mjs';
 import { mountNoteEditor, noteEditSession } from './note-editor.mjs';
 import { createParity, feedbackHTML, completionHTML, evidenceHTML, paginate, details } from './parity.mjs';
@@ -321,19 +321,19 @@ async function processSource(id, { research = false } = {}) {
   let timer,job,selectedResearch=research,reading=false,sending=false;
   const dialog=modal(research?'补充这份资料的核验':'把这份原文交给 AI 拆解？',`<p><strong>${e(note.title)}</strong></p><p>将必要原文发送给已配置的服务，可能计费。已有拆解会复用；核验不会自动确认个人理解。</p><label class="check"><input type="checkbox" name="research" ${research?'checked':''}> 联网核验事实、条件与反例</label><p class="form-note">不勾选也能整理和学习，待核验之处会继续标明。人工修改或进行中的练习会保留，新证据另存为修订建议。</p><div class="actions"><button class="primary" data-run>确认${research?'核验':'拆解'}</button></div>`,{onClose:()=>clearTimeout(timer)});
   const current=()=>dialog.isConnected&&dialog.open&&sequence===state.sequence;
+  const updateOutcome=createProcessOutcomeRenderer(dialog.querySelector('.dialog-body'));
   const render=(pendingProposals=0)=>{
     if(!current())return;
     const view=processOutcome(job,{research:selectedResearch,sourceId:id,returnTo,pendingProposals});
     dialog.querySelector('h2').textContent=view.title;dialog.setAttribute('aria-label',view.title);
     const body=dialog.querySelector('.dialog-body'),hadFocus=body.contains(document.activeElement)||document.activeElement===document.body;
-    body.innerHTML=view.html;
+    if(!updateOutcome(view))return;
     const retry=body.querySelector('[data-process-retry]');
     if(retry)retry.onclick=event=>busy(event.currentTarget,()=>send(job.id));
     const researchButton=body.querySelector('[data-process-research]');
     if(researchButton)researchButton.onclick=event=>busy(event.currentTarget,()=>send());
     body.querySelector('[data-process-refresh]').onclick=event=>busy(event.currentTarget,read);
     if(hadFocus)(retry||researchButton||body.querySelector('[data-process-refresh]')).focus({preventScroll:true});
-    springEnter(body,undefined,3,1);
   };
   const read=async()=>{
     if(!current()||reading||sending)return;
