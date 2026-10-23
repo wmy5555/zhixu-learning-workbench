@@ -1,4 +1,4 @@
-// Frozen desktop business rules; platform import adaptation only unless documented.
+// Frozen desktop business rules; platform imports and checked native read batching are documented in MIGRATION.md.
 import fs from '../platform/fs.js';
 import path from '../platform/path.js';
 import { DatabaseSync } from '../platform/sqlite.js';
@@ -276,17 +276,20 @@ export class Store {
         }
       }
     };
-    walk(this.vaultDir);
+    if (fs.scanMarkdownTree) {
+      const fingerprints = incremental ? Object.fromEntries([...this.scanCache].map(([file, entry]) => [file, entry.fingerprint])) : {};
+      for (const entry of fs.scanMarkdownTree(this.vaultDir, fingerprints)) files.push(entry);
+    } else walk(this.vaultDir);
     const previous = this.db.prepare('SELECT id,path,hash FROM notes').all();
     const byPath = new Map(previous.map(row => [row.path, row])), byHash = new Map();
     for (const row of previous) { const matches=byHash.get(row.hash)||[];matches.push(row);byHash.set(row.hash,matches); }
-    for (const { file, fingerprint } of files) {
+    for (const { file, fingerprint, raw: nativeRaw } of files) {
       const rel = path.relative(this.vaultDir, file).replaceAll('\\', '/');
       try {
         const cached = incremental && this.scanCache.get(file), unchanged = cached?.fingerprint === fingerprint;
         let raw, parsed;
         if (unchanged) ({ raw, parsed } = cached);
-        else { raw = fs.readFileSync(assertTree(file, this.vaultDir), 'utf8'); readFiles++; parsed = parse(raw); }
+        else { raw = nativeRaw ?? fs.readFileSync(assertTree(file, this.vaultDir), 'utf8'); readFiles++; parsed = parse(raw); }
         let id = parsed.meta.id;
         if (id !== undefined && (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(id))) fail('id 必须为短字符串。');
         const missing = !id && !byPath.has(rel) ? (byHash.get(hash(raw))||[]).filter(row=>!fs.existsSync(path.join(this.vaultDir,row.path))) : [];

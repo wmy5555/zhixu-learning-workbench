@@ -32,4 +32,10 @@ export const opendirSync = file => { const rows = readdirSync(file, { withFileTy
 export const openSync = (file, flags) => { if (flags !== 'r+') throw Error('Unsupported open mode'); statSync(file); return path(file); };
 export const fsyncSync = file => call('sync', { path: path(file) });
 export const closeSync = () => {};
-export default { existsSync,mkdirSync,readFileSync,writeFileSync,renameSync,linkSync,unlinkSync,rmSync,realpathSync,statSync,lstatSync,readdirSync,opendirSync,openSync,fsyncSync,closeSync };
+// Android performs the same checked, no-follow reads in one bounded batch.
+// iOS and Node keep their existing scanner. No results survive this invocation.
+export const scanMarkdownTree = runtime.platform === 'android' ? (root, fingerprints = {}) =>
+  call('scan', { path: path(root), fingerprints }).map(({ file, fingerprint, base64 }) => ({
+    file, fingerprint, ...(typeof base64 === 'string' ? { raw: Buffer.from(base64, 'base64').toString('utf8') } : {}),
+  })) : undefined;
+export default { existsSync,mkdirSync,readFileSync,writeFileSync,renameSync,linkSync,unlinkSync,rmSync,realpathSync,statSync,lstatSync,readdirSync,opendirSync,openSync,fsyncSync,closeSync,scanMarkdownTree };

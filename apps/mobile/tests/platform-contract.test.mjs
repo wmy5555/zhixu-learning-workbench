@@ -4,6 +4,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { sqliteStatement } from '../src/platform/sqlite-contract.mjs';
 import { fileStat } from '../src/platform/file-stat.mjs';
 import { SearchIndex } from '../src/core/search-index.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import { Store } from '../src/core/store.mjs';
 
 test('Expo SQLite result contract rebuilds and searches a populated local index', t => {
   const sqlite = new DatabaseSync(':memory:');
@@ -58,4 +61,43 @@ test('native file stamps preserve same-size edits, dates and bigint identity', (
   assert.ok(first.isFile());
   assert.ok(!first.isSymbolicLink());
   assert.equal(fileStat({ kind: 'file', size: 1, nlink: 1, mtimeMs: 1000 }).mtime.toISOString(), '1970-01-01T00:00:01.000Z');
+});
+
+test('batched native scans retain cache refresh, fallback reads and duplicate protection', t => {
+  fs.mkdirSync('.tmp', { recursive: true });
+  const root = fs.mkdtempSync(path.resolve('.tmp/native-scan-'));
+  let supplyRaw = true;
+  const previous = fs.scanMarkdownTree;
+  fs.scanMarkdownTree = (directory, cached) => fs.readdirSync(directory).filter(name => name.endsWith('.md')).map(name => {
+    const file = path.join(directory, name), stat = fs.statSync(file, { bigint: true });
+    const fingerprint = [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(':');
+    return { file, fingerprint, ...(supplyRaw && cached[file] !== fingerprint ? { raw: fs.readFileSync(file, 'utf8') } : {}) };
+  });
+  const store = new Store({ dataDir: path.join(root, 'data'), vaultDir: path.join(root, 'vault') });
+  t.after(() => {
+    store.close();
+    if (previous === undefined) delete fs.scanMarkdownTree; else fs.scanMarkdownTree = previous;
+    assert.ok(root.startsWith(path.resolve('.tmp') + path.sep));
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const file = path.join(root, 'vault', '原文.md');
+  const raw = body => `---\nid: synthetic_1\nkind: source\ntitle: 合成原文\nupdatedAt: 2026-10-23T00:00:00.000Z\n---\n${body}`;
+  fs.writeFileSync(file, raw('甲'));
+  assert.equal(store.scan().count, 1);
+  assert.equal(store.read('synthetic_1').body, '甲');
+  assert.equal(store.scan({ incremental: true }).readFiles, 0);
+  fs.writeFileSync(file, raw('乙'));
+  fs.utimesSync(file, new Date(), new Date(Date.now() + 2000));
+  store.scan({ incremental: true });
+  assert.equal(store.read('synthetic_1').body, '乙');
+  supplyRaw = false; // A bounded native batch may omit bytes; fresh reads still work.
+  fs.writeFileSync(file, raw('丙'));
+  fs.utimesSync(file, new Date(), new Date(Date.now() + 3000));
+  store.scan({ incremental: true });
+  assert.equal(store.read('synthetic_1').body, '丙');
+  fs.writeFileSync(path.join(root, 'vault', '重复.md'), raw('丁'));
+  store.scan();
+  assert.equal(store.list().length, 0);
+  assert.ok(store.conflicts.some(item => item.error.includes('重复稳定 id')));
+  assert.equal(fs.readFileSync(file, 'utf8'), raw('丙'));
 });

@@ -5,8 +5,12 @@ const gram = text => 'g' + Buffer.from(text).toString('hex');
 function grams(text, query = false) {
   const chars = Array.from(text.toLowerCase()), result = new Set();
   const lengths = query ? [Math.min(3, chars.length)] : [1, 2, 3];
-  for (const length of lengths) for (let i = 0; length && i <= chars.length - length; i++) result.add(gram(chars.slice(i, i + length).join('')));
-  return [...result];
+  // Deduplicate before UTF-8/hex conversion. Repeated phrases otherwise create
+  // thousands of temporary buffers on Hermes for the same final index token.
+  for (const length of lengths) for (let i = 0; length && i <= chars.length - length; i++) result.add(chars.slice(i, i + length).join(''));
+  // UTF-8 replacement can collapse distinct unpaired surrogates; retain the
+  // original encoded-token uniqueness and insertion order in that case too.
+  return [...new Set([...result].map(gram))];
 }
 export class SearchIndex {
   constructor(db) {

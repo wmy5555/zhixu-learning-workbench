@@ -72,4 +72,35 @@ class RuntimeInstrumentedTest {
     KeyStore.getInstance("AndroidKeyStore").apply { load(null); deleteEntry(alias) }
     try { secrets.open(a); fail("must reject") } catch (_: RuntimeFailure) { }
   }
+  @Test fun repeatedIOReleasesOwnedDescriptors() {
+    val before = File("/proc/self/fd").list()!!.size
+    repeat(200) {
+      write("repeated.md", "合成内容 $it")
+      files.call("read", args("repeated.md"))
+    }
+    val after = File("/proc/self/fd").list()!!.size
+    assertTrue("Descriptor growth: $before -> $after", after <= before + 8)
+  }
+  @Test fun checkedReadBatchSkipsLinksAndRefreshesChangedFiles() {
+    write("原文.md", "合成原文甲")
+    write(".hidden.md", "hidden")
+    write("ignored.txt", "not markdown")
+    val outside = File(root.parentFile, "outside-" + UUID.randomUUID()).apply { writeText("outside") }
+    try {
+      Os.symlink(outside.path, File(root, "escape.md").path)
+      val input = JSONObject().put("path", root.path)
+      val first = (files.call("scan", input) as List<*>).single() as Map<*, *>
+      assertEquals("合成原文甲", String(Base64.decode(first["base64"] as String, Base64.DEFAULT), Charsets.UTF_8))
+      input.put("fingerprints", JSONObject().put(first["file"] as String, first["fingerprint"]))
+      val same = (files.call("scan", input) as List<*>).single() as Map<*, *>
+      assertFalse(same.containsKey("base64"))
+      Thread.sleep(if (android.os.Build.VERSION.SDK_INT >= 27) 5 else 1100)
+      write("原文.md", "合成原文乙")
+      val changed = (files.call("scan", input) as List<*>).single() as Map<*, *>
+      assertNotEquals(first["fingerprint"], changed["fingerprint"])
+      assertEquals("合成原文乙", String(Base64.decode(changed["base64"] as String, Base64.DEFAULT), Charsets.UTF_8))
+      assertEquals("outside", outside.readText())
+      try { files.call("scan", args("escape.md")); fail("must reject link root") } catch (_: RuntimeFailure) { }
+    } finally { outside.delete() }
+  }
 }

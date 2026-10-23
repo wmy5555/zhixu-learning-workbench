@@ -28,3 +28,7 @@
 - 模拟器接硬键盘时输入框并不一定弹出软键盘。测试只能在 mInputShown=true 时用返回关闭键盘，否则会执行真实页面返回。系统返回缺口与这个测试假设叠加，早期旧标题日志不能用于断言表单丢字；已用实际 ASCII/中文输入读回和原文检索核对。
 - 恢复预览须显示资料、版本、附件数量及将改变的服务配置，并明确外部能力关闭规则；“预览通过”一行不能代替可核对的恢复范围。
 - UiAutomation.executeShellCommand 不是完整 shell：给 input text 包单引号会把引号也输入字段。测试先限制合成 ASCII 字符，空格编码为 %s，再直接传参数；不套用 PowerShell/终端的引用规则。实际失败字段读回确认过两端的单引号。
+- 万条合成恢复在 Android 15 出现 SIGABRT，原文为 `Could not make wake event fd: Too many open files`。Android 的 FileInputStream/FileOutputStream(FileDescriptor) 不取得描述符所有权；流 use/close 后仍须在 finally 显式 Os.close。新增 200 次读写后的句柄数量回归，不能靠增大系统上限掩盖泄漏。
+- 旧版 1000 条冷启动实测 14905ms，恢复流程 21913ms。Android 增加只读原生扫描批次，每个文件仍执行路径与 O_NOFOLLOW 校验，预读正文总量最多 32MiB，超预算和读取失败走原有逐文件校验；增量指纹与完整哈希复核规则保留，写入/恢复操作不使用该读取结果缓存。iOS/Node 保留旧扫描路径。
+- 检索 n-gram 先去重再做 UTF-8 十六进制编码，避免 Hermes 为重复片段反复创建 Buffer；编码后仍去重，保留未配对代理字符的原有编码语义。基线、改善后性能与实体手机验收须分别报告。
+- 旧列表计时在点击并等待空闲之后开始，18ms 不能表示打开知识库耗时。新用例在点击前计时；保留旧记录但不能把它用作性能结论。根目录 Dependencies 不覆盖 apps/mobile 的独立依赖审计，日批须核对移动端审计和未解除告警。

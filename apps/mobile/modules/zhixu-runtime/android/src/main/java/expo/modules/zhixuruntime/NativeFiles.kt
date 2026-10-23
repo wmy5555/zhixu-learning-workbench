@@ -4,11 +4,13 @@ import android.system.ErrnoException
 import android.os.Build
 import android.system.Os
 import android.system.OsConstants
+import android.system.StructStat
 import android.util.Base64
 import org.json.JSONObject
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.ByteArrayOutputStream
 
 internal class RuntimeFailure(val code: String, message: String) : Exception(message)
 
@@ -69,6 +71,71 @@ internal class NativeFiles(val root: File) {
     } else Os.remove(file.path)
   }
 
+  private fun stamps(stat: StructStat): Pair<Long, Long> {
+    val modified = if (Build.VERSION.SDK_INT >= 27) stat.st_mtim.tv_sec * 1_000_000_000L + stat.st_mtim.tv_nsec else stat.st_mtime * 1_000_000_000L
+    val changed = if (Build.VERSION.SDK_INT >= 27) stat.st_ctim.tv_sec * 1_000_000_000L + stat.st_ctim.tv_nsec else stat.st_ctime * 1_000_000_000L
+    return modified to changed
+  }
+
+  private fun readBytes(file: File, limit: Int? = null): ByteArray {
+    val fd = Os.open(file.path, OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW, 0)
+    try {
+      return FileInputStream(fd).use { stream ->
+        if (limit == null) stream.readBytes()
+        else {
+          val output = ByteArrayOutputStream()
+          val buffer = ByteArray(8192)
+          while (true) {
+            val size = stream.read(buffer)
+            if (size < 0) break
+            if (output.size() + size > limit) throw RuntimeFailure("FILE_TOO_LARGE", "资料文件超过读取上限")
+            output.write(buffer, 0, size)
+          }
+          output.toByteArray()
+        }
+      }
+    } finally {
+      // Android streams constructed from an existing descriptor do not own it.
+      if (fd.valid()) Os.close(fd)
+    }
+  }
+
+  private fun scanMarkdown(directory: File, fingerprints: JSONObject): List<Map<String, Any>> {
+    val rows = ArrayList<Map<String, Any>>()
+    var remainingBytes = 32 * 1024 * 1024
+    fun visit(dir: File) {
+      for (name in dir.list()?.sorted() ?: throw RuntimeFailure("ENOTDIR", "无法读取资料目录")) {
+        if (name.startsWith('.')) continue
+        val child = checked(File(dir, name).path, false)
+        val stat = Os.lstat(child.path)
+        if (OsConstants.S_ISLNK(stat.st_mode)) continue
+        if (OsConstants.S_ISDIR(stat.st_mode)) visit(checked(child.path))
+        else if (OsConstants.S_ISREG(stat.st_mode) && name.lowercase().endsWith(".md") && stat.st_size <= 5_000_000L) {
+          val (modified, changed) = stamps(stat)
+          val fingerprint = "${stat.st_dev}:${stat.st_ino}:${stat.st_size}:$modified:$changed"
+          val row = mutableMapOf<String, Any>("file" to child.path, "fingerprint" to fingerprint)
+          if (fingerprints.optString(child.path) != fingerprint && stat.st_size <= remainingBytes) {
+            try {
+              // Repeat path checks immediately before O_NOFOLLOW reads. This is
+              // only a read batch, never a cache for writes or restore checks.
+              val bytes = readBytes(checked(child.path), 5_000_000)
+              if (bytes.size <= remainingBytes) {
+                row["base64"] = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                remainingBytes -= bytes.size
+              }
+            } catch (_: Exception) {
+              // Let the existing per-file reader report a conflict with fresh
+              // checks. A raced or unreadable file never becomes valid content.
+            }
+          }
+          rows.add(row)
+        }
+      }
+    }
+    visit(directory)
+    return rows
+  }
+
   fun call(operation: String, args: JSONObject): Any {
     val file = checked(args.optString("path"), operation != "stat" || args.optBoolean("follow", true))
     return when (operation) {
@@ -80,15 +147,15 @@ internal class NativeFiles(val root: File) {
         JSONObject.NULL
       }
       "read" -> {
-        val fd = Os.open(file.path, OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW, 0)
-        FileInputStream(fd).use { Base64.encodeToString(it.readBytes(), Base64.NO_WRAP) }
+        Base64.encodeToString(readBytes(file), Base64.NO_WRAP)
       }
       "write" -> {
         val bytes = Base64.decode(args.getString("data"), Base64.DEFAULT)
         val flags = OsConstants.O_WRONLY or OsConstants.O_CREAT or OsConstants.O_NOFOLLOW or
           (if (args.optBoolean("exclusive")) OsConstants.O_EXCL else OsConstants.O_TRUNC)
         val fd = Os.open(file.path, flags, 384)
-        FileOutputStream(fd).use { it.write(bytes); it.fd.sync() }
+        try { FileOutputStream(fd).use { it.write(bytes); it.fd.sync() } }
+        finally { if (fd.valid()) Os.close(fd) }
         JSONObject.NULL
       }
       "rename", "link" -> {
@@ -110,8 +177,7 @@ internal class NativeFiles(val root: File) {
       }
       "stat" -> {
         val stat = Os.lstat(file.path)
-        val mtimeNs = if (Build.VERSION.SDK_INT >= 27) stat.st_mtim.tv_sec * 1_000_000_000L + stat.st_mtim.tv_nsec else stat.st_mtime * 1_000_000_000L
-        val ctimeNs = if (Build.VERSION.SDK_INT >= 27) stat.st_ctim.tv_sec * 1_000_000_000L + stat.st_ctim.tv_nsec else stat.st_ctime * 1_000_000_000L
+        val (mtimeNs, ctimeNs) = stamps(stat)
         mapOf("kind" to when {
           OsConstants.S_ISLNK(stat.st_mode) -> "symlink"
           OsConstants.S_ISDIR(stat.st_mode) -> "directory"
@@ -122,6 +188,7 @@ internal class NativeFiles(val root: File) {
           "mtimeMs" to mtimeNs.toDouble() / 1_000_000)
       }
       "list" -> (file.list()?.sorted() ?: throw RuntimeFailure("ENOTDIR", "无法读取目录"))
+      "scan" -> scanMarkdown(file, args.optJSONObject("fingerprints") ?: JSONObject())
       "realpath" -> file.path
       "sync" -> {
         val fd = Os.open(file.path, OsConstants.O_RDWR or OsConstants.O_NOFOLLOW, 0)
