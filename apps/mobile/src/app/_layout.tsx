@@ -7,10 +7,11 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { WorkbenchProvider, useWorkbench } from "@/services/app-state";
 import { Body, Label, usePalette } from "@/components/workbench-ui";
-import { AndroidDesignProvider } from "@/components/android-design";
+import { AndroidDesignProvider, useMotionPreference } from "@/components/android-design";
 function Routes() {
   const { ready, startupError, practiceId } = useWorkbench(),
     c = usePalette();
+  const reduced = useMotionPreference();
   if (!ready)
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: c.background }}><Body>
@@ -23,6 +24,9 @@ function Routes() {
     <Stack
       key={practiceId}
       screenOptions={{
+        // One native opacity transition for every Android route, including back
+        // and replace. Avoid the platform's translate/scale default entirely.
+        ...(Platform.OS === "android" ? { animation: reduced ? "none" as const : "fade" as const } : {}),
         headerBackButtonDisplayMode: "minimal",
         contentStyle: { backgroundColor: c.background },
         headerStyle: { backgroundColor: c.background },
@@ -43,7 +47,7 @@ function Routes() {
         name="form"
         options={{
           title: "编辑",
-          presentation: "modal",
+          presentation: Platform.OS === "android" ? "card" : "modal",
           gestureEnabled: false,
         }}
       />

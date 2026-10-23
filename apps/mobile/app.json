@@ -11,7 +11,7 @@
     "userInterfaceStyle": "automatic",
     "android": {
       "package": "com.zhixu.learning.nativeapp",
-      "versionCode": 2,
+      "versionCode": 3,
       "allowBackup": false,
       "softwareKeyboardLayoutMode": "resize",
       "predictiveBackGestureEnabled": false,

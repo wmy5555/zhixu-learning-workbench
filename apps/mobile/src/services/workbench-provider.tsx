@@ -5,11 +5,13 @@ import React, {
   useState,
   useSyncExternalStore,
 } from "react";
-import { AppState } from "react-native";
+import { AppState, Platform } from "react-native";
+import { useIsFocused } from "expo-router";
 import { createGateway } from "./gateway.mjs";
 import runtime from "../platform/runtime.native.js";
 import { setAppearance } from "./appearance";
 import { changeScope } from "./scope-switch.mjs";
+import { createResourceReader } from "./resource-reader.mjs";
 type Api = {
   get: (path: string) => Promise<any>;
   post: (path: string, body?: any) => Promise<any>;
@@ -44,6 +46,8 @@ class WorkbenchClient {
   };
   snapshot = () => this.state;
   private emit(change: Partial<Snapshot>) {
+    if (Object.entries(change).every(([key, value]) =>
+      Object.is(this.state[key as keyof Snapshot], value))) return;
     this.state = { ...this.state, ...change };
     this.listeners.forEach((fn) => fn());
   }
@@ -176,7 +180,7 @@ export function useWorkbench() {
 export function useDraftFlush(save: () => Promise<any>) {
   useEffect(() => client.registerDraft(save), [save]);
 }
-export function useResource(path: string) {
+function useStandardResource(path: string) {
   const { api, revision, practiceId, ready } = useWorkbench();
   const [nonce, setNonce] = useState(0);
   const key = practiceId + ":" + path,
@@ -216,3 +220,26 @@ export function useResource(path: string) {
     refresh: () => setNonce((n) => n + 1),
   };
 }
+
+function useAndroidResource(path: string) {
+  const { api, revision, practiceId, ready } = useWorkbench();
+  const focused = useIsFocused();
+  const [nonce, setNonce] = useState(0);
+  const [reader] = useState(() => createResourceReader(api.get));
+  const key = practiceId + ":" + path,
+    signature = key + ":" + revision + ":" + nonce;
+  const result = useSyncExternalStore(reader.subscribe, reader.snapshot);
+  useEffect(() => {
+    void reader.update({ key, path, signature, enabled: ready && focused });
+    return reader.cancel;
+  }, [reader, key, path, signature, ready, focused]);
+  return {
+    data: result.key === key ? result.data : undefined,
+    error: result.key === key ? result.error : "",
+    loading: ready && focused && result.signature !== signature,
+    refresh: () => setNonce((n) => n + 1),
+  };
+}
+
+// The platform is fixed for an app lifetime; iOS retains its original read flow.
+export const useResource = Platform.OS === "android" ? useAndroidResource : useStandardResource;

@@ -5,7 +5,7 @@ import type { BottomTabBarProps } from "expo-router/js-tabs";
 import { useRouter, useSegments } from "expo-router";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useKeyboardState } from "react-native-keyboard-controller";
-import Animated, { Easing, ReduceMotion, useAnimatedStyle, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
+import Animated, { Easing, ReduceMotion, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { scheduleOnRN } from "react-native-worklets";
 import { Icon, useAndroidPalette, useMotionPreference } from "./android-design";
 import { useWorkbench } from "../services/app-state";
@@ -18,6 +18,11 @@ const pages = [
   { name: "output", label: "应用", icon: "pen" },
 ];
 
+// Curves from open-claude-ui 4045ce76: CDS_EASING.DECEL / EASE_OUT_EXPO.
+// Adapted to UI-thread opacity/translation; no blur, scale or page displacement.
+const DRAWER_EASE = Easing.bezier(0.165, 0.84, 0.44, 1);
+const SWIFT_EASE = Easing.bezier(0.16, 1, 0.3, 1);
+
 function NavigationBar({ state, emitter, navigateToTab }: BottomTabBarProps) {
   const c = useAndroidPalette(), insets = useSafeAreaInsets(), reduced = useMotionPreference();
   const keyboardVisible = useKeyboardState(s => s.isVisible);
@@ -27,7 +32,7 @@ function NavigationBar({ state, emitter, navigateToTab }: BottomTabBarProps) {
     if (!width) return;
     // Tabs themselves are instantaneous peers. Only the selected mark moves.
     x.set(withTiming((width / pages.length) * state.index, {
-      duration: reduced ? 0 : 150, easing: Easing.bezier(0.77, 0, 0.175, 1), reduceMotion: ReduceMotion.System,
+      duration: reduced ? 0 : 150, easing: SWIFT_EASE, reduceMotion: ReduceMotion.System,
     }));
   }, [state.index, width, reduced, x]);
   const marker = useAnimatedStyle(() => ({ transform: [{ translateX: x.get() }] }));
@@ -86,7 +91,7 @@ export default function MobileTabs() {
   const { width } = useWindowDimensions(), router = useRouter(), segments = useSegments();
   const { practiceId } = useWorkbench();
   const [drawerVisible, setDrawerVisible] = useState(false);
-  const brand = useRef<React.ComponentRef<typeof View>>(null), closing = useRef(false), afterClose = useRef<(() => void) | null>(null);
+  const brand = useRef<React.ComponentRef<typeof View>>(null), closing = useRef(false);
   const progress = useSharedValue(0);
   const drawerWidth = Math.min(336, width - 48);
   const activeName = String(segments[segments.length - 1] || "index");
@@ -94,23 +99,31 @@ export default function MobileTabs() {
   const drawerStyle = useAnimatedStyle(() => ({ transform: [{ translateX: (progress.get() - 1) * drawerWidth }] }));
   const scrimStyle = useAnimatedStyle(() => ({ opacity: progress.get() * 0.45 }));
   const finishClose = useCallback(() => {
-    setDrawerVisible(false); closing.current = false;
-    const action = afterClose.current; afterClose.current = null;
-    if (action) action(); else brand.current?.focus();
+    setDrawerVisible(false);
+    brand.current?.focus();
+    // Keep the tap guard until the next open: a queued second tap must not push
+    // another route while the Modal is being removed from the native window.
   }, []);
-  function closeDrawer(action?: () => void) {
+  function closeDrawer() {
     if (closing.current) return;
-    closing.current = true; afterClose.current = action || null;
+    closing.current = true;
     if (reduced) { progress.set(0); finishClose(); return; }
-    progress.set(withTiming(0, { duration: 180, easing: Easing.bezier(0.23, 1, 0.32, 1), reduceMotion: ReduceMotion.System }, finished => {
+    progress.set(withTiming(0, { duration: 180, easing: DRAWER_EASE, reduceMotion: ReduceMotion.System }, finished => {
       if (finished) scheduleOnRN(finishClose);
     }));
   }
   function openDrawer() {
-    closing.current = false; afterClose.current = null; progress.set(0); setDrawerVisible(true);
+    closing.current = false; progress.set(0); setDrawerVisible(true);
   }
   function choose(item: DrawerItem) {
-    closeDrawer(() => item.route ? router.push(item.route as any) : router.push({ pathname: "/section/[name]", params: { name: item.section! } } as any));
+    if (closing.current) return;
+    closing.current = true;
+    // The destination owns the only transition. Dismiss the native Modal before
+    // pushing; don't wait on a second animation or leave an invisible window over
+    // the destination when the tabs' React Activity becomes hidden.
+    setDrawerVisible(false);
+    if (item.route) router.push(item.route as any);
+    else router.push({ pathname: "/section/[name]", params: { name: item.section! } } as any);
   }
   useEffect(() => {
     if (reduced && drawerVisible && !closing.current) progress.set(1);
@@ -129,7 +142,7 @@ export default function MobileTabs() {
     </Tabs>
     <Modal visible={drawerVisible} transparent animationType="none" statusBarTranslucent navigationBarTranslucent
       onRequestClose={() => closeDrawer()} onShow={() => {
-        progress.set(reduced ? 1 : withSpring(1, { duration: 300, dampingRatio: 1, overshootClamping: true, reduceMotion: ReduceMotion.System }));
+        progress.set(reduced ? 1 : withTiming(1, { duration: 240, easing: DRAWER_EASE, reduceMotion: ReduceMotion.System }));
         AccessibilityInfo.announceForAccessibility("知序，更多功能");
       }}>
       <View style={{ flex: 1 }}>
