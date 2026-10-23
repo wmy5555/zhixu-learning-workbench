@@ -1,5 +1,6 @@
 import React from "react";
 import { Stack } from "expo-router/stack";
+import { StatusBar } from "expo-status-bar";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { WorkbenchProvider, useWorkbench } from "@/services/app-state";
@@ -14,6 +15,8 @@ function Routes() {
       </Body>
     );
   return (
+    <>
+    <StatusBar style={c.colorScheme === "dark" ? "light" : "dark"} />
     <Stack
       key={practiceId}
       screenOptions={{
@@ -42,6 +45,7 @@ function Routes() {
         }}
       />
     </Stack>
+    </>
   );
 }
 export default function Layout() {

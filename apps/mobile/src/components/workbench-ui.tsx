@@ -15,10 +15,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAppearance } from "../services/appearance";
 import { accentPalette } from "../reference/accent.mjs";
 export function usePalette() {
-  const dark = useColorScheme() === "dark",
+  const systemDark = useColorScheme() === "dark",
     preference = useAppearance(),
+    dark = preference.mode === "system" ? systemDark : preference.mode === "dark",
     palette = accentPalette(preference.accent, dark);
   return {
+    colorScheme: (dark ? "dark" : "light") as "dark" | "light",
     background: dark ? "#111111" : "#f7f5f1",
     surface: dark ? "#1d1d1b" : "#ffffff",
     text: dark ? "#eeeae2" : "#24241f",
@@ -103,7 +105,7 @@ export function Button({
 }) {
   const c = usePalette();
   return (
-    <Host matchContents seedColor={c.accent}>
+    <Host matchContents seedColor={c.accent} colorScheme={c.colorScheme}>
       <SystemButton
         label={title}
         disabled={disabled}
@@ -126,7 +128,7 @@ export function Toggle({
 }) {
   const c = usePalette();
   return (
-    <Host matchContents seedColor={c.accent}>
+    <Host matchContents seedColor={c.accent} colorScheme={c.colorScheme}>
       <Switch
         label={label}
         value={value}
