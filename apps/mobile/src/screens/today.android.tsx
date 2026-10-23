@@ -18,7 +18,7 @@ function calendarLabel(value: string) {
   const date = new Date(year, month - 1, day, 12);
   return {
     day: String(day).padStart(2, "0"),
-    detail: new Intl.DateTimeFormat("zh-CN", { month: "long", weekday: "short" }).format(date),
+    detail: `${month} 月 · ${["周日", "周一", "周二", "周三", "周四", "周五", "周六"][date.getDay()]}`,
   };
 }
 
