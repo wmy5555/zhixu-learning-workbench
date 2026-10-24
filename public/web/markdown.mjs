@@ -24,6 +24,7 @@ function inline(text, presentation = false) {
     if (image) return `<span class="image-caption">[图片：${escape(image[1] || '原文附件')}]</span>`;
     const link = part.match(/^\[([^\]]+)\]\((.+)\)$/);
     if (link) {
+      if (/^#read\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(link[2])) return `<a href="${escape(link[2])}">${escape(link[1])}</a>`;
       const url = safeLink(link[2]);
       return url ? `<a href="${escape(url)}" target="_blank" rel="noopener noreferrer">${escape(link[1])} ↗</a>` : escape(link[1]);
     }

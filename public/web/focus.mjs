@@ -7,7 +7,8 @@ import {dialMarkup,bindDial} from './focus-dial.mjs';
 const display=ms=>`${String(Math.floor(Math.max(0,ms)/60000)).padStart(2,'0')}:${String(Math.floor(Math.max(0,ms)/1000)%60).padStart(2,'0')}`;
 export function createFocus({state,go}) {
   let key='',clock=freshClock(),node=null,shape='',expanded=false,dragged=false,pointerDragging=false,previousRect=null,errorShown=false,queue=Promise.resolve(),closed=false,recordsRender=null,view='clock',frame=0,manualMini=false,pendingPulse=null;
-  const reduced=()=>matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const motionPreference=matchMedia('(prefers-reduced-motion: reduce)');
+  const reduced=()=>motionPreference.matches;
   function scope(){
     const path=state.boot?.settings?.vaultDir||'default';
     const next=`zhixu-focus-v1-${encodeURIComponent(path)}`;
@@ -65,7 +66,12 @@ export function createFocus({state,go}) {
     const spent=elapsed(a,Date.now());
     node.querySelectorAll('.focus-progress').forEach(c=>{c.style.strokeDasharray='276.46';c.style.strokeDashoffset=String(276.46*(1-spent/a.durationMs));});
   }
-  function frames(){if(closed)return;if(!document.hidden&&!reduced())paintProgress();frame=requestAnimationFrame(frames);}
+  const animateProgress=()=>!closed&&!document.hidden&&!reduced()&&clock.active?.status==='running'&&node?.isConnected&&Boolean(node.querySelector('.focus-progress'));
+  function syncFrames(){
+    if(!animateProgress()){if(frame)cancelAnimationFrame(frame);frame=0;return;}
+    if(!frame)frame=requestAnimationFrame(frames);
+  }
+  function frames(){frame=0;if(!animateProgress())return;paintProgress();syncFrames();}
   function panel() {
     const a=clock.active;
     if(view==='recent'){
@@ -76,10 +82,10 @@ export function createFocus({state,go}) {
   }
   function render(animate=true) {
     if(state.route==='focus')recordsRender?.();
-    if(pointerDragging)return;
+    if(pointerDragging){syncFrames();return;}
     const slot=document.querySelector('#focus-home'),budget=document.querySelector('#budget-summary'),a=clock.active;
     if(budget)budget.hidden=Boolean(a&&!clock.position);
-    if(!a){document.querySelector('#focus-top-dock')?.remove();node?.remove();node=null;shape='';if(slot)slot.hidden=true;return;}
+    if(!a){document.querySelector('#focus-top-dock')?.remove();node?.remove();node=null;shape='';if(slot)slot.hidden=true;syncFrames();return;}
     const home=state.route==='today'&&slot&&!clock.position,mini=!home&&!expanded&&(a.status!=='finished'||manualMini),nextShape=`${mini}:${a.status}:${a.kind}:${view}:${view==='recent'?clock.records.length:''}`;
     if(!node){node=document.createElement('section');node.className='focus-clock';node.setAttribute('aria-label','网页番茄钟');}
     const from=previousRect||node.getBoundingClientRect();previousRect=null;node.getAnimations().forEach(a=>a.cancel());
@@ -101,6 +107,7 @@ export function createFocus({state,go}) {
       }
     }
     finishPulse();
+    syncFrames();
   }
   function bindDrag() {
     let drag=null;
@@ -205,8 +212,9 @@ export function createFocus({state,go}) {
   function mount(){change({type:'tick'}).catch(()=>{});}
   window.addEventListener('storage',ev=>{if(ev.key===key){try{clock=read();render();}catch(error){notify(error.message,true);}}});
   window.addEventListener('resize',()=>{node?.getAnimations().forEach(animation=>animation.cancel());render(false);});
-  document.addEventListener('visibilitychange',()=>{if(!document.hidden)mount();});
-  frame=requestAnimationFrame(frames);
+  function visibilityChanged(){syncFrames();if(!document.hidden)mount();}
+  document.addEventListener('visibilitychange',visibilityChanged);
+  motionPreference.addEventListener('change',syncFrames);
   const timer=setInterval(()=>{if(key&&!closed)change({type:'tick'}).catch(()=>{});},1000);
-  return {handle,page,mount,capture,close(){closed=true;clearInterval(timer);cancelAnimationFrame(frame);node?.remove();document.querySelector('#focus-top-dock')?.remove();}};
+  return {handle,page,mount,capture,close(){closed=true;clearInterval(timer);syncFrames();document.removeEventListener('visibilitychange',visibilityChanged);motionPreference.removeEventListener('change',syncFrames);node?.remove();document.querySelector('#focus-top-dock')?.remove();}};
 }

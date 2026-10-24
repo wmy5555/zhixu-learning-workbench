@@ -168,6 +168,18 @@ test('pause waits for active requests; reset invalidates old identities and leav
   assert.deepEqual(h.main.backup().notes, mainBefore.notes);
 });
 
+test('reset keeps the normalized custom material exactly and validates replacements before clearing it', async t => {
+  const h = harness(t), first = h.manager.start('custom', { title: '合成自选材料', body: '## 原文中的标题\n\n保留这段原文。', note: '我的合成心得', author: '合成作者' });
+  const original = h.manager.state().customSample;
+  await assert.rejects(h.manager.reset(first.practiceId, 'custom', { title: '', body: '' }), { code: 'ONBOARDING_MATERIAL' });
+  assert.equal(h.manager.state().practiceId, first.practiceId);
+  const second = await h.manager.reset(first.practiceId);
+  assert.notEqual(second.practiceId, first.practiceId);
+  assert.deepEqual(second.customSample, original);
+  const third = await h.manager.reset(second.practiceId);
+  assert.deepEqual(third.customSample, original, 'repeated resets must not wrap the already formatted source again');
+});
+
 test('connection receipts expire on configuration changes and a racing old test cannot restore readiness', async t => {
   let resolveTest;
   const h = harness(t, { ai: { test: () => new Promise(resolve => { resolveTest = resolve; }) } });

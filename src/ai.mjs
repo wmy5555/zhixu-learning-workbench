@@ -1,6 +1,5 @@
 import dns from 'node:dns/promises';
-import http from 'node:http';
-import https from 'node:https';
+import { pinnedRequest } from './pinned-request.mjs';
 import { createHash } from 'node:crypto';
 import { BlockList, isIP } from 'node:net';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -232,55 +231,6 @@ async function injectedRequest(fetchImpl, target, options, maxBytes) {
   return { status: response.status, headers: normalizeResponseHeaders(response.headers), body };
 }
 
-function pinnedRequest(target, options, maxBytes) {
-  const address = target.addresses[0].address;
-  const family = target.addresses[0].family;
-  const url = target.url;
-  const client = url.protocol === 'https:' ? https : http;
-  const defaultPort = url.protocol === 'https:' ? 443 : 80;
-  const hostHeader = url.port && Number(url.port) !== defaultPort ? `${url.hostname}:${url.port}` : url.hostname;
-  const requestOptions = {
-    protocol: url.protocol,
-    hostname: address,
-    family,
-    port: url.port || defaultPort,
-    method: options.method,
-    path: `${url.pathname}${url.search}`,
-    headers: { ...options.headers, host: hostHeader },
-    signal: options.signal,
-  };
-  if (url.protocol === 'https:') requestOptions.servername = isIP(url.hostname.replace(/^\[|\]$/g, '')) ? undefined : url.hostname;
-
-  return new Promise((resolve, reject) => {
-    const request = client.request(requestOptions, (response) => {
-      const chunks = [];
-      let size = 0;
-      const declared = Number(response.headers['content-length']);
-      if (Number.isFinite(declared) && declared > maxBytes) {
-        response.destroy();
-        reject(fail('RESPONSE_TOO_LARGE', '外部响应超过大小限制。'));
-        return;
-      }
-      response.on('data', (chunk) => {
-        size += chunk.length;
-        if (size > maxBytes) {
-          response.destroy(fail('RESPONSE_TOO_LARGE', '外部响应超过大小限制。'));
-          return;
-        }
-        chunks.push(chunk);
-      });
-      response.on('end', () => resolve({
-        status: response.statusCode ?? 0,
-        headers: normalizeResponseHeaders(response.headers),
-        body: Buffer.concat(chunks),
-      }));
-      response.on('error', reject);
-    });
-    request.on('error', reject);
-    if (options.body) request.write(options.body);
-    request.end();
-  });
-}
 
 function sanitizeError(value, secrets = []) {
   let text = value instanceof Error ? value.message : String(value ?? '');
