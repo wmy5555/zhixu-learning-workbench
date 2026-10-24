@@ -7,6 +7,7 @@ export function safeLink(value) {
     return ['http:', 'https:'].includes(url.protocol) ? url.href : '';
   } catch { return ''; }
 }
+const unescapeInline = value => value.replace(/\\([\\\[\]_*`<>])/g, '$1');
 function inline(text, presentation = false) {
   if (presentation) text = String(text).split(/(`[^`\n]+`)/g).map(part => part.startsWith('`') ? part : part
     .replace(/<Link\b[^<>]*\/>/g, tag => { const url = tag.match(/\burl="([^"]*)"/)?.[1], title = tag.match(/\btitle="([^"]*)"/)?.[1]; return url && title ? `[${title}](${url})` : title || ''; })
@@ -16,19 +17,20 @@ function inline(text, presentation = false) {
     .replace(/<(?:cite|memorycite)\b[^<>]*\/>/gi, '')
     .replace(/\[\$[^\]]+\]\(app:\/\/[^)]+\)/g, '')
     .replace(/(?:cite|navlist|image_group)[^]*/g, '')).join('');
-  const parts = String(text).split(/(`[^`\n]+`|\[[^\]\n]+\]\([^\s)]+\)|!\[[^\]\n]*\]\([^\n)]+\)|\*\*[^*\n]+\*\*|__[^_\n]+__)/g);
+  const parts = String(text).split(/(\\[\\\[\]_*`<>]|`[^`\n]+`|\[(?:\\[\\\[\]_*`<>]|[^\]\\\n])+\]\([^\s)]+\)|!\[[^\]\n]*\]\([^\n)]+\)|\*\*[^*\n]+\*\*|__[^_\n]+__)/g);
   return parts.map(part => {
     if (/^`[^`]+`$/.test(part)) return `<code>${escape(part.slice(1, -1))}</code>`;
     if (/^(\*\*|__)/.test(part)) return `<strong>${escape(part.slice(2, -2))}</strong>`;
     const image = part.match(/^!\[([^\]]*)\]\((.+)\)$/);
     if (image) return `<span class="image-caption">[图片：${escape(image[1] || '原文附件')}]</span>`;
-    const link = part.match(/^\[([^\]]+)\]\((.+)\)$/);
+    const link = part.match(/^\[((?:\\[\\\[\]_*`<>]|[^\]\\\n])+)\]\((.+)\)$/);
     if (link) {
-      if (/^#read\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(link[2])) return `<a href="${escape(link[2])}">${escape(link[1])}</a>`;
+      const label = escape(unescapeInline(link[1]));
+      if (/^#read\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(link[2])) return `<a href="${escape(link[2])}">${label}</a>`;
       const url = safeLink(link[2]);
-      return url ? `<a href="${escape(url)}" target="_blank" rel="noopener noreferrer">${escape(link[1])} ↗</a>` : escape(link[1]);
+      return url ? `<a href="${escape(url)}" target="_blank" rel="noopener noreferrer">${label} ↗</a>` : label;
     }
-    return escape(part);
+    return escape(unescapeInline(part));
   }).join('');
 }
 

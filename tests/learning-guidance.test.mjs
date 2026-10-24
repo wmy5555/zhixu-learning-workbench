@@ -28,3 +28,17 @@ test('feedback keeps diagnosis visible and detailed answer folded',()=>{
  const html=feedbackHTML({assessment:'partial',feedback:'主张说清楚了，补一句理由。',omission:'缺理由',correction:'<script>unsafe</script>',nextQuestion:'为什么需要这个条件？',suggestion:'尝试自己改写'});
  assert.match(html,/主张说清楚了/);assert.match(html,/<details[^>]*><summary>查看解析/);assert.doesNotMatch(html,/<details[^>]*\bopen\b|<script>/);assert.ok(html.indexOf('主张说清楚了')<html.indexOf('<details'));assert.ok(html.indexOf('缺理由')>html.indexOf('<details'));
 });
+
+test('practice-space recall and review questions take precedence without inheriting another question rubric',async t=>{
+ const dir=fs.mkdtempSync(path.resolve('.tmp/practice-question-'));let question='场景首次回忆题';
+ const s=createService({dataDir:path.join(dir,'data'),vaultDir:path.join(dir,'vault'),practice:true,getPracticeQuestion:()=>question});
+ t.after(async()=>{await s.close();fs.rmSync(dir,{recursive:true,force:true});});
+ const note=s.store.create({kind:'knowledge',title:'场景知识',body,meta:{stage:'learning',depth:'explain',learningPractice:makeLearningPractice(plan,body)}});
+ for(const expected of ['场景首次回忆题','跨日复习的新题']){
+  question=expected;const session=s.startStudy({noteId:note.id});assert.equal(session.question,expected);
+  assert.equal(session.practiceQuestion,undefined);assert.equal(session.practiceCriteria,undefined);
+ }
+ question=null;const generated=s.startStudy({noteId:note.id});assert.equal(generated.question,plan.question);assert.deepEqual(generated.practiceCriteria,plan.criteria);
+ const mistake=s.store.create({kind:'mistake',title:'误解',body:'需回查条件',meta:{noteId:note.id,correctionState:'open',nextQuestion:'错题专用问题'}});
+ question='不应用于错题';const correction=s.startStudy({mistakeId:mistake.id});assert.equal(correction.question,'错题专用问题');assert.equal(correction.practiceCriteria,undefined);
+});

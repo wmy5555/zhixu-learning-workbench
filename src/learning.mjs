@@ -216,8 +216,9 @@ export function createLearning(dependencies) {
       correction: mistake.meta.correction || mistakeSection(mistake, '修正与依据'),
       nextQuestion: mistake.meta.nextQuestion || mistakeSection(mistake, '后续练习'),
     } : null;
-    const practicePlan = learningPractice(note, depth);
-    const question = mistake ? mistakeContext.nextQuestion || `请针对上次的误解「${mistakeContext.omission || mistake.title}」重新解释，并说明修正依据和适用边界。` : practicePlan?.question || dependencies.getPracticeQuestion?.(note) || goals[depth].question(note.title);
+    const customQuestion = !mistake && dependencies.getPracticeQuestion?.(note);
+    const practicePlan = !customQuestion && learningPractice(note, depth);
+    const question = mistake ? mistakeContext.nextQuestion || `请针对上次的误解「${mistakeContext.omission || mistake.title}」重新解释，并说明修正依据和适用边界。` : customQuestion || practicePlan?.question || goals[depth].question(note.title);
     const id = randomUUID();
     const privacy = privacyFor(note) === 'cloud' && (!mistake || privacyFor(mistake) === 'cloud') ? 'cloud' : 'local';
     store.put('sessions', id, { id, noteId, planId, outboundIntentVersion: 1, ...(requestId ? { startRequestId: requestId, startIntent } : {}), status: 'reading', question, ...(practicePlan && !mistake ? { practiceQuestion: question, practiceCriteria: practicePlan.criteria } : {}), material: note.body, materialWarnings, sourceHash: note.hash, depth, goal, privacy, turns: [], createdAt: now(), hintCount: 0, ...practiceTags(mistake, note), ...(topic ? { topicId, topicIndex: textList(topic.meta.noteIds).indexOf(noteId) } : {}), ...(mistake ? { mistakeId, mistakeContext } : {}) });

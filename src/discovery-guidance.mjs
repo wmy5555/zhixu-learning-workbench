@@ -1,5 +1,5 @@
 const clean=(v,max)=>typeof v==='string'&&v.trim().length>0&&v.length<=max ? v.trim() : null;
-const quoteText=value=>String(value).replace(/[\r\n]+/g,' ').replace(/([\[\]_*\x60<>])/g,'\\$1');
+const quoteText=value=>String(value).replace(/[\r\n]+/g,' ').replace(/([\\\[\]_*\x60<>])/g,'\\$1');
 export function discoveryFindings(value, notes) {
   if(!value||!Array.isArray(value.findings))throw Object.assign(new Error('发现建议格式无效，已保留调用结果；不会自动重发。'),{code:'MODEL_FORMAT'});
   const byId=new Map(notes.map(n=>[n.id,n])),accepted=[],seen=new Set();let rejected=0;
