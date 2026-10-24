@@ -19,7 +19,8 @@ export function evidenceHTML(items, limitations = []) {
 export function feedbackHTML(feedback) {
   if(!feedback)return '';
   const labels={correct:'回答正确',partial:'仍有遗漏',incorrect:'需要修正',ambiguous:'存在不确定性'};
-  return `<div class="learning-feedback"><p class="nav-label">AI 反馈 · 供你判断</p>${facts([['评估',labels[feedback.assessment]||feedback.assessment]])}${[['反馈',feedback.feedback],['遗漏',feedback.omission],['修正与依据',feedback.correction],['下一问',feedback.nextQuestion],['建议',feedback.suggestion]].filter(([,v])=>v).map(([k,v])=>`<section><h3>${k}</h3><div class="article-prose">${markdown(readable(v)).html}</div></section>`).join('')}</div>`;
+  const section=(title,value)=>value?`<section>${title?`<h3>${title}</h3>`:''}<div class="article-prose">${markdown(readable(value)).html}</div></section>`:'';
+  return `<div class="learning-feedback"><p class="nav-label">AI 反馈 · ${e(labels[feedback.assessment]||feedback.assessment)}</p>${section('',feedback.feedback)}${details('查看解析',section('关键缺口',feedback.omission)+section('修正与依据',feedback.correction)+section('可修改的建议',feedback.suggestion)+section('后续练习',feedback.nextQuestion))}</div>`;
 }
 export function completionHTML(completion) {
   if(!completion)return '';
@@ -152,7 +153,8 @@ export function createParity(ctx) {
   }
   async function draft(id) {
     const draft=list((await api.get('/api/drafts')).drafts).find(d=>d.id===id);if(!draft)throw Error('草稿暂不可读。');
-    const d=formModal('继续打磨这份表达',`${area('正文','body',{value:draft.body||draft.answer||'',rows:12,required:true})}<h3>实际采用的知识</h3>${list(draft.citations).map(c=>`<label class="check"><input type="checkbox" name="usedId" value="${e(c.id||c.noteId)}" ${list(draft.usedIds).includes(c.id||c.noteId)?'checked':''}>${e(c.title||c.id)}</label>`).join('')||'<p class="notice">这份草稿没有可标记的引用。</p>'}${details('查看引用依据',evidenceHTML(draft.citations))}${btn('送回收集箱','capture-draft','text-button')}`,async(values,form)=>{await api.put(endpoint('drafts',id),{body:values.body,usedIds:[...form.querySelectorAll('[name="usedId"]:checked')].map(n=>n.value)});await refresh();},{wide:true});
+    const d=formModal('继续打磨这份表达',`${area('正文','body',{value:draft.body||draft.answer||'',rows:12,required:true})}<h3>实际采用的知识</h3>${list(draft.citations).map(c=>`<label class="check"><input type="checkbox" name="usedId" value="${e(c.id||c.noteId)}" ${list(draft.usedIds).includes(c.id||c.noteId)?'checked':''}>${e(c.title||c.id)}</label>`).join('')||'<p class="notice">这份草稿没有可标记的引用。</p>'}${details('查看引用依据',evidenceHTML(draft.citations)).replace('<details ', '<details data-output-citations ')}${btn('送回收集箱','capture-draft','text-button')}`,async(values,form)=>{await api.put(endpoint('drafts',id),{body:values.body,usedIds:[...form.querySelectorAll('[name="usedId"]:checked')].map(n=>n.value)});await refresh();},{wide:true});
+    d.dataset.draftId=id;
     d.querySelector('[data-action="capture-draft"]').onclick=ev=>busy(ev.currentTarget,async()=>{const body=d.querySelector('textarea').value;if(!body.trim())throw Error('请先写下内容。');if(!await confirm('作为新资料送回收集箱？','将保留这份草稿，并把当前正文作为原始资料保存。','送回收集箱'))return;await api.post(endpoint('drafts',id,'capture'),{title:draft.title||draft.question,body});d.close();await refresh();notify('已送回收集箱。');});
   }
   async function handle(control) {

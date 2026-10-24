@@ -4,7 +4,7 @@
 
 知序是一个本地优先的中文个人学习工作台。你可以保存原文、整理知识、练习与复习，并带着来源检索和输出；AI 按需参与，资料和学习记录保存在自己的电脑上。
 
-**开发预览 v0.1.0 · 本地运行 · 中文界面与文档**
+**开发预览 v0.2.0 · 本地运行 · 中文界面与文档**
 
 [跟着做一遍](docs/ONBOARDING.md) · [快速开始](#快速开始) · [文档](#文档) · [更新记录](CHANGELOG.md) · [CI 检查](https://github.com/wmy5555/zhixu-learning-workbench/actions/workflows/ci.yml)
 

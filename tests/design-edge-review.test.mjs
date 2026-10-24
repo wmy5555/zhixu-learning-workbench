@@ -71,6 +71,7 @@ test('relation exploration stops before a second model request when material cha
   s.updateSettings({ ai: { enabled: true } });
   subject = knowledge(s, '主知识', { topic: '领域甲' });
   knowledge(s, '可比较知识', { topic: '领域乙' });
+  for(let i=0;i<11;i++)knowledge(s,'large scope '+i,{topic:'scope'+i});
   const job = s.requestRelations(subject.id, { useAI: true });
   await s.runJobs();
   assert.equal(prompts.length, 1, 'changed material must not be included in a subsequent model call');

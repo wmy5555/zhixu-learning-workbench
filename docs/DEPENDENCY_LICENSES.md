@@ -1,3 +1,13 @@
+## 2026-10-22 传递依赖安全更新
+
+通过 `pnpm-workspace.yaml` 的限定覆盖与 pnpm 11.19.0 生成的锁文件更新以下包；不更改直接依赖或项目许可证。实际安装包的声明、随包许可及 registry integrity 记录于 [本次增量清单](dependency-security-20261022.json)。旧表与旧机器清单保留为历史证据。
+
+| 包 | 更新 | 许可及来源 | 原因 |
+|---|---|---|---|
+| hono | 4.13.8 → 4.13.11 | MIT，[npm](https://registry.npmjs.org/hono/4.13.11) | 修复 GHSA-5r4p-p66f-jhc7，覆盖 SDK 及其 node-server 对同一包的引用。 |
+| argparse | 1.0.10 → 2.0.1 | Python-2.0，[npm](https://registry.npmjs.org/argparse/2.0.1) | 仅覆盖 Mammoth 1.13.0 的依赖，移除无已发布修复版的 sprintf-js（GHSA-hp3w-g68c-fv3c）。保留旧 CLI 接口兼容层；CLI 会输出弃用警告，应用的原文提取不调用 CLI。保留随包完整 LICENSE。 |
+| uuid | 7.0.3 → 11.1.1 | MIT，[npm](https://registry.npmjs.org/uuid/11.1.1) | 仅覆盖 xcode 3.0.1 的依赖，修复 GHSA-w5hq-g745-h8pq，并保留 CommonJS require 与 v4。 |
+
 ## 2026-10-24 安全修复增量
 
 仅更新本轮涉及包的来源与随包声明；下方 2026-09-20 的 93 项清单为历史基线，不是当前依赖图的完整新审计。固定 pnpm 11.19.0 生成锁文件，保留各依赖的随包声明，不选择或新增知序自身许可证。

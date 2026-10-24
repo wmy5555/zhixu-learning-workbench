@@ -124,7 +124,9 @@ test('source processing renders the saved sourceExtract template into the actual
   await service.runJobs();
 
   assert.equal(generateCalls.length, 1);
-  assert.equal(generateCalls[0].prompt, `CUSTOM_SOURCE_EXTRACT_MARKER\n只处理这份资料：${sourceBody}`);
+  const [rendered, policy] = generateCalls[0].prompt.split('\n\n学习单元约定：');
+  assert.equal(rendered, `CUSTOM_SOURCE_EXTRACT_MARKER\n只处理这份资料：${sourceBody}`);
+  assert.match(policy, /问题与要点必须能由本项body回答/);
   assert.doesNotMatch(generateCalls[0].prompt, /{{\s*source\s*}}/);
   assert.equal(service.store.get('jobs', imported.jobs[0].id).state, 'done');
   assert.equal(service.listNotes({ kind: 'knowledge' }).length, 1);

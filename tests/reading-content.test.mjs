@@ -91,7 +91,7 @@ test('source right margin retains the full numbered child list apart from relate
   note.children = Array.from({ length: 19 }, (_, i) => ({ id: `child-${i}`, title: `子知识 ${i}`, kind: 'knowledge', meta: { stage: 'candidate' } }));
   note.children.push(note.children[0], { id: note.id, title: '资料自身', kind: 'source' });
   const html = reader(note, [], 'library', [{ id: 'other', title: '其他关联知识内容', kind: 'knowledge' }]).html;
-  const margin = html.split('<aside class="reading-margin">')[1].split('</aside>')[0];
+  const margin = html.match(/<aside\b[^>]*class="reading-margin"[^>]*>([\s\S]*?)<\/aside>/)?.[1];
   assert.match(margin, /<h2>这份资料里的想法<\/h2>/);
   assert.match(margin, /19 条知识，逐一读懂/);
   assert.match(margin, /aria-label="这份资料拆解出的知识"/);
@@ -106,7 +106,7 @@ test('source right margin retains the full numbered child list apart from relate
 });
 
 test('source without child knowledge keeps its reading and extraction actions without a fake list', () => {
-  const margin = reader(fixture(), []).html.split('<aside class="reading-margin">')[1].split('</aside>')[0];
+  const margin = reader(fixture(), []).html.match(/<aside\b[^>]*class="reading-margin"[^>]*>([\s\S]*?)<\/aside>/)?.[1];
   assert.match(margin, /先读原文，再决定值得留下什么/);
   assert.doesNotMatch(margin, /class="related-note"|逐一读懂/);
   assert.match(margin, /data-action="process"/);

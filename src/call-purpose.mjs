@@ -5,6 +5,7 @@ export const callPurposes = Object.freeze({
   index: '检索索引', topics: '学习包建议', answer: '问答',
   outline: '提纲生成', draft: '草稿生成', retrieval: '资料检索',
   connection_test: '连接测试',
+  onboarding: '新手学习引导',
 });
 export const knownPurpose = value => typeof value === 'string' && Object.hasOwn(callPurposes, value) ? value : undefined;
 

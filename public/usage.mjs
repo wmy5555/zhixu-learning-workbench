@@ -191,7 +191,7 @@ export async function createUsagePanel({ load, settings, readOnly = false, save,
 
 function recoveryPanel(pending, readOnly, recoverCall, refresh) {
   const panel = el('section', { class: 'panel', ariaLabel: '待核对的外部调用' }, [
-    heading('外部调用已暂停', '已有输入和已收到的回答保留在本机。先核对下面的记录；这些操作不会重新发送请求。'),
+    heading(pending.some(r=>!r.newRequestsAllowed)?'外部调用已暂停':'费用仍待核对', '已有输入和已收到的回答保留在本机。先核对下面的记录；这些操作不会重新发送请求。'),
   ]);
   for (const record of pending) {
     const status = el('p', { role: 'status', class: 'fine-print' });
@@ -215,7 +215,7 @@ function recoveryPanel(pending, readOnly, recoverCall, refresh) {
       checked.addEventListener('change', () => { submit.disabled = !checked.checked; });
       const form = el('form', { class: 'page-stack' }, [
         field('已核对的费用', cost), field('核对说明', reason),
-        el('label', {}, [checked, ' 我已核对供应商记录；费用仍未知时继续暂停新调用，之后可在这里补填金额。']), submit,
+        el('label', {}, [checked, record.newRequestsAllowed ? ' 我已核对供应商记录；原费用仍未知，之后可在这里补填金额。' : ' 我已核对供应商记录；费用仍未知时继续暂停新调用，之后可在这里补填金额。']), submit,
       ]);
       form.addEventListener('submit', async event => {
         event.preventDefault();
@@ -225,6 +225,18 @@ function recoveryPanel(pending, readOnly, recoverCall, refresh) {
         catch (error) { status.textContent = `尚未保存：${error.message}`; submit.disabled = !checked.checked; }
       });
       card.append(form);
+      if (record.canContinue && !record.newRequestsAllowed) {
+        const acknowledge = el('input', { type: 'checkbox', name: 'allowUnknownCost' });
+        const proceed = button('保留未知费用，继续其他请求', { disabled: true, onClick: async () => {
+          if (!acknowledge.checked || proceed.disabled) return;
+          proceed.disabled = true;
+          try { await recoverCall(record.id, { action: 'continue', acknowledgeUnknownCost: true, reason: '用户明确同意在费用仍未知时继续其他请求；原请求不重发。' }); await refresh(); }
+          catch (error) { status.textContent = error.message; proceed.disabled = !acknowledge.checked; }
+        } });
+        acknowledge.addEventListener('change', () => { proceed.disabled = !acknowledge.checked; });
+        card.append(el('label', {}, [acknowledge, ' 这笔费用仍未知；我同意新请求可能产生费用。预算限制仍生效。']), proceed);
+      } else if (record.newRequestsAllowed) card.append(el('p', { text: '已允许其他请求；这笔费用仍未知，原请求不会重发。预算限制仍生效。' }));
+
     }
     panel.append(card);
   }
