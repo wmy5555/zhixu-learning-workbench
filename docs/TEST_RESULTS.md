@@ -1,5 +1,7 @@
 ## 2026-10-24 依赖安全与兼容回归
 
+- PR #101 的实际 CI（head e0fe705）：Windows 1363 测试全部通过、0 失败/跳过；Linux 1359 通过、0 失败、4 项平台跳过。Quality、Secrets、Dependencies 与额外 Android build/lint 全部 success：[CI 40094890884](https://github.com/wmy5555/zhixu-learning-workbench/actions/runs/40094890884)。代码/安全初审公开回执未报告问题，已合并为 main 7713927；私有报告全文、真实供应商或设备验收不包含在此结论中。
+
 - 基线：完整 `pnpm audit --json` 为 9 项（2 high、5 moderate、2 low）；生产 CI 为 8 项，额外开发依赖告警来自 Xcode 的 uuid。GitHub 页面当时另有 3 条 open 告警，包含已撤回的 sprintf-js；两种清单的更新时间不同，不能互相替代。
 - 安全回归 `tests/dependency-security.test.mjs`：旧 Zod 对超限数组/集合仍执行全部 3 次成员校验，2 项断言实际失败；4.6.6 在成员解析前拒绝，同一用例通过，合法成员仍转换成功。另检查 Xcode 通过 CommonJS 生成 UUID 和 Mammoth `--help`，共 4 项通过。
 - 定向使用项目原生命令 `node --test --test-concurrency=1` 覆盖 settings-reliability、prompt-settings、mcp、chatgpt、chatgpt-sync、chatgpt-structure-import、chatgpt-undo、source-files 与新增依赖回归。首次 126 项中 114 通过、12 因隔离副本缺少空 `.tmp` 父目录而失败，未计为全部通过；补齐目录后只重跑结构导入及新增回归，16/16 通过。合计 128 个不同用例通过，0 未解决失败、0 跳过；未重复全量本地测试。
