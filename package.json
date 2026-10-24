@@ -20,20 +20,20 @@
     "android:test-device": "node scripts/test-android-device.mjs"
   },
   "dependencies": {
-    "@capacitor/android": "8.5.2",
-    "@capacitor/core": "8.5.2",
-    "@modelcontextprotocol/sdk": "1.32.0",
+    "@capacitor/android": "8.5.3",
+    "@capacitor/core": "8.5.3",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "filepond": "4.32.12",
     "filepond-plugin-file-validate-size": "2.2.8",
     "filepond-plugin-file-validate-type": "1.2.9",
     "filepond-plugin-image-preview": "4.6.12",
     "mammoth": "1.13.0",
-    "vditor": "4.0.0",
+    "vditor": "4.0.1",
     "yaml": "2.9.1",
     "yauzl": "3.4.0",
-    "zod": "4.6.6"
+    "zod": "4.6.7"
   },
   "devDependencies": {
-    "@capacitor/cli": "8.5.2"
+    "@capacitor/cli": "8.5.3"
   }
 }
