@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
 
 const source=await readFile(new URL('../public/web/onboarding.mjs',import.meta.url),'utf8');
-const nextSource=source.slice(source.indexOf('async function next()'),source.indexOf('async function leave()'));
+const nextSource=source.slice(source.indexOf('async function next()'),source.indexOf('async function leave('));
 function harness({visible=true,status='pending',kind='action',travelling=false,failure}={}){
  const events=[],step={id:'capture-save',kind};
  const context=vm.createContext({

@@ -12,6 +12,8 @@ import {icon,modal,confirm,notify} from './ui.mjs';
 const $=s=>document.querySelector(s),all=s=>[...document.querySelectorAll(s)];
 const readPreference=(key,fallback)=>{try{return localStorage.getItem(key)||fallback;}catch{return fallback;}};
 const savePreference=(key,value)=>{try{localStorage.setItem(key,String(value));}catch{}};
+const welcomeSeenKey='zhixu.guide.welcome-seen';
+const returnHint='可在系统设置中重新打开新手引导。';
 const button=(label,action,extra='')=>`<button type="button" data-guide="${action}" ${extra}>${label}</button>`;
 const bulb='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6m-5 3h4M8.5 15.5a6 6 0 1 1 7 0c-.9.7-1 1.2-1 2.5h-5c0-1.3-.1-1.8-1-2.5Z"/></svg>';
 const back='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 5-7 7 7 7"/></svg>';
@@ -46,7 +48,7 @@ export function createWebOnboarding({api,state,go,refreshBoot,beforeLeave}){
   all('.guide-welcome-dialog [data-guide="reset"]').forEach(n=>n.disabled=Boolean(travelling||proof?.busy));
   document.body.dataset.guideMode=mode;document.body.classList.toggle('onboard-active',active);card.dataset.mode=mode;card.dataset.travelling=String(travelling);
   banner.hidden=!active;banner.innerHTML=`<span>${icon('leaf')} ${api.getContext().practiceId?'独立练习空间':'共用 AI 设置'} <small>${api.getContext().practiceId?'练习资料与正式库分开保存':'配置同时供正式库与练习使用'}</small></span>${button('暂停并回正式库','pause')}`;
-  resume.hidden=!proof?.practiceId||active;card.hidden=!active||(mode==='A'&&!detail);if(!active){motion.hide();return;}
+  resume.hidden=!proof?.practiceId||active||steps.every(s=>complete(proof?.progress?.[s.id]));card.hidden=!active||(mode==='A'&&!detail);if(!active){motion.hide();return;}
   const position=index+1,blocked=prerequisite(step(),proof),pending=travelling||Boolean(blocked)||!target()&&!done(),status=error||blocked?.message||(relearning()?'正在重学本步，已有完成记录保留':done()?'这一步已完成':step().kind==='read'?'看一眼，再继续':'完成页面操作后检查进度');
   const nextLabel=travelling?'正在引导…':index===steps.length-1?'完成体验':done()||step().kind==='read'?'继续':'检查这一步';
   const extras=step().id==='capture-save'?button('填入练习材料','fill','class="onboard-text"'):step().id==='library-explain'?`<div class="onboard-candidates">${(proof.learningCandidates||[]).map(n=>button(e(n.title),'candidate',`data-id="${e(n.id)}" data-guide-candidate class="onboard-text" ${proof.learningStarted&&proof.roles.explain!==n.id?'disabled':''}`)).join('')||'<p>原文拆解完成后，候选知识会出现在这里。</p>'}</div>`:step().id==='review-clock-due'?button('跳到下次复习','clock','class="onboard-text"'):'';
@@ -101,7 +103,7 @@ export function createWebOnboarding({api,state,go,refreshBoot,beforeLeave}){
   if(proof?.busy||api.getContext().pending){notify('请先等当前操作完成，再重学此步。',true);return false;}
   return navigate(index,{relearn:true});
  }
- async function begin(dialog){if(!await beforeLeave())return;dialog.close();if(polling)await polling;adopt(await call(proof?.practiceId?'resume':'start',proof?.practiceId?{}:{materialId:selectedMaterial}));active=true;const saved=steps.findIndex(s=>s.id===proof.currentStepId);index=Math.max(0,saved);if(pendingGoal){const wanted=steps.findIndex(s=>s.id===intents[pendingGoal].start),missing=prerequisite(steps[wanted],proof);index=missing?steps.findIndex(s=>s.id===missing.id):wanted;pendingGoal=null;}await navigate(index);schedulePoll();}
+ async function begin(dialog){if(!await beforeLeave())return;dialog.guideTransition=true;dialog.close();if(polling)await polling;adopt(await call(proof?.practiceId?'resume':'start',proof?.practiceId?{}:{materialId:selectedMaterial}));active=true;const saved=steps.findIndex(s=>s.id===proof.currentStepId);index=Math.max(0,saved);if(pendingGoal){const wanted=steps.findIndex(s=>s.id===intents[pendingGoal].start),missing=prerequisite(steps[wanted],proof);index=missing?steps.findIndex(s=>s.id===missing.id):wanted;pendingGoal=null;}await navigate(index);schedulePoll();}
  async function reset(dialog){
   if(!proof?.practiceId)return;
   if(polling)await polling;
@@ -114,14 +116,14 @@ export function createWebOnboarding({api,state,go,refreshBoot,beforeLeave}){
   try{
    adopt(await call('reset'));
    sequence++;active=true;index=0;sessionId='';pendingGoal=null;requestedRoute=null;signature='';error='';hinting=false;detail=false;relearnStep='';
-   motion.hide();dialog.close();api.setContext(proof.practiceId);state.note=null;state.session=null;
+   motion.hide();dialog.guideTransition=true;dialog.close();api.setContext(proof.practiceId);state.note=null;state.session=null;
    await refreshBoot();await go('today',{force:true,guide:true,replace:true,speed});
   }finally{travelling=false;render();schedulePoll();}
   await navigate(0);
  }
- function welcome(){const dialog=modal('从一个想法，走向自己的理解。',welcomeBody({mode,materialId:selectedMaterial,practiceId:proof?.practiceId,index,customTitle:proof?.customSample?.title,busy:proof?.busy}));dialog.classList.add('guide-welcome-dialog');}
- async function next(){if(travelling)return;if(!target()&&!done()){error='当前步骤的位置暂时不可见，请先重新定位。';render();await hint();return;}adopt(await call('checkpoint',{stepId:step().id,mode:step().kind==='read'?'read':'check'}));if(!done()){error=proof.progress?.[step().id]?.reason||'还没有这一步的完成记录，请先完成操作，再检查。';render();await hint();return;}if(index===steps.length-1){await leave();notify('核心体验已完成，练习记录已保留。');return;}await navigate(index+1);}
- async function leave(){if(!await beforeLeave())return;if(polling)await polling;if(proof?.busy){notify('练习任务仍在处理，请等待完成或先取消任务。',true);return;}adopt(await call('pause'));api.setContext('');active=false;sequence++;travelling=false;motion.hide();detail=false;state.note=null;state.session=null;await refreshBoot();render();await go('today',{force:true,replace:true});clearTimeout(pollTimer);}
+ function welcome(){if($('dialog.guide-welcome-dialog[open]'))return;savePreference(welcomeSeenKey,'1');const dialog=modal('从一个想法，走向自己的理解。',welcomeBody({mode,materialId:selectedMaterial,practiceId:proof?.practiceId,index,customTitle:proof?.customSample?.title,busy:proof?.busy}),{onClose:()=>{if(!dialog.guideTransition)notify(returnHint);}});dialog.classList.add('guide-welcome-dialog');}
+ async function next(){if(travelling)return;if(!target()&&!done()){error='当前步骤的位置暂时不可见，请先重新定位。';render();await hint();return;}adopt(await call('checkpoint',{stepId:step().id,mode:step().kind==='read'?'read':'check'}));if(!done()){error=proof.progress?.[step().id]?.reason||'还没有这一步的完成记录，请先完成操作，再检查。';render();await hint();return;}if(index===steps.length-1){await leave(false);notify('核心体验已完成，练习记录已保留。');return;}await navigate(index+1);}
+ async function leave(showHint=true){if(!await beforeLeave())return;if(polling)await polling;if(proof?.busy){notify('练习任务仍在处理，请等待完成或先取消任务。',true);return;}adopt(await call('pause'));api.setContext('');active=false;sequence++;travelling=false;motion.hide();detail=false;state.note=null;state.session=null;await refreshBoot();render();await go('today',{force:true,replace:true});clearTimeout(pollTimer);if(showHint)notify(returnHint);}
  function routeMap(){modal('你的完整路线',`<p>已完成的操作保留记录；尚未满足的前置条件会明确提示。</p><div class="onboard-map">${steps.map((s,i)=>button(`<span>${complete(proof?.progress?.[s.id])?'✓':String(i+1).padStart(2,'0')}</span>${e(s.title)}`,'jump',`data-index="${i}" ${travelling?'disabled':''}`)).join('')}</div>`);}
  function propose(dialog,goal,{keepAnswer=false}={}){if(!Object.hasOwn(intents,goal))return;const wanted=steps.findIndex(s=>s.id===intents[goal].start),missing=prerequisite(steps[wanted],proof),start=missing?steps.findIndex(s=>s.id===missing.id):wanted;if(!keepAnswer)dialog.querySelector('[data-guide-reply]').textContent='可以，我们先确认路线，再按你当前的进度一步一步继续。';dialog.querySelector('#guide-suggestions').innerHTML=proposalBody({goal,steps,startIndex:start,reason:missing?missing.message:'已经保留本次练习的实际完成记录，按需要继续操作。'});}
  function assistant(){const dialog=modal('你想从哪里继续？',assistantBody());dialog.classList.add('guide-assistant-dialog');const heading=dialog.querySelector('.dialog-heading h2');heading.innerHTML='<span class="eyebrow">GUIDANCE, WHEN YOU NEED IT</span><span>你想从哪里继续？</span>';
@@ -137,8 +139,8 @@ export function createWebOnboarding({api,state,go,refreshBoot,beforeLeave}){
   if(action==='begin'){await begin(el.closest('dialog'));return;}
   if(action==='reset'){await reset(el.closest('dialog'));return;}
   if(action==='relearn'){await relearn();return;}
-  if(action==='welcome-ask'){el.closest('dialog').close();assistant();return;}
-  if(action==='goal'){if(!intents[el.dataset.goal])return;el.closest('dialog').close();if(!active){pendingGoal=el.dataset.goal;welcome();return;}const start=steps.findIndex(s=>s.id===intents[el.dataset.goal].start),missing=prerequisite(steps[start],proof);await navigate(missing?steps.findIndex(s=>s.id===missing.id):start);return;}
+  if(action==='welcome-ask'){const dialog=el.closest('dialog');dialog.guideTransition=true;dialog.close();assistant();return;}
+  if(action==='goal'){if(!intents[el.dataset.goal])return;const dialog=el.closest('dialog');dialog.guideTransition=true;dialog.close();if(!active){pendingGoal=el.dataset.goal;welcome();return;}const start=steps.findIndex(s=>s.id===intents[el.dataset.goal].start),missing=prerequisite(steps[start],proof);await navigate(missing?steps.findIndex(s=>s.id===missing.id):start);return;}
   if(action==='speed'){speed=speeds[(speeds.indexOf(speed)+1)%speeds.length];savePreference('zhixu.guide.speed',speed);render();card.querySelector('[data-guide="speed"]')?.focus({preventScroll:true});placeCard();return;}
   if(action==='hint'){await hint();return;}if(action==='pause'){await leave();return;}if(action==='next'){await next();return;}if(action==='back'){await navigate(index-1);return;}
   if(action==='relocate'){await navigate(index);return;}if(action==='prerequisite'){await navigate(steps.findIndex(s=>s.id===prerequisite(step(),proof)?.id));return;}
@@ -183,8 +185,8 @@ export function createWebOnboarding({api,state,go,refreshBoot,beforeLeave}){
  new MutationObserver(records=>{if(records.some(r=>[...r.addedNodes,...r.removedNodes].some(n=>n.nodeName==='DIALOG')))changed();}).observe(document.body,{childList:true});
  new MutationObserver(changed).observe($('#main'),{subtree:true,childList:true,attributes:true,attributeFilter:['hidden','open','inert','aria-busy']});
  document.addEventListener('keydown',ev=>{if(ev.key==='Escape'&&!ev.isComposing&&!$('dialog[open]')&&active){ev.preventDefault();ev.stopImmediatePropagation();detail=false;render();}},true);
- async function initialize(){adopt(await api.get('/api/onboarding/state'));index=Math.max(0,steps.findIndex(s=>s.id===proof.currentStepId));if(proof.practiceId&&proof.status==='active'){active=true;const shared=['setup-model','setup-save','setup-test','setup-budget'].includes(step().id);api.setContext(shared?'':proof.practiceId);}render();}
- async function ready(){if(active){await navigate(index);schedulePoll();}else if(new URL(location).searchParams.get('onboarding')==='start')welcome();}
+ async function initialize(){adopt(await api.get('/api/onboarding/state'));index=Math.max(0,steps.findIndex(s=>s.id===proof.currentStepId));if(proof.practiceId)savePreference(welcomeSeenKey,'1');if(proof.practiceId&&proof.status==='active'){active=true;const shared=['setup-model','setup-save','setup-test','setup-budget'].includes(step().id);api.setContext(shared?'':proof.practiceId);}render();}
+ async function ready(){if(active){await navigate(index);schedulePoll();}else if(readPreference(welcomeSeenKey,'')!=='1')welcome();}
  window.zhixuGuide=Object.freeze({version:1,getCatalog:()=>steps.map(({id,title,kind})=>({id,title,kind})),getContext:context,presentPlan:plan=>{if(!plan||plan.version!==1||!intents[plan.goal])return {accepted:false};const goal=plan.goal;modal('确认引导路线',`<p>按“${e(intents[goal].label)}”继续。实际保存、AI 请求与采用仍由你操作。</p>${button('按这条路线继续','goal',`data-goal="${goal}" class="primary"`)}`);return {accepted:true,requiresUserStart:true};}});
  async function prepareRoute(route){if(!active)return;const shared=['setup-model','setup-save','setup-test','setup-budget'].includes(step().id)&&['settings','manage/usage'].includes(route);const scope=shared?'':proof.practiceId;if(api.getContext().practiceId!==scope){if(polling)await polling;api.setContext(scope);state.note=null;state.session=null;await refreshBoot();render();}}
  return {initialize,ready,welcome,prepareRoute,get travelling(){return travelling;},get active(){return active;}};
