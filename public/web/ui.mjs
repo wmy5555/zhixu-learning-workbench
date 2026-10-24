@@ -3,6 +3,7 @@ import { springEnter } from './cds/motion-bridge.mjs';
 
 // Icons and the wordmark come exclusively from the selected 14328 prototype.
 const shapes = {
+  order:'<path d="M4 3v18h16M8 4h12M8 9h9M8 14h6"/>',
   leaf:'<path d="M5 19C2 9 8 3 20 3c1 12-5 18-15 16Z"/><path d="m4 20 12-12M8 16v-6m0 6h6"/>',
   search:'<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/>',
   plus:'<path d="M12 4v16M4 12h16"/>',

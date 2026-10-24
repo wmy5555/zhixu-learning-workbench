@@ -77,9 +77,10 @@ test('reader separates source children and actual relations, with expandable lis
   const note = fixture(); note.children = Array.from({ length: 8 }, (_, i) => ({ id: `child-${i}`, title: `子知识 ${i}`, kind: 'knowledge' }));
   const external = { id: 'external', title: '其他关联', kind: 'knowledge' };
   assert.equal(readingGroups(note, [...note.children, external, external]).related.length, 1);
-  const result = reader(note, [{ id: 'recent', title: '无关的最近记录', kind: 'knowledge' }], 'library', [external]);
-  assert.match(result.html, /从这份资料拆解/);
-  assert.match(result.html, /其他关联知识/);
+  const relations=Array.from({length:8},(_,i)=>({...external,id:`external-${i}`}));
+  const result = reader(note, [{ id: 'recent', title: '无关的最近记录', kind: 'knowledge' }], 'library', relations);
+  assert.match(result.html, /从原文走向理解/);
+  assert.match(result.html, /关联知识/);
   assert.match(result.html, /展开更多（3）/);
   assert.ok(!result.html.includes('无关的最近记录'));
   assert.match(result.html, /desk-abstract/);
@@ -92,8 +93,7 @@ test('source right margin retains the full numbered child list apart from relate
   note.children.push(note.children[0], { id: note.id, title: '资料自身', kind: 'source' });
   const html = reader(note, [], 'library', [{ id: 'other', title: '其他关联知识内容', kind: 'knowledge' }]).html;
   const margin = html.match(/<aside\b[^>]*class="reading-margin"[^>]*>([\s\S]*?)<\/aside>/)?.[1];
-  assert.match(margin, /<h2>这份资料里的想法<\/h2>/);
-  assert.match(margin, /19 条知识，逐一读懂/);
+  assert.match(margin, /<h2>19 条知识<\/h2>/);
   assert.match(margin, /aria-label="这份资料拆解出的知识"/);
   assert.equal((margin.match(/class="related-note"/g) || []).length, 19);
   for (let i = 0; i < 19; i++) assert.match(margin, new RegExp(`data-route="read/child-${i}"`));
@@ -101,16 +101,18 @@ test('source right margin retains the full numbered child list apart from relate
   assert.match(margin, /<span>19<\/span>/);
   assert.equal((margin.match(/待选学/g) || []).length, 19);
   assert.doesNotMatch(margin, /其他关联知识内容|资料自身/);
-  assert.match(margin, /data-action="process"/);
-  assert.match(html, /展开更多（14）/);
+  assert.match(html, /class="secondary" data-action="process"/);
+  assert.equal((html.match(/data-route="read\/child-0"/g)||[]).length,1);
 });
 
 test('source without child knowledge keeps its reading and extraction actions without a fake list', () => {
-  const margin = reader(fixture(), []).html.match(/<aside\b[^>]*class="reading-margin"[^>]*>([\s\S]*?)<\/aside>/)?.[1];
-  assert.match(margin, /先读原文，再决定值得留下什么/);
+  const html=reader(fixture(), []).html;
+  const margin = html.match(/<aside\b[^>]*class="reading-margin"[^>]*>([\s\S]*?)<\/aside>/)?.[1];
+  assert.match(html, /class="reading-margin"[^>]*hidden/);
   assert.doesNotMatch(margin, /class="related-note"|逐一读懂/);
-  assert.match(margin, /data-action="process"/);
-  assert.match(margin, /data-action="extract"/);
+  const footer=html.match(/<footer class="article-end">([\s\S]*?)<\/footer>/)?.[1];
+  assert.match(footer, /data-action="process"/);
+  assert.match(footer, /data-action="extract"/);
 });
 
 test('long abstract renders one complete content block rather than preview plus duplicate full text', () => {
