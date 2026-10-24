@@ -3,7 +3,7 @@
 ## 2026-10-24 · 采用 B 学习路线
 
 - 用户已选择 `feat/prototype-readme-20261024` / `0e73247` 的 B 方案作为正式 README 基础；再次明确不添加演示图片与许可证。仅将确认后的内容重写为 README，不合入三版原型、切换栏、预览服务或 package.json 改动。
-- 正式文档候选位于独立分支 `chore/readme-learning-path-20261024`，基于 main `6a8f633094bc44ea401b7bfc16d8958831d499db`。推送候选不代表 main 或 GitHub 默认首页已更新；按项目 02:00 日批归集，不创建提前 PR，不自动合并。
+- 正式文档位于独立分支 `chore/readme-learning-path-20261024`，基于 main `6a8f633094bc44ea401b7bfc16d8958831d499db`。用户随后明确授权本次 README 不等日批，立即创建 PR，四项检查通过并复查反馈后合并 main、更新 GitHub 首页；这是本任务的明确例外，不改变其他任务的日批节奏。
 - 主工作区 README 与原型基稿都有用户未提交内容，不能切换这些目录的分支、覆盖或顺带暂存。用户删去的“无需安装 Codex 或 Obsidian”不恢复。
 - 原主线 README 混有旧前端与 Android 样机说明。已将操作细节导向文档，Android 只作为历史参考；不因已有源码或历史记录声称全部新版能力、移动端或供应商已验收。
 - GitHub 中的 CONTRIBUTING 已较主工作区更新，不根据旧工作区的“私有仓库”印象重复修复。安装版本以候选 package.json 为准，保留 pnpm 冻结安装与直接启动。
