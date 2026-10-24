@@ -18,6 +18,15 @@ const syntheticKey = () => randomBytes(32).toString('hex');
 const credentials = service => service.store.db.prepare('SELECT * FROM encrypted_credentials ORDER BY capability').all();
 const configure = (service, key) => service.updateSettings({ ai: { baseUrl: 'https://EXAMPLE.invalid/v1/', model: 'synthetic-model', apiKey: key, enabled: true } });
 
+test('safe integers preserve valid call limits while impossible counters reject before saving', t => {
+  const h = fixture(t);
+  const saved = h.service.updateSettings({ ai: { dailyCallLimit: Number.MAX_SAFE_INTEGER } });
+  assert.equal(saved.ai.dailyCallLimit, Number.MAX_SAFE_INTEGER);
+  const before = h.service.settings();
+  assert.throws(() => h.service.updateSettings({ ai: { dailyCallLimit: Number.MAX_SAFE_INTEGER + 1 } }), { code: 'INVALID' });
+  assert.deepEqual(h.service.settings(), before);
+});
+
 test('all fields validate before setting, replacing, clearing credentials or changing Vault', async t => {
   const h = fixture(t), key = syntheticKey(); configure(h.service, key);
   const before = h.service.settings(), encrypted = credentials(h.service);
