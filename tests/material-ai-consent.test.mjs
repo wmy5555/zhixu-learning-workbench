@@ -187,7 +187,7 @@ function scopedAI(t, onGenerate = () => {}) {
     async generate(request) {
       sent.push({ capability: 'generate', ...request });
       await onGenerate(request, sent.length, h.service);
-      return { text: JSON.stringify({ queries: ['SCOPE_QUERY'], relations: [], packages: [{ title: '合成学习包', problem: '范围', noteIds: [packageId], prerequisites: [], minutes: 5 }] }) };
+      return { text: JSON.stringify({ findings: [], queries: ['SCOPE_QUERY'], relations: [], packages: [{ title: '合成学习包', problem: '范围', noteIds: [packageId], prerequisites: [], minutes: 5 }] }) };
     },
     async embed(request) { sent.push({ capability: 'embed', ...request }); return { vectors: request.texts.map(() => [1, 0]) }; },
   });
@@ -252,6 +252,7 @@ test('AI relation rechecks candidate scope after query generation and semantic l
       knowledge('SCOPE_QUERY 在检索时新增', 'ADDED_DURING_QUERY');
     }
   });
+  for(let i=0;i<11;i++)knowledge('large scope '+i,'large scope '+i);
   changed = knowledge('SCOPE_QUERY 检索前存在', 'BEFORE_QUERY_VERSION');
   h.service.updateSettings({ embedding: { enabled: true, model: 'synthetic-relation-scope' } });
   const job = enqueue('relate'); await h.service.runJobs();

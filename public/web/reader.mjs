@@ -18,23 +18,24 @@ export function reader(note, notes, returnTo = 'library', related = [], readines
   const html = `<div class="reader-shell">
     <header class="reader-top"><div>${routeButton(`${icon('arrow')} 返回`, returnTo, 'text-button reader-back')}<span class="reader-breadcrumb">${e(kind(note.kind))} / ${e(note.meta?.topic || '我的知识空间')}</span></div><div class="actions">${button('Aa', 'reader-size', 'icon-button', 'aria-label="调整阅读字号" aria-pressed="false"')}${button(icon('layers'), 'reader-focus', 'icon-button', 'aria-label="切换专注阅读" aria-pressed="false"')}${button(icon('moon'), 'theme', 'icon-button', 'aria-label="切换明暗模式"')}${button('资料操作', 'reader-actions', 'text-button', `data-id="${e(note.id)}"`)}</div></header>
     <div class="reading-grid">
-      <aside class="reading-shelf"><p class="eyebrow">MY READING DESK</p><h1>我的书桌</h1><p class="muted">打开一份资料，沉进去。</p>
+      <aside class="reading-shelf" data-reader-part="shelf"><p class="eyebrow">MY READING DESK</p><h1>我的书桌</h1><p class="muted">打开一份资料，沉进去。</p>
         <div class="shelf-current"><small>${e(kind(note.kind))}</small><h2>${e(note.title)}</h2></div>
         ${content.conversation ? `<section class="desk-context" aria-label="资料概览"><div class="desk-abstract"><h2>摘要</h2><small>AI 整理 · 待核验</small><div>${abstract}</div></div><details class="desk-coverage"><summary>收集范围</summary><p>${e(content.conversation.scope)}</p><p>只包含实际保存的文本，隐藏分支与未读取的附件不在其中。</p></details></section>` : ''}
         <details class="reader-toc" open><summary>这份资料的目录</summary>${content.aiOutline ? '<p class="muted small">按内容整理</p>' : ''}<nav aria-label="资料目录">${content.headings.map(h=>button(e(h.title), 'reader-section', `toc-level-${Math.min(3,h.depth)}`, `data-target="${e(h.id)}"`)).join('') || '<p class="muted small">从正文开始阅读。</p>'}</nav></details>
         ${note.kind === 'source' ? group('从这份资料拆解', children) : ''}${group('其他关联知识', otherKnowledge)}
       </aside>
       <div class="reading-scroll" tabindex="0" aria-label="资料正文"><article class="reading-article">
-        <header class="article-heading"><p class="eyebrow">${e(note.meta?.topic || kind(note.kind))} / READING NOTE</p><h1>${e(note.title || '未命名资料')}</h1><p>${e(kind(note.kind))} · ${e(stage(note.meta?.stage))} · ${characterCount.toLocaleString()} 字 · <span title="按每分钟 400 字估算">阅读 ${readingMinutes} 分钟</span></p></header>
-        ${learningNotice(note, readiness)}<div class="article-prose">${content.html}</div>
+        <header class="article-heading" data-reader-part="heading"><p class="eyebrow">${e(note.meta?.topic || kind(note.kind))} / READING NOTE</p><h1>${e(note.title || '未命名资料')}</h1><p>${e(kind(note.kind))} · ${e(stage(note.meta?.stage))} · ${characterCount.toLocaleString()} 字 · <span title="按每分钟 400 字估算">阅读 ${readingMinutes} 分钟</span></p></header>
+        <div data-reader-part="notices">${learningNotice(note, readiness)}</div><div class="article-prose" data-reader-part="body">${content.html}</div>
+        <div data-reader-part="attachments">
         ${files.length ? `<section class="article-attachments"><h2>原始附件</h2>${files.map(file=>{
           const url = api.url(`/api/notes/${encodeURIComponent(note.id)}/attachments?asset=${encodeURIComponent(file.id)}`);
           return `<div>${file.kind === 'image' ? `<img src="${url}" alt="${e(file.name)}" loading="lazy">` : ''}<a href="${url}&download=1">${icon('file')} ${e(file.name)} · 下载原件</a></div>`;
         }).join('')}</section>` : ''}
         ${sourceUrl ? `<p class="article-source"><a href="${e(sourceUrl)}" target="_blank" rel="noopener noreferrer">访问原始出处 ↗</a></p>` : ''}
-        <footer class="article-end"><span></span><p>读到这里，试着用自己的话说一遍。</p>${note.kind === 'knowledge' ? button('写下我的理解', 'understanding', 'text-button', `data-id="${e(note.id)}"`) : note.kind === 'source' ? button('从原文整理一条知识', 'extract', 'text-button', `data-id="${e(note.id)}"`) : ''}</footer>
+        </div><footer class="article-end"><span></span><p>读到这里，试着用自己的话说一遍。</p>${note.kind === 'knowledge' ? button('写下我的理解', 'understanding', 'text-button', `data-id="${e(note.id)}"`) : note.kind === 'source' ? button('从原文整理一条知识', 'extract', 'text-button', `data-id="${e(note.id)}"`) : ''}</footer>
       </article></div>
-      <aside class="reading-margin"><p class="nav-label">${note.kind === 'source' ? '从原文走向理解' : '我的学习'}</p>
+      <aside class="reading-margin" data-reader-part="margin"><p class="nav-label">${note.kind === 'source' ? '从原文走向理解' : '我的学习'}</p>
         ${note.kind === 'source' ? `<h2>这份资料里的想法</h2><p class="muted small">${children.length ? `${children.length} 条知识，逐一读懂。` : '先读原文，再决定值得留下什么。'}</p>
           ${children.length ? `<nav class="related-notes" aria-label="这份资料拆解出的知识">${children.map((child,index)=>routeButton(`<span>${String(index+1).padStart(2,'0')}</span><strong>${e(child.title)}</strong><small>${e(stage(child.meta?.stage))}</small>`, `read/${child.id}`, 'related-note')).join('')}</nav>` : ''}
           <div class="margin-actions">${button('AI 拆解这份资料', 'process', 'primary', `data-id="${e(note.id)}"`)}${button('自己整理一条', 'extract', 'text-button', `data-id="${e(note.id)}"`)}</div>`
@@ -43,4 +44,26 @@ export function reader(note, notes, returnTo = 'library', related = [], readines
       </aside>
     </div></div>`;
   return { html };
+}
+
+// Enrich the open desk without replacing its scroll container, focus mode or
+// unchanged prose. A selected passage keeps its nodes until the next opening.
+export function updateReader(root, html) {
+  const template=document.createElement('template');template.innerHTML=html;
+  const selection=document.getSelection(),selected=selection&&!selection.isCollapsed&&root.querySelector('.article-prose')?.contains(selection.anchorNode);
+  const scroll=[root,...root.querySelectorAll('.reading-scroll,.reading-shelf,.reading-margin')].map(node=>[node,node.scrollTop,node.scrollLeft]);
+  const active=document.activeElement;
+  for(const part of root.querySelectorAll('[data-reader-part]')){
+    if(selected&&['body','shelf'].includes(part.dataset.readerPart))continue;
+    const next=template.content.querySelector(`[data-reader-part="${part.dataset.readerPart}"]`);
+    if(!next||part.innerHTML===next.innerHTML)continue;
+    const panels=new Map([...part.querySelectorAll('details')].map(d=>[d.querySelector('summary')?.textContent,d.open]));
+    const focus=part.contains(active)?{...active.dataset}:null;
+    part.innerHTML=next.innerHTML;
+    for(const panel of part.querySelectorAll('details')){const open=panels.get(panel.querySelector('summary')?.textContent);if(open!==undefined)panel.open=open;}
+    if(focus){const target=[...part.querySelectorAll('[data-action],[data-route]')].find(node=>['action','route','target','id'].every(key=>node.dataset[key]===focus[key]));target?.focus({preventScroll:true});}
+  }
+  const breadcrumb=root.querySelector('.reader-breadcrumb'),fresh=template.content.querySelector('.reader-breadcrumb');
+  if(breadcrumb&&fresh)breadcrumb.textContent=fresh.textContent;
+  for(const [node,top,left] of scroll){node.scrollTop=top;node.scrollLeft=left;}
 }

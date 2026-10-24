@@ -236,9 +236,12 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
       return resume(record.practice.id);
     }
     assertIdle();
-    assertVaultIsolation();
     let sample;
     if (materialId === 'custom') { try { sample = customSample(customInput); } catch (error) { fail(error.message, 'ONBOARDING_MATERIAL', 400); } }
+    return createPractice(materialId, sample);
+  }
+  function createPractice(materialId, sample) {
+    assertVaultIsolation();
     record.practice = { id: randomUUID(), materialId: materialId || null, status: 'active', clockAt: iso(), currentStepId: steps()[0]?.id, roles: {}, cases: {}, events: {}, acknowledged: {} };
     const instance = open();
     if (sample) instance.service.store.put('onboardingMaterials', 'custom', sample);
@@ -268,7 +271,13 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
     const p = requirePractice(id); assertIdle();
     materialId ??= p.materialId || undefined;
     if (materialId !== undefined && !getMaterial(materialId)) fail('请选择一个可用的练习场景。', 'ONBOARDING_MATERIAL', 400);
-    if (materialId === 'custom') { try { customSample(customInput); } catch (error) { fail(error.message, 'ONBOARDING_MATERIAL', 400); } }
+    let sample;
+    if (materialId === 'custom') {
+      try {
+        sample = customInput === undefined && p.materialId === 'custom' ? open().service.store.get('onboardingMaterials', 'custom') : customSample(customInput);
+        if (!sample) throw Error('原练习材料暂不可读，请先重新提供材料。');
+      } catch (error) { fail(error.message, 'ONBOARDING_MATERIAL', 400); }
+    }
     await pause(id); transitioning = true;
     try {
       if (runtime) await runtime.service.close();
@@ -277,7 +286,7 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
       fs.rmSync(folder, { recursive: true, force: true });
       record.practice = null; persist();
     } finally { transitioning = false; }
-    return start(materialId, customInput);
+    return materialId === 'custom' ? createPractice(materialId, sample) : start(materialId, customInput);
   }
   function selectKnowledge(id, { noteId, role = 'explain' }) {
     const p = requirePractice(id); assertIdle();

@@ -1,3 +1,4 @@
+import { learningPolicies } from './learning-guidance.mjs';
 const MAX_TEMPLATE_LENGTH = 30_000;
 const PLACEHOLDER = /{{\s*([^{}]+?)\s*}}/g;
 const VARIABLE_NAME = /^[A-Za-z][A-Za-z0-9_]*$/;
@@ -58,14 +59,14 @@ export const promptDefaults = Object.freeze({
   ),
   discover: metadata(
     '跨主题发现',
-    '从有限知识摘要中提出跨主题桥梁、矛盾和非显然联系。',
-    '根据有限摘要检查跨主题桥梁、矛盾、长期未使用材料与非显然联系。每条给依据id、用处、失效边界；只是建议。未覆盖全库，不能宣称穷尽。{{notes}}',
+    '从不同来源的有限摘要中提出有逐字依据的对比和应用练习。',
+    '根据有限摘要提出最多两项跨资料的对比或应用练习。给出两份材料的逐字依据、具体小任务和适用边界；只是待用户检验的建议。没有有价值联系可以返回空数组，不凑数量，不把同源适用条件称作冲突。未覆盖全库，不能宣称穷尽。{{notes}}',
     ['notes'],
   ),
   topics: metadata(
     '学习包组织',
     '围绕关注主题，把有限材料组织成可调整的学习包。',
-    '针对关注主题 {{focusTopics}}，把有限材料组织为2–5个学习包，不强行连接孤立资料。不按日期排序。给出要解决的问题、按前置知识排序的noteIds、尚缺前置知识名称、预计分钟。不得生成未经研究的新事实。JSON {"packages":[{"title":"...","problem":"...","noteIds":["id"],"prerequisites":["缺口名称"],"minutes":20}]}。材料摘要：{{notes}}',
+    '针对关注主题 {{focusTopics}}，把有限材料组织为1–3个学习包，不强行连接孤立资料。不按日期排序。给出要解决的问题、按前置知识排序的noteIds、尚缺前置知识名称、预计分钟。不得生成未经研究的新事实。JSON {"packages":[{"title":"...","problem":"...","noteIds":["id"],"prerequisites":["缺口名称"],"minutes":20}]}。材料摘要：{{notes}}',
     ['focusTopics', 'notes'],
   ),
   ask: metadata(
@@ -154,7 +155,8 @@ export function renderPrompt(key, values = {}, overrides = {}) {
     }
   }
   const rendered = template.replace(PLACEHOLDER, (_match, rawName) => String(values[rawName.trim()]));
-  return ['researchSystem','researchEvaluation','researchBatchEvaluation','sourceStructure'].includes(key) ? `${rendered}\n\n${researchPolicy}${key === 'sourceStructure' ? '\n'+sourceExtractionStructure : ''}` : rendered;
+  const result = ['researchSystem','researchEvaluation','researchBatchEvaluation','sourceStructure'].includes(key) ? `${rendered}\n\n${researchPolicy}${key === 'sourceStructure' ? '\n'+sourceExtractionStructure : ''}` : rendered;
+  return learningPolicies[key] ? `${result}\n\n${learningPolicies[key]}` : result;
 }
 
 export const extractionResearchContract = `${researchPolicy}\nclaims 保持事实字符串数组，每条保留命题的前提和含义；数学知识应提取数学命题本身，不要全部改写为“某网页说过”。只有出处本身需要核对时才提取出处主张。每个 candidate 可附 claimChecks 数组，每项 {claimIndex,kind,subject}：claimIndex 指向本条 claims 下标；kind 为 formal（数学或形式推导）、empirical（经验事实）、attribution（出处核对）；subject 为保留关键条件的简短检索主题。不新增原文没有的命题、不删去重要条件。`;

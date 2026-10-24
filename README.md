@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/wmy5555/zhixu-learning-workbench/actions/workflows/ci.yml/badge.svg)](https://github.com/wmy5555/zhixu-learning-workbench/actions/workflows/ci.yml)
 
-当前版本 **0.1.0 开发预览**。仓库已由所有者确认公开，尚未选择项目开源许可证或添加 LICENSE。
+当前版本 **0.2.0 开发预览**。仓库已由所有者确认公开，尚未选择项目开源许可证或添加 LICENSE。
 
 历史审计与当前状态见 [Public Release Audit](docs/PUBLIC_RELEASE_AUDIT.md)，依赖及资产来源见 [第三方许可证清单](docs/DEPENDENCY_LICENSES.md)。后续变更继续增量检查；项目许可证和新的可见性变更仍由所有者明确决定。
 

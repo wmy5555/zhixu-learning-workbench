@@ -1,3 +1,11 @@
 # Do not silently reinstall dependencies when a maintenance script is run.
 # Use an explicit frozen-lockfile install; CI always installs from scratch.
 verifyDepsBeforeRun: false
+
+# Remove vulnerable transitive versions without upgrading unrelated UI/mobile packages.
+# argparse 2 retains the v1 CLI aliases used by Mammoth and no longer needs sprintf-js.
+# uuid 11 is the patched CommonJS-compatible line required by xcode 3.
+overrides:
+  'hono@>=4.12.4 <4.13.11': 4.13.11
+  'mammoth@1.13.0>argparse': 2.0.1
+  'xcode@3.0.1>uuid': 11.1.1

@@ -7,6 +7,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createService } from './service.mjs';
 import { atomicWrite, fail, now } from './store.mjs';
 import { createOnboarding } from './onboarding.mjs';
+import { createOnboardingAssistant } from './onboarding-assistant.mjs';
 import { BACKUP_REQUEST_MAX_BYTES } from './backup-contract.mjs';
 import { MAX_FILE_BYTES } from './attachments.mjs';
 import { searchContext } from './search-index.mjs';
@@ -39,6 +40,7 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
   const service = supplied || createService({ dataDir, vaultDir });
   const mainService = service;
   const onboarding = createOnboarding({ dataDir, mainService });
+  const assistOnboarding = createOnboardingAssistant({ ai: mainService.ai, getState: onboarding.state, getSettings: mainService.settings });
   const tokenPath = path.join(dataDir,'mcp-token');
   if (!fs.existsSync(tokenPath)) atomicWrite(tokenPath, randomBytes(32).toString('hex'));
   let mcpToken = fs.readFileSync(tokenPath,'utf8').trim();
@@ -154,6 +156,7 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
           else if (parts[2] === 'checkpoint') result = onboarding.checkpoint(body.practiceId, body);
           else if (parts[2] === 'event') result = onboarding.clientEvent(body.practiceId, body.event);
           else if (parts[2] === 'test') result = await onboarding.test(body.capability);
+          else if (parts[2] === 'assist') result = await assistOnboarding(body);
           else if (parts[2] === 'dismiss') result = onboarding.dismiss();
           else fail('引导接口不存在。', 'NOT_FOUND', 404);
         } else fail('引导接口不存在。', 'NOT_FOUND', 404);
@@ -295,7 +298,7 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
   server.requestTimeout=60000;server.headersTimeout=15000;
   let practiceTimer;
   server.on('listening',()=>{if(scheduler){const tick=async()=>{if(busyTick)return;busyTick=true;try{await service.tick();}catch(error){console.error('后台任务暂时失败：',error.code||'ERROR');}finally{busyTick=false;}};timer=setInterval(tick,3000);timer.unref();tick();practiceTimer=setInterval(()=>{onboarding.pump().catch(error=>console.error('练习任务暂时失败：',error.code||'ERROR'));},1000);practiceTimer.unref();}});
-  return {server,service,onboarding,async close(){clearInterval(timer);clearInterval(practiceTimer);await new Promise(resolve=>server.close(resolve));await onboarding.close();await service.close();}};
+  return {server,service,onboarding,async close(){clearInterval(timer);clearInterval(practiceTimer);await assistOnboarding.close();await new Promise(resolve=>server.close(resolve));await onboarding.close();await service.close();}};
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href){
   const app=createApp({purgeToken:process.env.LEARNING_PURGE_TOKEN||''});const port=Number(process.env.PORT||4318);
