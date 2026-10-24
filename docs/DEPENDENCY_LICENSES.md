@@ -8,6 +8,20 @@
 | argparse | 1.0.10 → 2.0.1 | Python-2.0，[npm](https://registry.npmjs.org/argparse/2.0.1) | 仅覆盖 Mammoth 1.13.0 的依赖，移除无已发布修复版的 sprintf-js（GHSA-hp3w-g68c-fv3c）。保留旧 CLI 接口兼容层；CLI 会输出弃用警告，应用的原文提取不调用 CLI。保留随包完整 LICENSE。 |
 | uuid | 7.0.3 → 11.1.1 | MIT，[npm](https://registry.npmjs.org/uuid/11.1.1) | 仅覆盖 xcode 3.0.1 的依赖，修复 GHSA-w5hq-g745-h8pq，并保留 CommonJS require 与 v4。 |
 
+## 2026-10-24 安全修复增量
+
+仅更新本轮涉及包的来源与随包声明；下方 2026-09-20 的 93 项清单为历史基线，不是当前依赖图的完整新审计。固定 pnpm 11.19.0 生成锁文件，保留各依赖的随包声明，不选择或新增知序自身许可证。
+
+| 包 / 版本 | 声明 | 随包文件 | SHA-256 |
+| --- | --- | --- | --- |
+| [zod 4.6.6](https://registry.npmjs.org/zod/4.6.6) | MIT | LICENSE | `3f1189b28e3866e0d979968d466b78f813f76827cfdca1fbb124cc0a5c8841f8` |
+| [hono 4.13.11](https://registry.npmjs.org/hono/4.13.11) | MIT | LICENSE | `a6ab98e5c77b9070c443eaff2ff81034a6f8cc05a7524d5098eb0f24defa0115` |
+| [body-parser 2.4.0](https://registry.npmjs.org/body-parser/2.4.0) | MIT | LICENSE | `23d466b1b134b415b66fa50c6526b4cf3e7b9258554da88d3abb371721e7ce68` |
+| [ip-address 10.7.4](https://registry.npmjs.org/ip-address/10.7.4) | MIT | LICENSE | `f8d791359a50cbcac82c29cb7b0b1b889b28be76fdd35b8ee33f0f7c8704702a` |
+| [fast-uri 3.1.9](https://registry.npmjs.org/fast-uri/3.1.9) | BSD-3-Clause | LICENSE | `b010b0dfdfdb23d7396e03b82cd4621fc9bb8f95d6b0aea70b9c24e12074c786` |
+| [argparse 2.0.1](https://registry.npmjs.org/argparse/2.0.1) | Python-2.0 | LICENSE | `de4d1f2d2ad5ad0cfd1657a106476b31cb5db5ef9d1ff842b237c0c81f0c8a23` |
+| [uuid 11.1.1](https://registry.npmjs.org/uuid/11.1.1) | MIT | LICENSE.md | `beaa6b04fb82e41dd2ad679e19e27953afb5999b1abbb455b6564e78ebfeb332` |
+
 ## 2026-10-22 MCP SDK 安全更新
 
 @modelcontextprotocol/sdk 从 1.31.0 固定升级至 1.32.0；实际包 metadata 与随附 LICENSE 均为 MIT。包管理器生成锁文件，固定 pnpm 11.19.0 frozen 安装通过。清除 GHSA-22jm-h49p-29qw 与 GHSA-46jr-4wx8-v453 的依赖门禁告警；本项目 MCP 均为 stdio，未配置上游 HTTP transport 或 taskStore。
@@ -16,7 +30,7 @@
 
 审计日期：2026-09-20。主分支基线：`f7f95e78a1fd87f33554cf9a12608e54bc656e6f`。本文件记录第三方声明和来源，不为知序项目本身选择许可证。
 
-## 核验方式与范围
+## 历史核验方式与范围（2026-09-20）
 
 当前 `pnpm-lock.yaml` 的 93 个包全部覆盖（无遗漏）。在隔离目录按锁文件安装，读取实际包的 package.json 和根目录 LICENSE/COPYING/NOTICE 文件；核对许可证正文特征、SHA-256、npm 官方版本元数据及 dist.integrity 与锁文件是否一致。93 项均一致。包声明的源码地址不等于独立证明作者身份或每一行代码的权利链。
 
@@ -30,7 +44,7 @@
 
 参考 ccusage 的报表口径，已核对其 MIT 声明与固定提交，来源和复用范围见 [USAGE](USAGE.md)。未复制其代码文件或增加运行依赖，不改变知序自身许可证状态。
 
-## 当前运行依赖（包含间接依赖）
+## 历史基线运行依赖（2026-09-20，包含间接依赖）
 
 ### 新手教程原文（2026-10-04）
 

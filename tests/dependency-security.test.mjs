@@ -4,6 +4,9 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import test from 'node:test';
+import { randomUUID } from 'node:crypto';
+import { z } from 'zod';
+import { captureRestoreSchema, captureUndoSchema } from '../src/chatgpt.mjs';
 import { parse } from 'yaml';
 import { docx } from './fixtures/source-files.mjs';
 
@@ -82,3 +85,31 @@ test('Mammoth CLI retains v1 argument compatibility without the vulnerable sprin
   assert.equal(invalid.status, 2);
   assert.doesNotMatch(invalid.stderr, /RangeError/);
 });
+
+test('RFC UUID receipts and default undo revisions remain valid while malformed selectors reject', () => {
+  const undoId = randomUUID();
+  assert.deepEqual(captureRestoreSchema.parse({ undoId }), { undoId });
+  assert.equal(captureRestoreSchema.safeParse({ undoId: '11111111-1111-1111-1111-111111111111' }).success, false);
+  assert.equal(captureRestoreSchema.safeParse({ undoId, confirm: true }).success, false);
+  const selector = { requestId: 'synthetic-request', noteId: 'synthetic-source' };
+  assert.equal(captureUndoSchema.parse(selector).syncRevision, null);
+  assert.equal(captureUndoSchema.safeParse({ ...selector, syncRevision: Number.MAX_SAFE_INTEGER + 1 }).success, false);
+});
+
+// Exercise the installed parser, not its version string: limits must bound parsing work.
+for (const kind of ['array', 'set']) {
+  test(`oversized ${kind} stops before validating members while valid input still parses`, () => {
+    let visited = 0;
+    const value = z.string().transform(text => { visited++; return text.toUpperCase(); });
+    const schema = kind === 'array' ? z.array(value).max(1) : z.set(value).max(1);
+    const input = entries => kind === 'array' ? entries : new Set(entries);
+
+    assert.deepEqual(schema.parse(input(['ok'])), input(['OK']));
+    assert.equal(visited, 1, 'ordinary input must still run member validation');
+    visited = 0;
+
+    const rejected = schema.safeParse(input(['first', 'second', 'third']));
+    assert.equal(rejected.success, false);
+    assert.equal(visited, 0, 'an oversized collection must not allocate per-member validation work');
+  });
+}

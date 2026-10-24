@@ -2,10 +2,12 @@
 # Use an explicit frozen-lockfile install; CI always installs from scratch.
 verifyDepsBeforeRun: false
 
-# Remove vulnerable transitive versions without upgrading unrelated UI/mobile packages.
-# argparse 2 retains the v1 CLI aliases used by Mammoth and no longer needs sprintf-js.
-# uuid 11 is the patched CommonJS-compatible line required by xcode 3.
+# Pin the patched lines without changing the UI/mobile packages or MCP protocol.
+# xcode still uses the CommonJS uuid API; Mammoth's CLI aliases remain available in argparse 2.
 overrides:
   'hono@>=4.12.4 <4.13.11': 4.13.11
+  'body-parser@>=2.0.0 <2.4.0': 2.4.0
+  'ip-address@>=10.0.0 <10.7.4': 10.7.4
+  'fast-uri@>=3.0.0 <3.1.9': 3.1.9
   'mammoth@1.13.0>argparse': 2.0.1
   'xcode@3.0.1>uuid': 11.1.1

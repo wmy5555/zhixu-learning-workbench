@@ -15,7 +15,7 @@ const schema = z.object({
   timezone: z.string().min(1).max(100).refine(value => { try { new Intl.DateTimeFormat('en', { timeZone: value }); return true; } catch { return false; } }, '时区无效。'),
   scheduleTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
   focusTopics: z.array(z.string().max(1000)).max(1000), pausedIds: z.array(z.string().max(500)).max(100000),
-  discoveryDays: numeric.pipe(z.number().int().min(1).max(3650)), prompts: z.record(z.string()),
+  discoveryDays: numeric.pipe(z.number().int().min(1).max(3650)), prompts: z.record(z.string(), z.string()),
   ai: z.object({ enabled: z.boolean(), baseUrl: serviceUrl, model: z.string().max(500),
     timeoutMs: numeric.pipe(z.number().int().min(1000).max(600000)), dailyCallLimit: numeric.pipe(z.number().int().nonnegative()),
     sourceCallLimit: numeric.pipe(z.number().int().min(1).max(300)), monthlyBudget: numeric.pipe(z.number().nonnegative()), ...prices, ...credential }),
