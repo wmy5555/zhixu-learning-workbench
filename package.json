@@ -9,6 +9,7 @@
   },
   "scripts": {
     "start": "node src/server.mjs",
+    "prototype:star-tree": "node scripts/prototype-star-tree.mjs",
     "test": "node --test --test-concurrency=1 tests/*.test.mjs",
     "mcp": "node src/mcp.mjs",
     "mcp:chatgpt": "node src/mcp-chatgpt.mjs",

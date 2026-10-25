@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0b151c">
+  <meta name="description" content="知序官网视觉原型：让收藏的星光，长成自己的知识。">
+  <title>知序 · 让知识生根</title>
+  <link rel="stylesheet" href="./style.css">
+  <script defer src="./vendor/scrollama.min.js"></script>
+  <script defer src="./scene.js"></script>
+</head>
+<body>
+  <canvas id="scene" aria-hidden="true"></canvas>
+  <div class="reading-shade" aria-hidden="true"></div>
+  <header class="site-header">
+    <a class="brand" href="#opening" aria-label="知序，回到开篇"><span class="brand-mark" aria-hidden="true">✳</span> 知序</a>
+    <nav aria-label="官网导航"><a href="#explain">学习如何发生</a><a href="#rooted">开始使用 <span aria-hidden="true">↗</span></a></nav>
+  </header>
+  <main id="story">
+    <section class="step opening" id="opening" data-name="散落的知识">
+      <div class="hero-copy">
+        <p class="overline">把看过的，变成自己的。</p>
+        <h1>收藏了很多。<br>真正用上的呢？</h1>
+        <p class="hero-lede">那些让你点头的道理，<br>值得在需要的时候，被想起来。</p>
+        <a class="scroll-link" href="#encounter">从一颗星开始 <span aria-hidden="true">↓</span></a>
+      </div>
+      <span class="margin-note">一份资料，一次生长。</span>
+    </section>
+    <section class="step" id="encounter" data-name="遇见一个概念">
+      <div class="chapter-copy">
+        <p class="chapter-index">01 / 遇见</p>
+        <h2>这个道理，<br>你可能听过。</h2>
+        <p class="lede">电影看了一半，明明不喜欢，<br>却想着：“都看这么久了，再坚持一下。”</p>
+        <article class="product-paper article-paper" aria-label="概念资料示意">
+          <div class="paper-top"><span>知序 / 阅读</span><span>01</span></div>
+          <h3>已经投入很多，还要继续吗？</h3>
+          <p>已经付出、无法收回的时间和金钱，是沉没成本。决定要不要继续，要看接下来的投入与收获。</p>
+          <div class="article-rule"></div>
+          <span class="concept-tag"><i aria-hidden="true"></i> 沉没成本</span>
+        </article>
+      </div>
+    </section>
+    <section class="step" id="explain" data-name="用自己的话解释">
+      <div class="chapter-copy">
+        <p class="chapter-index">02 / 解释</p>
+        <h2>合上文章，<br>试着自己说。</h2>
+        <p class="lede">从“好像懂了”，走到能讲清楚。<br>一颗星光，开始有了自己的形状。</p>
+        <article class="product-paper" aria-label="学习作答示意">
+          <div class="paper-top"><span>知序 / 学习</span><span>独立回忆</span></div>
+          <h3>为什么“已经看了一半”，<br>不能单独成为继续的理由？</h3>
+          <p class="answer-label">我的第一次回答</p>
+          <blockquote>已经花掉的时间拿不回来了，所以电影不好看就应该走。</blockquote>
+          <p class="paper-foot">这是一个开始，还可以想得更清楚。</p>
+        </article>
+      </div>
+    </section>
+    <section class="step" id="question" data-name="让理解展开">
+      <div class="chapter-copy">
+        <p class="chapter-index">03 / 修正</p>
+        <h2>多问一句，<br>理解便深一点。</h2>
+        <article class="product-paper dialogue" aria-label="追问与修正示意">
+          <div class="paper-top"><span>知序 / 追问</span><span>继续想一想</span></div>
+          <p class="question">如果后半段有你很想看的内容，离开仍然是更好的选择吗？</p>
+          <div class="revision"><span>修正后的理解</span><p>要看接下来的时间是否值得。既不为追回过去而坚持，也不一遇到不喜欢就放弃。</p></div>
+        </article>
+        <p class="quiet-line">留下原来的回答，也留下理解改变的过程。</p>
+      </div>
+    </section>
+    <section class="step" id="remember" data-name="过些天仍能想起">
+      <div class="chapter-copy">
+        <p class="chapter-index">04 / 记住</p>
+        <h2>过些天，<br>还能想起来。</h2>
+        <p class="lede">让这次理解，走过时间。<br>在后续复习里，重新用自己的话解释。</p>
+        <article class="product-paper review-paper" aria-label="复习安排示意">
+          <div class="paper-top"><span>知序 / 今日学习</span><span>几天后</span></div>
+          <div class="review-row"><span class="review-symbol" aria-hidden="true">↻</span><div><h3>沉没成本</h3><p>哪些投入值得考虑，哪些已经无法改变？</p></div></div>
+          <p class="paper-foot">先回忆，再看原文。</p>
+        </article>
+      </div>
+    </section>
+    <section class="step" id="apply" data-name="用到新的生活里">
+      <div class="chapter-copy">
+        <p class="chapter-index">05 / 用上</p>
+        <h2>换一个场景，<br>做自己的判断。</h2>
+        <p class="lede">已经排了半小时的队，<br>还要不要继续等？</p>
+        <article class="product-paper application" aria-label="生活情境练习示意">
+          <div class="paper-top"><span>知序 / 应用</span><span>试着选一选</span></div>
+          <button class="choice" data-choice="past">都等了半小时，现在走太亏了。<span aria-hidden="true">↗</span></button>
+          <button class="choice" data-choice="future">先看看还要等多久，还有什么选择。<span aria-hidden="true">↗</span></button>
+          <p class="choice-feedback" aria-live="polite">你会先考虑什么？</p>
+        </article>
+        <p class="quiet-line">知识开始参与生活里的选择。</p>
+      </div>
+    </section>
+    <section class="step ending" id="rooted" data-name="让知识生根">
+      <div class="chapter-copy">
+        <p class="chapter-index">从这一片叶子开始</p>
+        <h2>让知识，<br>在生活里生根。</h2>
+        <p class="lede">把你的下一份收藏，<br>变成记得住、用得上的知识。</p>
+        <button class="primary-action" id="download-demo">下载知序 <span aria-hidden="true">↗</span></button>
+        <p class="download-note" id="download-note" role="status">下载入口示意 · 原型不提供安装包</p>
+      </div>
+      <footer><span>知序</span><span>让收藏有回响。</span><a href="./RESEARCH.md">实现与来源 ↗</a></footer>
+    </section>
+  </main>
+  <aside class="chapter-nav" aria-label="故事章节">
+    <a href="#opening" aria-label="散落的知识" aria-current="step"><span></span></a>
+    <a href="#encounter" aria-label="遇见一个概念"><span></span></a>
+    <a href="#explain" aria-label="用自己的话解释"><span></span></a>
+    <a href="#question" aria-label="让理解展开"><span></span></a>
+    <a href="#remember" aria-label="过些天仍能想起"><span></span></a>
+    <a href="#apply" aria-label="用到新的生活里"><span></span></a>
+    <a href="#rooted" aria-label="让知识生根"><span></span></a>
+  </aside>
+  <div class="prototype-bar" aria-label="原型预览控制">
+    <span>视觉原型</span><span class="bar-divider" aria-hidden="true"></span>
+    <output id="stage-name">散落的知识</output>
+    <button id="motion-toggle" aria-pressed="false">减少动态</button>
+    <a href="#opening" aria-label="重新观看故事">↺</a>
+  </div>
+  <noscript><p class="noscript">此页面的星树动效需要 JavaScript，文字故事仍可直接阅读。</p></noscript>
+</body>
+</html>
