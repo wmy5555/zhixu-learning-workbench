@@ -58,8 +58,8 @@ export function bindImmersiveDeck({ surface, deck, indicator, first, canMove, mo
     if(dt>0){gesture.velocity=(event.clientY-gesture.lastY)/dt;gesture.vx=(event.clientX-gesture.lastX)/dt;gesture.lastTime=time;gesture.lastY=event.clientY;gesture.lastX=event.clientX;}
     gesture.dx=dx;
     if(gesture.axis==='horizontal'){
-      surface.closest('.a-screen').classList.toggle('peeking-detail',dx>0);
-      queuePaint(0,dx>0?Math.min(surface.clientWidth*.65,dx):Math.max(-28,dx*.12));return;
+      surface.closest('.a-screen').classList.toggle('peeking-detail',dx<0);
+      queuePaint(0,dx<0?Math.max(-surface.clientWidth*.65,dx):Math.min(28,dx*.12));return;
     }
     gesture.dy=dy;
     if(first()&&dy>0){
@@ -75,8 +75,8 @@ export function bindImmersiveDeck({ surface, deck, indicator, first, canMove, mo
     if(surface.hasPointerCapture(event.pointerId))surface.releasePointerCapture(event.pointerId);
     if(event.type==='pointercancel'){settle(0);return;}
     if(g.axis==='horizontal'){
-      const flick=performance.now()-g.lastTime<100&&g.vx>.65&&g.dx>30;
-      if(detail&&(g.dx>Math.min(110,surface.clientWidth*.25)||flick)){detail();return;}
+      const flick=performance.now()-g.lastTime<100&&g.vx<-.65&&g.dx<-30;
+      if(detail&&(g.dx<-Math.min(110,surface.clientWidth*.25)||flick)){detail();return;}
       settle(0);return;
     }
     if(g.axis!=='vertical'){settle(0);return;}

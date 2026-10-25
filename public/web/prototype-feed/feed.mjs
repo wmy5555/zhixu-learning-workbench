@@ -76,7 +76,7 @@ function VariantA(n){
  if(state.aDetail)return renderADetail(n,record(n),detailHelpers);
  const ids=visibleIds();
  const slots=[-1,0,1].map(slot=>{let id=ids[state.index+slot];if(!id&&slot===1&&state.filter==='all')id=nextBatchOrder()[0];return id?immersiveItem(notes.find(n=>n.id===id),slot):'';}).join('');
- return `<section class="immersive immersive-v2"><div class="feed-stage a-stage" id="feed-stage"><div class="a-screen"><div class="a-detail-peek" aria-hidden="true"><div>→<span>深入读一读</span></div></div><div class="pull-indicator a-pull" role="status" aria-live="polite">${icon('refresh')}<span>下拉，换一批</span></div><div class="gesture-surface a-viewport" id="gesture-surface" tabindex="0" aria-label="知识信息流，上下切换，右滑进入详情，首条下拉刷新"><div class="a-deck">${slots}</div></div>${rail(n,true)}<div class="like-flash" aria-hidden="true">${icon('heart')}</div></div><div class="a-page-controls"><span>${String(state.index+1).padStart(2,'0')} <i>/ ${String(ids.length).padStart(2,'0')}</i></span>${button(icon('up'),'prev','aria-label="上一条知识"'+(state.index===0?' disabled':''))}${button(icon('down'),'next','aria-label="下一条知识"')}</div><span class="a-desktop-hint">${icon('down')} 滚动，继续发现</span></div></section>`;
+ return `<section class="immersive immersive-v2"><div class="feed-stage a-stage" id="feed-stage"><div class="a-screen"><div class="a-detail-peek" aria-hidden="true"><div>←<span>深入读一读</span></div></div><div class="pull-indicator a-pull" role="status" aria-live="polite">${icon('refresh')}<span>下拉，换一批</span></div><div class="gesture-surface a-viewport" id="gesture-surface" tabindex="0" aria-label="知识信息流，上下切换，左滑进入详情，首条下拉刷新"><div class="a-deck">${slots}</div></div>${rail(n,true)}<div class="like-flash" aria-hidden="true">${icon('heart')}</div></div><div class="a-page-controls"><span>${String(state.index+1).padStart(2,'0')} <i>/ ${String(ids.length).padStart(2,'0')}</i></span>${button(icon('up'),'prev','aria-label="上一条知识"'+(state.index===0?' disabled':''))}${button(icon('down'),'next','aria-label="下一条知识"')}</div><span class="a-desktop-hint">${icon('down')} 滚动，继续发现</span></div></section>`;
 }
 const bRatios={recall:.74,correlation:1.02,spacing:.84,smallstep:1.08,transfer:.73,explain:.96};
 function bCover(n,detail=false){return `<div class="b-cover ${n.color}" data-cover-id="${n.id}" style="--cover-ratio:${bRatios[n.id]}" ${detail?'id="b-detail-cover"':''}>${poster(n)}<span class="b-cover-stamp">${statusText(n)}</span></div>`;}
@@ -116,13 +116,13 @@ function renderContent(){
 function openADetail(animate=true){
  if(state.variant!=='A'||state.aDetail||!current())return;
  const n=current();deckController?.pause();state.aDetailId=n.id;state.aDetail=true;record(n).sourceViewed=true;renderContent();
- if(animate&&!reduced())detailMotion=$('.a-reading').animate([{transform:'translateX(-70px)',opacity:.5},{transform:'translateX(0)',opacity:1}],{duration:260,easing:'cubic-bezier(.16,1,.3,1)'});
+ if(animate&&!reduced())detailMotion=$('.a-reading').animate([{transform:'translateX(70px)',opacity:.5},{transform:'translateX(0)',opacity:1}],{duration:260,easing:'cubic-bezier(.16,1,.3,1)'});
  $('.ad-hero h1').focus({preventScroll:true});
 }
 function closeADetail(animate=true){
  if(!state.aDetail)return;const id=state.aDetailId;state.aDetail=false;state.aDetailId=null;
  const at=visibleIds().indexOf(id);if(at>=0)state.index=at;renderContent();
- const page=$('.immersive-v2');if(page&&animate&&!reduced())detailMotion=page.animate([{transform:'translateX(55px)',opacity:.6},{transform:'translateX(0)',opacity:1}],{duration:240,easing:'cubic-bezier(.16,1,.3,1)'});
+ const page=$('.immersive-v2');if(page&&animate&&!reduced())detailMotion=page.animate([{transform:'translateX(-55px)',opacity:.6},{transform:'translateX(0)',opacity:1}],{duration:240,easing:'cubic-bezier(.16,1,.3,1)'});
  $('[data-action="a-detail"]')?.focus({preventScroll:true});
 }
 function syncADetail(){

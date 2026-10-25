@@ -18,12 +18,38 @@ export function renderADetail(n,r,helpers){
 }
 export function detailHistoryHTML(r,e){return r.turns.map((turn,i)=>`<div class="ad-history-turn"><span>第 ${i+1} 次 · 我的回答</span><p>${e(turn.answer)}</p><small>${turn.sourceViewed?'作答前查看过原文':'未记录查看原文'}${turn.hintUsed?' · 使用过提示':''}</small></div>`).join('');}
 
-// Only the non-interactive page header/hero owns back swipes; body text stays scrollable/selectable.
+// The entire detail page owns right swipes; vertical intent stays with native scrolling.
 export function bindDetailBack(page,close,reduced){
- const zones=[page.querySelector('.ad-topbar'),page.querySelector('.ad-hero')];let start=null,animation=null;
- const down=e=>{if(e.button!==0||e.target.closest('button,a'))return;start={id:e.pointerId,x:e.clientX,y:e.clientY,locked:false,dx:0};};
- const move=e=>{if(start?.id!==e.pointerId)return;const dx=e.clientX-start.x,dy=e.clientY-start.y;if(!start.locked){if(Math.abs(dy)>14&&Math.abs(dy)>Math.abs(dx)){start=null;return;}if(dx>-12||Math.abs(dx)<Math.abs(dy)*1.3)return;start.locked=true;e.currentTarget.setPointerCapture(e.pointerId);}start.dx=dx;page.style.transform=`translateX(${Math.max(-100,dx*.4)}px)`;};
- const up=e=>{if(start?.id!==e.pointerId)return;const g=start;start=null;const from=page.style.transform;page.style.transform='';if(e.type!=='pointercancel'&&g.locked&&g.dx<-90){close(true);return;}if(g.locked&&!reduced())animation=page.animate([{transform:from},{transform:'translateX(0)'}],{duration:220,easing:'cubic-bezier(.16,1,.3,1)'});};
- zones.forEach(z=>{z.addEventListener('pointerdown',down);z.addEventListener('pointermove',move);z.addEventListener('pointerup',up);z.addEventListener('pointercancel',up);});
- return ()=>{animation?.cancel();zones.forEach(z=>{z.removeEventListener('pointerdown',down);z.removeEventListener('pointermove',move);z.removeEventListener('pointerup',up);z.removeEventListener('pointercancel',up);});};
+ let start=null,animation=null,suppressClick=false;
+ const down=e=>{
+   if(e.button!==0||!e.isPrimary)return;
+   animation?.cancel();page.style.transform='';suppressClick=false;
+   start={id:e.pointerId,x:e.clientX,y:e.clientY,locked:false,dx:0};
+   // Keep taps, focus and typing intact; a deliberate horizontal drag can start on controls too.
+   if(e.pointerType==='mouse'&&!e.target.closest('button,a,input,textarea,select,summary,[contenteditable]'))e.preventDefault();
+ };
+ const move=e=>{
+   if(start?.id!==e.pointerId)return;
+   const dx=e.clientX-start.x,dy=e.clientY-start.y;
+   if(!start.locked){
+     if(Math.abs(dy)>12&&Math.abs(dy)>Math.abs(dx)){start=null;return;}
+     if(dx<-12&&Math.abs(dx)>Math.abs(dy)*1.3){start=null;return;}
+     if(dx<12||dx<Math.abs(dy)*1.3)return;
+     start.locked=true;suppressClick=true;page.setPointerCapture(e.pointerId);page.classList.add('ad-dragging');
+   }
+   e.preventDefault();start.dx=dx;page.style.transform=`translateX(${Math.min(page.clientWidth*.65,Math.max(0,dx)*.8)}px)`;
+ };
+ const up=e=>{
+   if(start?.id!==e.pointerId)return;
+   const g=start;start=null;const from=page.style.transform;page.style.transform='';page.classList.remove('ad-dragging');
+   if(page.hasPointerCapture(e.pointerId))page.releasePointerCapture(e.pointerId);
+   if(e.type!=='pointercancel'&&g.locked&&g.dx>Math.min(90,page.clientWidth*.24)){close(true);return;}
+   if(g.locked&&!reduced())animation=page.animate([{transform:from},{transform:'translateX(0)'}],{duration:220,easing:'cubic-bezier(.16,1,.3,1)'});
+ };
+ const click=e=>{if(suppressClick&&e.detail){suppressClick=false;e.preventDefault();e.stopImmediatePropagation();}};
+ const drag=e=>e.preventDefault();
+ page.addEventListener('pointerdown',down);page.addEventListener('pointermove',move);
+ page.addEventListener('pointerup',up);page.addEventListener('pointercancel',up);
+ page.addEventListener('click',click,true);page.addEventListener('dragstart',drag);
+ return ()=>{animation?.cancel();page.classList.remove('ad-dragging');page.removeEventListener('pointerdown',down);page.removeEventListener('pointermove',move);page.removeEventListener('pointerup',up);page.removeEventListener('pointercancel',up);page.removeEventListener('click',click,true);page.removeEventListener('dragstart',drag);};
 }
