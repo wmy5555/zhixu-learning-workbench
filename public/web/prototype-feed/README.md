@@ -10,7 +10,7 @@
 - B 图文发现：<http://127.0.0.1:4361/web/prototype-feed/?variant=B>
 - C 边刷边练：<http://127.0.0.1:4361/web/prototype-feed/?variant=C>
 
-仅需 Node.js 24，不需要安装新增依赖。端口可通过 `PROTOTYPE_PORT` 指定。独立预览器只绑定回环地址、只提供三份列入允许清单的静态文件；`NODE_ENV=production` 时拒绝启动。它不启动知序服务、调度器或数据库。
+仅需 Node.js 24，不需要安装新增依赖。端口可通过 `PROTOTYPE_PORT` 指定。独立预览器只绑定回环地址、只提供五份列入允许清单的静态文件；`NODE_ENV=production` 时拒绝启动。它不启动知序服务、调度器或数据库。
 
 底部左右箭头或键盘左右键切换方案；输入时保留方向键编辑。上下滑动、滚轮、上下键切换知识。首条向下拖动超过阈值后松开，或点击“换一批”，刷新内容；推荐流最后一条继续上滑会换批。刷新轮换六条演示内容，不表示获取了新知识。
 
@@ -56,3 +56,31 @@
 - 参考浏览器连接不可用时记录实际失败；不能把窄屏鼠标拖动描述为真实触摸验证。
 
 结论：三种结构均可把浏览与练习接通，候选交互已可体验；最终方向仍待用户选择。
+
+## A 第二轮：借鉴 zyronon/douyin（2026-10-25）
+
+用户要求深化 A，继续保留原型边界。B/C 保留作为对照，不推广到正式版。
+
+静态研究固定于 `zyronon/douyin` 提交 `8cc6172c737dfaf0c914a2b27cdfee4eb2306f2e`，没有安装或运行该仓库。
+
+| 实际读取的来源 | 借鉴到 A 的交互 | 本项目的实现 |
+| --- | --- | --- |
+| [src/utils/slide.ts](https://github.com/zyronon/douyin/blob/8cc6172c737dfaf0c914a2b27cdfee4eb2306f2e/src/utils/slide.ts) | 方向锁定、距离与速度判定、松手归位 | 原生 Pointer Events，整屏相邻卡片跟手移动；短滑回弹，快速轻扫可翻页；指针取消与尺寸改变时归位。 |
+| [SlideVerticalInfinite.vue](https://github.com/zyronon/douyin/blob/8cc6172c737dfaf0c914a2b27cdfee4eb2306f2e/src/components/slide/SlideVerticalInfinite.vue) | 当前附近有限条目、首条下拉刷新 | A 至多挂载前/中/后三条；邻项 inert，不进入操作与读屏顺序。末条衔接下一轮演示内容。 |
+| [IndicatorHome.vue](https://github.com/zyronon/douyin/blob/8cc6172c737dfaf0c914a2b27cdfee4eb2306f2e/src/pages/home/components/IndicatorHome.vue)、[SlideList.vue](https://github.com/zyronon/douyin/blob/8cc6172c737dfaf0c914a2b27cdfee4eb2306f2e/src/pages/home/slide/SlideList.vue) | 拉动提示、换批状态、重复动作门控 | 下拉阻尼与“松开换批”阈值；轮换本地六条资料，保留所有回答/草稿；无网络请求或伪造服务加载。 |
+| [Comment.vue](https://github.com/zyronon/douyin/blob/8cc6172c737dfaf0c914a2b27cdfee4eb2306f2e/src/components/Comment.vue) | 内容仍在背景，交互面板按需打开 | 桌面右侧练习抽屉，小屏底部抽屉；下拉把手收起，原生 dialog 保留焦点约束与 Escape。 |
+| SlideList 的兴趣交互入口 | 双击内容标记兴趣 | 本页内存布尔标记与短暂图标反馈，不伪造社交人数或推荐算法。 |
+
+没有复制或翻译上游组件、样式、媒体及字体。以交互目标和通用机制独立编写 `immersive-deck.mjs` 与 `immersive.css`，保持原生栈。上游 LICENSE 为 GPL v3，README 另有学习研究用途说明；此次不引入其代码或资产，也不改变知序的项目许可状态。
+
+### 第二轮验证与成本
+
+- Codex 浏览器实际检查：A 整屏切换、18px 短拖不换条、连续大幅滚轮只切一条、下拉换批、双击兴趣、桌面/390px 练习抽屉、下拉收起、答后追问、刷新保留回答与草稿。复核卡片容器 scrollTop=0、最多三项与无横向溢出。
+- 修复检查发现的错位：`overflow:hidden` 仍允许浏览器因选择/聚焦而滚动容器，不能用于绝对定位的手势卡片视窗；改用 `overflow:clip` 并阻止手势表面文字选择，原文弹窗仍可选择文本。
+- 滚轮的一次手势状态必须跨卡片重新挂载保留，否则动画结束后的余势会额外翻页。后续同类实现应保留这一约束。
+- 客户端五文件合计 约 68 KB，无新增依赖、模型调用、视频解码或空闲轮询。仅在指针移动时合帧更新 transform，过渡结束释放动画。
+- 实体触摸设备、系统键盘、屏幕阅读器和长时间性能未验收。桌面浏览器的滚动/拖动证据不能代替手机实际手感。
+
+当前判断：A 更适合继续评估连续浏览与按需练习的组合；仍是可抛弃原型，不能把预设反馈当成真实 AI 评分。
+
+验证补充：项目原生 pnpm check 实际检查 469 个跟踪文件通过；随后增加的打开面板中止背景过渡逻辑通过定向语法检查，并在浏览器确认当前知识与题目一致。最终 diff --check 通过；未跑全量测试。B 网格与 C 练习栏的页面冒烟检查通过。

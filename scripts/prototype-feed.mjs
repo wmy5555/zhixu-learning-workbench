@@ -6,6 +6,8 @@ const files = new Map([
   ['/web/prototype-feed/', ['index.html', 'text/html; charset=utf-8']],
   ['/web/prototype-feed/feed.css', ['feed.css', 'text/css; charset=utf-8']],
   ['/web/prototype-feed/feed.mjs', ['feed.mjs', 'text/javascript; charset=utf-8']],
+  ['/web/prototype-feed/immersive-deck.mjs', ['immersive-deck.mjs', 'text/javascript; charset=utf-8']],
+  ['/web/prototype-feed/immersive.css', ['immersive.css', 'text/css; charset=utf-8']],
 ]);
 if (process.env.NODE_ENV === 'production') throw new Error('Prototype must not run in production.');
 const port = Number(process.env.PROTOTYPE_PORT || 4361);

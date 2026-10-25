@@ -2,6 +2,9 @@
 
 ## 趣味学习信息流原型（2026-10-25）
 
+- 第二轮按用户给定 `zyronon/douyin` 固定提交 8cc6172 研究后深化 A：有限相邻卡片、整屏跟手与回弹、拉动刷新、双击兴趣、桌面侧边/手机底部练习抽屉。原生独立实现，来源与许可记录在原型 README，未引入上游代码/依赖/媒体。
+- 手势卡片视窗应用 `overflow:clip`；`overflow:hidden` 会被聚焦/选择触发的滚动带偏。滚轮手势门控须跨条目挂载保留，避免余势连翻；只禁用图文拖动表面的选择，保留原文文本选择。
+
 - 独立 `feat/prototype-learning-feed-20261025` 原型分支；用户明确仅预览，未选定，不得纳入日批产品发布或同步正式 4318。
 - `pnpm prototype:feed` 运行独立回环预览，`/web/prototype-feed/?variant=A|B|C`。六份合成资料、内存状态、预设反馈，不读取产品库或调用 AI。
 - 原型说明与取舍见 `public/web/prototype-feed/README.md`。当前没有实施 Issue 或选定方向。
