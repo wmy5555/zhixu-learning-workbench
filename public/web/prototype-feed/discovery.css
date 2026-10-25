@@ -1,0 +1,71 @@
+/* B only: measured masonry and a continuous cover-to-note reading surface. */
+.b-discovery{padding:6px 32px 35px;scrollbar-gutter:stable}
+.b-discovery .discovery-heading{max-width:1200px;margin:15px auto 30px;align-items:center}
+.b-discovery .discovery-heading h1{font-size:32px;margin-top:10px;letter-spacing:-.8px}
+.b-discovery .eyebrow{font-size:9px;letter-spacing:1.7px;color:#a3988a}
+.b-count{font-size:11px;color:#a39788}
+.b-masonry{position:relative;width:100%;max-width:1200px;margin:0 auto;min-height:300px;contain:layout}
+.b-tile{position:absolute;top:0;left:0;min-width:0;margin:0;padding:0 0 13px;background:transparent;visibility:hidden}
+.b-masonry[data-ready=true] .b-tile{visibility:visible}
+.b-open{display:block;padding:0;text-align:left;width:100%;border-radius:14px}
+.b-open:active{transform:none!important}
+.b-cover{width:100%;aspect-ratio:var(--cover-ratio);position:relative;container-type:inline-size;background:transparent}
+.b-cover>.poster{position:absolute;inset:0;width:100%;height:100%;padding:8cqw 8cqw 7cqw;border-radius:5cqw;background:var(--paper);overflow:hidden}
+.b-cover .poster-top{font-size:3cqw;letter-spacing:.25cqw;opacity:.55}
+.b-cover .poster-top span:last-child{display:none}
+.b-cover .quote-mark{left:6cqw;top:14cqw;font-size:37cqw;line-height:1;opacity:.12}
+.b-cover .poster-title{font-size:10cqw;line-height:1.55;letter-spacing:-.4cqw;padding:9cqw 0 5cqw;word-break:keep-all;font-weight:730}
+.b-cover .poster-title mark{padding:0 .4cqw}
+.b-cover .poster-bottom{font-size:3cqw;letter-spacing:.4cqw;opacity:.5;padding:0}
+.b-cover .poster-line{width:8cqw;height:1cqw}
+.b-cover-stamp{position:absolute;right:6cqw;top:6cqw;font-size:2.8cqw;border-radius:9cqw;background:#fff7;color:var(--ink);padding:1.5cqw 2.2cqw;letter-spacing:.1cqw}
+.b-cover.peach .poster-title,.b-cover.sage .poster-title{font-size:9.6cqw}
+.b-cover.peach .quote-mark,.b-cover.sage .quote-mark{font-size:29cqw;top:11cqw}
+.b-cover.sage .poster{background:var(--paper)}
+.b-tile-copy{padding:15px 3px 8px}
+.b-tile-copy h2{font-size:14px;line-height:1.7;font-weight:600;color:#473d34;margin:0 0 8px}
+.b-tile-copy p{font-size:11px;line-height:1.8;color:#aa9c8c;margin:0}
+.b-tile-meta{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 3px;color:#998a7a;font-size:10px}
+.b-tile-meta>span{display:flex;align-items:center;gap:6px}
+.b-topic-dot{display:inline-block;width:14px;height:14px;background:var(--paper);border-radius:50%;border:1px solid #0000000b}
+.b-tile-meta button{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;color:#a59684}
+.b-tile-meta svg{width:17px;height:17px}
+.b-tile .is-saved,.b-note-author .is-saved{color:#a77350}
+.is-saved svg{fill:#dcb08c66}
+.b-discovery-end{padding:28px 0 10px;text-align:center;color:#a38d77}
+.b-discovery-end button{gap:9px}
+.b-note-page{height:100%;display:flex;flex-direction:column;min-height:0;padding:0 22px}
+.b-note-header{height:48px;flex:none;display:flex;align-items:center;justify-content:space-between;position:relative;padding:0 6px 9px;color:#8b7b69}
+.b-note-header #b-back{min-width:60px;justify-content:start;font-size:13px;gap:7px}
+.b-return-grip{position:absolute;left:calc(50% - 40px);top:0;width:80px;height:36px;display:grid;place-items:center;touch-action:none;cursor:grab}
+.b-return-grip span{width:34px;height:4px;background:#d4c8b9;border-radius:4px}
+.b-note-pager{display:flex;align-items:center;gap:12px;font-size:11px;color:#aa9b8a}
+.b-note-pager button{width:30px;height:30px;border:1px solid #e6ddd3;border-radius:50%;display:grid;place-items:center}
+.b-note-pager svg{width:16px;height:16px}
+.b-note-scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding-bottom:20px}
+.b-note-layout{max-width:1120px;margin:0 auto;display:grid;grid-template-columns:minmax(0,1.15fr) minmax(330px,.85fr);background:#fffcf8;border:1px solid #e8dfd3;border-radius:19px;overflow:clip;transform-origin:50% 0}
+.b-note-visual{display:flex;align-items:center;justify-content:center;min-width:0;padding:30px;background:#f2ede5}
+.b-note-visual .b-cover{width:min(100%,calc((100dvh - 225px) * var(--cover-ratio)));flex:none}
+.b-note-copy{padding:32px 32px 28px;min-width:0}
+.b-note-author{display:flex;align-items:center;gap:8px;color:#9d8b79;font-size:11px;margin-bottom:28px}
+.b-note-author .tiny-avatar{border-color:#cbb59a;color:#ab865f;width:25px;height:25px}
+.b-note-author button{margin-left:auto;flex:none;display:grid;place-items:center;width:30px;height:30px}
+.b-note-author svg{width:21px;height:21px}
+.b-note-copy h1{font-size:26px;line-height:1.55;font-weight:600;letter-spacing:-.5px;color:#514233;margin:0 0 18px}
+.b-note-lead{font-size:13px;line-height:1.9;color:#a08e7d;padding-bottom:20px;border-bottom:1px solid #eee5da;margin-bottom:21px}
+.b-note-body{font-size:14px;line-height:1.95;color:#786653}
+.b-note-body p{margin:0 0 13px}
+.b-note-tags{display:flex;flex-wrap:wrap;gap:12px;font-size:11px;color:#aa825d;margin:21px 0 26px}
+.b-practice-prompt{border-top:1px solid #e9ddcd;padding-top:21px}
+.b-practice-prompt>div{display:flex;justify-content:space-between;font-size:10px;color:#ac8b68}
+.b-practice-prompt h2{font-size:17px;font-weight:500;line-height:1.75;margin:13px 0 20px;color:#6c543f}
+.b-practice-prompt .primary{background:#795d45;min-height:45px}
+.b-source-note{font-size:10px;color:#baac9a;margin-top:18px;text-align:center}
+.b-transitioning #content{pointer-events:none}
+.b-flying-cover{contain:layout style;user-select:none}
+@media(hover:hover) and (pointer:fine){.b-open:hover .b-cover{transform:translateY(-3px)}.b-open .b-cover{transition:transform 160ms var(--ease)}.b-tile-meta button:hover{background:#eee3d6}.b-return-grip:hover span{background:#bba58d}}
+@media(max-width:1150px){.b-discovery{padding:6px 15px 30px}.b-note-page{padding:0 5px}.b-note-copy{padding:25px}.b-note-visual{padding:22px}.b-note-copy h1{font-size:24px}}
+@media(max-width:850px){.b-note-layout{grid-template-columns:minmax(0,1fr) minmax(270px,.9fr)}.b-note-copy{padding:22px}.b-note-visual{padding:16px}.b-note-copy h1{font-size:22px}.b-note-body{font-size:13px}.b-note-author{font-size:10px;gap:6px;margin-bottom:22px}.b-note-author .tiny-avatar{display:none}}
+@media(max-width:650px){.b-discovery{padding:5px 14px 25px;scrollbar-gutter:auto}.b-discovery .discovery-heading{margin:14px 0 25px}.b-discovery .discovery-heading h1{font-size:27px;margin-top:9px}.b-discovery .eyebrow{font-size:7px;letter-spacing:1.4px}.b-count{font-size:9px;margin-top:23px}.b-tile-copy{padding:10px 1px 5px}.b-tile-copy h2{font-size:12px;line-height:1.65;margin-bottom:6px}.b-tile-copy p{font-size:9px;line-height:1.8}.b-tile-meta{font-size:9px;padding:0}.b-topic-dot{width:11px;height:11px}.b-tile-meta button{width:27px;height:27px}.b-tile-meta svg{width:16px;height:16px}.b-cover .poster-title{font-size:10.5cqw;letter-spacing:-.5cqw}.b-cover .poster-top{font-size:3.3cqw}.b-cover .poster-bottom{font-size:3.3cqw}.b-cover-stamp{font-size:3cqw}.b-note-page{padding:0}.b-note-header{height:40px;padding:0 16px 6px}.b-note-header #b-back{font-size:12px}.b-note-pager{gap:8px;font-size:10px}.b-note-pager button{width:27px;height:27px}.b-return-grip{height:28px}.b-note-scroll{padding-bottom:0;scrollbar-gutter:auto}.b-note-layout{display:block;border:0;border-radius:0}.b-note-visual{padding:0;background:transparent}.b-note-visual .b-cover{width:100%}.b-note-visual .b-cover>.poster{border-radius:0}.b-note-copy{padding:25px 24px 35px}.b-note-author .tiny-avatar{display:grid}.b-note-author{font-size:11px;margin-bottom:22px}.b-note-copy h1{font-size:26px}.b-note-body{font-size:15px;line-height:2}.b-note-lead{font-size:13px}.b-practice-prompt h2{font-size:18px}.b-practice-prompt .primary{min-height:47px}.b-source-note{font-size:10px}}
+@media(prefers-reduced-motion:reduce){.b-cover{transition:none!important}}
+@media(max-width:650px){.b-tile .poster-top,.b-tile .poster-bottom{visibility:hidden}.b-tile .b-cover-stamp{font-size:8px;padding:3px 5px}.b-tile-copy h2{font-size:13px}.b-tile-copy p{font-size:11px;line-height:1.75}.b-tile-meta{font-size:10px}}

@@ -10,7 +10,7 @@
 - B 图文发现：<http://127.0.0.1:4361/web/prototype-feed/?variant=B>
 - C 边刷边练：<http://127.0.0.1:4361/web/prototype-feed/?variant=C>
 
-仅需 Node.js 24，不需要安装新增依赖。端口可通过 `PROTOTYPE_PORT` 指定。独立预览器只绑定回环地址、只提供五份列入允许清单的静态文件；`NODE_ENV=production` 时拒绝启动。它不启动知序服务、调度器或数据库。
+仅需 Node.js 24，不需要安装新增依赖。端口可通过 `PROTOTYPE_PORT` 指定。独立预览器只绑定回环地址、只提供七份列入允许清单的静态文件；`NODE_ENV=production` 时拒绝启动。它不启动知序服务、调度器或数据库。
 
 底部左右箭头或键盘左右键切换方案；输入时保留方向键编辑。上下滑动、滚轮、上下键切换知识。首条向下拖动超过阈值后松开，或点击“换一批”，刷新内容；推荐流最后一条继续上滑会换批。刷新轮换六条演示内容，不表示获取了新知识。
 
@@ -84,3 +84,39 @@
 当前判断：A 更适合继续评估连续浏览与按需练习的组合；仍是可抛弃原型，不能把预设反馈当成真实 AI 评分。
 
 验证补充：项目原生 pnpm check 实际检查 469 个跟踪文件通过；随后增加的打开面板中止背景过渡逻辑通过定向语法检查，并在浏览器确认当前知识与题目一致。最终 diff --check 通过；未跑全量测试。B 网格与 C 练习栏的页面冒烟检查通过。
+
+## B 第二轮：瀑布流与共享封面转场（2026-10-25）
+
+用户指定参考两个项目，只深化 B，继续保留独立预览、演示反馈与内存状态。A 与 C 作为对照保留。
+
+| 固定来源 | 实际读取内容 | 本次借鉴 |
+| --- | --- | --- |
+| DrssXpro/waterfall-demo @ `9a39a50557540d6debbe376e6726cc26fb6ace4d` | [FsBookWaterfall.vue](https://github.com/DrssXpro/waterfall-demo/blob/9a39a50557540d6debbe376e6726cc26fb6ace4d/src/components/FsBookWaterfall.vue)、[FsBookCard.vue](https://github.com/DrssXpro/waterfall-demo/blob/9a39a50557540d6debbe376e6726cc26fb6ace4d/src/components/FsBookCard.vue)、README、package | 根据封面比例预留空间，测量文字与卡片实际高度，逐条放入最短列；尺寸变化后重排。 |
+| Arcns/fast-transition @ `bc6ff143f15d418eb7fac34dff9886b1e3bea920` | [FastTransitionTargetManager.kt](https://github.com/Arcns/fast-transition/blob/bc6ff143f15d418eb7fac34dff9886b1e3bea920/shared-element/src/main/java/com/arc/fast/transition/FastTransitionTargetManager.kt)、[FastRoundedCalculator.kt](https://github.com/Arcns/fast-transition/blob/bc6ff143f15d418eb7fac34dff9886b1e3bea920/shared-element/src/main/java/com/arc/fast/transition/item/rounded/FastRoundedCalculator.kt)、README、LICENSE | 封面按同一知识 ID 在列表与详情之间移动；详情切换知识后返回对应卡片；拖动退出，取消时清理转场。 |
+
+fast-transition 是 Android 库，此处没有将 Kotlin/Activity 代码移入网页。waterfall-demo 的本次完整文件树与 package 未发现许可文件或许可字段；fast-transition 的 LICENSE 是木兰宽松许可证第 2 版。本轮只借鉴交互目标与通用机制，独立编写原生 `discovery-layout.mjs` 和 `discovery.css`，没有复制上游实现、内容、图片或依赖，也不改变知序项目许可。
+
+### 已实现
+
+- 桌面最多四列、较窄窗口三列、手机双列。六张图文封面有不同长宽比，正文卡片高度真实测量，DOM 顺序保留原数据顺序。
+- 单张卡片可收藏；卡片收藏只操作对应 ID。详情显示演示原文，并如实记录查看原文，继续接入已有费曼回答、反馈、结束本轮。
+- 鼠标/触摸激活时，封面以 transform 完成列表→详情→列表的空间转场；键盘和减少动效模式直接切换。动画临时副本不参与输入或读屏，结束、取消、窗口变化或页面隐藏时清理。
+- 同一条直接返回，恢复原滚动位置与焦点。详情切换到其他条目后，按当前 ID 返回；仅当新目标在视窗外时调整列表位置。
+- 详情顶部把手可向下拖动返回，距离不足归位；原文区域正常滚动，不把正文滚动当作退出手势。返回按钮与 Escape 同时保留。
+- 示例集仍为六条，底部“换一批想法”轮换现有演示内容；没有添加分页接口或虚构更多内容。
+
+### 验证与限制
+
+实际在 Codex 浏览器验证四列与 390×844 双列、不同高度和无横向溢出；原位置返回前后 scrollTop 同为 516.6667；详情从第六条切到第五条后拖动返回，焦点落在第五条 `transfer` 卡片，临时副本清理为 0。验证独立卡片收藏、阅读→解释→反馈→结束本轮，完成状态回写卡片。反馈是预设演示，不是实际 AI 评分。
+
+布局只在挂载、内容尺寸或容器宽度改变时计算，批量写入宽度、读取高度、再写入位置；观察器和拖动帧在卸载时释放。无新增依赖、后台轮询、外发或真实资料访问。演示规模不代表海量资料性能；实体手机触摸、系统键盘、屏幕阅读器与浏览器兼容性仍待正式接入时验收。
+
+### 后续复用时的注意点
+
+- 先设置新列宽，再读真实卡片高度；只拿封面比例估高会让标题/说明覆盖下一张卡片。
+- 同一条返回时不要强行把卡片“完整滚入屏幕”，否则会破坏原来的浏览位置。只有详情已切换知识，才按当前 ID 找新的返回目标。
+- 共享封面的副本必须在正常完成和所有取消路径清理，不可留下遮挡、失效的 hidden 状态或输入锁。
+
+本轮仅深化 B 的发现与阅读体验；未提交正式产品 PR、未合并、未同步 4318。
+
+交付验证：原生 pnpm check 检查 471 个跟踪文件通过，最终 diff --check 通过。A 连续卡片与 C 常驻练习栏页面复核通过，浏览器未记录 warning/error。客户端七文件合计约 85 KB，无新增运行时依赖；未执行全量产品测试或真实供应商调用。
