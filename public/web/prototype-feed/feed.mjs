@@ -3,6 +3,7 @@
 import { bindImmersiveDeck, bindSheetHandle } from './immersive-deck.mjs';
 import { mountMasonry, createSharedCoverTransition, bindPullReturn } from './discovery-layout.mjs';
 import { renderADetail, detailStudyHTML, detailHistoryHTML, bindDetailBack } from './a-detail.mjs';
+import { createFlashDeck, mixFlashcards, flashItem, flashDue, revealFlash, rateFlash, renderFlash, renderFlashDetail } from './flashcards.mjs';
 const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const shapes = {
@@ -35,11 +36,14 @@ const variants = {A:'沉浸刷学',B:'图文发现',C:'边刷边练'};
 const initialVariant = new URL(location.href).searchParams.get('variant');
 const state = {variant:variants[initialVariant]?initialVariant:'A',filter:'all',index:0,order:notes.map(n=>n.id),reviewIds:[],refreshes:0,detail:false,aDetail:false,aDetailId:null,records:{},interest:[]};
 for(const n of notes) state.records[n.id]={saved:false,liked:false,seen:false,draft:'',reflection:'',reflectionDraft:'',turns:[],status:'idle',hintUsed:false,sourceViewed:false};
-const current = () => notes.find(n=>n.id===(state.variant==='A'&&state.aDetail?state.aDetailId:visibleIds()[state.index]));
-const record = n => state.records[n.id];
-const visibleIds = () => state.order.filter(id=>state.filter==='review'?state.reviewIds.includes(id):state.filter==='saved'?record({id}).saved:true);
-const dueLeft = () => notes.filter(n=>n.due&&record(n).status!=='completed').length;
-const completed = () => notes.filter(n=>record(n).status==='completed').length;
+state.flash=createFlashDeck();state.aOrder=mixFlashcards(state.order,state.flash);
+if(state.variant==='A'&&new URL(location.href).searchParams.get('card')==='flash')state.index=state.aOrder.findIndex(id=>flashItem(id,state.flash));
+const itemFor = id => notes.find(n=>n.id===id)||flashItem(id,state.flash);
+const current = () => itemFor(state.variant==='A'&&state.aDetail?state.aDetailId:visibleIds()[state.index]);
+const record = n => state.flash.entries[n.id]||state.records[n.id];
+const visibleIds = () => (state.variant==='A'?state.aOrder:state.order).filter(id=>state.filter==='review'?state.reviewIds.includes(id):state.filter==='saved'?record({id}).saved:true);
+const dueLeft = () => notes.filter(n=>n.due&&record(n).status!=='completed').length+(state.variant==='A'?Object.values(state.flash.records).filter(r=>r.due).length:0);
+const completed = () => notes.filter(n=>record(n).status==='completed').length+(state.variant==='A'?Object.values(state.flash.records).filter(r=>r.history.some(h=>!h.studied)).length:0);
 const statusText = n => record(n).status==='completed'?'本轮已练':record(n).turns.length?'待结束本轮':n.due?'今天复习':'发现新知';
 const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 let toastTimer, motion, wheelTotal=0, wheelTime=0, lockedUntil=0, lastSourceFocus, deckController;
@@ -68,15 +72,16 @@ function nextBatchOrder(){
  while(a.length||b.length){if(a.length)result.push(a.shift());if(b.length)result.push(b.shift());}return result;
 }
 function immersiveItem(n,slot){
+ if(n.kind==='flash')return renderFlash(n,record(n),slot,detailHelpers);
  return `<article class="a-slide ${slot===0?'current-card':''}" style="--slot:${slot}" data-note-id="${n.id}" ${slot===0?'':'aria-hidden="true" inert'}>
  <div class="a-cover">${poster(n)}<span class="a-state-chip">${n.due?icon('clock'):icon('spark')}${statusText(n)}</span></div>
  <div class="a-caption">${metadata(n)}<div class="a-card-footer">${button(icon('chat')+`<span>${record(n).draft?'继续刚才的解释…':record(n).turns.length?'回到这次练习…':n.due?'不看原文，还能讲清楚吗？':'用自己的话，讲给朋友听…'}</span>`,'practice',slot===0?'aria-label="开始或继续费曼练习"':'tabindex="-1"','a-compose')}${button(icon('arrow'),'practice',slot===0?'aria-label="打开费曼练习"':'tabindex="-1"','a-send')}</div></div></article>`;
 }
 function VariantA(n){
- if(state.aDetail)return renderADetail(n,record(n),detailHelpers);
+ if(state.aDetail)return n.kind==='flash'?renderFlashDetail(n,record(n),detailHelpers):renderADetail(n,record(n),detailHelpers);
  const ids=visibleIds();
- const slots=[-1,0,1].map(slot=>{let id=ids[state.index+slot];if(!id&&slot===1&&state.filter==='all')id=nextBatchOrder()[0];return id?immersiveItem(notes.find(n=>n.id===id),slot):'';}).join('');
- return `<section class="immersive immersive-v2"><div class="feed-stage a-stage" id="feed-stage"><div class="a-screen"><div class="a-detail-peek" aria-hidden="true"><div>←<span>深入读一读</span></div></div><div class="pull-indicator a-pull" role="status" aria-live="polite">${icon('refresh')}<span>下拉，换一批</span></div><div class="gesture-surface a-viewport" id="gesture-surface" tabindex="0" aria-label="知识信息流，上下切换，左滑进入详情，首条下拉刷新"><div class="a-deck">${slots}</div></div>${rail(n,true)}<div class="like-flash" aria-hidden="true">${icon('heart')}</div></div><div class="a-page-controls"><span>${String(state.index+1).padStart(2,'0')} <i>/ ${String(ids.length).padStart(2,'0')}</i></span>${button(icon('up'),'prev','aria-label="上一条知识"'+(state.index===0?' disabled':''))}${button(icon('down'),'next','aria-label="下一条知识"')}</div><span class="a-desktop-hint">${icon('down')} 滚动，继续发现</span></div></section>`;
+ const slots=[-1,0,1].map(slot=>{let id=ids[state.index+slot];if(!id&&slot===1&&state.filter==='all')id=nextBatchOrder()[0];return id?immersiveItem(itemFor(id),slot):'';}).join('');
+ return `<section class="immersive immersive-v2"><div class="feed-stage a-stage" id="feed-stage"><div class="a-screen"><div class="a-detail-peek" aria-hidden="true"><div>←<span>深入读一读</span></div></div><div class="pull-indicator a-pull" role="status" aria-live="polite">${icon('refresh')}<span>下拉，换一批</span></div><div class="gesture-surface a-viewport" id="gesture-surface" tabindex="0" aria-label="知识信息流，上下切换，左滑进入详情，首条下拉刷新"><div class="a-deck">${slots}</div></div>${n.kind==='flash'?'':rail(n,true)}<div class="like-flash" aria-hidden="true">${icon('heart')}</div></div><div class="a-page-controls"><span>${String(state.index+1).padStart(2,'0')} <i>/ ${String(ids.length).padStart(2,'0')}</i></span>${button(icon('up'),'prev','aria-label="上一条知识"'+(state.index===0?' disabled':''))}${button(icon('down'),'next','aria-label="下一条知识"')}</div><span class="a-desktop-hint">${icon('down')} 滚动，继续发现</span></div></section>`;
 }
 const bRatios={recall:.74,correlation:1.02,spacing:.84,smallstep:1.08,transfer:.73,explain:.96};
 function bCover(n,detail=false){return `<div class="b-cover ${n.color}" data-cover-id="${n.id}" style="--cover-ratio:${bRatios[n.id]}" ${detail?'id="b-detail-cover"':''}>${poster(n)}<span class="b-cover-stamp">${statusText(n)}</span></div>`;}
@@ -100,8 +105,9 @@ function renderContent(){
  deckController?.dispose();deckController=null;
  masonry?.dispose();masonry=null;releasePull?.();releasePull=null;
  const ids=visibleIds();state.index=Math.min(state.index,Math.max(0,ids.length-1));const n=current();
+ if(n?.kind==='flash')state.flash.pending=state.flash.pending.filter(p=>p.id!==n.id);
  $('#content').innerHTML=n?({A:VariantA,B:VariantB,C:VariantC}[state.variant](n)):`<section class="empty-state">${icon(state.filter==='saved'?'star':'check')}<h1>${state.filter==='saved'?'把想再看的知识，留在这里。':'今天的演示复习完成了。'}</h1><p>${state.filter==='saved'?'点击知识旁的星标，即可收藏。':'可以继续探索，也可以到这里结束。'}</p>${button('去发现','filter','data-filter="all"','primary')}</section>`;
- if(n){record(n).seen=true;if(state.variant==='A'&&!state.aDetail)deckController=bindImmersiveDeck({surface:$('#gesture-surface'),deck:$('.a-deck'),indicator:$('.a-pull'),first:()=>state.index===0,canMove:direction=>direction>0?(state.index<visibleIds().length-1||state.filter==='all'):state.index>0,move:direction=>next(direction,false,true),refresh:performRefresh,detail:()=>openADetail(true),like:()=>{record(n).liked=true;state.interest=notes.filter(item=>record(item).liked).map(item=>item.topic);const heart=$('.like-flash');if(!reduced())heart.animate([{transform:'translate(-50%,-50%) scale(.85)',opacity:0},{transform:'translate(-50%,-50%) scale(1.1)',opacity:1,offset:.35},{transform:'translate(-50%,-70%) scale(1)',opacity:0}],{duration:280,easing:'ease-out'});const b=$('.a-screen [data-action="like"]');b.classList.add('on');b.setAttribute('aria-pressed','true');b.setAttribute('aria-label','取消感兴趣');surfaceState();},reduced});else bindGestures();}
+ if(n){record(n).seen=true;if(state.variant==='A'&&!state.aDetail)deckController=bindImmersiveDeck({surface:$('#gesture-surface'),deck:$('.a-deck'),indicator:$('.a-pull'),first:()=>state.index===0,canMove:direction=>direction>0?(state.index<visibleIds().length-1||state.filter==='all'):state.index>0,move:direction=>next(direction,false,true),refresh:performRefresh,detail:()=>openADetail(true),like:()=>{if(n.kind==='flash')return;record(n).liked=true;state.interest=notes.filter(item=>record(item).liked).map(item=>item.topic);const heart=$('.like-flash');if(!reduced())heart.animate([{transform:'translate(-50%,-50%) scale(.85)',opacity:0},{transform:'translate(-50%,-50%) scale(1.1)',opacity:1,offset:.35},{transform:'translate(-50%,-70%) scale(1)',opacity:0}],{duration:280,easing:'ease-out'});const b=$('.a-screen [data-action="like"]');b.classList.add('on');b.setAttribute('aria-pressed','true');b.setAttribute('aria-label','取消感兴趣');surfaceState();},reduced});else bindGestures();}
  if(state.variant==='B'&&n){
    if(state.detail){record(n).sourceViewed=true;releasePull=bindPullReturn($('.b-return-grip'),$('.b-note-layout'),()=>closeBNote(),reduced);}
    else{masonry=mountMasonry($('.b-masonry'));const scroller=$('.b-discovery');scroller.scrollTop=bMemory.scroll;scroller.addEventListener('scroll',()=>{bMemory.scroll=scroller.scrollTop;},{passive:true});}
@@ -115,6 +121,7 @@ function renderContent(){
 }
 function openADetail(animate=true){
  if(state.variant!=='A'||state.aDetail||!current())return;
+ if(current().kind==='flash')revealFlash(record(current()),true);
  const n=current();deckController?.pause();state.aDetailId=n.id;state.aDetail=true;record(n).sourceViewed=true;renderContent();
  if(animate&&!reduced())detailMotion=$('.a-reading').animate([{transform:'translateX(70px)',opacity:.5},{transform:'translateX(0)',opacity:1}],{duration:260,easing:'cubic-bezier(.16,1,.3,1)'});
  $('.ad-hero h1').focus({preventScroll:true});
@@ -127,6 +134,7 @@ function closeADetail(animate=true){
 }
 function syncADetail(){
  if(state.variant!=='A'||!state.aDetail||!current())return;const n=current(),r=record(n);
+ if(n.kind==='flash')return;
  $('#ad-study-card').innerHTML=detailStudyHTML(n,r,detailHelpers);
  $('.ad-mobile-action button').innerHTML=(r.status==='completed'?'查看这次练习':r.draft||r.turns.length?'继续解释':'试着讲一讲')+icon('arrow');
  $('.ad-history').hidden=!r.turns.length;$('[data-ad-turn-count]').textContent=r.turns.length;
@@ -139,16 +147,16 @@ function practiceHTML(n){const r=record(n),last=r.turns.at(-1),question=r.turns.
  <form id="practice-form" data-note="${n.id}"><textarea name="answer" aria-label="我的解释" placeholder="不用复述原句，讲出你的理解……" maxlength="2000" required>${esc(r.draft)}</textarea><div class="answer-tools">${button(icon('spark')+' 一点提示','hint','','text-button')}${button(icon('book')+' 看原文','source','','text-button')}</div>${r.hintUsed?`<p class="hint-content">${esc(n.hint)}</p>`:''}<button class="primary" type="submit">${r.turns.length?'回答追问':'提交解释'} ${icon('arrow')}</button></form>
  <div class="practice-end">${button('结束本轮','finish',r.turns.length?'':'disabled','text-button')}<span>${r.turns.length?'结束后才记为本轮已练':'先留下回答，再看反馈'}</span></div>`;
 }
-function openPractice(){deckController?.pause();const n=current();if(!n)return;if(state.variant==='C'&&matchMedia('(min-width: 1000px)').matches){$('#practice-desk').scrollTop=0;$('#practice-desk textarea')?.focus();return;}
+function openPractice(){deckController?.pause();const n=current();if(!n||n.kind==='flash')return;if(state.variant==='C'&&matchMedia('(min-width: 1000px)').matches){$('#practice-desk').scrollTop=0;$('#practice-desk textarea')?.focus();return;}
  const d=$('#learning-dialog');d.dataset.presentation=state.variant==='A'?'feed-sheet':'';d.innerHTML=`${state.variant==='A'?'<div class="sheet-grip" aria-hidden="true"><span></span></div>':''}<header class="dialog-header"><span>${state.variant==='A'?'讲一讲 · '+esc(n.topic):esc(n.source)}</span>${button(icon('close'),'close-practice','aria-label="关闭练习"')}</header><div class="dialog-practice">${practiceHTML(n)}</div>`;d.showModal();
  if(state.variant==='A'){document.documentElement.classList.add('practice-open');bindSheetHandle(d,closePractice,reduced);if(!reduced())d.animate([{transform:'translateY(28px)',opacity:.5},{transform:'translateY(0)',opacity:1}],{duration:240,easing:'cubic-bezier(.16,1,.3,1)'});d.querySelector('[data-action="close-practice"]').focus({preventScroll:true});}else d.querySelector('textarea')?.focus();surfaceState();}
 function updatePractice(){const n=current();if(!n)return;const d=$('#learning-dialog');if(d.open)d.querySelector('.dialog-practice').innerHTML=practiceHTML(n);if($('#practice-desk'))$('#practice-desk').innerHTML=practiceHTML(n);syncADetail();surfaceState();}
 function closePractice(){if($('#learning-dialog').open)$('#learning-dialog').close();}
-function setFilter(filter){state.aDetail=false;state.aDetailId=null;bTransition.cancel();bMemory.scroll=0;closePractice();state.filter=filter;state.reviewIds=notes.filter(n=>n.due&&record(n).status!=='completed').map(n=>n.id);state.index=0;state.detail=false;shell();}
+function setFilter(filter){state.aDetail=false;state.aDetailId=null;bTransition.cancel();bMemory.scroll=0;closePractice();state.filter=filter;state.reviewIds=[...notes.filter(n=>n.due&&record(n).status!=='completed').map(n=>n.id),...state.aOrder.filter(id=>flashItem(id,state.flash)&&flashDue(id,state.flash))];state.index=0;state.detail=false;shell();}
 function switchVariant(delta){state.aDetail=false;state.aDetailId=null;bTransition.cancel();closePractice();state.variant=['A','B','C'][(['A','B','C'].indexOf(state.variant)+delta+3)%3];state.detail=false;const u=new URL(location.href);u.searchParams.set('variant',state.variant);history.replaceState({},'',u);shell();}
 function next(delta=1,animate=true,fromDeck=false){if(state.variant==='A'&&state.aDetail){closeADetail(false);return next(delta,false,true);}if(!current()||(state.variant==='B'&&bTransition.running))return;if(state.variant==='A'&&!fromDeck&&animate){deckController?.step(delta);return;}closePractice();const ids=visibleIds();if(state.index+delta>=ids.length){if(state.filter==='all'){performRefresh();return;}toast('这一组已经看完了');return;}if(state.index+delta<0)return;motion?.cancel();state.index+=delta;renderContent();if(animate&&!reduced()){const el=$('.current-card');if(el)motion=el.animate([{transform:`translateY(${delta>0?60:-60}px)`,opacity:.5},{transform:'translateY(0)',opacity:1}],{duration:220,easing:'cubic-bezier(.16,1,.3,1)'});}surfaceState();}
 function refresh(){if(state.variant==='A'&&deckController){deckController.refresh();return;}performRefresh();}
-function performRefresh(){state.aDetail=false;state.aDetailId=null;bTransition.cancel();bMemory.scroll=0;closePractice();state.reviewIds=notes.filter(n=>n.due&&record(n).status!=='completed').map(n=>n.id);state.refreshes++;state.order=nextBatchOrder();state.index=0;shell();toast('已换一批 · 学习记录和草稿已保留');}
+function performRefresh(){state.aDetail=false;state.aDetailId=null;bTransition.cancel();bMemory.scroll=0;closePractice();state.reviewIds=[...notes.filter(n=>n.due&&record(n).status!=='completed').map(n=>n.id),...state.aOrder.filter(id=>flashItem(id,state.flash)&&flashDue(id,state.flash))];state.refreshes++;state.order=nextBatchOrder();state.aOrder=mixFlashcards(state.order,state.flash);state.reviewIds=[...notes.filter(n=>n.due&&record(n).status!=='completed').map(n=>n.id),...state.aOrder.filter(id=>flashItem(id,state.flash)&&flashDue(id,state.flash))];state.index=0;shell();toast('已换一批 · 学习记录和草稿已保留');}
 function bindGestures(){const surface=$('#gesture-surface');if(!surface)return;let start=null,pulling=false,drag=0;
  surface.addEventListener('pointerdown',e=>{if(e.button!==0||e.target.closest('button,a,input,textarea'))return;start={x:e.clientX,y:e.clientY,id:e.pointerId};drag=0;surface.setPointerCapture(e.pointerId);});
  surface.addEventListener('pointermove',e=>{if(!start)return;const dy=e.clientY-start.y,dx=e.clientX-start.x;if(Math.abs(dx)>Math.abs(dy)&&Math.abs(dx)>20){start=null;return;}drag=dy;pulling=state.index===0&&dy>0;const card=surface.querySelector('.current-card');card.style.transform=`translateY(${pulling?Math.min(120,dy*.45):Math.max(-110,Math.min(110,dy*.55))}px)`;const indicator=$('.pull-indicator');indicator.classList.toggle('visible',pulling);indicator.querySelector('span').textContent=dy>145?'松开，换一批':'下拉换一批';});
@@ -156,10 +164,13 @@ function bindGestures(){const surface=$('#gesture-surface');if(!surface)return;l
  surface.addEventListener('pointerup',end);surface.addEventListener('pointercancel',end);
  surface.addEventListener('wheel',e=>{if(Math.abs(e.deltaY)<Math.abs(e.deltaX))return;e.preventDefault();const now=performance.now();if(now<lockedUntil)return;if(now-wheelTime>200)wheelTotal=0;wheelTime=now;wheelTotal+=e.deltaY;if(Math.abs(wheelTotal)>48){const d=Math.sign(wheelTotal);wheelTotal=0;lockedUntil=now+480;if(state.index===0&&d<0){toast('向下拖动卡片，或点「换一批」刷新');return;}next(d);}}, {passive:false});
 }
-document.addEventListener('input',e=>{if(e.target.matches('textarea[name="answer"]'))record(current()).draft=e.target.value;if(e.target.matches('textarea[name="reflection"]')){record(current()).reflectionDraft=e.target.value;$('#ad-reflection-state').textContent='草稿已保留在本次预览';}});
+document.addEventListener('input',e=>{if(e.target.matches('textarea[name="answer"],textarea[name="flash-answer"]'))record(current()).draft=e.target.value;if(e.target.matches('textarea[name="reflection"]')){record(current()).reflectionDraft=e.target.value;$('#ad-reflection-state').textContent='草稿已保留在本次预览';}});
+document.addEventListener('submit',e=>{if(!e.target.matches('[data-flash-form]'))return;e.preventDefault();if(current()?.kind!=='flash')return;revealFlash(record(current()));renderContent();$('.current-card .fc-rate, .current-card .fc-reveal')?.focus({preventScroll:true});});
 document.addEventListener('submit',e=>{if(e.target.id!=='practice-form')return;e.preventDefault();const n=current(),r=record(n),answer=new FormData(e.target).get('answer').trim();if(!answer)return;r.turns.push({question:r.turns.length?n.follow:n.question,answer,round:r.turns.length,feedback:'preset-demo',hintUsed:r.hintUsed,sourceViewed:r.sourceViewed});r.draft='';r.status='feedback';updatePractice();const container=$('#learning-dialog').open?$('.dialog-practice'):$('#practice-desk');container?.querySelector('.feedback')?.scrollIntoView({block:'nearest'});});
 document.addEventListener('click',e=>{const target=e.target.closest('[data-action]');if(!target)return;const a=target.dataset.action,n=current(),r=n&&record(n);
  if(a==='variant-prev')return switchVariant(-1);if(a==='variant-next')return switchVariant(1);if(a==='filter')return setFilter(target.dataset.filter);if(a==='refresh')return refresh();
+ if(a==='flash-study'&&n?.kind==='flash'){revealFlash(r,true);renderContent();return;}
+ if(a==='flash-rate'&&n?.kind==='flash'){if(rateFlash(r,state.flash,state.aOrder,state.aOrder.indexOf(n.id),target.dataset.grade,visibleIds())){if(state.filter==='review')state.reviewIds.push(...state.aOrder.filter(id=>flashItem(id,state.flash)&&flashDue(id,state.flash)&&!state.reviewIds.includes(id)));shell();}return;}
  if(a==='a-detail')return openADetail(e.detail!==0);if(a==='a-detail-back')return closeADetail(e.detail!==0);
  if(a==='a-detail-save'&&r){r.saved=!r.saved;target.innerHTML=icon('star')+(r.saved?'已收藏':'收藏');target.setAttribute('aria-pressed',r.saved);target.setAttribute('aria-label',r.saved?'取消收藏当前知识':'收藏当前知识');surfaceState();return;}
  if(a==='a-reflection-save'&&r){r.reflection=r.reflectionDraft.trim();$('#ad-reflection-state').textContent=r.reflection?'已暂存于本次预览':'已清空本次暂存';surfaceState();return;}

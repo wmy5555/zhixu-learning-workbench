@@ -42,7 +42,8 @@ export function bindImmersiveDeck({ surface, deck, indicator, first, canMove, mo
     event.preventDefault(); // This surface is a draggable graphic; source text remains selectable in its dialog.
     if(gesture){gesture=null;interrupt();return;}
     const time=performance.now();
-    gesture={id:event.pointerId,x:event.clientX,y:event.clientY,lastX:event.clientX,lastY:event.clientY,lastTime:time,velocity:0,vx:0,dx:0,dy:0,axis:null};
+    const scroller=event.target.closest('[data-feed-scroll]');
+    gesture={id:event.pointerId,x:event.clientX,y:event.clientY,lastX:event.clientX,lastY:event.clientY,lastTime:time,velocity:0,vx:0,dx:0,dy:0,axis:null,scroller,scrollTop:scroller?.scrollTop||0};
     surface.setPointerCapture(event.pointerId);
   }
   function drag(event){
@@ -51,12 +52,13 @@ export function bindImmersiveDeck({ surface, deck, indicator, first, canMove, mo
     if(!gesture.axis){
       if(Math.max(Math.abs(dx),Math.abs(dy))<10)return;
       if(Math.abs(dx)>Math.abs(dy)*1.25)gesture.axis='horizontal';
-      else if(Math.abs(dy)>Math.abs(dx)*1.25)gesture.axis='vertical';
+      else if(Math.abs(dy)>Math.abs(dx)*1.25){const s=gesture.scroller;gesture.axis=s&&s.scrollHeight>s.clientHeight+1&&(dy<0?s.scrollTop+s.clientHeight<s.scrollHeight-1:s.scrollTop>0)?'scroll':'vertical';}
       else return;
     }
     const dt=time-gesture.lastTime;
     if(dt>0){gesture.velocity=(event.clientY-gesture.lastY)/dt;gesture.vx=(event.clientX-gesture.lastX)/dt;gesture.lastTime=time;gesture.lastY=event.clientY;gesture.lastX=event.clientX;}
     gesture.dx=dx;
+    if(gesture.axis==='scroll'){gesture.scroller.scrollTop=gesture.scrollTop-dy;return;}
     if(gesture.axis==='horizontal'){
       surface.closest('.a-screen').classList.toggle('peeking-detail',dx<0);
       queuePaint(0,dx<0?Math.max(-surface.clientWidth*.65,dx):Math.min(28,dx*.12));return;
@@ -88,6 +90,8 @@ export function bindImmersiveDeck({ surface, deck, indicator, first, canMove, mo
   }
   function wheel(event){
     if(event.ctrlKey||Math.abs(event.deltaX)>Math.abs(event.deltaY))return;
+    const scroller=event.target.closest('[data-feed-scroll]');
+    if(scroller&&(event.deltaY>0?scroller.scrollTop+scroller.clientHeight<scroller.scrollHeight-1:scroller.scrollTop>0)){wheelLastEvent=performance.now();wheelConsumed=true;return;}
     event.preventDefault();const time=performance.now(),quiet=time-wheelLastEvent>180;wheelLastEvent=time;
     if(quiet){wheelDistance=0;wheelConsumed=false;}
     if(busy||wheelConsumed)return;
