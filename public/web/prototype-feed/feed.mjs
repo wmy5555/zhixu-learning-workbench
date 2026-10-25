@@ -2,6 +2,7 @@
 // One route, ?variant=A|B|C; synthetic notes and in-memory state only.
 import { bindImmersiveDeck, bindSheetHandle } from './immersive-deck.mjs';
 import { mountMasonry, createSharedCoverTransition, bindPullReturn } from './discovery-layout.mjs';
+import { renderADetail, detailStudyHTML, detailHistoryHTML, bindDetailBack } from './a-detail.mjs';
 const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const shapes = {
@@ -32,9 +33,9 @@ const notes = [
 ];
 const variants = {A:'沉浸刷学',B:'图文发现',C:'边刷边练'};
 const initialVariant = new URL(location.href).searchParams.get('variant');
-const state = {variant:variants[initialVariant]?initialVariant:'A',filter:'all',index:0,order:notes.map(n=>n.id),reviewIds:[],refreshes:0,detail:false,records:{},interest:[]};
-for(const n of notes) state.records[n.id]={saved:false,liked:false,seen:false,draft:'',turns:[],status:'idle',hintUsed:false,sourceViewed:false};
-const current = () => notes.find(n=>n.id===visibleIds()[state.index]);
+const state = {variant:variants[initialVariant]?initialVariant:'A',filter:'all',index:0,order:notes.map(n=>n.id),reviewIds:[],refreshes:0,detail:false,aDetail:false,aDetailId:null,records:{},interest:[]};
+for(const n of notes) state.records[n.id]={saved:false,liked:false,seen:false,draft:'',reflection:'',reflectionDraft:'',turns:[],status:'idle',hintUsed:false,sourceViewed:false};
+const current = () => notes.find(n=>n.id===(state.variant==='A'&&state.aDetail?state.aDetailId:visibleIds()[state.index]));
 const record = n => state.records[n.id];
 const visibleIds = () => state.order.filter(id=>state.filter==='review'?state.reviewIds.includes(id):state.filter==='saved'?record({id}).saved:true);
 const dueLeft = () => notes.filter(n=>n.due&&record(n).status!=='completed').length;
@@ -43,6 +44,8 @@ const statusText = n => record(n).status==='completed'?'本轮已练':record(n).
 const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 let toastTimer, motion, wheelTotal=0, wheelTime=0, lockedUntil=0, lastSourceFocus, deckController;
 let masonry=null,releasePull=null;
+let releaseDetailBack=null,detailMotion=null;
+const detailScroll=new Map(),detailHelpers={e:esc,button,icon};
 const bMemory={scroll:0,origin:null};
 const bTransition=createSharedCoverTransition(reduced);
 function toast(text){$('#toast').textContent=text;$('#toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').hidden=true,2600);}
@@ -56,7 +59,7 @@ function shell(){
 }
 function poster(n,small=false){return `<div class="poster ${n.color} ${small?'mini-poster':''}"><div class="poster-top"><span>知序 / ${esc(n.topic)}</span><span>${n.due?'REVISIT':'A LITTLE THOUGHT'}</span></div><span class="quote-mark" aria-hidden="true">“</span><div class="poster-title">${n.lines.map(line=>`<div>${line}</div>`).join('')}</div><div class="poster-bottom"><span>${esc(n.tag)}</span><span class="poster-line"></span></div></div>`;}
 function metadata(n){return `<div class="item-caption"><div class="item-author"><span class="tiny-avatar">知</span><b>${esc(n.source)}</b><span class="learning-status ${n.due?'due':''}">${statusText(n)}</span></div><p>${esc(n.copy)}</p><span class="hashtags"># ${esc(n.tag)} &nbsp; # ${esc(n.topic)}</span></div>`;}
-function rail(n){const r=record(n);return `<div class="action-rail">${button(icon('heart')+'<span>有意思</span>','like',`aria-label="${r.liked?'取消感兴趣':'标记感兴趣'}" aria-pressed="${r.liked}"`,r.liked?'on':'')}${button(icon('chat')+'<span>讲一讲</span>','practice','aria-label="打开费曼练习"')}${button(icon('star')+`<span>${r.saved?'已收藏':'收藏'}</span>`,'save',`aria-label="${r.saved?'取消收藏':'收藏这条知识'}" aria-pressed="${r.saved}"`,r.saved?'on':'')}${button(icon('book')+'<span>原文</span>','source','aria-label="查看演示原文"')}</div>`;}
+function rail(n,showDetail=false){const r=record(n);return `<div class="action-rail">${button(icon('heart')+'<span>有意思</span>','like',`aria-label="${r.liked?'取消感兴趣':'标记感兴趣'}" aria-pressed="${r.liked}"`,r.liked?'on':'')}${button(icon('chat')+'<span>讲一讲</span>','practice','aria-label="打开费曼练习"')}${button(icon('star')+`<span>${r.saved?'已收藏':'收藏'}</span>`,'save',`aria-label="${r.saved?'取消收藏':'收藏这条知识'}" aria-pressed="${r.saved}"`,r.saved?'on':'')}${button(icon('book')+(showDetail?'<span>详情</span>':'<span>原文</span>'),showDetail?'a-detail':'source',showDetail?'aria-label="查看知识详情"':'aria-label="查看演示原文"')}</div>`;}
 function stage(n){return `<div class="feed-stage" id="feed-stage"><div class="pull-indicator" role="status">${icon('refresh')}<span>下拉换一批</span></div><div class="gesture-surface" id="gesture-surface" tabindex="0" aria-label="知识信息流，向上下一条，首条向下刷新"><article class="current-card" data-note-id="${n.id}">${poster(n)}${metadata(n)}</article></div>${rail(n)}<div class="feed-pagination"><span>${String(state.index+1).padStart(2,'0')}<i>/ ${String(visibleIds().length).padStart(2,'0')}</i></span>${button(icon('up'),'prev','aria-label="上一条知识"'+(state.index===0?' disabled':''))}${button(icon('down'),'next','aria-label="下一条知识"')}</div><div class="stage-footer"><span class="scroll-hint">${icon('down')} 向上滑，遇见下一个想法</span>${button(n.due?'先试着回忆 '+icon('arrow'):'用自己的话讲一讲 '+icon('arrow'),'practice','','practice-cta')}</div></div>`;}
 function nextBatchOrder(){
  const rotate=arr=>arr.length>1?[...arr.slice(1),arr[0]]:arr;
@@ -70,9 +73,10 @@ function immersiveItem(n,slot){
  <div class="a-caption">${metadata(n)}<div class="a-card-footer">${button(icon('chat')+`<span>${record(n).draft?'继续刚才的解释…':record(n).turns.length?'回到这次练习…':n.due?'不看原文，还能讲清楚吗？':'用自己的话，讲给朋友听…'}</span>`,'practice',slot===0?'aria-label="开始或继续费曼练习"':'tabindex="-1"','a-compose')}${button(icon('arrow'),'practice',slot===0?'aria-label="打开费曼练习"':'tabindex="-1"','a-send')}</div></div></article>`;
 }
 function VariantA(n){
+ if(state.aDetail)return renderADetail(n,record(n),detailHelpers);
  const ids=visibleIds();
  const slots=[-1,0,1].map(slot=>{let id=ids[state.index+slot];if(!id&&slot===1&&state.filter==='all')id=nextBatchOrder()[0];return id?immersiveItem(notes.find(n=>n.id===id),slot):'';}).join('');
- return `<section class="immersive immersive-v2"><div class="feed-stage a-stage" id="feed-stage"><div class="a-screen"><div class="pull-indicator a-pull" role="status" aria-live="polite">${icon('refresh')}<span>下拉，换一批</span></div><div class="gesture-surface a-viewport" id="gesture-surface" tabindex="0" aria-label="知识信息流，上下滑动切换，首条下拉刷新"><div class="a-deck">${slots}</div></div>${rail(n)}<div class="like-flash" aria-hidden="true">${icon('heart')}</div></div><div class="a-page-controls"><span>${String(state.index+1).padStart(2,'0')} <i>/ ${String(ids.length).padStart(2,'0')}</i></span>${button(icon('up'),'prev','aria-label="上一条知识"'+(state.index===0?' disabled':''))}${button(icon('down'),'next','aria-label="下一条知识"')}</div><span class="a-desktop-hint">${icon('down')} 滚动，继续发现</span></div></section>`;
+ return `<section class="immersive immersive-v2"><div class="feed-stage a-stage" id="feed-stage"><div class="a-screen"><div class="a-detail-peek" aria-hidden="true"><div>→<span>深入读一读</span></div></div><div class="pull-indicator a-pull" role="status" aria-live="polite">${icon('refresh')}<span>下拉，换一批</span></div><div class="gesture-surface a-viewport" id="gesture-surface" tabindex="0" aria-label="知识信息流，上下切换，右滑进入详情，首条下拉刷新"><div class="a-deck">${slots}</div></div>${rail(n,true)}<div class="like-flash" aria-hidden="true">${icon('heart')}</div></div><div class="a-page-controls"><span>${String(state.index+1).padStart(2,'0')} <i>/ ${String(ids.length).padStart(2,'0')}</i></span>${button(icon('up'),'prev','aria-label="上一条知识"'+(state.index===0?' disabled':''))}${button(icon('down'),'next','aria-label="下一条知识"')}</div><span class="a-desktop-hint">${icon('down')} 滚动，继续发现</span></div></section>`;
 }
 const bRatios={recall:.74,correlation:1.02,spacing:.84,smallstep:1.08,transfer:.73,explain:.96};
 function bCover(n,detail=false){return `<div class="b-cover ${n.color}" data-cover-id="${n.id}" style="--cover-ratio:${bRatios[n.id]}" ${detail?'id="b-detail-cover"':''}>${poster(n)}<span class="b-cover-stamp">${statusText(n)}</span></div>`;}
@@ -91,16 +95,42 @@ function closeBNote(animate=true){
 }
 function VariantC(n){return `<section class="practice-layout">${stage(n)}<aside class="practice-desk" id="practice-desk">${practiceHTML(n)}</aside></section>`;}
 function renderContent(){
+ const oldReading=$('.ad-scroll');if(oldReading)detailScroll.set(oldReading.dataset.noteId,oldReading.scrollTop);
+ releaseDetailBack?.();releaseDetailBack=null;detailMotion?.cancel();detailMotion=null;
  deckController?.dispose();deckController=null;
  masonry?.dispose();masonry=null;releasePull?.();releasePull=null;
  const ids=visibleIds();state.index=Math.min(state.index,Math.max(0,ids.length-1));const n=current();
  $('#content').innerHTML=n?({A:VariantA,B:VariantB,C:VariantC}[state.variant](n)):`<section class="empty-state">${icon(state.filter==='saved'?'star':'check')}<h1>${state.filter==='saved'?'把想再看的知识，留在这里。':'今天的演示复习完成了。'}</h1><p>${state.filter==='saved'?'点击知识旁的星标，即可收藏。':'可以继续探索，也可以到这里结束。'}</p>${button('去发现','filter','data-filter="all"','primary')}</section>`;
- if(n){record(n).seen=true;if(state.variant==='A')deckController=bindImmersiveDeck({surface:$('#gesture-surface'),deck:$('.a-deck'),indicator:$('.a-pull'),first:()=>state.index===0,canMove:direction=>direction>0?(state.index<visibleIds().length-1||state.filter==='all'):state.index>0,move:direction=>next(direction,false,true),refresh:performRefresh,like:()=>{record(n).liked=true;state.interest=notes.filter(item=>record(item).liked).map(item=>item.topic);const heart=$('.like-flash');if(!reduced())heart.animate([{transform:'translate(-50%,-50%) scale(.85)',opacity:0},{transform:'translate(-50%,-50%) scale(1.1)',opacity:1,offset:.35},{transform:'translate(-50%,-70%) scale(1)',opacity:0}],{duration:280,easing:'ease-out'});const b=$('.a-screen [data-action="like"]');b.classList.add('on');b.setAttribute('aria-pressed','true');b.setAttribute('aria-label','取消感兴趣');surfaceState();},reduced});else bindGestures();}
+ if(n){record(n).seen=true;if(state.variant==='A'&&!state.aDetail)deckController=bindImmersiveDeck({surface:$('#gesture-surface'),deck:$('.a-deck'),indicator:$('.a-pull'),first:()=>state.index===0,canMove:direction=>direction>0?(state.index<visibleIds().length-1||state.filter==='all'):state.index>0,move:direction=>next(direction,false,true),refresh:performRefresh,detail:()=>openADetail(true),like:()=>{record(n).liked=true;state.interest=notes.filter(item=>record(item).liked).map(item=>item.topic);const heart=$('.like-flash');if(!reduced())heart.animate([{transform:'translate(-50%,-50%) scale(.85)',opacity:0},{transform:'translate(-50%,-50%) scale(1.1)',opacity:1,offset:.35},{transform:'translate(-50%,-70%) scale(1)',opacity:0}],{duration:280,easing:'ease-out'});const b=$('.a-screen [data-action="like"]');b.classList.add('on');b.setAttribute('aria-pressed','true');b.setAttribute('aria-label','取消感兴趣');surfaceState();},reduced});else bindGestures();}
  if(state.variant==='B'&&n){
    if(state.detail){record(n).sourceViewed=true;releasePull=bindPullReturn($('.b-return-grip'),$('.b-note-layout'),()=>closeBNote(),reduced);}
    else{masonry=mountMasonry($('.b-masonry'));const scroller=$('.b-discovery');scroller.scrollTop=bMemory.scroll;scroller.addEventListener('scroll',()=>{bMemory.scroll=scroller.scrollTop;},{passive:true});}
  }
+ if(state.variant==='A'&&state.aDetail&&n){
+   const reading=$('.ad-scroll');reading.scrollTop=detailScroll.get(n.id)||0;
+   reading.addEventListener('scroll',()=>detailScroll.set(n.id,reading.scrollTop),{passive:true});
+   releaseDetailBack=bindDetailBack($('.a-reading'),closeADetail,reduced);
+ }
  surfaceState();
+}
+function openADetail(animate=true){
+ if(state.variant!=='A'||state.aDetail||!current())return;
+ const n=current();deckController?.pause();state.aDetailId=n.id;state.aDetail=true;record(n).sourceViewed=true;renderContent();
+ if(animate&&!reduced())detailMotion=$('.a-reading').animate([{transform:'translateX(-70px)',opacity:.5},{transform:'translateX(0)',opacity:1}],{duration:260,easing:'cubic-bezier(.16,1,.3,1)'});
+ $('.ad-hero h1').focus({preventScroll:true});
+}
+function closeADetail(animate=true){
+ if(!state.aDetail)return;const id=state.aDetailId;state.aDetail=false;state.aDetailId=null;
+ const at=visibleIds().indexOf(id);if(at>=0)state.index=at;renderContent();
+ const page=$('.immersive-v2');if(page&&animate&&!reduced())detailMotion=page.animate([{transform:'translateX(55px)',opacity:.6},{transform:'translateX(0)',opacity:1}],{duration:240,easing:'cubic-bezier(.16,1,.3,1)'});
+ $('[data-action="a-detail"]')?.focus({preventScroll:true});
+}
+function syncADetail(){
+ if(state.variant!=='A'||!state.aDetail||!current())return;const n=current(),r=record(n);
+ $('#ad-study-card').innerHTML=detailStudyHTML(n,r,detailHelpers);
+ $('.ad-mobile-action button').innerHTML=(r.status==='completed'?'查看这次练习':r.draft||r.turns.length?'继续解释':'试着讲一讲')+icon('arrow');
+ $('.ad-history').hidden=!r.turns.length;$('[data-ad-turn-count]').textContent=r.turns.length;
+ $('[data-ad-history]').innerHTML=detailHistoryHTML(r,esc);
 }
 function practiceHTML(n){const r=record(n),last=r.turns.at(-1),question=r.turns.length?n.follow:n.question;
  if(r.status==='completed')return `<div class="practice-header"><span class="eyebrow">本轮练习</span>${icon('check')}</div><div class="finished"><div class="finish-symbol">${icon('check')}</div><h2>这一次思考，留下来了。</h2><p>已保留你的 ${r.turns.length} 次回答${r.hintUsed||r.sourceViewed?'与查看提示的记录':''}。</p><span class="simulation-label">仅为演示状态，不代表已掌握</span>${button('继续看下一条 '+icon('arrow'),'next-after','','primary')}${button('再练一次','retry','','text-button')}</div>`;
@@ -112,13 +142,13 @@ function practiceHTML(n){const r=record(n),last=r.turns.at(-1),question=r.turns.
 function openPractice(){deckController?.pause();const n=current();if(!n)return;if(state.variant==='C'&&matchMedia('(min-width: 1000px)').matches){$('#practice-desk').scrollTop=0;$('#practice-desk textarea')?.focus();return;}
  const d=$('#learning-dialog');d.dataset.presentation=state.variant==='A'?'feed-sheet':'';d.innerHTML=`${state.variant==='A'?'<div class="sheet-grip" aria-hidden="true"><span></span></div>':''}<header class="dialog-header"><span>${state.variant==='A'?'讲一讲 · '+esc(n.topic):esc(n.source)}</span>${button(icon('close'),'close-practice','aria-label="关闭练习"')}</header><div class="dialog-practice">${practiceHTML(n)}</div>`;d.showModal();
  if(state.variant==='A'){document.documentElement.classList.add('practice-open');bindSheetHandle(d,closePractice,reduced);if(!reduced())d.animate([{transform:'translateY(28px)',opacity:.5},{transform:'translateY(0)',opacity:1}],{duration:240,easing:'cubic-bezier(.16,1,.3,1)'});d.querySelector('[data-action="close-practice"]').focus({preventScroll:true});}else d.querySelector('textarea')?.focus();surfaceState();}
-function updatePractice(){const n=current();if(!n)return;const d=$('#learning-dialog');if(d.open)d.querySelector('.dialog-practice').innerHTML=practiceHTML(n);if($('#practice-desk'))$('#practice-desk').innerHTML=practiceHTML(n);surfaceState();}
+function updatePractice(){const n=current();if(!n)return;const d=$('#learning-dialog');if(d.open)d.querySelector('.dialog-practice').innerHTML=practiceHTML(n);if($('#practice-desk'))$('#practice-desk').innerHTML=practiceHTML(n);syncADetail();surfaceState();}
 function closePractice(){if($('#learning-dialog').open)$('#learning-dialog').close();}
-function setFilter(filter){bTransition.cancel();bMemory.scroll=0;closePractice();state.filter=filter;state.reviewIds=notes.filter(n=>n.due&&record(n).status!=='completed').map(n=>n.id);state.index=0;state.detail=false;shell();}
-function switchVariant(delta){bTransition.cancel();closePractice();state.variant=['A','B','C'][(['A','B','C'].indexOf(state.variant)+delta+3)%3];state.detail=false;const u=new URL(location.href);u.searchParams.set('variant',state.variant);history.replaceState({},'',u);shell();}
-function next(delta=1,animate=true,fromDeck=false){if(!current()||(state.variant==='B'&&bTransition.running))return;if(state.variant==='A'&&!fromDeck&&animate){deckController?.step(delta);return;}closePractice();const ids=visibleIds();if(state.index+delta>=ids.length){if(state.filter==='all'){performRefresh();return;}toast('这一组已经看完了');return;}if(state.index+delta<0)return;motion?.cancel();state.index+=delta;renderContent();if(animate&&!reduced()){const el=$('.current-card');if(el)motion=el.animate([{transform:`translateY(${delta>0?60:-60}px)`,opacity:.5},{transform:'translateY(0)',opacity:1}],{duration:220,easing:'cubic-bezier(.16,1,.3,1)'});}surfaceState();}
+function setFilter(filter){state.aDetail=false;state.aDetailId=null;bTransition.cancel();bMemory.scroll=0;closePractice();state.filter=filter;state.reviewIds=notes.filter(n=>n.due&&record(n).status!=='completed').map(n=>n.id);state.index=0;state.detail=false;shell();}
+function switchVariant(delta){state.aDetail=false;state.aDetailId=null;bTransition.cancel();closePractice();state.variant=['A','B','C'][(['A','B','C'].indexOf(state.variant)+delta+3)%3];state.detail=false;const u=new URL(location.href);u.searchParams.set('variant',state.variant);history.replaceState({},'',u);shell();}
+function next(delta=1,animate=true,fromDeck=false){if(state.variant==='A'&&state.aDetail){closeADetail(false);return next(delta,false,true);}if(!current()||(state.variant==='B'&&bTransition.running))return;if(state.variant==='A'&&!fromDeck&&animate){deckController?.step(delta);return;}closePractice();const ids=visibleIds();if(state.index+delta>=ids.length){if(state.filter==='all'){performRefresh();return;}toast('这一组已经看完了');return;}if(state.index+delta<0)return;motion?.cancel();state.index+=delta;renderContent();if(animate&&!reduced()){const el=$('.current-card');if(el)motion=el.animate([{transform:`translateY(${delta>0?60:-60}px)`,opacity:.5},{transform:'translateY(0)',opacity:1}],{duration:220,easing:'cubic-bezier(.16,1,.3,1)'});}surfaceState();}
 function refresh(){if(state.variant==='A'&&deckController){deckController.refresh();return;}performRefresh();}
-function performRefresh(){bTransition.cancel();bMemory.scroll=0;closePractice();state.reviewIds=notes.filter(n=>n.due&&record(n).status!=='completed').map(n=>n.id);state.refreshes++;state.order=nextBatchOrder();state.index=0;shell();toast('已换一批 · 学习记录和草稿已保留');}
+function performRefresh(){state.aDetail=false;state.aDetailId=null;bTransition.cancel();bMemory.scroll=0;closePractice();state.reviewIds=notes.filter(n=>n.due&&record(n).status!=='completed').map(n=>n.id);state.refreshes++;state.order=nextBatchOrder();state.index=0;shell();toast('已换一批 · 学习记录和草稿已保留');}
 function bindGestures(){const surface=$('#gesture-surface');if(!surface)return;let start=null,pulling=false,drag=0;
  surface.addEventListener('pointerdown',e=>{if(e.button!==0||e.target.closest('button,a,input,textarea'))return;start={x:e.clientX,y:e.clientY,id:e.pointerId};drag=0;surface.setPointerCapture(e.pointerId);});
  surface.addEventListener('pointermove',e=>{if(!start)return;const dy=e.clientY-start.y,dx=e.clientX-start.x;if(Math.abs(dx)>Math.abs(dy)&&Math.abs(dx)>20){start=null;return;}drag=dy;pulling=state.index===0&&dy>0;const card=surface.querySelector('.current-card');card.style.transform=`translateY(${pulling?Math.min(120,dy*.45):Math.max(-110,Math.min(110,dy*.55))}px)`;const indicator=$('.pull-indicator');indicator.classList.toggle('visible',pulling);indicator.querySelector('span').textContent=dy>145?'松开，换一批':'下拉换一批';});
@@ -126,10 +156,13 @@ function bindGestures(){const surface=$('#gesture-surface');if(!surface)return;l
  surface.addEventListener('pointerup',end);surface.addEventListener('pointercancel',end);
  surface.addEventListener('wheel',e=>{if(Math.abs(e.deltaY)<Math.abs(e.deltaX))return;e.preventDefault();const now=performance.now();if(now<lockedUntil)return;if(now-wheelTime>200)wheelTotal=0;wheelTime=now;wheelTotal+=e.deltaY;if(Math.abs(wheelTotal)>48){const d=Math.sign(wheelTotal);wheelTotal=0;lockedUntil=now+480;if(state.index===0&&d<0){toast('向下拖动卡片，或点「换一批」刷新');return;}next(d);}}, {passive:false});
 }
-document.addEventListener('input',e=>{if(e.target.matches('textarea[name="answer"]'))record(current()).draft=e.target.value;});
+document.addEventListener('input',e=>{if(e.target.matches('textarea[name="answer"]'))record(current()).draft=e.target.value;if(e.target.matches('textarea[name="reflection"]')){record(current()).reflectionDraft=e.target.value;$('#ad-reflection-state').textContent='草稿已保留在本次预览';}});
 document.addEventListener('submit',e=>{if(e.target.id!=='practice-form')return;e.preventDefault();const n=current(),r=record(n),answer=new FormData(e.target).get('answer').trim();if(!answer)return;r.turns.push({question:r.turns.length?n.follow:n.question,answer,round:r.turns.length,feedback:'preset-demo',hintUsed:r.hintUsed,sourceViewed:r.sourceViewed});r.draft='';r.status='feedback';updatePractice();const container=$('#learning-dialog').open?$('.dialog-practice'):$('#practice-desk');container?.querySelector('.feedback')?.scrollIntoView({block:'nearest'});});
 document.addEventListener('click',e=>{const target=e.target.closest('[data-action]');if(!target)return;const a=target.dataset.action,n=current(),r=n&&record(n);
  if(a==='variant-prev')return switchVariant(-1);if(a==='variant-next')return switchVariant(1);if(a==='filter')return setFilter(target.dataset.filter);if(a==='refresh')return refresh();
+ if(a==='a-detail')return openADetail(e.detail!==0);if(a==='a-detail-back')return closeADetail(e.detail!==0);
+ if(a==='a-detail-save'&&r){r.saved=!r.saved;target.innerHTML=icon('star')+(r.saved?'已收藏':'收藏');target.setAttribute('aria-pressed',r.saved);target.setAttribute('aria-label',r.saved?'取消收藏当前知识':'收藏当前知识');surfaceState();return;}
+ if(a==='a-reflection-save'&&r){r.reflection=r.reflectionDraft.trim();$('#ad-reflection-state').textContent=r.reflection?'已暂存于本次预览':'已清空本次暂存';surfaceState();return;}
  if(a==='state'){deckController?.pause();const d=$('#state-dialog');d.innerHTML=`<header class="dialog-header"><h2>当前演示状态</h2>${button(icon('close'),'close-state','aria-label="关闭状态"')}</header><p>只在本页内存中，重载页面即清空。</p><pre>${esc(JSON.stringify(state,null,2))}</pre>`;d.showModal();return;}
  if(a==='close-state')return $('#state-dialog').close();if(a==='close-source'){return $('#source-dialog').close();}if(a==='close-practice')return closePractice();
  if(a==='open-note')return openBNote(target.dataset.id,target,e.detail!==0);
@@ -143,9 +176,9 @@ document.addEventListener('click',e=>{const target=e.target.closest('[data-actio
  if(a==='finish'&&r.turns.length){r.status='completed';shell();updatePractice();return;}
  if(a==='retry'){r.status='idle';r.turns=[];r.draft='';updatePractice();}
 });
-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&state.variant==='B'&&state.detail&&!document.querySelector('dialog[open]')){e.preventDefault();closeBNote(false);return;}if(e.target.closest('input,textarea,select,[contenteditable="true"]')||document.querySelector('dialog[open]'))return;if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();switchVariant(e.key==='ArrowLeft'?-1:1);}if(e.key==='ArrowUp'||e.key==='ArrowDown'){e.preventDefault();if(state.variant==='B'&&!state.detail){state.detail=true;renderContent();}else next(e.key==='ArrowDown'?1:-1,false);}});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&state.variant==='A'&&state.aDetail&&!document.querySelector('dialog[open]')){e.preventDefault();closeADetail(false);return;}if(e.key==='Escape'&&state.variant==='B'&&state.detail&&!document.querySelector('dialog[open]')){e.preventDefault();closeBNote(false);return;}if(e.target.closest('input,textarea,select,[contenteditable="true"]')||document.querySelector('dialog[open]'))return;if(state.variant==='A'&&state.aDetail&&['ArrowUp','ArrowDown'].includes(e.key))return;if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();switchVariant(e.key==='ArrowLeft'?-1:1);}if(e.key==='ArrowUp'||e.key==='ArrowDown'){e.preventDefault();if(state.variant==='B'&&!state.detail){state.detail=true;renderContent();}else next(e.key==='ArrowDown'?1:-1,false);}});
 $('#source-dialog').addEventListener('close',()=>lastSourceFocus?.isConnected&&lastSourceFocus.focus());
-$('#learning-dialog').addEventListener('close',()=>{document.documentElement.classList.remove('practice-open');$('#learning-dialog').style.transform='';const n=current(),label=$('.current-card .a-compose span');if(n&&label)label.textContent=record(n).draft?'继续刚才的解释…':record(n).turns.length?'回到这次练习…':n.due?'不看原文，还能讲清楚吗？':'用自己的话，讲给朋友听…';});
+$('#learning-dialog').addEventListener('close',()=>{document.documentElement.classList.remove('practice-open');$('#learning-dialog').style.transform='';const n=current(),label=$('.current-card .a-compose span');if(n&&label)label.textContent=record(n).draft?'继续刚才的解释…':record(n).turns.length?'回到这次练习…':n.due?'不看原文，还能讲清楚吗？':'用自己的话，讲给朋友听…';syncADetail();});
 for(const dialog of document.querySelectorAll('dialog'))dialog.addEventListener('click',e=>{if(e.target===dialog){const box=dialog.getBoundingClientRect();if(e.clientX<box.left||e.clientX>box.right||e.clientY<box.top||e.clientY>box.bottom)dialog.close();}});
 shell();
 
