@@ -106,7 +106,7 @@ export function bindImmersiveDeck({ surface, deck, indicator, first, canMove, mo
   surface.addEventListener('wheel',wheel,{passive:false});surface.addEventListener('dblclick',double);
   let lastWidth=surface.clientWidth,lastHeight=surface.clientHeight;
   const resize=new ResizeObserver(()=>{const width=surface.clientWidth,nextHeight=surface.clientHeight;if(width===lastWidth&&nextHeight===lastHeight)return;lastWidth=width;lastHeight=nextHeight;if(gesture||busy){gesture=null;interrupt();resume();}});resize.observe(surface);
-  return { step, refresh:doRefresh, pause(){gesture=null;interrupt();}, dispose(){disposed=true;gesture=null;interrupt();resize.disconnect();surface.removeEventListener('pointerdown',down);surface.removeEventListener('pointermove',drag);surface.removeEventListener('pointerup',up);surface.removeEventListener('pointercancel',up);surface.removeEventListener('wheel',wheel);surface.removeEventListener('dblclick',double);} };
+  return { step, refresh:doRefresh, reset(){gesture=null;interrupt();}, pause(){gesture=null;interrupt();}, dispose(){disposed=true;gesture=null;interrupt();resize.disconnect();surface.removeEventListener('pointerdown',down);surface.removeEventListener('pointermove',drag);surface.removeEventListener('pointerup',up);surface.removeEventListener('pointercancel',up);surface.removeEventListener('wheel',wheel);surface.removeEventListener('dblclick',double);} };
 }
 
 export function bindSheetHandle(dialog,close,reduced){

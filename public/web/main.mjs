@@ -23,7 +23,7 @@ installInputModality(document.documentElement, document);
 
 const navigation = [['home','今日','today'],['spark','学习发现','discover'],['plus','收集与加工','capture'],['book','知识库','library'],['check','学习与错题','study'],['layers','主题学习包','topics'],['network','检索与发现','search'],['chat','问答与输出','output']];
 const state = { boot:null, route:'today', sequence:0, dirty:false, saving:0, readerReturn:'library', note:null, session:null, jobs:[], scroll:new Map() };
-const context={api,state,go,refreshBoot,formModal,submit,watchForm,savedForm,processSource,startStudy,noteCard:note=>noteCard(note)};
+const context={api,state,go,refreshBoot,formModal,submit,watchForm,savedForm,processSource,startStudy,openStudy:noteId=>startStudy(noteId,undefined,{inline:true}),studyRender:{notice:credibilityNotice,feedback:feedbackHTML,completion:completionHTML},noteCard:note=>noteCard(note)};
 const parity=createParity(context),management=createManagement(context,initializeAccent()),focus=createFocus(context);
 const onboarding=createWebOnboarding({api,state,go,refreshBoot,beforeLeave});
 const readerData=createReaderData(api);
@@ -292,7 +292,7 @@ function formModal(title, contents, save, { wide = false } = {}) {
   submit(form,async(values,node)=>{await save(values,node);dirty=false;dialog.close();});
   return dialog;
 }
-async function startStudy(noteId, planId) {
+async function startStudy(noteId, planId, {inline=false}={}) {
   const key=`${noteId}:${planId||''}`;
   const intent=startStudy.intents.get(key)||{requestId:crypto.randomUUID(),pending:null};
   if(intent.pending)return intent.pending;
@@ -301,14 +301,15 @@ async function startStudy(noteId, planId) {
     const sequence=state.sequence;
     const note=await api.get(endpoint('notes',noteId)),readiness=await readReadiness(note);
     if(sequence!==state.sequence)return;
-    if(!readiness.ready){modal(readiness.heading,learningHelp(note,readiness));return;}
+    if(!readiness.ready){if(inline)return {blocked:true,heading:readiness.heading,html:learningHelp(note,readiness)};modal(readiness.heading,learningHelp(note,readiness));return;}
     try {
       const session=await api.post('/api/study/start',{noteId,...(planId?{planId}:{}),requestId:intent.requestId});
-      if(sequence===state.sequence)await go(`study/${session.id}`);
+      if(!inline&&sequence===state.sequence)await go(`study/${session.id}`);
       startStudy.intents.delete(key);
+      return {session};
     } catch(error) {
       if(sequence!==state.sequence)return;
-      if(error.code==='NOTE_UNAVAILABLE'){await prepareLearning(noteId);return;}
+      if(error.code==='NOTE_UNAVAILABLE'){if(inline)return {blocked:true,heading:'材料已变化',html:'<p>请重新打开，核对当前材料后再开始。</p>'};await prepareLearning(noteId);return;}
       throw error;
     }
   })();

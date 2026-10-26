@@ -167,3 +167,50 @@ html.lf-reading-open{overflow:hidden}
 .lf-reading-card>.lf-caption>.lf-caption-copy{display:block;color:inherit}
 .lf-reading-card>.lf-caption>.lf-compose-row{display:flex;gap:10px;align-items:center;color:inherit}
 @media(max-width:760px){.lf-reading-card>.lf-caption{padding:13px 17px 15px}}
+
+/* One unboxed control rail and in-stage panels. The stage is never replaced on a swipe. */
+.lf-flow-rail{position:absolute;right:max(12px,calc((100% - 640px)/2 - 55px));bottom:184px;top:auto;gap:14px;z-index:3}
+.lf-flow-rail[hidden],.lf-overlay[hidden]{display:none}
+.lf-flow-shell .lf-flow-rail button,.lf-flow-shell:has(.lf-current:not([data-card-type=reading])) .lf-flow-rail button{background:transparent!important;border:0!important;box-shadow:none;border-radius:0;filter:none;color:var(--ink);width:40px;min-height:43px;padding:3px;gap:6px}
+.lf-flow-shell .lf-flow-rail button:hover{background:transparent!important}
+.lf-flow-shell:has(.lf-current:not([data-card-type=reading])) .lf-flow-rail{right:max(12px,calc((100% - 640px)/2 - 55px));bottom:184px;top:auto;flex-direction:column;gap:14px}
+.lf-flow-rail span{display:block;font-size:9px}.lf-flow-rail svg{width:24px;height:24px}
+.dark .lf-cover{filter:none}.dark .lf-poster{background:var(--lf-paper);color:var(--lf-ink)}
+.lf-overlay{position:absolute;inset:0;z-index:8;display:grid;justify-items:center;align-items:stretch;background:color-mix(in srgb,var(--ink) 12%,transparent);overflow:clip}
+.lf-panel,.lf-overlay>.lf-panel.lf-detail{width:min(520px,100%);height:100%;min-height:0;display:flex;flex-direction:column;overflow:hidden;background:var(--canvas);color:var(--ink);border:1px solid var(--line);border-radius:10px;position:relative;touch-action:pan-y pinch-zoom}
+.lf-panel[data-expanded=true],.lf-overlay>.lf-panel.lf-detail[data-expanded=true]{width:100%}
+.lf-panel-header{min-height:48px;display:flex;gap:10px;align-items:center;justify-content:space-between;padding:6px 15px;border-bottom:1px solid var(--line);flex:none}
+.lf-panel-header>span{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--secondary)}
+.lf-panel-header button{display:flex;align-items:center;gap:4px;min-height:34px;font-size:12px;flex:none;padding:6px}
+.lf-panel-header svg{width:17px;height:17px}
+.lf-panel-body{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:21px 24px;scrollbar-width:thin}
+.lf-panel-article>h2,.lf-practice-question{font:400 22px/1.6 var(--font-editorial);margin-bottom:12px}
+.lf-panel .lf-full-text{padding:10px 0 15px;font-size:14px;line-height:2}
+.lf-panel-primary{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:39px;padding:9px 14px;border-radius:8px;background:var(--accent);color:var(--canvas);font-size:12px}
+.lf-panel-primary svg{width:16px;height:16px}
+.lf-overlay[data-kind=practice]{align-items:end}
+.lf-overlay[data-kind=practice]>.lf-panel{height:75%;width:min(620px,100%);border-radius:14px 14px 0 0}
+.lf-overlay[data-kind=practice]>.lf-panel[data-expanded=true]{height:100%;width:100%}
+.lf-practice-material{font-size:14px;line-height:1.9;margin-bottom:17px}
+.lf-practice-material p{margin-bottom:12px}
+.lf-practice-form label{display:block;font-size:12px;color:var(--secondary)}
+.lf-practice-form textarea{display:block;width:100%;min-height:82px;max-height:180px;resize:vertical;border:1px solid var(--line);border-radius:8px;background:var(--soft);color:var(--ink);font-size:15px;line-height:1.8;padding:11px;margin:8px 0 10px;user-select:text}
+.lf-practice-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:7px;font-size:11px}
+.lf-practice-actions>button:not(.lf-panel-primary){padding:7px 5px;color:var(--secondary)}
+.lf-practice-disclosure{font-size:10px;color:var(--secondary);line-height:1.7;margin-top:10px}
+.lf-practice-turn{border-bottom:1px solid var(--line);padding:12px 0;margin-bottom:12px;font-size:13px;line-height:1.85}
+.lf-practice-turn>span{font-size:10px;color:var(--secondary)}.lf-practice-turn>p{white-space:pre-wrap;margin:7px 0}
+.lf-practice-hint{padding:10px 12px;border-left:2px solid var(--accent);background:var(--soft);font-size:12px;line-height:1.8;margin-bottom:13px}
+.lf-practice-wait{font-size:12px;line-height:1.85}.lf-practice-wait p{margin:8px 0;color:var(--secondary)}
+.lf-panel-error{color:var(--danger);font-size:12px;line-height:1.8;margin-top:12px}
+@media(max-width:760px){
+ .lf-flow-shell .lf-flow-rail,.lf-flow-shell:has(.lf-current:not([data-card-type=reading])) .lf-flow-rail{right:9px;top:auto;bottom:184px;gap:12px;flex-direction:column}
+ .lf-flow-shell .lf-flow-rail button,.lf-flow-shell:has(.lf-current:not([data-card-type=reading])) .lf-flow-rail button{width:32px;min-height:40px;padding:2px}
+ .lf-flow-shell .lf-flow-rail span{display:block;font-size:8px}.lf-flow-shell .lf-flow-rail svg{width:22px;height:22px}
+ .lf-flow-shell:has(.lf-current[data-card-type=reading]) .lf-flow-rail button{color:#344136}
+ .lf-learning-content{margin-right:51px}
+ .lf-panel-body{padding:18px}.lf-panel-article>h2,.lf-practice-question{font-size:20px}
+}
+
+/* Keep the actual learning paper in the same light palette, with a dark surrounding stage. */
+.dark .lf-learning-content{--canvas:#fbfaf7;--ink:#403b35;--secondary:#827a6d;--line:#e5dfd5;--soft:#f3efe7;--accent:#a57154;--accent-ink:#8f5e3f;color-scheme:light}

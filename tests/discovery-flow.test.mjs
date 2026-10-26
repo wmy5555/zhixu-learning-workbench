@@ -35,15 +35,15 @@ test('content tags come from the current text and supplied metadata, with no HTM
 });
 
 test('deck prepares the visible next card before animation and ignores the initial resize notification',async()=>{
- const original=globalThis.ResizeObserver;let resize,finish,cancelled=0,next='old',shown,moved;
+ const original=globalThis.ResizeObserver;let resize,finish,cancelled=0,next='old',shown,moved,frames;
  globalThis.ResizeObserver=class{constructor(fn){resize=fn;}observe(){}disconnect(){}};
  const listeners=new Map(),screen={classList:{remove(){}}},surface={clientHeight:500,clientWidth:600,closest:()=>screen,addEventListener:(name,fn)=>listeners.set(name,fn),removeEventListener:name=>listeners.delete(name)};
- const deck={style:{},animate(){shown=next;return {finished:new Promise(r=>{finish=r;}),cancel(){cancelled++;}};}};
+ const deck={style:{},animate(value){frames=value;shown=next;return {finished:new Promise(r=>{finish=r;}),cancel(){cancelled++;}};}};
  const indicator={classList:{toggle(){}},querySelector:()=>({textContent:''})};let controller;
  try{
   controller=bindImmersiveDeck({surface,deck,indicator,first:()=>false,canMove:()=>true,prepare:()=>{next='prepared';},move:()=>{moved=next;},refresh(){},like(){},detail(){},reduced:()=>false});
   controller.step(1);assert.equal(shown,'prepared');resize();assert.equal(cancelled,0);finish();await new Promise(setImmediate);
-  assert.equal(moved,shown);assert.equal(cancelled,1);controller.dispose();assert.equal(listeners.size,0);
+  assert.equal(moved,shown);assert.equal(cancelled,1);controller.reset();controller.step(1);assert.equal(frames[0].transform,'translate3d(0px,0px,0)');finish();await new Promise(setImmediate);assert.equal(cancelled,2);controller.dispose();assert.equal(listeners.size,0);
  }finally{if(original===undefined)delete globalThis.ResizeObserver;else globalThis.ResizeObserver=original;}
 });
 
