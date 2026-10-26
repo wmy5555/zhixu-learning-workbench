@@ -1,7 +1,7 @@
 // Independent native implementation of common feed interaction patterns.
 // Research pointers and deliberate differences: README.md, A revision 2.
 let wheelLastEvent = 0, wheelConsumed = false;
-export function bindImmersiveDeck({ surface, deck, indicator, first, canMove, move, refresh, like, detail, reduced }) {
+export function bindImmersiveDeck({ surface, deck, indicator, first, canMove, move, refresh, like, detail, reduced,prepare=()=>{},resume=()=>{} }) {
   let gesture = null, animation = null, disposed = false, busy = false, committing=false, offset = 0, offsetX=0;
   let wheelDistance = 0, frame = 0, pendingOffset = 0, pendingX=0, token = 0;
   const height = () => surface.clientHeight;
@@ -23,10 +23,11 @@ export function bindImmersiveDeck({ surface, deck, indicator, first, canMove, mo
     if(disposed||revision!==token)return;
     paint(target);animation?.cancel();animation=null;busy=false;committing=false;
     surface.closest('.lf-screen').classList.remove('lf-peeking');
-    if(commit)commit();else{paint(0);announce('下拉，换一批',false);}
+    if(commit)commit();else{paint(0);announce('下拉，换一批',false);resume();}
   }
   function step(direction, animate=true) {
     if(disposed||committing)return;if(busy)interrupt();
+    prepare(direction);
     if(!canMove(direction)){settle(0);return;}
     if(!animate){move(direction);return;}
     settle(-direction*height(),()=>move(direction));
@@ -52,7 +53,7 @@ export function bindImmersiveDeck({ surface, deck, indicator, first, canMove, mo
     if(!gesture.axis){
       if(Math.max(Math.abs(dx),Math.abs(dy))<10)return;
       if(Math.abs(dx)>Math.abs(dy)*1.25)gesture.axis='horizontal';
-      else if(Math.abs(dy)>Math.abs(dx)*1.25){const s=gesture.scroller;gesture.axis=s&&s.scrollHeight>s.clientHeight+1&&(dy<0?s.scrollTop+s.clientHeight<s.scrollHeight-1:s.scrollTop>0)?'scroll':'vertical';}
+      else if(Math.abs(dy)>Math.abs(dx)*1.25){const s=gesture.scroller;gesture.axis=s&&s.scrollHeight>s.clientHeight+1&&(dy<0?s.scrollTop+s.clientHeight<s.scrollHeight-1:s.scrollTop>0)?'scroll':'vertical';if(gesture.axis==='vertical')prepare(dy<0?1:-1);}
       else return;
     }
     const dt=time-gesture.lastTime;
@@ -103,7 +104,8 @@ export function bindImmersiveDeck({ surface, deck, indicator, first, canMove, mo
   surface.addEventListener('pointerdown',down);surface.addEventListener('pointermove',drag);
   surface.addEventListener('pointerup',up);surface.addEventListener('pointercancel',up);
   surface.addEventListener('wheel',wheel,{passive:false});surface.addEventListener('dblclick',double);
-  const resize=new ResizeObserver(()=>{if(gesture||busy){gesture=null;interrupt();}});resize.observe(surface);
+  let lastWidth=surface.clientWidth,lastHeight=surface.clientHeight;
+  const resize=new ResizeObserver(()=>{const width=surface.clientWidth,nextHeight=surface.clientHeight;if(width===lastWidth&&nextHeight===lastHeight)return;lastWidth=width;lastHeight=nextHeight;if(gesture||busy){gesture=null;interrupt();resume();}});resize.observe(surface);
   return { step, refresh:doRefresh, pause(){gesture=null;interrupt();}, dispose(){disposed=true;gesture=null;interrupt();resize.disconnect();surface.removeEventListener('pointerdown',down);surface.removeEventListener('pointermove',drag);surface.removeEventListener('pointerup',up);surface.removeEventListener('pointercancel',up);surface.removeEventListener('wheel',wheel);surface.removeEventListener('dblclick',double);} };
 }
 
