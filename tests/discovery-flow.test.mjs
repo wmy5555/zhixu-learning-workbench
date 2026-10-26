@@ -10,7 +10,7 @@ function historyHarness(cards){
  const source=readFileSync(new URL('../public/web/discovery.mjs',import.meta.url),'utf8');
  const between=(start,end)=>source.slice(source.indexOf(start),source.indexOf(end,source.indexOf(start)));
  return vm.runInNewContext(`
-  let queue=cards.slice(0,12),cursor=0,visitedThrough=0,prepared=null,pendingElapsed=null,ended=false,exposure=null,root=null,gridCards=[],gridReady=false,detail=null;
+  let queue=cards.slice(0,12),cursor=0,visitedThrough=0,prepared=null,pendingElapsed=null,ended=false,exposure=null,root=null,gridCards=[],gridReady=false,detail=null;const storyStates=new Map();
   const seen=new Set([cards[0].id]),key=c=>c.id,current=()=>queue[cursor];let reversed=false;
   const ranked=(onlyReading,extra={})=>{const pool=reversed?[...cards].reverse():cards;return pool.filter(c=>!(extra.excludeIds||[]).includes(c.id)).slice(0,extra.limit||12);};
   const rec={observe(){}},getProgress=()=>({submitted:false,grade:null}),endExposure=()=>1500;
@@ -131,5 +131,24 @@ test('page-wide wheel handling leaves long card content scrollable before switch
   wheel();assert.equal(prevented,0);assert.equal(moved,0);
   scroller.scrollTop=500;now+=20;wheel();assert.equal(moved,0,'reaching the edge does not spill the current gesture into the feed');
   now+=200;wheel();assert.equal(moved,1);
+ }finally{controller?.dispose();if(original===undefined)delete globalThis.ResizeObserver;else globalThis.ResizeObserver=original;}
+});
+
+test('the whole feed frame accepts drag and wheel while horizontal motion stays on the story ribbon',t=>{
+ const original=globalThis.ResizeObserver;globalThis.ResizeObserver=class{observe(){}disconnect(){}};
+ let now=4000,started=0,dragged=0,finished=null,vertical=0,sideways=0,captured=false,stopped=false,pointerAllowed=true;t.mock.method(performance,'now',()=>now);
+ const pointer=new Map(),wheel=new Map(),surfaceEvents=new Map(),target={closest:()=>null};
+ const frame={addEventListener:(name,fn)=>pointer.set(name,fn),removeEventListener:name=>pointer.delete(name),setPointerCapture(){captured=true;},hasPointerCapture:()=>captured,releasePointerCapture(){captured=false;}};
+ const surface={clientHeight:500,clientWidth:500,closest:()=>({classList:{remove(){},toggle(){}}}),addEventListener:(name,fn)=>surfaceEvents.set(name,fn),removeEventListener:name=>surfaceEvents.delete(name)};
+ const wheelTarget={addEventListener:(name,fn)=>wheel.set(name,fn),removeEventListener:name=>wheel.delete(name)};
+ const event=(x,y)=>({button:0,target,pointerId:1,pointerType:'touch',clientX:x,clientY:y,preventDefault(){}});let controller;
+ try{
+  controller=bindImmersiveDeck({surface,pointerTarget:frame,pointerEnabled:()=>pointerAllowed,wheelTarget,wheelEnabled:()=>true,horizontal:{start(){started++;},drag:dx=>{dragged=dx;},end:(...args)=>{finished=args;},step:()=>sideways++},deck:{style:{}},indicator:{classList:{toggle(){}},querySelector:()=>({})},first:()=>false,canMove:()=>true,move:()=>{vertical++;controller.reset();},refresh(){},like(){},reduced:()=>true});
+  pointer.get('pointerdown')(event(400,200));now+=16;pointer.get('pointermove')(event(150,203));pointer.get('pointerup')(event(150,203));assert.equal(started,1);assert.equal(dragged,-250);assert.equal(finished[0],-250);assert.equal(finished[2],false);assert.equal(vertical,0);assert.equal(captured,false);
+  pointer.get('click')({detail:1,preventDefault(){},stopImmediatePropagation(){stopped=true;}});assert.equal(stopped,true);
+  pointerAllowed=false;pointer.get('pointerdown')(event(400,200));pointer.get('pointermove')(event(150,200));pointer.get('pointerup')(event(150,200));assert.equal(started,1,'a visible sheet blocks dragging the background ribbon');pointerAllowed=true;
+  now+=300;wheel.get('wheel')({...event(10,10),deltaX:70,deltaY:0,deltaMode:0});assert.equal(sideways,1);assert.equal(vertical,0);
+  now+=300;wheel.get('wheel')({...event(10,10),deltaX:0,deltaY:70,deltaMode:0});assert.equal(vertical,1);
+  controller.dispose();assert.equal(pointer.size,0);assert.equal(wheel.size,0);assert.equal(surfaceEvents.size,0);
  }finally{controller?.dispose();if(original===undefined)delete globalThis.ResizeObserver;else globalThis.ResizeObserver=original;}
 });

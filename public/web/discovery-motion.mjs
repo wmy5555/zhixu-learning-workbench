@@ -1,9 +1,9 @@
 // Independent native implementation of common feed interaction patterns.
 // Research pointers and deliberate differences: README.md, A revision 2.
 let wheelLastEvent = 0, wheelConsumed = false;
-export function bindImmersiveDeck({ surface, deck, indicator, first, canMove, move, refresh, like, detail, reduced,prepare=()=>{},resume=()=>{},wheelTarget=surface,wheelEnabled=()=>true }) {
+export function bindImmersiveDeck({ surface, deck, indicator, first, canMove, move, refresh, like, detail, reduced,prepare=()=>{},resume=()=>{},wheelTarget=surface,wheelEnabled=()=>true,pointerTarget=surface,pointerEnabled=()=>true,horizontal=null }) {
   let gesture = null, animation = null, disposed = false, busy = false, committing=false, offset = 0, offsetX=0;
-  let wheelDistance = 0, frame = 0, pendingOffset = 0, pendingX=0, token = 0;
+  let wheelDistance = 0, frame = 0, pendingOffset = 0, pendingX=0, token = 0,suppressClick=false;
   const height = () => surface.clientHeight;
   const paint = (value,x=0) => { offset = value;offsetX=x; deck.style.transform = `translate3d(${x}px,${value}px,0)`; };
   const queuePaint = (value,x=0) => { pendingOffset = value;pendingX=x; if (!frame) frame = requestAnimationFrame(() => { frame=0; paint(pendingOffset,pendingX); }); };
@@ -38,21 +38,23 @@ export function bindImmersiveDeck({ surface, deck, indicator, first, canMove, mo
     settle(0,refresh,220);
   }
   function down(event){
-    if(event.button!==0||event.target.closest('button,a,input,textarea')||committing)return;
+    suppressClick=false;
+    if(!pointerEnabled(event)||event.button!==0||event.target.closest('button,a,input,textarea')||committing)return;
+    if(event.pointerType==='mouse'&&event.target.closest('[data-story-detail-page]')){if(event.target.closest('.lf-detail')&&!isDetailBlank(event,{ignoreSelection:true}))return;window.getSelection()?.removeAllRanges();}
     if(busy)interrupt();
     event.preventDefault(); // This surface is a draggable graphic; source text remains selectable in its dialog.
     if(gesture){gesture=null;interrupt();return;}
     const time=performance.now();
     const scroller=event.target.closest('[data-feed-scroll]');
     gesture={id:event.pointerId,x:event.clientX,y:event.clientY,lastX:event.clientX,lastY:event.clientY,lastTime:time,velocity:0,vx:0,dx:0,dy:0,axis:null,scroller,scrollTop:scroller?.scrollTop||0};
-    surface.setPointerCapture(event.pointerId);
+    pointerTarget.setPointerCapture(event.pointerId);
   }
   function drag(event){
     if(!gesture||gesture.id!==event.pointerId)return;
     const dx=event.clientX-gesture.x,dy=event.clientY-gesture.y,time=performance.now();
     if(!gesture.axis){
       if(Math.max(Math.abs(dx),Math.abs(dy))<10)return;
-      if(Math.abs(dx)>Math.abs(dy)*1.25)gesture.axis='horizontal';
+      if(Math.abs(dx)>Math.abs(dy)*1.25){gesture.axis='horizontal';horizontal?.start();}
       else if(Math.abs(dy)>Math.abs(dx)*1.25){const s=gesture.scroller;gesture.axis=s&&s.scrollHeight>s.clientHeight+1&&(dy<0?s.scrollTop+s.clientHeight<s.scrollHeight-1:s.scrollTop>0)?'scroll':'vertical';if(gesture.axis==='vertical')prepare(dy<0?1:-1);}
       else return;
     }
@@ -61,6 +63,7 @@ export function bindImmersiveDeck({ surface, deck, indicator, first, canMove, mo
     gesture.dx=dx;
     if(gesture.axis==='scroll'){gesture.scroller.scrollTop=gesture.scrollTop-dy;return;}
     if(gesture.axis==='horizontal'){
+      suppressClick=true;if(horizontal){horizontal.drag(dx);return;}
       surface.closest('.lf-screen').classList.toggle('lf-peeking',dx<0);
       queuePaint(0,dx<0?Math.max(-surface.clientWidth*.65,dx):Math.min(28,dx*.12));return;
     }
@@ -75,7 +78,8 @@ export function bindImmersiveDeck({ surface, deck, indicator, first, canMove, mo
   function up(event){
     if(!gesture||gesture.id!==event.pointerId)return;
     const g=gesture;gesture=null;flush();
-    if(surface.hasPointerCapture(event.pointerId))surface.releasePointerCapture(event.pointerId);
+    if(pointerTarget.hasPointerCapture(event.pointerId))pointerTarget.releasePointerCapture(event.pointerId);
+    if(g.axis==='horizontal'&&horizontal){horizontal.end(g.dx,performance.now()-g.lastTime<100?g.vx:0,event.type==='pointercancel');return;}
     if(event.type==='pointercancel'){settle(0);return;}
     if(g.axis==='horizontal'){
       const flick=performance.now()-g.lastTime<100&&g.vx<-.65&&g.dx<-30;
@@ -90,23 +94,26 @@ export function bindImmersiveDeck({ surface, deck, indicator, first, canMove, mo
     if(enough||flick)step(g.dy<0?1:-1);else settle(0);
   }
   function wheel(event){
-    if(!wheelEnabled(event)||event.ctrlKey||Math.abs(event.deltaX)>Math.abs(event.deltaY))return;
+    if(!wheelEnabled(event)||event.ctrlKey)return;
+    const sideways=Math.abs(event.deltaX)>Math.abs(event.deltaY);
+    if(sideways&&!horizontal)return;
     const scroller=event.target.closest('[data-feed-scroll]');
-    if(scroller&&(event.deltaY>0?scroller.scrollTop+scroller.clientHeight<scroller.scrollHeight-1:scroller.scrollTop>0)){wheelLastEvent=performance.now();wheelConsumed=true;return;}
+    if(!sideways&&scroller&&(event.deltaY>0?scroller.scrollTop+scroller.clientHeight<scroller.scrollHeight-1:scroller.scrollTop>0)){wheelLastEvent=performance.now();wheelConsumed=true;return;}
     event.preventDefault();const time=performance.now(),quiet=time-wheelLastEvent>180;wheelLastEvent=time;
     if(quiet){wheelDistance=0;wheelConsumed=false;}
     if(busy||wheelConsumed)return;
-    const amount=event.deltaY*(event.deltaMode===1?16:event.deltaMode===2?height():1);
+    const amount=(sideways?event.deltaX:event.deltaY)*(event.deltaMode===1?16:event.deltaMode===2?height():1);
     wheelDistance+=amount;
-    if(Math.abs(wheelDistance)>=44){wheelConsumed=true;if(first()&&wheelDistance<0)doRefresh();else step(Math.sign(wheelDistance));}
+    if(Math.abs(wheelDistance)>=44){wheelConsumed=true;if(sideways)horizontal.step(Math.sign(wheelDistance));else if(first()&&wheelDistance<0)doRefresh();else step(Math.sign(wheelDistance));}
   }
-  function double(event){if(!event.target.closest('button,a,input,textarea'))like();}
-  surface.addEventListener('pointerdown',down);surface.addEventListener('pointermove',drag);
-  surface.addEventListener('pointerup',up);surface.addEventListener('pointercancel',up);
+  function double(event){if(!horizontal?.detailOpen&&!event.target.closest('button,a,input,textarea'))like();}
+  function click(event){if(suppressClick&&event.detail){suppressClick=false;event.preventDefault();event.stopImmediatePropagation();}}
+  pointerTarget.addEventListener('pointerdown',down);pointerTarget.addEventListener('pointermove',drag);
+  pointerTarget.addEventListener('pointerup',up);pointerTarget.addEventListener('pointercancel',up);pointerTarget.addEventListener('click',click,true);
   wheelTarget.addEventListener('wheel',wheel,{passive:false});surface.addEventListener('dblclick',double);
   let lastWidth=surface.clientWidth,lastHeight=surface.clientHeight;
   const resize=new ResizeObserver(()=>{const width=surface.clientWidth,nextHeight=surface.clientHeight;if(width===lastWidth&&nextHeight===lastHeight)return;lastWidth=width;lastHeight=nextHeight;if(gesture||busy){gesture=null;interrupt();resume();}});resize.observe(surface);
-  return { step, refresh:doRefresh, reset(){gesture=null;interrupt();}, pause(){gesture=null;interrupt();}, dispose(){disposed=true;gesture=null;interrupt();resize.disconnect();surface.removeEventListener('pointerdown',down);surface.removeEventListener('pointermove',drag);surface.removeEventListener('pointerup',up);surface.removeEventListener('pointercancel',up);wheelTarget.removeEventListener('wheel',wheel);surface.removeEventListener('dblclick',double);} };
+  return { step, refresh:doRefresh, reset(){gesture=null;interrupt();}, pause(){gesture=null;interrupt();}, dispose(){disposed=true;gesture=null;interrupt();resize.disconnect();pointerTarget.removeEventListener('pointerdown',down);pointerTarget.removeEventListener('pointermove',drag);pointerTarget.removeEventListener('pointerup',up);pointerTarget.removeEventListener('pointercancel',up);pointerTarget.removeEventListener('click',click,true);wheelTarget.removeEventListener('wheel',wheel);surface.removeEventListener('dblclick',double);} };
 }
 
 export function bindSheetHandle(dialog,close,reduced){
