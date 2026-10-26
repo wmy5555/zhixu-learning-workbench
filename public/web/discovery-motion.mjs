@@ -117,7 +117,7 @@ export function bindSheetHandle(dialog,close,reduced){
 
 // Original native prototype. Research/version pointers are in README.md.
 export function mountMasonry(list) {
-  const cards=[...list.children];let frame=0,closed=false,lastWidth=0;
+  let cards=[...list.children],frame=0,closed=false,lastWidth=0;
   function layout(){
     frame=0;if(closed||!list.isConnected)return;
     const width=list.clientWidth,columns=width<560?2:width<850?3:4,gap=width<560?14:24;
@@ -126,34 +126,43 @@ export function mountMasonry(list) {
     // Separate width writes, real text/cover measurements, then position writes.
     const sizes=cards.map(card=>card.getBoundingClientRect().height),bottom=Array(columns).fill(0);
     cards.forEach((card,i)=>{const column=bottom.indexOf(Math.min(...bottom));card.style.transform=`translate3d(${column*(cardWidth+gap)}px,${bottom[column]}px,0)`;bottom[column]+=sizes[i]+gap;});
-    list.style.height=`${Math.max(0,...bottom)-gap}px`;list.dataset.columns=String(columns);list.dataset.ready='true';
+    list.style.height=`${Math.max(0,Math.max(...bottom)-gap)}px`;list.dataset.columns=String(columns);list.dataset.ready='true';
   }
   const schedule=()=>{if(!frame)frame=requestAnimationFrame(layout);};
   const resize=new ResizeObserver(entries=>{if(entries.some(entry=>entry.target!==list)){schedule();return;}const width=list.clientWidth;if(Math.abs(width-lastWidth)>.5){lastWidth=width;schedule();}});
   resize.observe(list);cards.forEach(card=>resize.observe(card));layout();
-  return {layout,dispose(){closed=true;resize.disconnect();cancelAnimationFrame(frame);}};
+  return {layout,refresh(){const next=[...list.children];next.filter(card=>!cards.includes(card)).forEach(card=>resize.observe(card));cards=next;layout();},dispose(){closed=true;resize.disconnect();cancelAnimationFrame(frame);}};
+}
+
+export function expansionGeometry(source,target){
+ const scale=Math.max(source.width/target.width,source.height/target.height);
+ const left=source.left-target.left,top=source.top-target.top;
+ const right=Math.max(0,target.width-source.width/scale),bottom=Math.max(0,target.height-source.height/scale);
+ return {scale,left,top,right,bottom,transform:`translate3d(${left}px,${top}px,0) scale(${scale})`,clip:`inset(0px ${right}px ${bottom}px 0px round 12px)`};
 }
 
 export function createSharedCoverTransition(reduced){
-  let cleanup=null,animation=null,revision=0;
-  const cancel=()=>{revision++;animation?.cancel();animation=null;cleanup?.();cleanup=null;document.documentElement.classList.remove('lf-transitioning');};
+  let cleanup=null,animation=null,revision=0,finish=null;
+  const cancel=()=>{revision++;animation?.cancel();animation=null;cleanup?.();cleanup=null;const complete=finish;finish=null;complete?.();};
   return {
     get running(){return Boolean(cleanup);},cancel,
-    async run({from,change,target,after,animate=true}){
-      cancel();const current=revision;
-      const before=from?.getBoundingClientRect();
-      const ghost=from?.cloneNode(true);
-      change();const to=target(),end=to?.getBoundingClientRect();
-      if(!ghost||!before?.width||!end?.width||reduced()||!animate){after?.();return;}
-      ghost.classList.add('lf-flying-cover');ghost.removeAttribute('id');ghost.setAttribute('aria-hidden','true');ghost.inert=true;
-      Object.assign(ghost.style,{position:'fixed',left:`${before.left}px`,top:`${before.top}px`,width:`${before.width}px`,height:`${before.height}px`,margin:'0',zIndex:'100',pointerEvents:'none',transformOrigin:'0 0'});
-      const visibility=to.style.visibility;to.style.visibility='hidden';document.body.append(ghost);
-      cleanup=()=>{ghost.remove();to.style.visibility=visibility;};document.documentElement.classList.add('lf-transitioning');
-      const transform=`translate(${end.left-before.left}px,${end.top-before.top}px) scale(${end.width/before.width},${end.height/before.height})`;
-      animation=ghost.animate([{transform:'translate(0,0) scale(1)'},{transform}],{duration:280,easing:'cubic-bezier(.16,1,.3,1)',fill:'forwards'});
+    async run({from,change,target,after,animate=true,reverse=false}){
+      // Read the rendered frame before cancelling so a rapid return reverses without snapping.
+      const interrupted=reverse&&animation&&from?getComputedStyle(from):null;
+      const start=interrupted?{transform:interrupted.transform,clipPath:interrupted.clipPath}:null;
+      cancel();const current=revision,before=from?.getBoundingClientRect();
+      if(!reverse)change();const to=target(),end=to?.getBoundingClientRect();
+      const complete=()=>{if(reverse)change();after?.();};
+      if(!before?.width||!end?.width||reduced()||!animate){complete();return;}
+      const panel=reverse?from:to,compact=expansionGeometry(reverse?end:before,reverse?before:end);
+      const full={transform:'translate3d(0,0,0) scale(1)',clipPath:'inset(0px 0px 0px 0px round 0px)'};
+      const small={transform:compact.transform,clipPath:compact.clip};
+      const origin=panel.style.transformOrigin;panel.style.transformOrigin='0 0';
+      cleanup=()=>{panel.style.transformOrigin=origin;};finish=complete;
+      animation=panel.animate(reverse?[start||full,small]:[small,full],{duration:280,easing:'cubic-bezier(.16,1,.3,1)',fill:'both'});
       try{await animation.finished;}catch{return;}
       if(current!==revision)return;
-      animation.cancel();animation=null;cleanup();cleanup=null;document.documentElement.classList.remove('lf-transitioning');after?.();
+      animation.cancel();animation=null;cleanup();cleanup=null;finish=null;complete();
     }
   };
 }
@@ -173,9 +182,12 @@ export function bindDetailBack(page,close,reduced){
  const down=e=>{
    if(e.button!==0||!e.isPrimary)return;
    animation?.cancel();page.style.transform='';suppressClick=false;
+   const blank=isDetailBlank(e,{ignoreSelection:true});
+   if(blank)window.getSelection()?.removeAllRanges();
+   // A desktop drag that starts on text belongs to text selection, not swipe-back.
+   if(e.pointerType==='mouse'&&!e.target.closest('button,a,input,textarea,select,summary,[contenteditable],.lf-cover')&&!blank)return;
    start={id:e.pointerId,x:e.clientX,y:e.clientY,locked:false,dx:0};
    // Keep taps, focus and typing intact; a deliberate horizontal drag can start on controls too.
-   if(e.pointerType==='mouse'&&!e.target.closest('button,a,input,textarea,select,summary,[contenteditable]'))e.preventDefault();
  };
  const move=e=>{
    if(start?.id!==e.pointerId)return;
@@ -195,10 +207,26 @@ export function bindDetailBack(page,close,reduced){
    if(e.type!=='pointercancel'&&g.locked&&g.dx>Math.min(90,page.clientWidth*.24)){close(true);return;}
    if(g.locked&&!reduced())animation=page.animate([{transform:from},{transform:'translateX(0)'}],{duration:220,easing:'cubic-bezier(.16,1,.3,1)'});
  };
- const click=e=>{if(suppressClick&&e.detail){suppressClick=false;e.preventDefault();e.stopImmediatePropagation();}};
+ const click=e=>{
+  if(suppressClick&&e.detail){suppressClick=false;e.preventDefault();e.stopImmediatePropagation();return;}
+  if(isDetailBlank(e)){e.preventDefault();e.stopPropagation();close();}
+ };
  const drag=e=>e.preventDefault();
  page.addEventListener('pointerdown',down);page.addEventListener('pointermove',move);
  page.addEventListener('pointerup',up);page.addEventListener('pointercancel',up);
  page.addEventListener('click',click,true);page.addEventListener('dragstart',drag);
  return ()=>{animation?.cancel();page.classList.remove('lf-dragging');page.removeEventListener('pointerdown',down);page.removeEventListener('pointermove',move);page.removeEventListener('pointerup',up);page.removeEventListener('pointercancel',up);page.removeEventListener('click',click,true);page.removeEventListener('dragstart',drag);};
+}
+
+export function isDetailBlank(event,{ignoreSelection=false}={}){
+ const target=event.target;
+ if(!target?.closest('.lf-detail')||target.closest('button,a,input,textarea,select,label,summary,[contenteditable],img,picture,video,audio,canvas,.lf-cover'))return false;
+ const selection=window.getSelection();if(!ignoreSelection&&selection&&!selection.isCollapsed)return false;
+ // Text line boxes protect reading and selection; block padding and gutters remain blank.
+ const walker=document.createTreeWalker(target,NodeFilter.SHOW_TEXT),range=document.createRange();
+ for(let node=walker.nextNode();node;node=walker.nextNode()){
+  if(!node.textContent.trim())continue;range.selectNodeContents(node);
+  if([...range.getClientRects()].some(rect=>event.clientX>=rect.left&&event.clientX<=rect.right&&event.clientY>=rect.top&&event.clientY<=rect.bottom))return false;
+ }
+ return true;
 }
