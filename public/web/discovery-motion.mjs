@@ -1,7 +1,7 @@
 // Independent native implementation of common feed interaction patterns.
 // Research pointers and deliberate differences: README.md, A revision 2.
 let wheelLastEvent = 0, wheelConsumed = false;
-export function bindImmersiveDeck({ surface, deck, indicator, first, canMove, move, refresh, like, detail, reduced,prepare=()=>{},resume=()=>{} }) {
+export function bindImmersiveDeck({ surface, deck, indicator, first, canMove, move, refresh, like, detail, reduced,prepare=()=>{},resume=()=>{},wheelTarget=surface,wheelEnabled=()=>true }) {
   let gesture = null, animation = null, disposed = false, busy = false, committing=false, offset = 0, offsetX=0;
   let wheelDistance = 0, frame = 0, pendingOffset = 0, pendingX=0, token = 0;
   const height = () => surface.clientHeight;
@@ -90,7 +90,7 @@ export function bindImmersiveDeck({ surface, deck, indicator, first, canMove, mo
     if(enough||flick)step(g.dy<0?1:-1);else settle(0);
   }
   function wheel(event){
-    if(event.ctrlKey||Math.abs(event.deltaX)>Math.abs(event.deltaY))return;
+    if(!wheelEnabled(event)||event.ctrlKey||Math.abs(event.deltaX)>Math.abs(event.deltaY))return;
     const scroller=event.target.closest('[data-feed-scroll]');
     if(scroller&&(event.deltaY>0?scroller.scrollTop+scroller.clientHeight<scroller.scrollHeight-1:scroller.scrollTop>0)){wheelLastEvent=performance.now();wheelConsumed=true;return;}
     event.preventDefault();const time=performance.now(),quiet=time-wheelLastEvent>180;wheelLastEvent=time;
@@ -103,10 +103,10 @@ export function bindImmersiveDeck({ surface, deck, indicator, first, canMove, mo
   function double(event){if(!event.target.closest('button,a,input,textarea'))like();}
   surface.addEventListener('pointerdown',down);surface.addEventListener('pointermove',drag);
   surface.addEventListener('pointerup',up);surface.addEventListener('pointercancel',up);
-  surface.addEventListener('wheel',wheel,{passive:false});surface.addEventListener('dblclick',double);
+  wheelTarget.addEventListener('wheel',wheel,{passive:false});surface.addEventListener('dblclick',double);
   let lastWidth=surface.clientWidth,lastHeight=surface.clientHeight;
   const resize=new ResizeObserver(()=>{const width=surface.clientWidth,nextHeight=surface.clientHeight;if(width===lastWidth&&nextHeight===lastHeight)return;lastWidth=width;lastHeight=nextHeight;if(gesture||busy){gesture=null;interrupt();resume();}});resize.observe(surface);
-  return { step, refresh:doRefresh, reset(){gesture=null;interrupt();}, pause(){gesture=null;interrupt();}, dispose(){disposed=true;gesture=null;interrupt();resize.disconnect();surface.removeEventListener('pointerdown',down);surface.removeEventListener('pointermove',drag);surface.removeEventListener('pointerup',up);surface.removeEventListener('pointercancel',up);surface.removeEventListener('wheel',wheel);surface.removeEventListener('dblclick',double);} };
+  return { step, refresh:doRefresh, reset(){gesture=null;interrupt();}, pause(){gesture=null;interrupt();}, dispose(){disposed=true;gesture=null;interrupt();resize.disconnect();surface.removeEventListener('pointerdown',down);surface.removeEventListener('pointermove',drag);surface.removeEventListener('pointerup',up);surface.removeEventListener('pointercancel',up);wheelTarget.removeEventListener('wheel',wheel);surface.removeEventListener('dblclick',double);} };
 }
 
 export function bindSheetHandle(dialog,close,reduced){
