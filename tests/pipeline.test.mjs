@@ -63,7 +63,7 @@ function orchestrationAI({ researchFailure = false } = {}) {
             citationIds: [state.answerId],
           }) };
         }
-        if (input.prompt.includes('把有限材料组织为2–5个学习包')) {
+        if (input.prompt.includes('"packages"') && input.prompt.includes('材料摘要：')) {
           return { text: JSON.stringify({ packages: [{
             title: '编排测试学习包',
             problem: '验证引用范围',

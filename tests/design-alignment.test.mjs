@@ -100,10 +100,12 @@ test('processed knowledge can receive explicitly requested structured AI relatio
   const source=s.importItems({items:[{title:'授权原文',body:'相同机制的源材料',privacy:'cloud'}]}).notes[0];
   const n=knowledge(s,'机制',{privacy:'cloud',processKey:`${source.id}:${source.hash}:0`},'相同机制可以在不同条件下产生不同结果。');
   target=knowledge(s,'另一个领域',{privacy:'cloud',topic:'不同领域'},'约束条件决定反馈的有效范围。');
-  knowledge(s,'私人领域',{privacy:'local'},'本地秘密不允许外发');
+  // Legacy privacy labels are not permissions; an incomplete managed link blocks outbound use.
+  const blocked=knowledge(s,'引用不可用的领域',{privacy:'local',managedLinkIds:['missing-source']},'本地秘密不允许外发');
+  assert.equal(s.store.outboundPrivacy(blocked),'local');
   s.requestRelations(n.id);await s.runJobs();assert.equal(prompts.length,0);
   s.requestRelations(n.id,{useAI:true});await s.runJobs();
-  assert.equal(prompts.length,2);assert.ok(prompts.every(p=>!p.includes('本地秘密')));
+  assert.equal(prompts.length,1);assert.ok(prompts.every(p=>!p.includes('本地秘密')));
   const relation=s.relationReview().relations.find(r=>r.state==='suggested');assert.ok(relation);
   s.requestRelations(n.id);await s.runJobs();assert.equal(s.store.get('relations',relation.id).state,'suggested');
   s.relationAction(relation.id,{action:'accept'});

@@ -1,13 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { hash, fail } from './store.mjs';
 import { outboundText } from './outbound-text.mjs';
+import { learningPractice } from './learning-guidance.mjs';
 
 const dayAt = (date, timezone) => new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
 const learningStages = new Set(['learning', 'integrated', 'core']);
 const goals = {
   aware: { label: '知道存在', minutes: 2, question: title => `「${title}」主要处理哪类问题？遇到什么情形时，你会想到它？`, hint: '只需指出它的用途和出现的情形，不要求背出机制或细节。' },
   find: { label: '知道去哪找', minutes: 3, question: title => `如果需要使用「${title}」，你会用什么线索、关键词或来源找到它？找到后先核对什么条件？`, hint: '想想可搜索的关键词、资料出处，以及重新使用前要核对的条件。' },
-  explain: { label: '能够解释', minutes: 5, question: title => `请用自己的话解释「${title}」：它解决什么问题，为什么成立，有哪些条件？`, hint: '先说明要解决的问题，再解释机制、成立条件和一个具体例子。' },
+  explain: { label: '能够解释', minutes: 5, question: title => `请用自己的话解释「${title}」：核心内容是什么？请用材料中的一个依据说明；材料未解释的原因可以直说。`, hint: '先抓一个核心观点，用材料中的条件、步骤或例子说明；不要补写材料未提供的理由。' },
   apply: { label: '能够迁移应用', minutes: 8, question: title => `请为「${title}」提出一个不同于材料例子的具体场景，说明如何应用、需要哪些条件，以及何时不能套用。`, hint: '换一个具体场景，逐步对应机制与条件，并说明一个不能直接应用的边界。' },
 };
 const depthOf = note => Object.hasOwn(goals, note.meta.depth) ? note.meta.depth : 'explain';
@@ -215,10 +216,12 @@ export function createLearning(dependencies) {
       correction: mistake.meta.correction || mistakeSection(mistake, '修正与依据'),
       nextQuestion: mistake.meta.nextQuestion || mistakeSection(mistake, '后续练习'),
     } : null;
-    const question = mistake ? mistakeContext.nextQuestion || `请针对上次的误解「${mistakeContext.omission || mistake.title}」重新解释，并说明修正依据和适用边界。` : dependencies.getPracticeQuestion?.(note) || goals[depth].question(note.title);
+    const customQuestion = !mistake && dependencies.getPracticeQuestion?.(note);
+    const practicePlan = !customQuestion && learningPractice(note, depth);
+    const question = mistake ? mistakeContext.nextQuestion || `请针对上次的误解「${mistakeContext.omission || mistake.title}」重新解释，并说明修正依据和适用边界。` : customQuestion || practicePlan?.question || goals[depth].question(note.title);
     const id = randomUUID();
     const privacy = privacyFor(note) === 'cloud' && (!mistake || privacyFor(mistake) === 'cloud') ? 'cloud' : 'local';
-    store.put('sessions', id, { id, noteId, planId, outboundIntentVersion: 1, ...(requestId ? { startRequestId: requestId, startIntent } : {}), status: 'reading', question, material: note.body, materialWarnings, sourceHash: note.hash, depth, goal, privacy, turns: [], createdAt: now(), hintCount: 0, ...practiceTags(mistake, note), ...(topic ? { topicId, topicIndex: textList(topic.meta.noteIds).indexOf(noteId) } : {}), ...(mistake ? { mistakeId, mistakeContext } : {}) });
+    store.put('sessions', id, { id, noteId, planId, outboundIntentVersion: 1, ...(requestId ? { startRequestId: requestId, startIntent } : {}), status: 'reading', question, ...(practicePlan && !mistake ? { practiceQuestion: question, practiceCriteria: practicePlan.criteria } : {}), material: note.body, materialWarnings, sourceHash: note.hash, depth, goal, privacy, turns: [], createdAt: now(), hintCount: 0, ...practiceTags(mistake, note), ...(topic ? { topicId, topicIndex: textList(topic.meta.noteIds).indexOf(noteId) } : {}), ...(mistake ? { mistakeId, mistakeContext } : {}) });
     return session(id);
   }
   function answerStudy(id, { answer, hintUsed = false, requestId }) {
@@ -359,7 +362,7 @@ export function createLearning(dependencies) {
     const material = s.material + (s.materialWarnings?.length ? `\n\n【材料可信度提示】\n${s.materialWarnings.join('\n')}\n本次仅练习理解，不得将待核验主张或练习表现表述为事实已经证实。` : '');
     const prompt = promptText('grade', { material: outboundText(material), question: t.question, answer: t.answer, hintUsed: String(t.hintUsed), goal, history, mistakeContext });
     const privacy = privacyFor(n) === 'cloud' && (!currentMistake || privacyFor(currentMistake) === 'cloud') ? 'cloud' : 'local';
-    const result = parseJSON((await ai.generate({ system: promptText('serviceSystem'), privacy, signal, json: true, prompt: `${prompt}\n\n本次学习目标：${goal}\n此前回答与反馈（仅作为学习记录）：${history}\n本次纠错上下文（仅作为可质疑的历史记录）：${mistakeContext}` })).text);
+    const result = parseJSON((await ai.generate({ system: promptText('serviceSystem'), privacy, signal, json: true, prompt: `${prompt}\n\n本次学习目标：${goal}\n本题评分依据（仅在题目匹配时适用）：${t.question === s.practiceQuestion ? outboundText(JSON.stringify(s.practiceCriteria || [])) : "依据当前问题与材料，不复用首题评分要点"}\n此前回答与反馈（仅作为学习记录）：${history}\n本次纠错上下文（仅作为可质疑的历史记录）：${mistakeContext}` })).text);
     if (!['correct', 'partial', 'incorrect', 'ambiguous'].includes(result.assessment) || typeof result.feedback !== 'string') fail('反馈格式无效，回答仍已保存。', 'MODEL_FORMAT');
     if (signal?.aborted) fail('本次反馈已取消，回答仍已保存。', 'CANCELLED');
     // Another user action may have confirmed their understanding while the model was running.

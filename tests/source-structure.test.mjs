@@ -91,7 +91,9 @@ test('saved extraction templates receive the structure contract in the same call
     const detail = s.readPublicNote(result.notes[0].id);
     assert.equal(calls.length, 1);
     assert.match(calls[0].system, /保留用户自定义系统说明.*\n.*同一次回答.*hierarchy.*sourceExcerpt/s);
-    assert.equal(calls[0].prompt, `用户保存的旧拆解提示 当前资料 ${count}`);
+    const [rendered, policy] = calls[0].prompt.split('\n\n学习单元约定：');
+    assert.equal(rendered, `用户保存的旧拆解提示 当前资料 ${count}`);
+    assert.match(policy, /问题与要点必须能由本项body回答/);
     assert.equal(detail.children.length, count); assert.equal(detail.structure.state, 'ready');
     assert.equal(detail.structure.hierarchy.length, count);
     if (count > 1) assert.equal(detail.structure.edges[0].to, detail.children.at(-1).id);

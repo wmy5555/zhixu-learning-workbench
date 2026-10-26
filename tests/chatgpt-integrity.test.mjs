@@ -223,7 +223,7 @@ test('status separates receiver and MCP build identities and reports the actuall
   t.after(async () => { await client.close(); await server.close(); });
   const tools = await client.listTools(), status = (await client.callTool({ name: 'get_zhixu_status', arguments: {} })).structuredContent;
   assert.equal(status.canRead, false); assert.equal(status.saveVerificationVersion, 1);
-  assert.match(status.build.sha256, /^[a-f0-9]{64}$/); assert.equal(status.build.version, '0.1.0');
+  assert.match(status.build.sha256, /^[a-f0-9]{64}$/); assert.equal(status.build.version, JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
   assert.equal(status.mcp.build.sha256, status.build.sha256);
   assert.deepEqual(status.mcp.toolNames.toSorted(), tools.tools.map(tool => tool.name).toSorted());
   assert.deepEqual(status.toolNames.toSorted(), status.mcp.toolNames.toSorted());

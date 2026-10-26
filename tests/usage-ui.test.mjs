@@ -110,6 +110,16 @@ test('received-result recovery is local, prevents double clicks, and practice ca
   assert.match(practice.textContent, /请返回正式库/);
 });
 
+test('lab continuation needs a checked choice and never submits a cost or retries the original task', async () => {
+  const calls=[], app=browser();let allowed=false;
+  const options={load:async()=>report(),settings,save:async()=>{},loadRecovery:async()=>({pending:[{id:'unknown-lab',phase:'unknown',canContinue:true,newRequestsAllowed:allowed}]}),recoverCall:async(id,input)=>{calls.push(plain([id,input]));allowed=true;}};
+  const panel=await app.createUsagePanel(options), button=findButton(panel,'保留未知费用，继续其他请求'), check=control(panel,'allowUnknownCost');
+  assert.equal(button.disabled,true);await click(button);assert.equal(calls.length,0);
+  check.checked=true;check.events.change();assert.equal(button.disabled,false);check.checked=false;check.events.change();assert.equal(button.disabled,true);
+  check.checked=true;check.events.change();await click(button);assert.equal(calls.length,1);assert.equal(calls[0][1].action,'continue');assert.equal(calls[0][1].acknowledgeUnknownCost,true);assert.equal(Object.hasOwn(calls[0][1],'cost'),false);assert.match(panel.textContent,/费用仍待核对/);
+  const normal=await app.createUsagePanel({...options,loadRecovery:async()=>({pending:[{id:'other',phase:'unknown'}]})});assert.equal(findButton(normal,'保留未知费用，继续其他请求'),undefined);
+});
+
 test('dashboard labels incomplete costs, renders model names as text and saves only cost settings', async () => {
   const app = browser(), saves = [], requests = [];
   const panel = await app.createUsagePanel({ load: async query => { requests.push(query); return report(); }, settings, save: async data => saves.push(data) });

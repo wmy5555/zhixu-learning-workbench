@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import {createClient} from '../public/web/api.mjs';
+import {createReaderData} from '../public/web/reader-data.mjs';
 const source=fs.readFileSync(new URL('../public/web/main.mjs',import.meta.url),'utf8');
 function harness(){
  const counts={library:0,bind:0,loading:0},context={version:0,revision:0};
@@ -10,6 +11,7 @@ function harness(){
  const state={route:'today',sequence:0,dirty:false,saving:0,scroll:new Map()},window={scrollY:0,scrollTo({top}){this.scrollY=top;},dispatchEvent(){}};
  const page=async()=>({html:'reader'});
  const sandbox={state,window,document:{documentElement:{classList:{toggle(){},remove(){}}}},history:{pushState(){},replaceState(){}},matchMedia:()=>({matches:true}),CustomEvent:class{},api:{getContext:()=>context,get:async()=>({})},onboarding:{travelling:false,prepareRoute:async()=>{}},focus:{capture(){},mount(){}},shell(){},$:()=>main,$$:()=>[],notify(){},confirm:async()=>true,empty:(_title,message)=>{throw Error(message);},btn(){},link(){},springEnter(){},parity:{library:async()=>{counts.library++;return {html:'library',bind(){counts.bind++;}};}},management:{},readPage:page};
+ sandbox.readerData=createReaderData(sandbox.api);
  for(const name of ['todayPage','capturePage','editPage','studyPage','topicsPage','outputPage','settingsPage'])sandbox[name]=page;
  vm.createContext(sandbox);vm.runInContext(source.slice(source.indexOf('let stopStudyFeedback'),source.indexOf('function watchForm'))+';globalThis.goPage=go;globalThis.refresh=refreshBoot;',sandbox);
  return {sandbox,counts,context,main,window};
