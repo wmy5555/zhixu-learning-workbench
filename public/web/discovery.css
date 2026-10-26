@@ -259,6 +259,7 @@ html.lf-reading-open{overflow:hidden}
 .lf-inline-body .lf-full-text{padding:0;font-size:15px;line-height:1.95}
 .lf-inline-body .lf-panel-primary{margin-top:24px}
 .lf-flow-shell[data-reading-detail=true] .lf-flow-position,.lf-flow-shell[data-reading-detail=true] .lf-reason{visibility:hidden}
+.lf-page .lf-flow-shell:has(.lf-current) .lf-flow-rail{top:50%;bottom:auto;transform:translate3d(0,-50%,0);transition:none}
 .lf-flow-rail svg{transform-origin:50% 55%;transition:color 140ms ease,fill 140ms ease}
 .lf-flow-rail button:active svg{transform:scale(.86)}
 .lf-flow-shell .lf-flow-rail button.on[data-feed-action=like]{color:#bd5772}

@@ -118,19 +118,21 @@ test('fullscreen wheel scope shares one gesture gate across the page and release
  }finally{controller?.dispose();if(original===undefined)delete globalThis.ResizeObserver;else globalThis.ResizeObserver=original;}
 });
 
-test('page-wide wheel handling leaves long card content scrollable before switching cards',t=>{
+test('wheel scrolling inside an overflowing card never turns the feed, including fresh gestures at either edge',t=>{
  const original=globalThis.ResizeObserver;globalThis.ResizeObserver=class{observe(){}disconnect(){}};
  let now=2000,moved=0,prevented=0;t.mock.method(performance,'now',()=>now);
  const scroller={scrollTop:0,clientHeight:200,scrollHeight:700},listeners=new Map();
  const surface={clientHeight:500,clientWidth:600,closest:()=>({classList:{remove(){}}}),addEventListener(){},removeEventListener(){}};
  const wheelTarget={addEventListener:(name,fn)=>listeners.set(name,fn),removeEventListener:name=>listeners.delete(name)};
  const indicator={classList:{toggle(){}},querySelector:()=>({textContent:''})};let controller;
- const wheel=()=>listeners.get('wheel')({target:{closest:()=>scroller},deltaY:60,deltaX:0,deltaMode:0,preventDefault(){prevented++;}});
+ const wheel=(extra={})=>listeners.get('wheel')({target:{closest:()=>scroller},deltaY:60,deltaX:0,deltaMode:0,preventDefault(){prevented++;},...extra});
  try{
   controller=bindImmersiveDeck({surface,wheelTarget,deck:{style:{}},indicator,first:()=>false,canMove:()=>true,move:()=>{moved++;controller.reset();},refresh(){},like(){},reduced:()=>true});
   wheel();assert.equal(prevented,0);assert.equal(moved,0);
   scroller.scrollTop=500;now+=20;wheel();assert.equal(moved,0,'reaching the edge does not spill the current gesture into the feed');
-  now+=200;wheel();assert.equal(moved,1);
+  now+=200;wheel();assert.equal(moved,0,'a new gesture at the bottom must still belong to the card');
+  scroller.scrollTop=0;now+=200;wheel({deltaY:-60});assert.equal(moved,0);assert.equal(prevented,0);
+  now+=200;wheel({target:{closest:()=>null}});assert.equal(moved,1,'a fresh gesture outside the card can still turn the feed');
  }finally{controller?.dispose();if(original===undefined)delete globalThis.ResizeObserver;else globalThis.ResizeObserver=original;}
 });
 
@@ -151,4 +153,22 @@ test('the whole feed frame accepts drag and wheel while horizontal motion stays 
   now+=300;wheel.get('wheel')({...event(10,10),deltaX:0,deltaY:70,deltaMode:0});assert.equal(vertical,1);
   controller.dispose();assert.equal(pointer.size,0);assert.equal(wheel.size,0);assert.equal(surfaceEvents.size,0);
  }finally{controller?.dispose();if(original===undefined)delete globalThis.ResizeObserver;else globalThis.ResizeObserver=original;}
+});
+
+test('dragging an overflowing card at either edge stays inside it, while the frame and short cards can advance',()=>{
+ const original=globalThis.ResizeObserver;globalThis.ResizeObserver=class{observe(){}disconnect(){}};
+ const originalFrame=globalThis.requestAnimationFrame,originalCancel=globalThis.cancelAnimationFrame;globalThis.requestAnimationFrame=()=>1;globalThis.cancelAnimationFrame=()=>{};
+ const listeners=new Map();let top=0,moved=0,refreshed=0,controller;
+ const scroller={clientHeight:200,scrollHeight:700,get scrollTop(){return top;},set scrollTop(value){top=Math.max(0,Math.min(this.scrollHeight-this.clientHeight,value));}};
+ const target={closest:selector=>selector==='[data-feed-scroll]'?scroller:null},outside={closest:()=>null};
+ const surface={clientHeight:500,clientWidth:500,closest:()=>({classList:{remove(){}}}),addEventListener:(name,fn)=>listeners.set(name,fn),removeEventListener:name=>listeners.delete(name),setPointerCapture(){},hasPointerCapture:()=>true,releasePointerCapture(){}};
+ const event=(node,y)=>({target:node,button:0,pointerType:'mouse',pointerId:1,clientX:100,clientY:y,preventDefault(){}});
+ const drag=(node,delta)=>{listeners.get('pointerdown')(event(node,200));listeners.get('pointermove')(event(node,200+delta));listeners.get('pointerup')(event(node,200+delta));};
+ try{
+  controller=bindImmersiveDeck({surface,deck:{style:{}},indicator:{classList:{toggle(){}},querySelector:()=>({})},first:()=>true,canMove:()=>true,move:()=>{moved++;controller.reset();},refresh:()=>refreshed++,like(){},reduced:()=>true});
+  drag(target,180);assert.equal(top,0);assert.equal(moved,0);assert.equal(refreshed,0);
+  top=500;drag(target,-180);assert.equal(top,500);assert.equal(moved,0);
+  drag(outside,-180);assert.equal(moved,1);
+  scroller.scrollHeight=200;top=0;drag(target,-180);assert.equal(moved,2);
+ }finally{controller?.dispose();if(original===undefined)delete globalThis.ResizeObserver;else globalThis.ResizeObserver=original;if(originalFrame===undefined)delete globalThis.requestAnimationFrame;else globalThis.requestAnimationFrame=originalFrame;if(originalCancel===undefined)delete globalThis.cancelAnimationFrame;else globalThis.cancelAnimationFrame=originalCancel;}
 });

@@ -55,7 +55,7 @@ export function bindImmersiveDeck({ surface, deck, indicator, first, canMove, mo
     if(!gesture.axis){
       if(Math.max(Math.abs(dx),Math.abs(dy))<10)return;
       if(Math.abs(dx)>Math.abs(dy)*1.25){gesture.axis='horizontal';horizontal?.start();}
-      else if(Math.abs(dy)>Math.abs(dx)*1.25){const s=gesture.scroller;gesture.axis=s&&s.scrollHeight>s.clientHeight+1&&(dy<0?s.scrollTop+s.clientHeight<s.scrollHeight-1:s.scrollTop>0)?'scroll':'vertical';if(gesture.axis==='vertical')prepare(dy<0?1:-1);}
+      else if(Math.abs(dy)>Math.abs(dx)*1.25){const s=gesture.scroller;gesture.axis=s&&s.scrollHeight>s.clientHeight+1?'scroll':'vertical';if(gesture.axis==='vertical')prepare(dy<0?1:-1);}
       else return;
     }
     const dt=time-gesture.lastTime;
@@ -98,7 +98,7 @@ export function bindImmersiveDeck({ surface, deck, indicator, first, canMove, mo
     const sideways=Math.abs(event.deltaX)>Math.abs(event.deltaY);
     if(sideways&&!horizontal)return;
     const scroller=event.target.closest('[data-feed-scroll]');
-    if(!sideways&&scroller&&(event.deltaY>0?scroller.scrollTop+scroller.clientHeight<scroller.scrollHeight-1:scroller.scrollTop>0)){wheelLastEvent=performance.now();wheelConsumed=true;return;}
+    if(!sideways&&scroller&&scroller.scrollHeight>scroller.clientHeight+1){wheelLastEvent=performance.now();wheelConsumed=true;return;}
     event.preventDefault();const time=performance.now(),quiet=time-wheelLastEvent>180;wheelLastEvent=time;
     if(quiet){wheelDistance=0;wheelConsumed=false;}
     if(busy||wheelConsumed)return;

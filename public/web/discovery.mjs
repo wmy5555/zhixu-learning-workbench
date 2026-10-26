@@ -107,7 +107,6 @@ export function createDiscovery(ctx){
  }
  function hydrateStoryDetail(element){const target=element.querySelector('[data-story-text]');if(!target||target.dataset.loaded)return;const c=cards.find(card=>card.id===element.closest('[data-card-id]').dataset.cardId);if(c){target.innerHTML=markdown(c.body,{prefix:`story-${c.noteId}`}).html;target.dataset.loaded='true';}}
  function storyChanged({detail:opened,key:id}){if(!root)return;root.querySelector('.lf-flow-shell').dataset.readingDetail=String(opened);const rail=root.querySelector('.lf-flow-rail');rail.hidden=ended||opened;
-  if(!opened){const caption=root.querySelector('.lf-current .lf-story-page:not([aria-hidden]) .lf-caption');if(caption)rail.style.bottom=`${caption.getBoundingClientRect().height+16}px`;}
   if(opened){if(detailExposure!==id){assist(current());endExposure();detailExposure=id;}}else{detailExposure=null;if(!panels?.open&&!exposure&&!ended)beginExposure(current());}
  }
  function repaintHeader(){const holder=root.querySelector('.lf-header');holder.innerHTML=header();}
@@ -147,15 +146,14 @@ export function createDiscovery(ctx){
   if(name==='lesson-prev'){p.page=Math.max(0,p.page-1);}
   else if(name==='lesson-next'){p.page=Math.min(c.pages.length-1,p.page+1);}
   else if(name==='lesson-complete'){p.completed=true;rec.observe(c,{type:'lesson-complete'});future();}
-  else if(name==='quiz-select'&&!p.submitted){p.selected=control.dataset.option;}
-  else if(name==='quiz-submit'&&!p.submitted&&c.options.some(o=>o.id===p.selected)){const attempt={selected:p.selected,correct:p.selected===c.correctOptionId,firstAttempt:p.attempts.length===0,assisted:p.assisted};p.first||={...attempt};p.attempts.push(attempt);p.submitted=true;rec.observe(c,{type:'quiz-result',...attempt,attempt:c.attempt||0});if(!attempt.correct)rec.observe(c,{type:'open-material'});future();}
+  else if(name==='quiz-select'&&!p.submitted&&c.options.some(o=>o.id===control.dataset.option)){p.selected=control.dataset.option;const attempt={selected:p.selected,correct:p.selected===c.correctOptionId,firstAttempt:p.attempts.length===0,assisted:p.assisted};p.first||={...attempt};p.attempts.push(attempt);p.submitted=true;rec.observe(c,{type:'quiz-result',...attempt,attempt:c.attempt||0});if(!attempt.correct)rec.observe(c,{type:'open-material'});future();}
   else if(name==='quiz-retry'){p.selected=null;p.submitted=false;p.assisted=true;}
   else if(name==='flash-reveal'&&!p.revealed){p.attempt=p.draft.trim();p.revealed=true;}
   else if(name==='flash-study'&&!p.revealed){p.attempt=p.draft.trim();p.revealed=true;p.assisted=true;rec.observe(c,{type:'open-material'});}
   else if(name==='flash-rate'&&p.revealed&&!p.grade&&['again','hard','good','easy'].includes(control.dataset.grade)&&(!p.assisted||control.dataset.grade==='again')){p.grade=control.dataset.grade;rec.observe(c,{type:'flash-result',grade:p.grade,assisted:p.assisted,firstAttempt:true,attempt:c.attempt||0});if(p.grade==='again')rec.observe(c,{type:'open-material'});p.receipt=({again:'先补上解释，再隔开内容试一次',hard:'记下这次费力回忆，稍后再试',good:'这次想起了，之后再间隔复习',easy:'这次很轻松，之后拉开复习间隔'})[p.grade];future();}
   else return;
   mountContent({updateCard:true});
-  const host=root.querySelector('.lf-current');let focusTarget;if(name==='quiz-select')focusTarget=[...host.querySelectorAll('[data-option]')].find(b=>b.dataset.option===p.selected);else if(name.startsWith('lesson-'))focusTarget=host.querySelector('[data-feed-action=lesson-next],[data-feed-action=lesson-complete],[data-feed-action=feed-next]');else if(name==='flash-reveal'||name==='flash-study')focusTarget=host.querySelector('[data-feed-action=flash-rate]');else if(name==='quiz-submit')focusTarget=host.querySelector('[data-feed-action=quiz-retry]');focusTarget?.focus({preventScroll:true});
+  const host=root.querySelector('.lf-current');let focusTarget;if(name==='quiz-select')focusTarget=host.querySelector('.lfc-quiz-feedback');else if(name==='quiz-retry')focusTarget=host.querySelector('[data-option]');else if(name.startsWith('lesson-'))focusTarget=host.querySelector('[data-feed-action=lesson-next],[data-feed-action=lesson-complete],[data-feed-action=feed-next]');else if(name==='flash-reveal'||name==='flash-study')focusTarget=host.querySelector('[data-feed-action=flash-rate]');focusTarget?.focus({preventScroll:true});
  }
  function click(event){if(panels?.contains(event.target))return;if(story?.detailOpen&&event.target.closest('[data-story-detail-page]')&&!event.target.closest('button,a,input,textarea,select')&&(!window.getSelection()||window.getSelection().isCollapsed)&&(!event.target.closest('.lf-detail')||isDetailBlank(event))){event.preventDefault();void story.back();return;}const material=event.target.closest('[data-feed-material]');if(material){if(fullscreen)setFullscreen(false);const c=cards.find(x=>x.id===material.dataset.feedMaterial);if(c)assist(c);endExposure();return;}
   const control=event.target.closest('[data-feed-action]');if(!control)return;const name=control.dataset.feedAction,c=targetCard(control);

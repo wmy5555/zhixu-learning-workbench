@@ -29,8 +29,13 @@
 :is(.lf-page,.lf-flow) .lfc-option{display:flex;align-items:flex-start;gap:13px;width:100%;min-width:0;text-align:left;padding:14px 17px;min-height:56px;border:1px solid var(--card-line);border-radius:9px;background:transparent;color:var(--card-ink);font-size:15px;line-height:1.8}
 :is(.lf-page,.lf-flow) .lfc-option-letter{font:italic 15px/1.9 Georgia,serif;flex:none;color:var(--card-secondary);width:18px}
 :is(.lf-page,.lf-flow) .lfc-option>span:nth-child(2){flex:1;min-width:0}
+:is(.lf-page,.lf-flow) .lfc .lfc-option:focus-visible:not(:disabled){background:var(--card-soft);color:var(--card-ink);border-color:var(--card-accent)}
+@media(hover:hover) and (pointer:fine){
+ :is(.lf-page,.lf-flow) .lfc .lfc-option:hover:not(:disabled){background:var(--card-soft);color:var(--card-ink);border-color:var(--card-accent)}
+ :is(.lf-page,.lf-flow) .lfc .lfc-option:hover:not(:disabled) .lfc-option-letter{color:var(--card-accent)}
+}
 :is(.lf-page,.lf-flow) .lfc-option.is-selected{border-color:var(--card-accent);background:var(--card-soft)}
-:is(.lf-page,.lf-flow) .lfc-option:disabled{opacity:1}
+:is(.lf-page,.lf-flow) .lfc .lfc-option:disabled{opacity:1}
 :is(.lf-page,.lf-flow) .lfc-option.is-correct{border-color:#91a38a;background:color-mix(in srgb,#92a783 12%,var(--canvas,#fbfaf7))}
 :is(.lf-page,.lf-flow) .lfc-option.is-wrong{border-color:#bc9078;background:color-mix(in srgb,#bc9078 12%,var(--canvas,#fbfaf7))}
 :is(.lf-page,.lf-flow) .lfc-option svg{width:18px;height:18px;flex:none;margin-top:4px;color:#72846a}

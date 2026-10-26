@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {discoverySeeds} from '../public/web/discovery-content.mjs';
 import {renderLearningCard} from '../public/web/discovery-cards.mjs';
+import {readFileSync} from 'node:fs';
+import vm from 'node:vm';
 
 const find=type=>discoverySeeds.flatMap(s=>s.cards).find(c=>c.type===type);
 const quiz=find('quiz'),flash=find('flash'),lesson=find('lesson');
@@ -26,12 +28,25 @@ test('microcourse exposes only its current page and ends with an explicit comple
  const completed=renderLearningCard(lesson,{page:2,completed:true});assert.ok(completed.includes('data-feed-action="feed-next"'));assert.ok(!completed.includes('data-feed-action="lesson-complete"'));
 });
 
-test('quiz cannot confirm an absent or invalid selection and hides explanatory feedback until submission',()=>{
+test('quiz exposes one-click options without a separate confirmation and keeps feedback hidden until selection',()=>{
  for(const selected of [null,'not-an-option']){
-  const html=renderLearningCard(quiz,{selected});assert.match(html,/data-feed-action="quiz-submit" disabled/);
+  const html=renderLearningCard(quiz,{selected});assert.ok(!html.includes('data-feed-action="quiz-submit"'));
   assert.ok(!html.includes('lfc-quiz-feedback'));assert.ok(!html.includes(quiz.options[0].explanation));assert.ok(!html.includes('is-correct'));
  }
- const chosen=renderLearningCard(quiz,{selected:quiz.correctOptionId});assert.ok(chosen.includes('is-selected'));assert.ok(!chosen.includes('data-feed-action="quiz-submit" disabled'));
+ const chosen=renderLearningCard(quiz,{selected:quiz.correctOptionId});assert.ok(chosen.includes('is-selected'));assert.ok(!chosen.includes('data-feed-action="quiz-submit"'));
+});
+
+test('the real selection handler submits once, rejects invalid options and keeps the first answer across retries',()=>{
+ const source=readFileSync(new URL('../public/web/discovery.mjs',import.meta.url),'utf8'),start=source.indexOf('function learningAction('),end=source.indexOf('function click(',start);
+ const progress={page:0,selected:null,submitted:false,attempts:[],first:null,assisted:false},events=[];let rendered='',ranked=0,renders=0;
+ const act=vm.runInNewContext(`${source.slice(start,end)};learningAction`,{current:()=>quiz,detail:null,getProgress:()=>progress,rec:{observe:(_,event)=>events.push(event)},future:()=>ranked++,mountContent:()=>{renders++;rendered=renderLearningCard(quiz,progress);},root:{querySelector:()=>({querySelector:()=>({focus(){}}),querySelectorAll:()=>[]})}});
+ const select=id=>act('quiz-select',{dataset:{option:id}}),wrong=quiz.options.find(o=>o.id!==quiz.correctOptionId);
+ select('invalid');assert.equal(progress.submitted,false);assert.equal(renders,0);assert.equal(events.length,0);
+ select(wrong.id);assert.equal(progress.submitted,true);assert.equal(progress.selected,wrong.id);assert.equal(progress.attempts.length,1);assert.equal(progress.first.correct,false);assert.ok(rendered.includes('lfc-quiz-feedback'));assert.ok(!rendered.includes('quiz-submit'));
+ select(quiz.correctOptionId);assert.equal(progress.selected,wrong.id);assert.equal(progress.attempts.length,1);
+ act('quiz-retry',{dataset:{}});assert.equal(progress.submitted,false);assert.equal(progress.assisted,true);select(quiz.correctOptionId);
+ assert.equal(progress.submitted,true);assert.equal(progress.first.selected,wrong.id);assert.equal(progress.first.correct,false);assert.equal(progress.attempts.length,2);assert.equal(progress.attempts[1].correct,true);assert.equal(progress.attempts[1].firstAttempt,false);assert.equal(progress.attempts[1].assisted,true);
+ assert.equal(events.filter(e=>e.type==='quiz-result').length,2);assert.equal(ranked,2);
 });
 
 test('submitted options lock and a retry keeps the first wrong selection visible',()=>{
