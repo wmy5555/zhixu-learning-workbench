@@ -21,9 +21,9 @@ import { captureFilesHTML, mountCaptureFiles } from './capture-files.mjs';
 
 installInputModality(document.documentElement, document);
 
-const navigation = [['home','今日','today'],['plus','收集与加工','capture'],['book','知识库','library'],['check','学习与错题','study'],['layers','主题学习包','topics'],['network','检索与发现','search'],['chat','问答与输出','output']];
+const navigation = [['home','今日','today'],['spark','学习发现','discover'],['plus','收集与加工','capture'],['book','知识库','library'],['check','学习与错题','study'],['layers','主题学习包','topics'],['network','检索与发现','search'],['chat','问答与输出','output']];
 const state = { boot:null, route:'today', sequence:0, dirty:false, saving:0, readerReturn:'library', note:null, session:null, jobs:[], scroll:new Map() };
-const context={api,state,go,refreshBoot,formModal,submit,watchForm,savedForm,processSource,noteCard:note=>noteCard(note)};
+const context={api,state,go,refreshBoot,formModal,submit,watchForm,savedForm,processSource,startStudy,noteCard:note=>noteCard(note)};
 const parity=createParity(context),management=createManagement(context,initializeAccent()),focus=createFocus(context);
 const onboarding=createWebOnboarding({api,state,go,refreshBoot,beforeLeave});
 const readerData=createReaderData(api);
@@ -50,6 +50,15 @@ function shell() {
   theme.title = dark ? '切换日间模式' : '切换夜间模式';
 }
 let stopStudyFeedback = () => {};
+let disposePage = () => {};
+let discovery,discoveryImport;
+async function discoveryPage(mode){
+  const sequence=state.sequence;
+  const module=await(discoveryImport||=import('./discovery.mjs').catch(error=>{discoveryImport=null;throw error;}));
+  if(sequence!==state.sequence||state.route.split('/')[0]!=='discover')return {html:''};
+  discovery||=module.createDiscovery(context);
+  return discovery.page(mode);
+}
 let librarySnapshot=null;
 const libraryKey=()=>{const {version,revision}=api.getContext();return `${version}:${revision}`;};
 async function refreshBoot() { librarySnapshot=null;state.boot = await api.get('/api/bootstrap'); return state.boot; }
@@ -65,6 +74,8 @@ async function go(route, { replace = false, force = false, guide = false, speed 
   let ghost;
   if(guide&&!reduce){ghost=main.cloneNode(true);ghost.removeAttribute('id');ghost.classList.add('onboard-page-ghost');ghost.inert=true;ghost.setAttribute('aria-hidden','true');ghost.querySelectorAll('[id]').forEach(n=>n.removeAttribute('id'));const r=main.getBoundingClientRect();Object.assign(ghost.style,{left:r.x+'px',top:r.y+'px',width:r.width+'px',height:r.height+'px'});document.body.append(ghost);main.style.opacity='0';}
   stopStudyFeedback();
+  disposePage();disposePage=()=>{};
+  discovery?.dispose();
   dialogs.forEach(dialog=>dialog.isConnected&&dialog.close());
   focus.capture();
   state.dirty = false;
@@ -81,10 +92,10 @@ async function go(route, { replace = false, force = false, guide = false, speed 
   if(!cachedLibrary&&!immediateReader)$('#main').innerHTML = '<div class="page-loading" role="status"><span></span>正在把内容放到书桌上…</div>';
   try {
     const [view,id] = state.route.split('/');
-    const page = cachedLibrary?null:await ({ today:todayPage, capture:capturePage, library:parity.library, read:()=>readPage(id), edit:()=>editPage(id), study:()=>studyPage(id), topics:topicsPage, search:parity.search, output:outputPage, settings:settingsPage, jobs:parity.jobs, relations:parity.relations, history:parity.history, manage:()=>management.page(id), focus:focus.page }[view] || todayPage)();
+    const page = cachedLibrary?null:await ({ today:todayPage, discover:()=>discoveryPage(id==='flow'?'flow':'grid'), capture:capturePage, library:parity.library, read:()=>readPage(id), edit:()=>editPage(id), study:()=>studyPage(id), topics:topicsPage, search:parity.search, output:outputPage, settings:settingsPage, jobs:parity.jobs, relations:parity.relations, history:parity.history, manage:()=>management.page(id), focus:focus.page }[view] || todayPage)();
     if (sequence !== state.sequence) {ghost?.remove();main.style.opacity='';return false;}
     if(cachedLibrary)main.replaceChildren(...cachedLibrary.nodes);
-    else{main.innerHTML=page.html;page.bind?.();}
+    else{main.innerHTML=page.html;const cleanup=page.bind?.();disposePage=typeof cleanup==='function'?cleanup:()=>{};}
     if(view==='library')librarySnapshot={key:snapshotKey,nodes:[...main.childNodes]};
     $('#main').dataset.route=state.route;
     focus.mount();
@@ -516,5 +527,5 @@ $('#nav-shade').onclick=()=>document.documentElement.classList.remove('nav-open'
 window.addEventListener('beforeunload',event=>{if(state.dirty||$$('dialog').some(dialog=>dialog.hasUnsavedInput?.())){event.preventDefault();event.returnValue='unsaved';}});
 window.addEventListener('popstate',async()=>{const target=location.hash.slice(1)||'today';if(await go(target,{replace:true})===false)history.replaceState(null,'',`#${state.route}`);});
 window.addEventListener('hashchange',async()=>{const target=location.hash.slice(1)||'today';if(target!==state.route){if(await go(target,{replace:true})===false)history.replaceState(null,'',`#${state.route}`);}});
-try { await onboarding.initialize();await refreshBoot();await go(location.hash.slice(1)||'today',{replace:true});await onboarding.ready(); }
+try { await onboarding.initialize();await refreshBoot();await go(location.hash.slice(1)||'today',{replace:true});if(!state.boot.preview?.isolated)await onboarding.ready(); }
 catch(error){$('#main').innerHTML=empty('暂时连接不上知识空间',error.message,btn('重新连接','reload','primary'));}

@@ -1,0 +1,109 @@
+/* Card layouts only; the host owns the product chrome and immersive backdrop. */
+:is(.lf-page,.lf-flow) .lfc{--card-line:var(--line,#e5dfd5);--card-soft:var(--soft,#f3efe7);--card-ink:var(--ink,#403b35);--card-secondary:var(--secondary,#827a6d);--card-accent:var(--accent,#a57154);padding:34px 38px;background:var(--canvas,#fbfaf7);color:var(--card-ink);border:1px solid var(--card-line);border-radius:14px;min-width:0;overflow-wrap:anywhere}
+:is(.lf-page,.lf-flow) .lfc p,:is(.lf-page,.lf-flow) .lfc h2{margin:0}
+:is(.lf-page,.lf-flow) .lfc-eyebrow{font-size:11px;color:var(--card-accent);letter-spacing:1.3px;line-height:1.6}
+:is(.lf-page,.lf-flow) .lfc-title{font:400 clamp(24px,2.3vw,35px)/1.6 var(--font-editorial,Georgia,serif);color:var(--card-ink);margin-top:17px;letter-spacing:-.35px;overflow-wrap:anywhere}
+:is(.lf-page,.lf-flow) .lfc-intro{color:var(--card-secondary);font-size:14px;line-height:1.85;margin-top:17px}
+:is(.lf-page,.lf-flow) .lfc-prose{margin-top:26px;display:grid;gap:17px;font-size:16px;line-height:2;color:var(--card-secondary);white-space:pre-line}
+:is(.lf-page,.lf-flow) .lfc-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:12px;margin-top:27px}
+:is(.lf-page,.lf-flow) .lfc-primary{background:var(--card-accent);color:var(--cds-gray-10,#fffaf5);border:1px solid transparent;border-radius:8px;min-height:44px;padding:11px 17px;display:inline-flex;gap:10px;align-items:center;justify-content:center;font-size:14px;line-height:1.6;font-weight:500}
+:is(.lf-page,.lf-flow) .lfc-primary svg{width:17px;height:17px}
+:is(.lf-page,.lf-flow) .lfc-text{padding:8px 7px;color:var(--card-secondary);font-size:13px;min-height:40px;line-height:1.7}
+:is(.lf-page,.lf-flow) .lfc button:disabled{cursor:default;opacity:.45}
+:is(.lf-page,.lf-flow) .lfc button:focus-visible,:is(.lf-page,.lf-flow) .lfc textarea:focus-visible{outline:2px solid var(--card-accent);outline-offset:3px}
+:is(.lf-page,.lf-flow) .lfc-footnote{color:var(--card-secondary);font-size:11px;line-height:1.8;margin-top:17px}
+:is(.lf-page,.lf-flow) .lfc-lesson-head{display:flex;align-items:center;justify-content:space-between;gap:16px}
+:is(.lf-page,.lf-flow) .lfc-page-count{font:italic 24px/1.4 Georgia,serif;color:var(--card-accent);font-variant-numeric:tabular-nums}
+:is(.lf-page,.lf-flow) .lfc-page-count i{font-size:15px;color:var(--card-secondary)}
+:is(.lf-page,.lf-flow) .lfc-series{font-size:12px;color:var(--card-secondary);line-height:1.8;margin-top:30px}
+:is(.lf-page,.lf-flow) .lfc-lesson .lfc-title{margin-top:11px}
+:is(.lf-page,.lf-flow) .lfc-takeaway{margin-top:29px;padding:20px 22px;background:var(--card-soft);border-left:2px solid var(--card-accent);border-radius:0 8px 8px 0}
+:is(.lf-page,.lf-flow) .lfc-takeaway>span{font-size:11px;color:var(--card-accent)}
+:is(.lf-page,.lf-flow) .lfc-takeaway p{font:20px/1.8 var(--font-editorial,Georgia,serif);margin-top:9px;color:var(--card-ink)}
+:is(.lf-page,.lf-flow) .lfc-lesson-footer{display:flex;justify-content:space-between;align-items:center;gap:16px;border-top:1px solid var(--card-line);margin-top:32px;padding-top:22px}
+:is(.lf-page,.lf-flow) .lfc-lesson-footer .lfc-actions{margin:0}
+:is(.lf-page,.lf-flow) .lfc-page-dots{display:flex;gap:6px}.lf-page .lfc-page-dots span,.lf-flow .lfc-page-dots span{width:6px;height:6px;border-radius:50%;background:var(--card-line)}
+:is(.lf-page,.lf-flow) .lfc-page-dots .current{width:20px;border-radius:4px;background:var(--card-accent)}
+:is(.lf-page,.lf-flow) .lfc-page-dots .read{background:color-mix(in srgb,var(--card-accent) 45%,var(--card-line))}
+:is(.lf-page,.lf-flow) .lfc-options{display:grid;gap:10px;margin-top:25px}
+:is(.lf-page,.lf-flow) .lfc-option{display:flex;align-items:flex-start;gap:13px;width:100%;min-width:0;text-align:left;padding:14px 17px;min-height:56px;border:1px solid var(--card-line);border-radius:9px;background:transparent;color:var(--card-ink);font-size:15px;line-height:1.8}
+:is(.lf-page,.lf-flow) .lfc-option-letter{font:italic 15px/1.9 Georgia,serif;flex:none;color:var(--card-secondary);width:18px}
+:is(.lf-page,.lf-flow) .lfc-option>span:nth-child(2){flex:1;min-width:0}
+:is(.lf-page,.lf-flow) .lfc-option.is-selected{border-color:var(--card-accent);background:var(--card-soft)}
+:is(.lf-page,.lf-flow) .lfc-option:disabled{opacity:1}
+:is(.lf-page,.lf-flow) .lfc-option.is-correct{border-color:#91a38a;background:color-mix(in srgb,#92a783 12%,var(--canvas,#fbfaf7))}
+:is(.lf-page,.lf-flow) .lfc-option.is-wrong{border-color:#bc9078;background:color-mix(in srgb,#bc9078 12%,var(--canvas,#fbfaf7))}
+:is(.lf-page,.lf-flow) .lfc-option svg{width:18px;height:18px;flex:none;margin-top:4px;color:#72846a}
+:is(.lf-page,.lf-flow) .lfc-first-answer{margin-top:21px;border-left:2px solid var(--card-line);padding:4px 13px}
+:is(.lf-page,.lf-flow) .lfc-first-answer>span{font-size:10px;color:var(--card-secondary)}
+:is(.lf-page,.lf-flow) .lfc-first-answer p{font-size:13px;line-height:1.8;margin-top:5px;color:var(--card-secondary)}
+:is(.lf-page,.lf-flow) .lfc-first-answer small{font-size:10px;margin-left:6px;color:var(--card-accent);white-space:nowrap}
+:is(.lf-page,.lf-flow) .lfc-quiz-feedback{margin-top:25px;padding-top:22px;border-top:1px solid var(--card-line)}
+:is(.lf-page,.lf-flow) .lfc-feedback-label{font-size:12px;color:var(--card-accent)}
+:is(.lf-page,.lf-flow) .lfc-feedback-label.correct{color:#71866a}
+:is(.lf-page,.lf-flow) .lfc-correct-answer{font-size:18px;line-height:1.8;margin-top:10px}
+:is(.lf-page,.lf-flow) .lfc-option-reasons{display:grid;gap:15px;margin-top:20px}
+:is(.lf-page,.lf-flow) .lfc-option-reasons p{display:grid;gap:4px;font-size:13px;line-height:1.8;color:var(--card-secondary)}
+:is(.lf-page,.lf-flow) .lfc-option-reasons b{font-weight:500;color:var(--card-ink)}
+:is(.lf-page,.lf-flow) .lfc-flash{--card-accent:#51765d;--card-ink:#344c3a;--card-secondary:#7a8974;--card-line:#d6decb;--card-soft:#e8edde;background:#f5f3e8;color:var(--card-ink);box-shadow:0 5px 0 -1px #c9d1be,0 10px 0 -3px #96a78c}
+:is(.lf-page,.lf-flow) .lfc-flash-top{display:flex;align-items:center;justify-content:space-between;gap:12px;color:var(--card-secondary);font-size:10px}
+:is(.lf-page,.lf-flow) .lfc-flash-top .lfc-eyebrow{font:22px/1.4 var(--font-editorial,Georgia,serif);letter-spacing:2px;color:var(--card-ink)}
+:is(.lf-page,.lf-flow) .lfc-flash-question{margin-top:25px}.lf-page .lfc-q,.lf-flow .lfc-q{font:italic 28px/1.4 Georgia,serif;color:#98a48c}
+:is(.lf-page,.lf-flow) .lfc-flash-question .lfc-title{margin-top:11px;font-size:clamp(25px,2.4vw,36px)}
+:is(.lf-page,.lf-flow) .lfc-flash-actions{margin-top:26px}
+:is(.lf-page,.lf-flow) .lfc-recall-label{display:block;color:var(--card-secondary);font-size:11px;line-height:1.8}
+:is(.lf-page,.lf-flow) .lfc-recall-label textarea{display:block;resize:vertical;min-height:78px;max-height:200px;width:100%;margin:10px 0 20px;border:0;border-bottom:1px solid var(--card-line);background:transparent;border-radius:0;padding:10px 0;color:var(--card-ink);font-size:16px;line-height:1.9;user-select:text;touch-action:pan-y pinch-zoom}
+:is(.lf-page,.lf-flow) .lfc-recall-label textarea::placeholder{color:#9aa58e}
+:is(.lf-page,.lf-flow) .lfc-flash-actions>.lfc-primary{width:100%}
+:is(.lf-page,.lf-flow) .lfc-study-first{display:block;margin:10px auto 0;font-size:11px}
+:is(.lf-page,.lf-flow) .lfc-flash-answer{margin-top:24px;border-top:1px dashed #c7d0bc;padding-top:21px}
+:is(.lf-page,.lf-flow) .lfc-flash-answer>span{font-size:10px;color:var(--card-secondary);letter-spacing:1px}
+:is(.lf-page,.lf-flow) .lfc-flash-answer>strong{display:block;font:400 clamp(30px,3vw,47px)/1.5 var(--font-editorial,Georgia,serif);color:#3a6645;margin:8px 0 11px;overflow-wrap:anywhere}
+:is(.lf-page,.lf-flow) .lfc-flash-answer>p{font-size:14px;line-height:1.95;color:var(--card-secondary)}
+:is(.lf-page,.lf-flow) .lfc-own-answer{border-left:2px solid #c2cfb8;margin-top:18px;padding:4px 12px}
+:is(.lf-page,.lf-flow) .lfc-own-answer>span{font-size:10px;color:var(--card-secondary)}
+:is(.lf-page,.lf-flow) .lfc-own-answer p{white-space:pre-wrap;line-height:1.9;font-size:13px;margin-top:6px}
+:is(.lf-page,.lf-flow) .lfc-rating-instruction{font-size:11px;color:var(--card-secondary);line-height:1.85;margin-bottom:14px}
+:is(.lf-page,.lf-flow) .lfc-ratings{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+:is(.lf-page,.lf-flow) .lfc-rating{min-width:0;min-height:68px;display:grid;align-content:center;gap:6px;padding:13px 3px;border:1px solid #d0d9c5;border-radius:8px;background:#ebefdf;color:#657b5c}
+:is(.lf-page,.lf-flow) .lfc-rating b{font-weight:500;font-size:12px;white-space:nowrap}
+:is(.lf-page,.lf-flow) .lfc-rating small{font-size:10px;color:#8e9d83}
+:is(.lf-page,.lf-flow) .lfc-rating.again{background:#f0e8dc;border-color:#dfcdb8;color:#987451}
+:is(.lf-page,.lf-flow) .lfc-rating.good{background:#42694d;border-color:#42694d;color:#f9f8ec}
+:is(.lf-page,.lf-flow) .lfc-rating.good small{color:#c2d0b7}
+:is(.lf-page,.lf-flow) .lfc-rating.easy{background:#dce8cf}
+:is(.lf-page,.lf-flow) .lfc-flash-receipt{display:grid;justify-items:center;text-align:center;gap:11px;margin-bottom:23px;color:#5f7d52}
+:is(.lf-page,.lf-flow) .lfc-flash-receipt p{font-size:17px;line-height:1.8}
+:is(.lf-page,.lf-flow) .lfc-flash-receipt small{font-size:10px;color:var(--card-secondary);line-height:1.8}
+:is(.lf-page,.lf-flow) .lfc-comparison{margin-top:28px;border-top:1px solid var(--card-line)}
+:is(.lf-page,.lf-flow) .lfc-comparison-head,:is(.lf-page,.lf-flow) .lfc-comparison-row{display:grid;grid-template-columns:90px minmax(0,1fr) minmax(0,1fr);gap:20px;padding:19px 0;border-bottom:1px solid var(--card-line);align-items:start}
+:is(.lf-page,.lf-flow) .lfc-comparison-head>span,:is(.lf-page,.lf-flow) .lfc-comparison-row>span{font-size:11px;line-height:1.9;color:var(--card-secondary)}
+:is(.lf-page,.lf-flow) .lfc-comparison-head strong{font:400 19px/1.65 var(--font-editorial,Georgia,serif);color:var(--card-accent)}
+:is(.lf-page,.lf-flow) .lfc-comparison-row p{font-size:14px;line-height:1.95;color:var(--card-secondary)}
+.lf-flow .lfc:not(.lfc-flash){--card-ink:#53483c;--card-secondary:#968773;--card-line:#e8dfd1;--card-soft:#f0eadf;--card-accent:#9d785a;background:#fbf8f1;color-scheme:light}
+@media(max-width:650px){
+ :is(.lf-page,.lf-flow) .lfc{padding:25px 23px;border-radius:12px}
+ :is(.lf-page,.lf-flow) .lfc-title{font-size:27px;line-height:1.65}
+ :is(.lf-page,.lf-flow) .lfc-series{margin-top:23px}
+ :is(.lf-page,.lf-flow) .lfc-prose{font-size:15px;line-height:2;margin-top:21px}
+ :is(.lf-page,.lf-flow) .lfc-lesson-footer{margin-top:26px;padding-top:20px;gap:9px;align-items:flex-end}
+ :is(.lf-page,.lf-flow) .lfc-actions{gap:6px}
+ :is(.lf-page,.lf-flow) .lfc-primary{font-size:12px;padding:11px 12px;min-height:44px}
+ :is(.lf-page,.lf-flow) .lfc-text{font-size:12px}
+ :is(.lf-page,.lf-flow) .lfc-page-dots{gap:4px;flex:none;padding-bottom:17px}
+ :is(.lf-page,.lf-flow) .lfc-page-dots .current{width:15px}
+ :is(.lf-page,.lf-flow) .lfc-option{font-size:14px;padding:13px 12px;gap:10px}
+ :is(.lf-page,.lf-flow) .lfc-options{gap:9px}
+ :is(.lf-page,.lf-flow) .lfc-takeaway{padding:17px 18px}
+ :is(.lf-page,.lf-flow) .lfc-takeaway p{font-size:19px}
+ :is(.lf-page,.lf-flow) .lfc-flash-question .lfc-title{font-size:27px}
+ :is(.lf-page,.lf-flow) .lfc-flash-answer>strong{font-size:37px}
+ :is(.lf-page,.lf-flow) .lfc-ratings{gap:5px}
+ :is(.lf-page,.lf-flow) .lfc-rating{min-height:65px;padding:12px 1px}
+ :is(.lf-page,.lf-flow) .lfc-rating b{font-size:10px}
+ :is(.lf-page,.lf-flow) .lfc-rating small{font-size:9px}
+ :is(.lf-page,.lf-flow) .lfc-comparison-head,:is(.lf-page,.lf-flow) .lfc-comparison-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:9px 17px;padding:17px 0}
+ :is(.lf-page,.lf-flow) .lfc-comparison-head>span,:is(.lf-page,.lf-flow) .lfc-comparison-row>span{grid-column:1/-1}
+ :is(.lf-page,.lf-flow) .lfc-comparison-head strong{font-size:17px}
+ :is(.lf-page,.lf-flow) .lfc-comparison-row p{font-size:13px}
+}
