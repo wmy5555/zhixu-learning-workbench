@@ -59,6 +59,20 @@ function parse(raw) {
   if (typeof meta !== 'object' || Array.isArray(meta)) fail('文件属性必须为键值对象。');
   return { doc, meta, body: match ? raw.slice(match[0].length) : raw };
 }
+function unchangedFrontmatter(file, raw, root) {
+  const header = raw.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[0];
+  // An unclosed header can acquire metadata anywhere in the remaining bytes.
+  if (!header && /^---\r?\n/.test(raw)) return false;
+  const expected = Buffer.from(header ?? raw.slice(0, 5));
+  // An EOF delimiter must remain at EOF; a short plain file may gain a header.
+  const checkEnd = header ? !header.endsWith('\n') : raw.length < 5;
+  const bytes = Buffer.alloc(expected.length + (checkEnd ? 1 : 0));
+  const fd = fs.openSync(assertTree(file, root), 'r');
+  try {
+    const length = fs.readSync(fd, bytes, 0, bytes.length, 0);
+    return length === expected.length && bytes.subarray(0, length).equals(expected);
+  } finally { fs.closeSync(fd); }
+}
 function serialize(raw, fields, body) {
   const { doc } = parse(raw);
   for (const [key, value] of Object.entries(fields)) if (value !== undefined) doc.set(key, value);
@@ -88,6 +102,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS versions (id TEXT PRIMARY KEY,noteId TEXT NOT NULL,path TEXT NOT NULL,hash TEXT NOT NULL,raw TEXT NOT NULL,reason TEXT NOT NULL,createdAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS versions_note ON versions(noteId);
       CREATE TABLE IF NOT EXISTS index_chunks (id TEXT PRIMARY KEY,noteId TEXT NOT NULL,body TEXT NOT NULL,vector TEXT,model TEXT);
+      CREATE INDEX IF NOT EXISTS index_chunks_note ON index_chunks(noteId);
       CREATE TABLE IF NOT EXISTS restore_transactions (id TEXT PRIMARY KEY,digest TEXT NOT NULL,committed INTEGER NOT NULL DEFAULT 0);`);
     this.conflicts = [];
     this.scanCache = new Map(); this.lastFullScan = 0;
@@ -228,7 +243,8 @@ export class Store {
     const reusable = new Map();
     for (const chunk of previous) if (!reusable.has(chunk.body) || chunk.vector !== null) reusable.set(chunk.body, chunk);
     const keep = new Set();
-    const insert = this.db.prepare('INSERT INTO index_chunks(id,noteId,body,vector,model) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body,vector=excluded.vector,model=excluded.model');
+    const insert = this.db.prepare(`INSERT INTO index_chunks(id,noteId,body,vector,model) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body,vector=excluded.vector,model=excluded.model
+      WHERE index_chunks.body IS NOT excluded.body OR index_chunks.vector IS NOT excluded.vector OR index_chunks.model IS NOT excluded.model`);
     for (let i = 0; i < body.length; i += 700) {
       const chunkId = `${id}:${i}`, text = body.slice(i, i + 900), old = reusable.get(text);
       keep.add(chunkId); insert.run(chunkId, id, text, old?.vector ?? null, old?.model ?? null);
@@ -254,12 +270,12 @@ export class Store {
     if (!existing || existing.hash !== digest) { this.index(id, `${note.title}\n${body}`); this.put('changed', id, { id, hash: digest, at: now() }); }
     return note;
   }
-  ensureFresh() {
+  ensureFresh({ freshFrontmatter = false } = {}) {
     // Metadata is checked on every search, independent of lossy/asynchronous OS
     // watch delivery. A full hash reconciliation also catches preserved stamps.
-    return this.scan({ incremental: Date.now() - this.lastFullScan < 60_000 });
+    return this.scan({ incremental: Date.now() - this.lastFullScan < 60_000, freshFrontmatter });
   }
-  scan({ dryRun = false, incremental = false } = {}) {
+  scan({ dryRun = false, incremental = false, freshFrontmatter = false } = {}) {
     this.assertAvailable();
     if (!fs.existsSync(this.vaultDir) || fs.lstatSync(this.vaultDir).isSymbolicLink()) fail('Vault 根目录不存在或已被替换为链接。', 'SYMLINK', 403);
     const files = [], conflicts = [], seen = new Map(), valid = [], cache = new Map();
@@ -282,14 +298,16 @@ export class Store {
     for (const { file, fingerprint } of files) {
       const rel = path.relative(this.vaultDir, file).replaceAll('\\', '/');
       try {
-        const cached = incremental && this.scanCache.get(file), unchanged = cached?.fingerprint === fingerprint;
+        const cached = incremental && this.scanCache.get(file);
+        let unchanged = cached?.fingerprint === fingerprint;
+        if (unchanged && freshFrontmatter) unchanged = unchangedFrontmatter(file, cached.raw, this.vaultDir);
         let raw, parsed;
         if (unchanged) ({ raw, parsed } = cached);
         else { raw = fs.readFileSync(assertTree(file, this.vaultDir), 'utf8'); readFiles++; parsed = parse(raw); }
         let id = parsed.meta.id;
         if (id !== undefined && (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(id))) fail('id 必须为短字符串。');
         const missing = !id && !byPath.has(rel) ? (byHash.get(hash(raw))||[]).filter(row=>!fs.existsSync(path.join(this.vaultDir,row.path))) : [];
-        id ||= byPath.get(rel)?.id || (missing.length===1 ? missing[0].id : null) || cached?.id || randomUUID();
+        id ||= byPath.get(rel)?.id || (missing.length===1 ? missing[0].id : null) || (!freshFrontmatter && cached?.id) || randomUUID();
         if (seen.has(id)) conflicts.push({ path: rel, id, error: '重复稳定 id；两个文件暂时从检索中隔离。', other: seen.get(id) });
         seen.set(id, rel); valid.push({ id, file, raw, parsed, unchanged });
         cache.set(file, { fingerprint, raw, parsed, id });

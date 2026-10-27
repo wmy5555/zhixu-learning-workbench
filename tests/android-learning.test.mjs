@@ -538,6 +538,8 @@ test('strict boundary rejects oversized answers, unsafe JSON keys, unsupported s
 
 function parityHarness(factory, seed, config, eligibility) {
   const state = structuredClone(seed), store = createMemoryStore(state, [], () => timestamp);
+  // The web core uses Store's freshness entry point; this fixture has no files.
+  store.ensureFresh = () => store.scan();
   const dependencies = { store, settings: () => config, getNote: n => store.read(n), eligible: n => eligibility ? eligibility(n, store) : n.kind === 'knowledge' && n.meta.stage !== 'retired' && !n.meta.supersededBy && !n.meta.researchLimitations?.length,
     learningClock: clock, updateSettings: value => Object.assign(config, value), queue() { throw new Error('Not used'); },
   };

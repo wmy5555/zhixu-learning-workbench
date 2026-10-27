@@ -1093,7 +1093,8 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     if(!eligible(note)) { if(job.payload.useAI===true)fail('这条知识仍有待研究内容，请先处理依据。','RESEARCH_INCOMPLETE'); return; }
     const res=await search(`${note.title} ${note.meta.topic || ''}`,{mode:'keyword',limit:7,scan:false});
     const bridges=store.list().filter(n=>n.id!==note.id&&eligible(n)&&n.meta.topic!==note.meta.topic)
-      .sort((a,b)=>hash(`${note.id}:${a.id}`).localeCompare(hash(`${note.id}:${b.id}`))).slice(0,3);
+      .map(n=>({note:n,rank:hash(`${note.id}:${n.id}`)}))
+      .sort((a,b)=>a.rank.localeCompare(b.rank)).slice(0,3).map(entry=>entry.note);
     let candidates=[...new Map([...res.results.filter(n=>n.id!==note.id&&eligible(n)).slice(0,4),...bridges].filter(inScope).map(n=>[n.id,n])).values()];
     for(const n of candidates) {
       const id=hash([note.id,n.id].sort().join(':')), old=store.get('relations',id);
@@ -1144,14 +1145,16 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     const scope=job.payload.useAI===true ? materialScope(job) : null;
     store.scan(); const notes=store.list().filter(n=>n.kind==='knowledge'&&n.meta.stage!=='retired');
     const relations=store.records('relations').filter(r=>r.state==='accepted'), linked=new Set(relations.flatMap(r=>[r.fromId,r.toId]));
-    const isolated=notes.filter(n=>!linked.has(n.id)), unused=notes.filter(n=>!store.records('uses').some(u=>u.noteId===n.id));
+    const useCounts=new Map();
+    if(notes.length)for(const use of store.records('uses'))useCounts.set(use.noteId,(useCounts.get(use.noteId)||0)+1);
+    const isolated=notes.filter(n=>!linked.has(n.id)), unused=notes.filter(n=>!useCounts.has(n.id));
     let body=`# 知识结构检查\n\n检查时间：${now()}\n知识条目：${notes.length}；已确认关系：${relations.length}。\n\n## 孤立节点\n${isolated.slice(0,30).map(n=>`- ${n.title}（${n.id}）`).join('\n') || '无'}\n\n## 尚无实际输出使用记录\n${unused.slice(0,30).map(n=>`- ${n.title}`).join('\n') || '无'}\n\n以上只是导航线索，不以曝光次数判断价值。`;
     const changed=new Set(store.records('changed').map(n=>n.id));
     let discoveryIssue=null;
     const selected=[...notes.filter(n=>changed.has(n.id)),...isolated,...notes].filter((n,i,a)=>(!scope||scope.get(n.id)===n.hash)&&privacyFor(n)==='cloud'&&a.findIndex(v=>v.id===n.id)===i).slice(0,16);
     let discoveryResult={findings:[],rejected:0},summaryStatus='not_requested',detailStatus='not_requested';
     if(job.payload.useAI===true&&settings().ai.enabled&&selected.length){try {
-      const materials=selected.map(n=>({id:n.id,sourceIds:learningSourceIds(n),title:outboundTitle(n),topic:n.meta.topic,useCount:store.records('uses').filter(u=>u.noteId===n.id).length,summary:outboundText(n.body).slice(0,900)}));
+      const materials=selected.map(n=>({id:n.id,sourceIds:learningSourceIds(n),title:outboundTitle(n),topic:n.meta.topic,useCount:useCounts.get(n.id)||0,summary:outboundText(n.body).slice(0,900)}));
       const answer=await ai.generate({system:promptText('serviceSystem'),privacy:'cloud',signal,json:true,prompt:promptText('discover',{notes:JSON.stringify(materials)})});
       store.scan();
       if(selected.some(n=>store.row(n.id)?.hash!==n.hash||privacyFor(store.read(n.id))!=='cloud'))fail('生成发现时材料已变化，请重新核对已有结果。','SOURCE_CHANGED');
@@ -1175,8 +1178,11 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     const snapshots = job.payload.snapshots;
     if (!validMaterialSnapshots(snapshots)) fail('索引任务缺少点击时的资料版本；请主动重试以使用当前资料。', 'OUTBOUND_INTENT_REQUIRED');
     const ids=snapshots.map(n=>n.noteId);
+    // Share the reconciled store within each synchronous stretch. The scan after
+    // every embedding await refreshes it before response writes and later notes.
+    if(ids.length)store.scan();
     for(let i=0;i<ids.length;i++) {
-      store.scan(); if(!store.row(ids[i]))continue;
+      if(!store.row(ids[i]))continue;
       const n=store.read(ids[i]), model=settings().embedding.model;
       store.index(n.id,`${n.title}\n${n.body}`);
       if(n.hash===snapshots[i].hash&&settings().embedding.enabled&&privacyFor(n)==='cloud'&&['knowledge','source','topic'].includes(n.kind)&&n.meta.stage!=='retired'&&!n.meta.supersededBy) {
@@ -1236,7 +1242,17 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     })().finally(() => { pausing = false; pausePromise = null; });
     return pausePromise;
   }
-  function tick(){if(practice)return runJobs();store.ensureFresh();const cfg=settings(),date=learningDate(),time=new Intl.DateTimeFormat('en-GB',{timeZone:cfg.timezone,hour:'2-digit',minute:'2-digit',hour12:false}).format(date);if(time>=cfg.scheduleTime)today();const last=store.get('schedule','discovery');if(store.list().some(n=>n.kind==='knowledge')&&(!last||date.getTime()-Date.parse(last.at)>cfg.discoveryDays*86400000))queue('discover',{},`discovery:${localDay(date,cfg.timezone)}`);return runJobs();}
+  function tick() {
+    if (practice) return runJobs();
+    const cfg = settings(), date = learningDate();
+    const time = new Intl.DateTimeFormat('en-GB', { timeZone: cfg.timezone, hour: '2-digit', minute: '2-digit', hour12: false }).format(date);
+    // today() performs the same freshness check; each tick needs it only once.
+    if (time >= cfg.scheduleTime) today();
+    else store.ensureFresh();
+    const last = store.get('schedule', 'discovery');
+    if (store.list().some(n => n.kind === 'knowledge') && (!last || date.getTime() - Date.parse(last.at) > cfg.discoveryDays * 86400000)) queue('discover', {}, `discovery:${localDay(date, cfg.timezone)}`);
+    return runJobs();
+  }
   function demo(){const existing=store.list().filter(n=>n.meta.demo);if(existing.length)return{notes:existing};const source=store.create({kind:'source',title:'演示资料 · 小林的读书项目',body:'【虚构演示，不代表用户真实经历】小林正在整理一份读书报告。他保存了原始摘录，希望用自己的话说明观点，再找到能支持或反对它的材料。此条用于体验输入、查找和编辑。',meta:{demo:true,privacy:'local',platform:'内置演示'}});const note=store.create({kind:'knowledge',title:'演示知识 · 给读书报告保留出处',body:'【演示设定】为小林的读书报告记录：一句观点、对应原文、页码，以及哪些条件会限制该观点。\n\n练习：假设你是小林，请用自己的话说明报告中为何要保留出处。这个练习仅针对上述虚构任务，没有预先记录任何学习成绩。',meta:{demo:true,privacy:'local',stage:'candidate',topic:'读书与表达',depth:'explain',sources:[{id:source.id,role:'input'}],promotionReason:'用于试用学习流程，可自行加入学习。'}});return{notes:[source,note]};}
   function diagnostics() {
     store.scan();
@@ -1317,7 +1333,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     confirmRestore(input) { requireCapture(); return undoController.confirmRestore(input, undoAuthority); },
   };
   const chatgpt = createChatgptBridge({ getStore: () => store, settings, search: tracked(search), getNote, readStructure: id => readImportedView(store,getNote(id)), related, undo: chatgptUndo, receiveSnapshot: receiveHistorySnapshot });
-  sourceFiles = createSourceFiles({ store, getNote });
+  sourceFiles = createSourceFiles({ store });
   const uploadFile = input => sourceFiles.receive(input);
   const revertUpload = id => sourceFiles.revert(id);
   const commitFile = tracked(input => sourceFiles.commit(input));

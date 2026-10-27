@@ -139,12 +139,182 @@ test('topic membership order and explicit prerequisite ids determine the daily l
   assert.equal(started.topicIndex, -1);
 });
 
+test('today computes each topic path once per snapshot without sharing member prerequisites', t => {
+  const h = harness(t), ids = ['path_a', 'path_b', 'path_c', 'path_d', 'path_e', 'path_f', 'path_p'];
+  for (const id of ids) h.store.create({ id, kind: 'knowledge', title: `合成${id}`, body: '【合成测试】主题路径。', meta: { stage: 'learning', depth: 'explain', ...(id === 'path_b' ? { prerequisites: ['path_p'] } : {}) } });
+  let topic = h.learning.createTopic({ title: '合成复用路径', body: '【合成测试】有序成员。', noteIds: ids.slice(0, 6) });
+  h.configure({ dailyMinutes: 40 });
+  h.store.ensureFresh();
+  const reads = new Map(), list = h.store.list.bind(h.store);
+  // Count actual prerequisite reads without replacing path calculation or storage.
+  t.mock.method(h.store, 'list', () => list().map(note => {
+    const prerequisites = note.meta.prerequisites;
+    Object.defineProperty(note.meta, 'prerequisites', { enumerable: true, get() {
+      reads.set(note.id, (reads.get(note.id) || 0) + 1);
+      return prerequisites;
+    } });
+    return note;
+  }));
+  const first = h.learning.today();
+  assert.deepEqual(first.items.map(item => item.noteId), ['path_a', 'path_p', 'path_b', 'path_c', 'path_d', 'path_e', 'path_f']);
+  assert.equal(reads.get(topic.id), 1, 'one path construction for the topic');
+  for (const id of ids) assert.ok(reads.get(id) <= 3, 'one path read and at most two independent member dependency reads');
+  topic = h.store.update(topic.id, { expectedHash: topic.hash, meta: { noteIds: ['path_f', 'path_a', 'path_b', 'path_c', 'path_d', 'path_e'] } });
+  h.store.ensureFresh();
+  reads.clear();
+  const reordered = h.learning.today();
+  assert.deepEqual(reordered.items.map(item => item.noteId), ['path_f', 'path_a', 'path_p', 'path_b', 'path_c', 'path_d', 'path_e']);
+  assert.equal(reads.get(topic.id), 1, 'a new snapshot builds a new path');
+  for (const id of ids) assert.ok(reads.get(id) <= 3);
+  assert.equal(h.calls.length, 0);
+});
+
+test('today keeps overlapping topic paths and each member prerequisite distinct across calls', t => {
+  const h = harness(t);
+  for (const id of ['shared_a', 'shared_b', 'shared_c', 'shared_d']) h.store.create({ id, kind: 'knowledge', title: `合成${id}`, body: '【合成测试】重叠主题。', meta: { stage: 'learning', depth: 'explain', ...(id === 'shared_d' ? { prerequisites: ['shared_b'] } : {}) } });
+  const left = h.learning.createTopic({ title: '合成左主题', body: '【合成测试】左侧顺序。', noteIds: ['shared_a', 'shared_c'] });
+  const right = h.learning.createTopic({ title: '合成右主题', body: '【合成测试】右侧顺序。', noteIds: ['shared_b', 'shared_c', 'shared_d'] });
+  h.configure({ focusTopics: [right.title] });
+  let result = h.learning.today();
+  assert.deepEqual(result.items.map(item => item.noteId), ['shared_a', 'shared_b', 'shared_c', 'shared_d']);
+  assert.equal(result.items.find(item => item.noteId === 'shared_c').topicId, right.id);
+  h.configure({ focusTopics: [left.title] });
+  result = h.learning.today();
+  assert.equal(result.items.find(item => item.noteId === 'shared_c').topicId, left.id);
+  h.learning.topicAction(left.id, { action: 'pause' });
+  result = h.learning.today();
+  assert.deepEqual(result.items.map(item => item.noteId), ['shared_b']);
+  assert.equal(result.blocked.some(item => item.noteId === 'shared_d' && item.prerequisiteId === 'shared_c'), true);
+  h.store.put('sessions', 'shared_completed', { noteId: 'shared_c', status: 'completed', completion: { reviewSettled: true } });
+  assert.deepEqual(h.learning.today().items.map(item => item.noteId), ['shared_b', 'shared_d']);
+  assert.equal(h.calls.length, 0);
+});
+
 test('an inactive prerequisite blocks dependent teaching instead of silently teaching past it', t => {
   const h = harness(t), prerequisite = h.knowledge('待选学前置', { stage: 'candidate' }), dependent = h.knowledge('依赖前置的知识', { prerequisites: [prerequisite.id] });
   const result = h.learning.today();
   assert.equal(result.items.some(x => x.noteId === dependent.id), false);
   assert.equal(result.blocked.some(x => x.prerequisiteId === prerequisite.id), true);
   assert.equal(result.backlog, 1);
+});
+
+test('topics shares one completion snapshot and notes read across its topic details', t => {
+  const h = harness(t), a = h.knowledge('合成已确认', { confirmedAt: '2026-10-26T00:00:00.000Z' });
+  const b = h.knowledge('合成已结算'), c = h.knowledge('合成未结算');
+  h.store.put('sessions', 'topics_settled', { noteId: b.id, status: 'completed', completion: { reviewSettled: true } });
+  h.store.put('sessions', 'topics_unsettled', { noteId: c.id, status: 'completed' });
+  let sessionReads = 0, noteReads = 0;
+  const records = h.store.records.bind(h.store), list = h.store.list.bind(h.store);
+  t.mock.method(h.store, 'records', (...args) => { if (args[0] === 'sessions') sessionReads++; return records(...args); });
+  t.mock.method(h.store, 'list', (...args) => { noteReads++; return list(...args); });
+  assert.deepEqual(h.learning.topics(), []);
+  assert.equal(sessionReads, 0, 'no completion scan when there are no topics');
+  assert.equal(noteReads, 2, 'one mirror scan and one topic snapshot');
+  const topics = [
+    h.store.create({ id: 'snapshot_left', kind: 'topic', title: '合成左主题', body: '【合成测试】主题。', meta: { noteIds: [a.id, b.id, c.id, 'missing_member'] } }),
+    h.store.create({ id: 'snapshot_right', kind: 'topic', title: '合成右主题', body: '【合成测试】主题。', meta: { noteIds: [c.id, a.id] } }),
+    h.store.create({ id: 'snapshot_paused', kind: 'topic', title: '合成暂停主题', body: '【合成测试】主题。', meta: { noteIds: [c.id], paused: true } }),
+  ];
+  sessionReads = 0; noteReads = 0;
+  const result = h.learning.topics();
+  assert.deepEqual(result.map(topic => topic.id), topics.map(topic => topic.id).reverse());
+  const left = result.find(topic => topic.id === topics[0].id);
+  assert.deepEqual(left.members.map(member => [member.id, member.completed, member.available]),
+    [[a.id, true, true], [b.id, true, true], [c.id, false, true], ['missing_member', false, false]]);
+  assert.equal(left.members[3].title, '内容已删除或暂不可读');
+  assert.equal(left.progress.nextNoteId, c.id);
+  assert.deepEqual(left.progress.completedNoteIds, [a.id, b.id]);
+  assert.equal(result[0].progress.nextNoteId, null);
+  assert.equal(sessionReads, 1, 'all topics share one sessions query');
+  assert.equal(noteReads, 2, 'topic details reuse the notes already loaded after scanning');
+  assert.equal(h.calls.length, 0);
+});
+
+test('topics snapshots do not outlive a call or replace fresh standalone topic details', t => {
+  const h = harness(t), a = h.knowledge('合成先学'), b = h.knowledge('合成后学');
+  const topic = h.learning.createTopic({ title: '合成实时详情', body: '【合成测试】实时进度。', noteIds: [a.id, b.id] });
+  h.store.put('sessions', 'topics_reading', { id: 'topics_reading', noteId: a.id, topicId: topic.id, status: 'reading', materialWarnings: [] });
+  assert.equal(h.learning.topics()[0].progress.nextNoteId, a.id);
+  h.store.put('sessions', 'topics_new_completion', { noteId: a.id, status: 'completed', completion: { reviewSettled: true } });
+  h.store.update(b.id, { expectedHash: b.hash, title: '合成更新后的后学' });
+  let progress = h.learning.session('topics_reading').topicProgress;
+  assert.deepEqual(progress.completedNoteIds, [a.id]);
+  assert.equal(progress.nextNoteId, b.id);
+  assert.equal(progress.nextNoteTitle, '合成更新后的后学');
+  h.configure({ pausedIds: [b.id] });
+  progress = h.learning.session('topics_reading').topicProgress;
+  assert.equal(progress.nextNoteId, null);
+  assert.equal(progress.blockedNoteId, b.id);
+  const refreshed = h.learning.topics()[0];
+  assert.deepEqual(refreshed.progress, progress);
+  assert.equal(refreshed.members[1].title, '合成更新后的后学');
+  h.reopen();
+  h.configure({ pausedIds: [] });
+  assert.equal(h.learning.topics()[0].progress.nextNoteId, b.id);
+  assert.equal(h.learning.session('topics_reading').topicProgress.nextNoteId, b.id);
+  assert.equal(h.calls.length, 0);
+});
+
+test('topic member validation scans once before saving and keeps the post-save link checks', t => {
+  const h = harness(t), members = Array.from({ length: 4 }, (_, i) => h.knowledge(`合成批量成员${i}`));
+  let beforeSave = true, validationScans = 0, savedScans = 0, previews = 0;
+  const scan = h.store.scan.bind(h.store), create = h.store.create.bind(h.store), update = h.store.update.bind(h.store), preview = h.store.managedLinksPreview.bind(h.store);
+  t.mock.method(h.store, 'scan', (...args) => { if (beforeSave) validationScans++; else savedScans++; return scan(...args); });
+  t.mock.method(h.store, 'create', input => { if (input.kind === 'topic') beforeSave = false; return create(input); });
+  t.mock.method(h.store, 'update', (...args) => { beforeSave = false; return update(...args); });
+  t.mock.method(h.store, 'managedLinksPreview', (...args) => { previews++; return preview(...args); });
+  const ids = members.map(note => note.id);
+  let topic = h.learning.createTopic({ title: '合成批量验证', body: '【合成测试】说明。', noteIds: [...ids, ids[0]] });
+  assert.deepEqual(topic.noteIds, ids, 'duplicate members still preserve first occurrence order');
+  assert.equal(validationScans, 1, 'creation checks member freshness once');
+  assert.ok(savedScans > 0 && previews > 0, 'post-save verification remains active');
+  beforeSave = true; validationScans = 0; savedScans = 0; previews = 0;
+  topic = h.learning.updateTopic(topic.id, { expectedHash: topic.hash, meta: { noteIds: ids.toReversed() } });
+  assert.deepEqual(topic.noteIds, ids.toReversed());
+  assert.equal(validationScans, 1, 'saving reuses the initial topic read freshness check');
+  assert.ok(savedScans > 0 && previews > 0);
+  assert.equal(topic.linkSyncConflict, null);
+  assert.equal(h.calls.length, 0);
+});
+
+test('topic member validation still rejects external deletion, duplicate IDs and changed kinds', t => {
+  for (const change of ['deleted', 'duplicate', 'source']) {
+    const h = harness(t), note = h.knowledge(`合成外改${change}`);
+    const topic = h.learning.createTopic({ title: `合成验证${change}`, body: '【合成测试】说明。' });
+    const file = path.join(h.store.vaultDir, note.path);
+    if (change === 'deleted') fs.unlinkSync(file);
+    else if (change === 'duplicate') fs.copyFileSync(file, path.join(path.dirname(file), 'duplicate-member.md'));
+    else fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('kind: knowledge', 'kind: source'));
+    const expected = change === 'source'
+      ? { code: 'INVALID', status: 400, message: '主题成员应选择知识条目，不能选择原始资料或报告。' }
+      : { code: 'NOT_FOUND', status: 404, message: '内容不存在，可能已经删除或存在文件冲突。' };
+    const matches = error => error.code === expected.code && error.status === expected.status && error.message === expected.message;
+    assert.throws(() => h.learning.createTopic({ title: '合成拒绝创建', noteIds: [note.id] }), matches, change);
+    assert.throws(() => h.learning.updateTopic(topic.id, { expectedHash: topic.hash, meta: { noteIds: [note.id] } }), matches, change);
+    assert.equal(h.calls.length, 0);
+  }
+});
+
+test('topic saving detects an external managed-block edit after member validation', t => {
+  const h = harness(t), a = h.knowledge('合成后验甲'), b = h.knowledge('合成后验乙');
+  const topic = h.learning.createTopic({ title: '合成保存后复核', body: '【合成测试】人工说明。', noteIds: [a.id, b.id] });
+  const update = h.store.update.bind(h.store);
+  let injected = false;
+  t.mock.method(h.store, 'update', (...args) => {
+    const saved = update(...args);
+    if (!injected && args[0] === topic.id) {
+      injected = true;
+      const file = path.join(h.store.vaultDir, saved.path);
+      fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('## 已确认的知识链接', '## 已确认的知识链接\n\n合成外部编辑必须保留'));
+    }
+    return saved;
+  });
+  const saved = h.learning.updateTopic(topic.id, { expectedHash: topic.hash, meta: { noteIds: [b.id, a.id] } });
+  assert.equal(injected, true);
+  assert.match(saved.body, /合成外部编辑必须保留/);
+  assert.match(saved.linkSyncConflict, /外部修改/);
+  assert.deepEqual(saved.noteIds, [b.id, a.id]);
+  assert.equal(h.calls.length, 0);
 });
 
 test('topic members can be added, removed and reordered, with hash checking and synchronized pause membership', t => {
