@@ -1,4 +1,12 @@
 
+## 2026-10-27 检索片段按笔记定位
+
+- 接续 `20da16298f56958141e1619092b15f5161690a3d`，只处理 `index_chunks` 的 `noteId` 定位；上一项扫描修复和有效验证保留，不扩展片段写入、向量计算或接口。修改前增量重读 #100 普通评论、行内与总结，与上一项记录一致，无本范围新增反馈。
+- 原 schema 只有 `id` 主键索引，不能覆盖 `Store.index` 的 `SELECT * FROM index_chunks WHERE noteId=?`，以及删除笔记/扫描移除的 `DELETE FROM index_chunks WHERE noteId=?`。SQLite 实测两者均为 `SCAN index_chunks`。唯一产品改动为初始化时 `CREATE INDEX IF NOT EXISTS index_chunks_note ON index_chunks(noteId)`；不添加唯一约束，不改表、行、原文或查询。
+- 新增两项合成数据库回归（新建、保留数据/向量且移除该索引以复现旧 schema）。修前均因全表扫描实际失败；修后两次重新打开，两种查询均为 `SEARCH index_chunks USING INDEX index_chunks_note (noteId=?)`。核对仅一个非唯一 noteId 索引、片段/向量和磁盘 Markdown 字节不变、原始查询结果与缺失向量排序一致、定向删除与事务回滚一致。命令：`node --test tests/chunk-note-index.test.mjs`，2/2 通过。
+- 首次打开旧库需扫描片段构建索引，并增加索引存储及后续维护开销；未测真实大库启动耗时，不宣称其他全片段查询或前一项跨 await 的全库扫描已消除。不读取或迁移真实库，不调用 AI、不安装依赖、不运行前轮全部用例或全量测试。
+- 公开差异仅为原创单行 schema 增量、合成回归及说明，无真实资料、凭据、第三方资产、依赖或权限变化。独立提交并推送现有任务分支作为备份，不提 PR、不合并、不部署；当前无本补丁 CI 或云端审查结论。
+
 ## 2026-10-27 批量重建索引扫描
 
 - 基线为远端 main `fed3e956066e96e24b9c3199f493f7a13f0ea613`；修改前读取最新 PR 列表及已合并 #98/#100/#101 的普通评论、行内意见与审阅总结。#100 两项 P2 已有修复回复及代码复审回执，均不涉及本轮索引；其安全复审仍显示 running，不记为完成。既有其他范围的跟进保留，不扩大本任务。

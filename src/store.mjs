@@ -88,6 +88,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS versions (id TEXT PRIMARY KEY,noteId TEXT NOT NULL,path TEXT NOT NULL,hash TEXT NOT NULL,raw TEXT NOT NULL,reason TEXT NOT NULL,createdAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS versions_note ON versions(noteId);
       CREATE TABLE IF NOT EXISTS index_chunks (id TEXT PRIMARY KEY,noteId TEXT NOT NULL,body TEXT NOT NULL,vector TEXT,model TEXT);
+      CREATE INDEX IF NOT EXISTS index_chunks_note ON index_chunks(noteId);
       CREATE TABLE IF NOT EXISTS restore_transactions (id TEXT PRIMARY KEY,digest TEXT NOT NULL,committed INTEGER NOT NULL DEFAULT 0);`);
     this.conflicts = [];
     this.scanCache = new Map(); this.lastFullScan = 0;
