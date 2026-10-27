@@ -1144,14 +1144,16 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     const scope=job.payload.useAI===true ? materialScope(job) : null;
     store.scan(); const notes=store.list().filter(n=>n.kind==='knowledge'&&n.meta.stage!=='retired');
     const relations=store.records('relations').filter(r=>r.state==='accepted'), linked=new Set(relations.flatMap(r=>[r.fromId,r.toId]));
-    const isolated=notes.filter(n=>!linked.has(n.id)), unused=notes.filter(n=>!store.records('uses').some(u=>u.noteId===n.id));
+    const useCounts=new Map();
+    if(notes.length)for(const use of store.records('uses'))useCounts.set(use.noteId,(useCounts.get(use.noteId)||0)+1);
+    const isolated=notes.filter(n=>!linked.has(n.id)), unused=notes.filter(n=>!useCounts.has(n.id));
     let body=`# 知识结构检查\n\n检查时间：${now()}\n知识条目：${notes.length}；已确认关系：${relations.length}。\n\n## 孤立节点\n${isolated.slice(0,30).map(n=>`- ${n.title}（${n.id}）`).join('\n') || '无'}\n\n## 尚无实际输出使用记录\n${unused.slice(0,30).map(n=>`- ${n.title}`).join('\n') || '无'}\n\n以上只是导航线索，不以曝光次数判断价值。`;
     const changed=new Set(store.records('changed').map(n=>n.id));
     let discoveryIssue=null;
     const selected=[...notes.filter(n=>changed.has(n.id)),...isolated,...notes].filter((n,i,a)=>(!scope||scope.get(n.id)===n.hash)&&privacyFor(n)==='cloud'&&a.findIndex(v=>v.id===n.id)===i).slice(0,16);
     let discoveryResult={findings:[],rejected:0},summaryStatus='not_requested',detailStatus='not_requested';
     if(job.payload.useAI===true&&settings().ai.enabled&&selected.length){try {
-      const materials=selected.map(n=>({id:n.id,sourceIds:learningSourceIds(n),title:outboundTitle(n),topic:n.meta.topic,useCount:store.records('uses').filter(u=>u.noteId===n.id).length,summary:outboundText(n.body).slice(0,900)}));
+      const materials=selected.map(n=>({id:n.id,sourceIds:learningSourceIds(n),title:outboundTitle(n),topic:n.meta.topic,useCount:useCounts.get(n.id)||0,summary:outboundText(n.body).slice(0,900)}));
       const answer=await ai.generate({system:promptText('serviceSystem'),privacy:'cloud',signal,json:true,prompt:promptText('discover',{notes:JSON.stringify(materials)})});
       store.scan();
       if(selected.some(n=>store.row(n.id)?.hash!==n.hash||privacyFor(store.read(n.id))!=='cloud'))fail('生成发现时材料已变化，请重新核对已有结果。','SOURCE_CHANGED');
