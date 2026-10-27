@@ -229,7 +229,8 @@ export class Store {
     const reusable = new Map();
     for (const chunk of previous) if (!reusable.has(chunk.body) || chunk.vector !== null) reusable.set(chunk.body, chunk);
     const keep = new Set();
-    const insert = this.db.prepare('INSERT INTO index_chunks(id,noteId,body,vector,model) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body,vector=excluded.vector,model=excluded.model');
+    const insert = this.db.prepare(`INSERT INTO index_chunks(id,noteId,body,vector,model) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body,vector=excluded.vector,model=excluded.model
+      WHERE index_chunks.body IS NOT excluded.body OR index_chunks.vector IS NOT excluded.vector OR index_chunks.model IS NOT excluded.model`);
     for (let i = 0; i < body.length; i += 700) {
       const chunkId = `${id}:${i}`, text = body.slice(i, i + 900), old = reusable.get(text);
       keep.add(chunkId); insert.run(chunkId, id, text, old?.vector ?? null, old?.model ?? null);
