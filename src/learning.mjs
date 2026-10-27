@@ -26,11 +26,11 @@ export function createLearning(dependencies) {
   // Read the getter at each operation so changing the configured Vault does not retain an old Store.
   const storage = () => dependencies.store;
   const privacyFor = note => dependencies.privacyFor ? dependencies.privacyFor(note) : storage().outboundPrivacy(note);
-  const completedIds = () => {
+  const completedIds = all => {
     const store = storage();
     return new Set([
       ...store.records('sessions').filter(s => s.status === 'completed' && s.completion?.reviewSettled).map(s => s.noteId),
-      ...store.list().filter(n => n.kind === 'knowledge' && n.meta.confirmedAt).map(n => n.id),
+      ...(all ?? store.list()).filter(n => n.kind === 'knowledge' && n.meta.confirmedAt).map(n => n.id),
     ]);
   };
   const topicPaused = topic => topic.meta.paused ?? storage().get('topics', topic.id, {}).paused ?? false;
@@ -47,8 +47,8 @@ export function createLearning(dependencies) {
     for (const id of textList(topic.meta.noteIds)) visit(id);
     return ordered;
   }
-  function topicDetails(topic, all = storage().list()) {
-    const done = completedIds(), byId = new Map(all.map(n => [n.id, n]));
+  function topicDetails(topic, all = storage().list(), snapshot) {
+    const done = snapshot?.done ?? completedIds(), byId = snapshot?.byId ?? new Map(all.map(n => [n.id, n]));
     const pausedIds = settings().pausedIds || [];
     const members = textList(topic.meta.noteIds).map((id, index) => {
       const n = byId.get(id);
@@ -64,7 +64,13 @@ export function createLearning(dependencies) {
       progress: { total: members.length, completedCount: members.filter(m => m.completed).length, completedNoteIds: members.filter(m => m.completed).map(m => m.id), nextNoteId: canStart ? next.id : null, nextNoteTitle: canStart ? next.title : null, blockedNoteId: next && !canStart ? next.id : null },
     };
   }
-  function topics() { const store = storage(); store.scan(); const all = store.list(); return all.filter(n => n.kind === 'topic').map(n => topicDetails(n, all)); }
+  function topics() {
+    const store = storage(); store.scan();
+    const all = store.list(), bundles = all.filter(n => n.kind === 'topic');
+    if (!bundles.length) return [];
+    const snapshot = { done: completedIds(all), byId: new Map(all.map(n => [n.id, n])) };
+    return bundles.map(n => topicDetails(n, all, snapshot));
+  }
 
   function today() {
     const store = storage(); store.ensureFresh();

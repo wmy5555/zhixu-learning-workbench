@@ -198,6 +198,63 @@ test('an inactive prerequisite blocks dependent teaching instead of silently tea
   assert.equal(result.backlog, 1);
 });
 
+test('topics shares one completion snapshot and notes read across its topic details', t => {
+  const h = harness(t), a = h.knowledge('合成已确认', { confirmedAt: '2026-10-26T00:00:00.000Z' });
+  const b = h.knowledge('合成已结算'), c = h.knowledge('合成未结算');
+  h.store.put('sessions', 'topics_settled', { noteId: b.id, status: 'completed', completion: { reviewSettled: true } });
+  h.store.put('sessions', 'topics_unsettled', { noteId: c.id, status: 'completed' });
+  let sessionReads = 0, noteReads = 0;
+  const records = h.store.records.bind(h.store), list = h.store.list.bind(h.store);
+  t.mock.method(h.store, 'records', (...args) => { if (args[0] === 'sessions') sessionReads++; return records(...args); });
+  t.mock.method(h.store, 'list', (...args) => { noteReads++; return list(...args); });
+  assert.deepEqual(h.learning.topics(), []);
+  assert.equal(sessionReads, 0, 'no completion scan when there are no topics');
+  assert.equal(noteReads, 2, 'one mirror scan and one topic snapshot');
+  const topics = [
+    h.store.create({ id: 'snapshot_left', kind: 'topic', title: '合成左主题', body: '【合成测试】主题。', meta: { noteIds: [a.id, b.id, c.id, 'missing_member'] } }),
+    h.store.create({ id: 'snapshot_right', kind: 'topic', title: '合成右主题', body: '【合成测试】主题。', meta: { noteIds: [c.id, a.id] } }),
+    h.store.create({ id: 'snapshot_paused', kind: 'topic', title: '合成暂停主题', body: '【合成测试】主题。', meta: { noteIds: [c.id], paused: true } }),
+  ];
+  sessionReads = 0; noteReads = 0;
+  const result = h.learning.topics();
+  assert.deepEqual(result.map(topic => topic.id), topics.map(topic => topic.id).reverse());
+  const left = result.find(topic => topic.id === topics[0].id);
+  assert.deepEqual(left.members.map(member => [member.id, member.completed, member.available]),
+    [[a.id, true, true], [b.id, true, true], [c.id, false, true], ['missing_member', false, false]]);
+  assert.equal(left.members[3].title, '内容已删除或暂不可读');
+  assert.equal(left.progress.nextNoteId, c.id);
+  assert.deepEqual(left.progress.completedNoteIds, [a.id, b.id]);
+  assert.equal(result[0].progress.nextNoteId, null);
+  assert.equal(sessionReads, 1, 'all topics share one sessions query');
+  assert.equal(noteReads, 2, 'topic details reuse the notes already loaded after scanning');
+  assert.equal(h.calls.length, 0);
+});
+
+test('topics snapshots do not outlive a call or replace fresh standalone topic details', t => {
+  const h = harness(t), a = h.knowledge('合成先学'), b = h.knowledge('合成后学');
+  const topic = h.learning.createTopic({ title: '合成实时详情', body: '【合成测试】实时进度。', noteIds: [a.id, b.id] });
+  h.store.put('sessions', 'topics_reading', { id: 'topics_reading', noteId: a.id, topicId: topic.id, status: 'reading', materialWarnings: [] });
+  assert.equal(h.learning.topics()[0].progress.nextNoteId, a.id);
+  h.store.put('sessions', 'topics_new_completion', { noteId: a.id, status: 'completed', completion: { reviewSettled: true } });
+  h.store.update(b.id, { expectedHash: b.hash, title: '合成更新后的后学' });
+  let progress = h.learning.session('topics_reading').topicProgress;
+  assert.deepEqual(progress.completedNoteIds, [a.id]);
+  assert.equal(progress.nextNoteId, b.id);
+  assert.equal(progress.nextNoteTitle, '合成更新后的后学');
+  h.configure({ pausedIds: [b.id] });
+  progress = h.learning.session('topics_reading').topicProgress;
+  assert.equal(progress.nextNoteId, null);
+  assert.equal(progress.blockedNoteId, b.id);
+  const refreshed = h.learning.topics()[0];
+  assert.deepEqual(refreshed.progress, progress);
+  assert.equal(refreshed.members[1].title, '合成更新后的后学');
+  h.reopen();
+  h.configure({ pausedIds: [] });
+  assert.equal(h.learning.topics()[0].progress.nextNoteId, b.id);
+  assert.equal(h.learning.session('topics_reading').topicProgress.nextNoteId, b.id);
+  assert.equal(h.calls.length, 0);
+});
+
 test('topic members can be added, removed and reordered, with hash checking and synchronized pause membership', t => {
   const h = harness(t), a = h.knowledge('成员甲'), b = h.knowledge('成员乙'), c = h.knowledge('成员丙');
   let topic = h.learning.createTopic({ title: '可调整主题', body: '主题说明', noteIds: [a.id, b.id] });
