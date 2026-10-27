@@ -24,7 +24,7 @@ export function createCallLedger({ store, getStore = () => store, at = () => new
     if (!row) fail('CALL_NOT_FOUND', '调用记录不存在。');
     return row;
   };
-  function pending(current) { return current.records('callLedger').filter(row => unresolved.has(row.phase) || row.phase === 'resolved_unknown' && costValue(row.confirmation?.cost) === null); }
+  function pending(current, rows = current.records('callLedger')) { return rows.filter(row => unresolved.has(row.phase) || row.phase === 'resolved_unknown' && costValue(row.confirmation?.cost) === null); }
   function listPending() {
     return pending(getStore()).map(row => {
       const { id, phase, capability, model, createdAt, updatedAt, jobId, turnId, error } = row;
@@ -34,16 +34,21 @@ export function createCallLedger({ store, getStore = () => store, at = () => new
   function reserve({ capability, model = null, sourceId, key, contextKey, singleRequest = false, jobId, turnId, purpose, reservedCost = null }, config) {
     const metadata = knownPurpose(purpose) ? { purpose } : {};
     const row = transaction(current => {
-      if (pending(current).some(item => !active.has(item.id) && !allowsNew(item))) fail('CALL_RECOVERY_REQUIRED', '有结果未知或记账未完成的调用。请先在用量与费用中处理，系统不会自动重发。');
-      if (contextKey && current.records('callLedger').some(item => item.contextKey === contextKey && ['unknown','resolved_unknown'].includes(item.phase))) fail('CALL_RECOVERY_REQUIRED', '原操作没有可恢复的响应。确认继续其他请求不会授权该操作重新发送。');
-      if (singleRequest && contextKey && current.records('callLedger').some(item => item.contextKey === contextKey && item.phase !== 'cancelled')) fail('CALL_RECOVERY_REQUIRED', '此轮操作已有调用，请恢复已有结果；修改输入或模型配置不会重新发送。');
-      if (key && current.records('callLedger').some(item => item.key === key && item.phase !== 'cancelled')) fail('CALL_RECOVERY_REQUIRED', '同一操作已有调用记录，请恢复已有结果，不能重新发送。');
+      const ledgerRows = current.records('callLedger');
+      if (pending(current, ledgerRows).some(item => !active.has(item.id) && !allowsNew(item))) fail('CALL_RECOVERY_REQUIRED', '有结果未知或记账未完成的调用。请先在用量与费用中处理，系统不会自动重发。');
+      if (contextKey && ledgerRows.some(item => item.contextKey === contextKey && ['unknown','resolved_unknown'].includes(item.phase))) fail('CALL_RECOVERY_REQUIRED', '原操作没有可恢复的响应。确认继续其他请求不会授权该操作重新发送。');
+      if (singleRequest && contextKey && ledgerRows.some(item => item.contextKey === contextKey && item.phase !== 'cancelled')) fail('CALL_RECOVERY_REQUIRED', '此轮操作已有调用，请恢复已有结果；修改输入或模型配置不会重新发送。');
+      if (key && ledgerRows.some(item => item.key === key && item.phase !== 'cancelled')) fail('CALL_RECOVERY_REQUIRED', '同一操作已有调用记录，请恢复已有结果，不能重新发送。');
       const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: config.timezone || 'Asia/Singapore', year: 'numeric', month: '2-digit', day: '2-digit' });
       const dayOf = value => { const date = new Date(value); return Number.isFinite(date.getTime()) ? formatter.format(date) : null; };
       const now = timestamp(), today = dayOf(now), calls = current.records('calls');
-      if (calls.some(call => !dayOf(call.createdAt))) fail('BUDGET_UNKNOWN', '调用记录日期无效，无法核对预算。');
-      const todayCalls = calls.filter(call => dayOf(call.createdAt) === today);
-      const monthly = calls.filter(call => dayOf(call.createdAt).startsWith(today.slice(0, 7)));
+      const callDays = calls.map(call => {
+        const day = dayOf(call.createdAt);
+        if (!day) fail('BUDGET_UNKNOWN', '调用记录日期无效，无法核对预算。');
+        return day;
+      });
+      const todayCalls = calls.filter((_, index) => callDays[index] === today);
+      const monthly = calls.filter((_, index) => callDays[index].startsWith(today.slice(0, 7)));
       const dailyLimit = costValue(config.ai?.dailyCallLimit), monthlyBudget = costValue(config.ai?.monthlyBudget);
       if (dailyLimit !== null && todayCalls.length >= dailyLimit) fail('BUDGET_EXCEEDED', '今日外部调用次数已达到上限。');
       if (monthlyBudget > 0) {
