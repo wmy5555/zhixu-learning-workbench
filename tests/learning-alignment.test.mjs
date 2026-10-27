@@ -139,6 +139,57 @@ test('topic membership order and explicit prerequisite ids determine the daily l
   assert.equal(started.topicIndex, -1);
 });
 
+test('today computes each topic path once per snapshot without sharing member prerequisites', t => {
+  const h = harness(t), ids = ['path_a', 'path_b', 'path_c', 'path_d', 'path_e', 'path_f', 'path_p'];
+  for (const id of ids) h.store.create({ id, kind: 'knowledge', title: `合成${id}`, body: '【合成测试】主题路径。', meta: { stage: 'learning', depth: 'explain', ...(id === 'path_b' ? { prerequisites: ['path_p'] } : {}) } });
+  let topic = h.learning.createTopic({ title: '合成复用路径', body: '【合成测试】有序成员。', noteIds: ids.slice(0, 6) });
+  h.configure({ dailyMinutes: 40 });
+  h.store.ensureFresh();
+  const reads = new Map(), list = h.store.list.bind(h.store);
+  // Count actual prerequisite reads without replacing path calculation or storage.
+  t.mock.method(h.store, 'list', () => list().map(note => {
+    const prerequisites = note.meta.prerequisites;
+    Object.defineProperty(note.meta, 'prerequisites', { enumerable: true, get() {
+      reads.set(note.id, (reads.get(note.id) || 0) + 1);
+      return prerequisites;
+    } });
+    return note;
+  }));
+  const first = h.learning.today();
+  assert.deepEqual(first.items.map(item => item.noteId), ['path_a', 'path_p', 'path_b', 'path_c', 'path_d', 'path_e', 'path_f']);
+  assert.equal(reads.get(topic.id), 1, 'one path construction for the topic');
+  for (const id of ids) assert.ok(reads.get(id) <= 3, 'one path read and at most two independent member dependency reads');
+  topic = h.store.update(topic.id, { expectedHash: topic.hash, meta: { noteIds: ['path_f', 'path_a', 'path_b', 'path_c', 'path_d', 'path_e'] } });
+  h.store.ensureFresh();
+  reads.clear();
+  const reordered = h.learning.today();
+  assert.deepEqual(reordered.items.map(item => item.noteId), ['path_f', 'path_a', 'path_p', 'path_b', 'path_c', 'path_d', 'path_e']);
+  assert.equal(reads.get(topic.id), 1, 'a new snapshot builds a new path');
+  for (const id of ids) assert.ok(reads.get(id) <= 3);
+  assert.equal(h.calls.length, 0);
+});
+
+test('today keeps overlapping topic paths and each member prerequisite distinct across calls', t => {
+  const h = harness(t);
+  for (const id of ['shared_a', 'shared_b', 'shared_c', 'shared_d']) h.store.create({ id, kind: 'knowledge', title: `合成${id}`, body: '【合成测试】重叠主题。', meta: { stage: 'learning', depth: 'explain', ...(id === 'shared_d' ? { prerequisites: ['shared_b'] } : {}) } });
+  const left = h.learning.createTopic({ title: '合成左主题', body: '【合成测试】左侧顺序。', noteIds: ['shared_a', 'shared_c'] });
+  const right = h.learning.createTopic({ title: '合成右主题', body: '【合成测试】右侧顺序。', noteIds: ['shared_b', 'shared_c', 'shared_d'] });
+  h.configure({ focusTopics: [right.title] });
+  let result = h.learning.today();
+  assert.deepEqual(result.items.map(item => item.noteId), ['shared_a', 'shared_b', 'shared_c', 'shared_d']);
+  assert.equal(result.items.find(item => item.noteId === 'shared_c').topicId, right.id);
+  h.configure({ focusTopics: [left.title] });
+  result = h.learning.today();
+  assert.equal(result.items.find(item => item.noteId === 'shared_c').topicId, left.id);
+  h.learning.topicAction(left.id, { action: 'pause' });
+  result = h.learning.today();
+  assert.deepEqual(result.items.map(item => item.noteId), ['shared_b']);
+  assert.equal(result.blocked.some(item => item.noteId === 'shared_d' && item.prerequisiteId === 'shared_c'), true);
+  h.store.put('sessions', 'shared_completed', { noteId: 'shared_c', status: 'completed', completion: { reviewSettled: true } });
+  assert.deepEqual(h.learning.today().items.map(item => item.noteId), ['shared_b', 'shared_d']);
+  assert.equal(h.calls.length, 0);
+});
+
 test('an inactive prerequisite blocks dependent teaching instead of silently teaching past it', t => {
   const h = harness(t), prerequisite = h.knowledge('待选学前置', { stage: 'candidate' }), dependent = h.knowledge('依赖前置的知识', { prerequisites: [prerequisite.id] });
   const result = h.learning.today();

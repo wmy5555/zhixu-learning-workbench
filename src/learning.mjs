@@ -82,15 +82,20 @@ export function createLearning(dependencies) {
     // Older review records may not carry noteId; read by key for compatibility.
     for (const n of candidates) if (!reviews.has(n.id)) { const review = store.get('reviews', n.id); if (review) reviews.set(n.id, review); }
     const mistakes = new Map(all.filter(n => n.kind === 'mistake' && n.meta.correctionState === 'open').map(n => [n.meta.noteId, n]));
-    const bundleFor = new Map();
-    for (const bundle of bundles.filter(n => !topicPaused(n))) for (const id of topicPath(bundle, all)) if (!bundleFor.has(id)) bundleFor.set(id, bundle);
+    // Paths depend only on each topic and this notes snapshot, not on candidates.
+    const bundleFor = new Map(), bundlePaths = new Map();
+    for (const bundle of bundles.filter(n => !topicPaused(n))) {
+      const path = topicPath(bundle, all);
+      bundlePaths.set(bundle, path);
+      for (const id of path) if (!bundleFor.has(id)) bundleFor.set(id, bundle);
+    }
     const due = n => !reviews.get(n.id)?.dueAt || reviews.get(n.id).dueAt <= timestamp;
     const priority = n => reviews.get(n.id)?.dueAt && due(n) ? 0 : mistakes.has(n.id) ? 1 : 2;
     const waiting = candidates.filter(n => due(n) && !fixedIds.has(n.id));
     waiting.sort((a, b) => priority(a) - priority(b) || (reviews.get(a.id)?.dueAt || '').localeCompare(reviews.get(b.id)?.dueAt || '') || Number(config.focusTopics.includes(b.meta.topic)) - Number(config.focusTopics.includes(a.meta.topic)) || String(a.meta.topic || '').localeCompare(String(b.meta.topic || '')) || a.id.localeCompare(b.id));
     const ordered = [], selected = new Set(), visiting = new Set(), blocked = [];
     const dependenciesFor = n => {
-      const bundle = bundleFor.get(n.id), path = bundle ? topicPath(bundle, all) : [];
+      const path = bundlePaths.get(bundleFor.get(n.id)) || [];
       const index = path.indexOf(n.id);
       return uniqueStrings([...textList(n.meta.prerequisites).filter(id => byId.get(id)?.kind === 'knowledge'), ...(index > 0 ? path.slice(0, index) : [])]);
     };
