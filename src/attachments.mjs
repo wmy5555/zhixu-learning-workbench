@@ -47,7 +47,8 @@ export function decodeFile(input) {
     const [width, height] = imageDimensions(bytes, ext);
     if (!width || !height || width > 16000 || height > 16000 || width * height > 40_000_000) reject('图片尺寸无效或超过 4000 万像素 / 单边 16000 像素限制。');
   }
-  return { bytes, descriptor: { id: digest(bytes) + '.' + (ext === 'jpeg' ? 'jpg' : ext), name, mime, size: bytes.length, sha256: digest(bytes), kind: mime.startsWith('image/') ? 'image' : ext === 'pdf' ? 'pdf' : 'word', format: ext } };
+  const sha256 = digest(bytes);
+  return { bytes, descriptor: { id: sha256 + '.' + (ext === 'jpeg' ? 'jpg' : ext), name, mime, size: bytes.length, sha256, kind: mime.startsWith('image/') ? 'image' : ext === 'pdf' ? 'pdf' : 'word', format: ext } };
 }
 function imageDimensions(b, ext) {
   if (ext === 'png') return [b.readUInt32BE(16), b.readUInt32BE(20)];
