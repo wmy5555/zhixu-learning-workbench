@@ -26,11 +26,11 @@ export function createLearning(dependencies) {
   // Read the getter at each operation so changing the configured Vault does not retain an old Store.
   const storage = () => dependencies.store;
   const privacyFor = note => dependencies.privacyFor ? dependencies.privacyFor(note) : storage().outboundPrivacy(note);
-  const completedIds = () => {
+  const completedIds = all => {
     const store = storage();
     return new Set([
       ...store.records('sessions').filter(s => s.status === 'completed' && s.completion?.reviewSettled).map(s => s.noteId),
-      ...store.list().filter(n => n.kind === 'knowledge' && n.meta.confirmedAt).map(n => n.id),
+      ...(all ?? store.list()).filter(n => n.kind === 'knowledge' && n.meta.confirmedAt).map(n => n.id),
     ]);
   };
   const topicPaused = topic => topic.meta.paused ?? storage().get('topics', topic.id, {}).paused ?? false;
@@ -47,8 +47,8 @@ export function createLearning(dependencies) {
     for (const id of textList(topic.meta.noteIds)) visit(id);
     return ordered;
   }
-  function topicDetails(topic, all = storage().list()) {
-    const done = completedIds(), byId = new Map(all.map(n => [n.id, n]));
+  function topicDetails(topic, all = storage().list(), snapshot) {
+    const done = snapshot?.done ?? completedIds(), byId = snapshot?.byId ?? new Map(all.map(n => [n.id, n]));
     const pausedIds = settings().pausedIds || [];
     const members = textList(topic.meta.noteIds).map((id, index) => {
       const n = byId.get(id);
@@ -64,10 +64,16 @@ export function createLearning(dependencies) {
       progress: { total: members.length, completedCount: members.filter(m => m.completed).length, completedNoteIds: members.filter(m => m.completed).map(m => m.id), nextNoteId: canStart ? next.id : null, nextNoteTitle: canStart ? next.title : null, blockedNoteId: next && !canStart ? next.id : null },
     };
   }
-  function topics() { const store = storage(); store.scan(); const all = store.list(); return all.filter(n => n.kind === 'topic').map(n => topicDetails(n, all)); }
+  function topics() {
+    const store = storage(); store.scan();
+    const all = store.list(), bundles = all.filter(n => n.kind === 'topic');
+    if (!bundles.length) return [];
+    const snapshot = { done: completedIds(all), byId: new Map(all.map(n => [n.id, n])) };
+    return bundles.map(n => topicDetails(n, all, snapshot));
+  }
 
   function today() {
-    const store = storage(); store.scan();
+    const store = storage(); store.ensureFresh();
     const config = settings(), timestamp = now(), date = dayAt(new Date(timestamp), config.timezone);
     const all = store.list(), byId = new Map(all.map(n => [n.id, n]));
     const bundles = all.filter(n => n.kind === 'topic').sort((a, b) => Number(config.focusTopics.includes(b.title)) - Number(config.focusTopics.includes(a.title)) || a.id.localeCompare(b.id));
@@ -75,21 +81,27 @@ export function createLearning(dependencies) {
     const candidates = all.filter(n => eligible(n) && learningStages.has(n.meta.stage) && !config.pausedIds.includes(n.id) && !pausedMembers.has(n.id));
     const candidateMap = new Map(candidates.map(n => [n.id, n]));
     const existing = store.records('plans').filter(p => p.date === date);
+    const existingById = new Map(existing.map(p => [p.id, p]));
     const fixed = existing.filter(p => ['done', 'skip', 'defer', 'pause'].includes(p.state));
     const fixedIds = new Set(fixed.map(p => p.noteId)), done = completedIds();
     const reviews = new Map(store.records('reviews').map(r => [r.noteId, r]));
     // Older review records may not carry noteId; read by key for compatibility.
     for (const n of candidates) if (!reviews.has(n.id)) { const review = store.get('reviews', n.id); if (review) reviews.set(n.id, review); }
     const mistakes = new Map(all.filter(n => n.kind === 'mistake' && n.meta.correctionState === 'open').map(n => [n.meta.noteId, n]));
-    const bundleFor = new Map();
-    for (const bundle of bundles.filter(n => !topicPaused(n))) for (const id of topicPath(bundle, all)) if (!bundleFor.has(id)) bundleFor.set(id, bundle);
+    // Paths depend only on each topic and this notes snapshot, not on candidates.
+    const bundleFor = new Map(), bundlePaths = new Map();
+    for (const bundle of bundles.filter(n => !topicPaused(n))) {
+      const path = topicPath(bundle, all);
+      bundlePaths.set(bundle, path);
+      for (const id of path) if (!bundleFor.has(id)) bundleFor.set(id, bundle);
+    }
     const due = n => !reviews.get(n.id)?.dueAt || reviews.get(n.id).dueAt <= timestamp;
     const priority = n => reviews.get(n.id)?.dueAt && due(n) ? 0 : mistakes.has(n.id) ? 1 : 2;
     const waiting = candidates.filter(n => due(n) && !fixedIds.has(n.id));
     waiting.sort((a, b) => priority(a) - priority(b) || (reviews.get(a.id)?.dueAt || '').localeCompare(reviews.get(b.id)?.dueAt || '') || Number(config.focusTopics.includes(b.meta.topic)) - Number(config.focusTopics.includes(a.meta.topic)) || String(a.meta.topic || '').localeCompare(String(b.meta.topic || '')) || a.id.localeCompare(b.id));
     const ordered = [], selected = new Set(), visiting = new Set(), blocked = [];
     const dependenciesFor = n => {
-      const bundle = bundleFor.get(n.id), path = bundle ? topicPath(bundle, all) : [];
+      const path = bundlePaths.get(bundleFor.get(n.id)) || [];
       const index = path.indexOf(n.id);
       return uniqueStrings([...textList(n.meta.prerequisites).filter(id => byId.get(id)?.kind === 'knowledge'), ...(index > 0 ? path.slice(0, index) : [])]);
     };
@@ -125,10 +137,12 @@ export function createLearning(dependencies) {
         minutes, state: 'pending', depth: depthOf(note), materialWarnings: dependencies.limitationsFor?.(note) || [], ...practiceTags(mistake, note), ...(mistake ? { mistakeId: mistake.id } : {}),
         ...(bundle ? { topicId: bundle.id, topicIndex: (bundle.meta.noteIds || []).indexOf(note.id) } : {}),
       };
-      store.put('plans', item.id, item); pending.push(item); scheduledIds.add(note.id); used += minutes;
+      if (JSON.stringify(existingById.get(item.id)) !== JSON.stringify(item)) store.put('plans', item.id, item);
+      pending.push(item); scheduledIds.add(note.id); used += minutes;
     }
     for (const p of existing) if (!fixedIds.has(p.noteId) && !scheduledIds.has(p.noteId)) {
-      store.put('plans', p.id, { ...p, state: candidateMap.has(p.noteId) ? 'budget_deferred' : 'paused' });
+      const state = candidateMap.has(p.noteId) ? 'budget_deferred' : 'paused';
+      if (p.state !== state) store.put('plans', p.id, { ...p, state });
     }
     const unavailable = all.filter(n => n.kind === 'knowledge' && !scheduledIds.has(n.id)).map(note => {
       const materialIssues = dependencies.limitationsFor?.(note) || note.meta.researchLimitations || [];
@@ -306,11 +320,13 @@ export function createLearning(dependencies) {
     if (!states[action]) fail('错题动作无效。');
     return store.update(id, { expectedHash: n.hash, meta: { correctionState: states[action], userReason: reason }, body: `${n.body}\n\n### 用户处理 ${now()}\n${action}：${reason}` });
   }
-  function validateTopic({ noteIds, prerequisites, minutes }) {
+  function validateTopic({ noteIds, prerequisites, minutes }, { fresh = false } = {}) {
     if (typeof prerequisites === 'string') prerequisites = textList(prerequisites);
     if (!Array.isArray(noteIds) || !Array.isArray(prerequisites) || [...noteIds, ...prerequisites].some(x => typeof x !== 'string')) fail('主题知识与前置知识应为文本列表。');
     if (noteIds.length > 500 || prerequisites.length > 100) fail('单个主题的知识或前置项过多，请拆分主题。');
-    for (const id of noteIds) if (getNote(id).kind !== 'knowledge') fail('主题成员应选择知识条目，不能选择原始资料或报告。');
+    const store = storage();
+    if (noteIds.length && !fresh) store.scan();
+    for (const id of noteIds) if (store.read(id).kind !== 'knowledge') fail('主题成员应选择知识条目，不能选择原始资料或报告。');
     if (!Number.isFinite(+minutes) || +minutes < 1 || +minutes > 1440) fail('预计投入应为 1–1440 分钟。');
     return { noteIds: uniqueStrings(noteIds), prerequisites: uniqueStrings(prerequisites.map(x => x.trim()).filter(Boolean)), minutes: +minutes };
   }
@@ -330,7 +346,8 @@ export function createLearning(dependencies) {
   function updateTopic(id, { title, body, expectedHash, meta = {} }) {
     const store = storage(), n = getNote(id);
     if (n.kind !== 'topic') fail('条目不是主题学习包。');
-    const fields = validateTopic({ noteIds: meta.noteIds ?? n.meta.noteIds ?? [], prerequisites: meta.prerequisites ?? n.meta.prerequisites ?? [], minutes: meta.minutes ?? n.meta.minutes ?? 20 });
+    // getNote() already scanned the Store for this synchronous save operation.
+    const fields = validateTopic({ noteIds: meta.noteIds ?? n.meta.noteIds ?? [], prerequisites: meta.prerequisites ?? n.meta.prerequisites ?? [], minutes: meta.minutes ?? n.meta.minutes ?? 20 }, { fresh: true });
     if (title !== undefined && !String(title).trim() || body !== undefined && !String(body).trim()) fail('主题标题和正文不能为空。');
     const result = store.update(id, { title, body, expectedHash, meta: { ...fields, confirmedBy: 'user' } });
     store.put('topics', id, { id, noteIds: fields.noteIds, paused: topicPaused(result) });

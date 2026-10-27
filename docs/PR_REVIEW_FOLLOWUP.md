@@ -1,4 +1,48 @@
 
+## 主题成员验证重复扫描（2026-10-27）
+
+前序基线 `e7d83a5a6c85f9d7c785ba37c3a2f337245b2a8f`，PR #100 评论、行内意见及总结的增量核对未变。实际调用链为 `validateTopic()` 对每个成员执行 `getNote()`，后者每次完整扫描。现在创建时非空成员只完整核验一次，保存时复用入口读取主题的完整扫描，逐项使用原 `Store.read()` 保留缺失/冲突错误及类型拒绝。原类型/数量/成员/分钟/去重顺序不变，内部 fresh 标识不接收 API 参数；保存和链接处理代码未移除任何复核。
+
+新增三项合成回归在旧代码为一项预期失败、两项通过，最终 3/3 通过。四个成员加一个重复引用的创建，保存前扫描 5→1；相同引用的保存含最初主题读取，保存前扫描 6→1。对应创建后的 3 次扫描/2 次链接预览、保存后的 4 次扫描/2 次链接预览均与基线一致。覆盖重复成员的首次顺序、外部删除、重复稳定 ID、外改为 source，以及在保存后、链接复核前插入的自动区外部编辑；错误或冲突仍正确返回，人工文字不被覆盖。
+
+忽略目录中的 `.tmp/validation-equivalence.mjs` 直接对照前序与最终模块，27/27 组合成操作的完整结果、保存笔记、主题镜像及按优先级返回的错误 name/code/status/message 相同。包括空成员、重复与顺序、列表/成员类型、两类超限、非知识/缺失成员/分钟错误的先后、旧前置文本、外部删除/重复 ID/类型变化、标题先后、旧 hash 及晚到链接区冲突。该临时进程只固定随机 ID 和时间以比较生成结果，实际扫描、存储和验证均执行原实现；基线仅改相对导入地址，已核与 e7d83a5 一致。计数不是大库耗时或加速比例。
+
+实际新增命令：`node --import=./.tmp/runtime-deps.mjs --test --test-concurrency=1 --test-name-pattern='topic member validation|topic saving detects' tests/learning-alignment.test.mjs`；等价对照为 `node --import=./.tmp/runtime-deps.mjs .tmp/validation-equivalence.mjs`。仅补受影响 JS 语法及差异检查，沿用同运行时、锁定依赖和前三轮有效证据，不重复既有用例。公开差异仅原创源码、合成测试及说明，无真实资料、凭据、日志、新资产、依赖、权限或许可证变化；没有当前 PR，未触发新云端审阅。正式服务、真实库、大库性能、全套回归和 CI 未在本轮验收。
+
+## 主题列表完成状态与资料快照（2026-10-27）
+
+在前序提交 `14fbcab75c88b124f89854f7e15b95fa0a869cf0` 上接续；PR #100 的评论、行内意见和总结增量读取结果未变。原 `topics()` 每个主题都经 `topicDetails()` 再查询全部 sessions、解析同一资料集合并重建 byId。现在只在该次列表调用内共享完成集合和资料查找表，无主题时仍不读取会话；独立详情入口及不带参数的 `completedIds()` 保持原读取顺序，前两项修复不重构。
+
+新增两项合成回归：计数用例在旧代码实际失败，三主题的 sessions 查询为 3 次，修复后为 1 次；资料列表读取由 5 次降为 2 次，含原有完整扫描内部的一次读取。最终 2/2 通过，覆盖空主题、缺失成员、成员顺序、已确认与已结算/未结算进度、暂停、后续资料和学习记录修改、单独会话详情以及 Store 重新打开后的新数据。真实 Store 查询只增加调用计数，没有替换读取、解析或主题计算。
+
+另以忽略的 `.tmp/topics-equivalence.mjs` 在相同合成 Store 上直接对照前序模块与最终模块：15/15 组的完整主题列表、数据变化后的下一次列表、单独会话详情，以及错误 name/code/message 相同。覆盖重复/缺失/非知识成员、前置路径与循环、已确认和各类会话状态、主题/成员暂停、未选学/缺失前置项、停用和待研究成员、旧字符串成员、无效会话及空主题不读取无效会话。已核临时基线与前序提交只有相对导入地址改写，未改基线算法。该证据不代表大库耗时或内存基准。
+
+实际命令：`node --import=./.tmp/runtime-deps.mjs --test --test-concurrency=1 --test-name-pattern='topics shares one completion|topics snapshots do not' tests/learning-alignment.test.mjs`；对照为 `node --import=./.tmp/runtime-deps.mjs .tmp/topics-equivalence.mjs`。沿用前两轮的 Node 24.21.0、同锁定依赖及已验证证据，不安装、不重跑未变测试；仅补本次两处 JS 的语法及差异检查。公开增量限原创源码、合成测试与说明，无真实资料、凭据、运行日志、新资产、依赖、权限或许可证变化。没有当前 PR，未触发新云端审阅；CI、正式服务、真实库和完整产品回归未在本轮验收。
+
+## 今日安排主题路径复用（2026-10-27）
+
+在独立前序提交 `e3a8be58dc7fe1d4f0f1e40f7cfbdbc8a066a186` 上接续；已增量核对 PR #100 的评论、行内意见及审阅总结，较前轮没有新增或变化。只修改 `today()` 内主题路径的复用，不改 `topicPath()` 本身、其他学习接口或前序扫描/写入修复。路径依赖主题对象和本次 `all` 快照，在主题归属遍历时保存一次；成员自己的前置项仍分别合并，避免错误共享不同成员的输入，也不同时保留所有成员的前缀列表。
+
+新增两项合成回归：第一项在旧代码实际失败，7 条知识的一次安排重建主题路径 15 次，修复后为 1 次；第二项先在旧代码通过，保持重叠主题归属、聚焦切换、暂停与已完成前置项的行为。最终 2/2 通过，修改主题顺序后的下一次调用会重建新路径，没有跨请求缓存。通过真实 Store.list 返回值上的只读属性计数观测调用，未替换路径算法或真实存储。
+
+另在忽略的 `.tmp/path-equivalence.mjs` 中直接对照前序源码与最终源码：17/17 组合成快照的完整 `today()` 返回值、最终持久化计划及错误的 name/code/message 相同。覆盖主题顺序、不同成员前置项、主题重叠与聚焦、缺失 ID、循环、主题/单项暂停、未选学前置项、会话完成与用户确认、done/skip/defer/pause 固定计划、未来和逾期复习、错题、预算、旧字符串前置项及畸形主题的原有 TypeError。临时对照模块只为解析导入改写相对模块地址，不改基线算法；合成库关闭后删除。该结果是确定性快照等价证据，不是大库延迟或内存基准。
+
+最终定向命令：`node --import=./.tmp/runtime-deps.mjs --test --test-concurrency=1 --test-name-pattern='today computes each topic path|today keeps overlapping topic' tests/learning-alignment.test.mjs`；对照命令为 `node --import=./.tmp/runtime-deps.mjs .tmp/path-equivalence.mjs`。执行环境、依赖及锁文件沿用前轮，未安装依赖。前轮 12 项证据保留，未重复执行；只补本次两处 JS 语法和差异检查，不重跑无关全套或全仓检查。
+
+公开增量限原创源码、合成回归及说明，无个人资料、凭据、真实日志、新资产、依赖、权限或许可证变化。没有当前 PR，未新增云端审阅请求；未部署或验收运行服务。CI、真实库、真实大库性能与完整产品回归仍未在本轮验证。
+
+## 今日安排空闲调度修复（2026-10-27）
+
+基线 `fed3e956066e96e24b9c3199f493f7a13f0ea613`。已增量读取 PR #100 的评论、行内意见、审阅总结和解决状态，以及后续 PR #102/#103 的空评论列表。#100 两项 P2 已有修复与复审回执，行内线程均已解决；本次保留场景题优先级和引用渲染代码，不重复处理。可见安全总结曾显示运行中，不能据此声称本轮完整安全验收。
+
+根因是 tick 的增量检查后，`today()` 又做完整扫描，并无条件写回待办和未安排计划。现在 `today()` 复用既有新鲜度机制，tick 避免第二次检查；重算与排序规则不变，比较持久化内容或状态后才写回，没有新增长期缓存。局部源码仅涉及 `src/learning.mjs` 和 `src/service.mjs`，不改 HTTP/API、前端、Store 格式、权限或外发机制。
+
+实际验证：新增 `scheduler-plan` 五项在旧代码为三项预期失败、两项通过；修复后五项通过。补验 `learning-alignment` 中七项今日排序、未安排原因、前置关系与预算重算回归，共 12/12，通过且无跳过。两篇合成 Markdown 的三次空闲 tick，旧代码六次扫描、重读六个文件，修复后三次增量检查、重读零个文件；单项待办旧代码写入三次，修复后零次。待办、预算延期和暂停三种稳定状态均无计划写入，SQLite `total_changes()` 不增长。还覆盖直接读取今日、内部改题、同尺寸并恢复 mtime 的外部编辑、移动/删除、学习记录到期、跳过、设置恢复、北京时间跨午夜、安排时间前检查及 60 秒完整校对。上述为合成调用计数，不代表真实大库耗时或加速比例。
+
+执行环境为 Node 24.21.0；只读复用既有安装并用临时 `--import=./.tmp/runtime-deps.mjs` 解析依赖，锁文件 SHA-256 与候选一致：`b6378e902b3b71bef022905d66c049993f4c7b0133e4d2a3e961cb269aa63f63`，未安装或更新依赖。实际定向命令为 `node --import=./.tmp/runtime-deps.mjs --test --test-concurrency=1 --test-name-pattern='idle scheduled|unchanged pending|scheduled plans pick|due reviews|freshness checks|overdue reviews|unscheduled knowledge|unavailable prerequisites|a prerequisite omitted|topic membership order|an inactive prerequisite|replanning remains' tests/scheduler-plan.test.mjs tests/learning-alignment.test.mjs`。正常冻结安装后无需临时解析器。
+
+仓库检查 463 个跟踪文件及 `git diff --check` 通过。公开增量检查只涉及原创源码、合成测试和说明；无个人资料、凭据、真实日志、第三方资产或许可证变化，依赖及执行配置不变。本轮没有当前 PR，未新增云端审阅请求；日批候选由主执行者按现行规则去重触发。本地全套测试、CI、真实知识库、大库长期性能与运行服务均未验收，不将定向结果扩大为这些结论。
+
 ## v0.2.0 整合候选（2026-10-24）
 
 - f197ca9 的四项 CI 全部通过，安全初审公开回执未发现问题；代码初审的 [场景题优先级](https://github.com/wmy5555/zhixu-learning-workbench/pull/100#discussion_r4367224254) 与 [引用转义](https://github.com/wmy5555/zhixu-learning-workbench/pull/100#discussion_r4367224258) 两项 P2 均采纳，先实际复现再定向修复，27 项回归通过。只对这两处修复请求一次代码复审及不可信文本/链接的定向安全复审，未扩大到全仓，最终回执保留 PR。
