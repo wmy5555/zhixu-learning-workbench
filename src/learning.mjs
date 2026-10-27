@@ -320,11 +320,13 @@ export function createLearning(dependencies) {
     if (!states[action]) fail('错题动作无效。');
     return store.update(id, { expectedHash: n.hash, meta: { correctionState: states[action], userReason: reason }, body: `${n.body}\n\n### 用户处理 ${now()}\n${action}：${reason}` });
   }
-  function validateTopic({ noteIds, prerequisites, minutes }) {
+  function validateTopic({ noteIds, prerequisites, minutes }, { fresh = false } = {}) {
     if (typeof prerequisites === 'string') prerequisites = textList(prerequisites);
     if (!Array.isArray(noteIds) || !Array.isArray(prerequisites) || [...noteIds, ...prerequisites].some(x => typeof x !== 'string')) fail('主题知识与前置知识应为文本列表。');
     if (noteIds.length > 500 || prerequisites.length > 100) fail('单个主题的知识或前置项过多，请拆分主题。');
-    for (const id of noteIds) if (getNote(id).kind !== 'knowledge') fail('主题成员应选择知识条目，不能选择原始资料或报告。');
+    const store = storage();
+    if (noteIds.length && !fresh) store.scan();
+    for (const id of noteIds) if (store.read(id).kind !== 'knowledge') fail('主题成员应选择知识条目，不能选择原始资料或报告。');
     if (!Number.isFinite(+minutes) || +minutes < 1 || +minutes > 1440) fail('预计投入应为 1–1440 分钟。');
     return { noteIds: uniqueStrings(noteIds), prerequisites: uniqueStrings(prerequisites.map(x => x.trim()).filter(Boolean)), minutes: +minutes };
   }
@@ -344,7 +346,8 @@ export function createLearning(dependencies) {
   function updateTopic(id, { title, body, expectedHash, meta = {} }) {
     const store = storage(), n = getNote(id);
     if (n.kind !== 'topic') fail('条目不是主题学习包。');
-    const fields = validateTopic({ noteIds: meta.noteIds ?? n.meta.noteIds ?? [], prerequisites: meta.prerequisites ?? n.meta.prerequisites ?? [], minutes: meta.minutes ?? n.meta.minutes ?? 20 });
+    // getNote() already scanned the Store for this synchronous save operation.
+    const fields = validateTopic({ noteIds: meta.noteIds ?? n.meta.noteIds ?? [], prerequisites: meta.prerequisites ?? n.meta.prerequisites ?? [], minutes: meta.minutes ?? n.meta.minutes ?? 20 }, { fresh: true });
     if (title !== undefined && !String(title).trim() || body !== undefined && !String(body).trim()) fail('主题标题和正文不能为空。');
     const result = store.update(id, { title, body, expectedHash, meta: { ...fields, confirmedBy: 'user' } });
     store.put('topics', id, { id, noteIds: fields.noteIds, paused: topicPaused(result) });

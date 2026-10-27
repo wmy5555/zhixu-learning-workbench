@@ -255,6 +255,68 @@ test('topics snapshots do not outlive a call or replace fresh standalone topic d
   assert.equal(h.calls.length, 0);
 });
 
+test('topic member validation scans once before saving and keeps the post-save link checks', t => {
+  const h = harness(t), members = Array.from({ length: 4 }, (_, i) => h.knowledge(`合成批量成员${i}`));
+  let beforeSave = true, validationScans = 0, savedScans = 0, previews = 0;
+  const scan = h.store.scan.bind(h.store), create = h.store.create.bind(h.store), update = h.store.update.bind(h.store), preview = h.store.managedLinksPreview.bind(h.store);
+  t.mock.method(h.store, 'scan', (...args) => { if (beforeSave) validationScans++; else savedScans++; return scan(...args); });
+  t.mock.method(h.store, 'create', input => { if (input.kind === 'topic') beforeSave = false; return create(input); });
+  t.mock.method(h.store, 'update', (...args) => { beforeSave = false; return update(...args); });
+  t.mock.method(h.store, 'managedLinksPreview', (...args) => { previews++; return preview(...args); });
+  const ids = members.map(note => note.id);
+  let topic = h.learning.createTopic({ title: '合成批量验证', body: '【合成测试】说明。', noteIds: [...ids, ids[0]] });
+  assert.deepEqual(topic.noteIds, ids, 'duplicate members still preserve first occurrence order');
+  assert.equal(validationScans, 1, 'creation checks member freshness once');
+  assert.ok(savedScans > 0 && previews > 0, 'post-save verification remains active');
+  beforeSave = true; validationScans = 0; savedScans = 0; previews = 0;
+  topic = h.learning.updateTopic(topic.id, { expectedHash: topic.hash, meta: { noteIds: ids.toReversed() } });
+  assert.deepEqual(topic.noteIds, ids.toReversed());
+  assert.equal(validationScans, 1, 'saving reuses the initial topic read freshness check');
+  assert.ok(savedScans > 0 && previews > 0);
+  assert.equal(topic.linkSyncConflict, null);
+  assert.equal(h.calls.length, 0);
+});
+
+test('topic member validation still rejects external deletion, duplicate IDs and changed kinds', t => {
+  for (const change of ['deleted', 'duplicate', 'source']) {
+    const h = harness(t), note = h.knowledge(`合成外改${change}`);
+    const topic = h.learning.createTopic({ title: `合成验证${change}`, body: '【合成测试】说明。' });
+    const file = path.join(h.store.vaultDir, note.path);
+    if (change === 'deleted') fs.unlinkSync(file);
+    else if (change === 'duplicate') fs.copyFileSync(file, path.join(path.dirname(file), 'duplicate-member.md'));
+    else fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('kind: knowledge', 'kind: source'));
+    const expected = change === 'source'
+      ? { code: 'INVALID', status: 400, message: '主题成员应选择知识条目，不能选择原始资料或报告。' }
+      : { code: 'NOT_FOUND', status: 404, message: '内容不存在，可能已经删除或存在文件冲突。' };
+    const matches = error => error.code === expected.code && error.status === expected.status && error.message === expected.message;
+    assert.throws(() => h.learning.createTopic({ title: '合成拒绝创建', noteIds: [note.id] }), matches, change);
+    assert.throws(() => h.learning.updateTopic(topic.id, { expectedHash: topic.hash, meta: { noteIds: [note.id] } }), matches, change);
+    assert.equal(h.calls.length, 0);
+  }
+});
+
+test('topic saving detects an external managed-block edit after member validation', t => {
+  const h = harness(t), a = h.knowledge('合成后验甲'), b = h.knowledge('合成后验乙');
+  const topic = h.learning.createTopic({ title: '合成保存后复核', body: '【合成测试】人工说明。', noteIds: [a.id, b.id] });
+  const update = h.store.update.bind(h.store);
+  let injected = false;
+  t.mock.method(h.store, 'update', (...args) => {
+    const saved = update(...args);
+    if (!injected && args[0] === topic.id) {
+      injected = true;
+      const file = path.join(h.store.vaultDir, saved.path);
+      fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('## 已确认的知识链接', '## 已确认的知识链接\n\n合成外部编辑必须保留'));
+    }
+    return saved;
+  });
+  const saved = h.learning.updateTopic(topic.id, { expectedHash: topic.hash, meta: { noteIds: [b.id, a.id] } });
+  assert.equal(injected, true);
+  assert.match(saved.body, /合成外部编辑必须保留/);
+  assert.match(saved.linkSyncConflict, /外部修改/);
+  assert.deepEqual(saved.noteIds, [b.id, a.id]);
+  assert.equal(h.calls.length, 0);
+});
+
 test('topic members can be added, removed and reordered, with hash checking and synchronized pause membership', t => {
   const h = harness(t), a = h.knowledge('成员甲'), b = h.knowledge('成员乙'), c = h.knowledge('成员丙');
   let topic = h.learning.createTopic({ title: '可调整主题', body: '主题说明', noteIds: [a.id, b.id] });
