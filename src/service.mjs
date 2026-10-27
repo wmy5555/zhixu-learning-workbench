@@ -1093,7 +1093,8 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     if(!eligible(note)) { if(job.payload.useAI===true)fail('这条知识仍有待研究内容，请先处理依据。','RESEARCH_INCOMPLETE'); return; }
     const res=await search(`${note.title} ${note.meta.topic || ''}`,{mode:'keyword',limit:7,scan:false});
     const bridges=store.list().filter(n=>n.id!==note.id&&eligible(n)&&n.meta.topic!==note.meta.topic)
-      .sort((a,b)=>hash(`${note.id}:${a.id}`).localeCompare(hash(`${note.id}:${b.id}`))).slice(0,3);
+      .map(n=>({note:n,rank:hash(`${note.id}:${n.id}`)}))
+      .sort((a,b)=>a.rank.localeCompare(b.rank)).slice(0,3).map(entry=>entry.note);
     let candidates=[...new Map([...res.results.filter(n=>n.id!==note.id&&eligible(n)).slice(0,4),...bridges].filter(inScope).map(n=>[n.id,n])).values()];
     for(const n of candidates) {
       const id=hash([note.id,n.id].sort().join(':')), old=store.get('relations',id);
