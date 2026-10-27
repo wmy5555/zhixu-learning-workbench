@@ -67,7 +67,7 @@ export function createLearning(dependencies) {
   function topics() { const store = storage(); store.scan(); const all = store.list(); return all.filter(n => n.kind === 'topic').map(n => topicDetails(n, all)); }
 
   function today() {
-    const store = storage(); store.scan();
+    const store = storage(); store.ensureFresh();
     const config = settings(), timestamp = now(), date = dayAt(new Date(timestamp), config.timezone);
     const all = store.list(), byId = new Map(all.map(n => [n.id, n]));
     const bundles = all.filter(n => n.kind === 'topic').sort((a, b) => Number(config.focusTopics.includes(b.title)) - Number(config.focusTopics.includes(a.title)) || a.id.localeCompare(b.id));
@@ -75,6 +75,7 @@ export function createLearning(dependencies) {
     const candidates = all.filter(n => eligible(n) && learningStages.has(n.meta.stage) && !config.pausedIds.includes(n.id) && !pausedMembers.has(n.id));
     const candidateMap = new Map(candidates.map(n => [n.id, n]));
     const existing = store.records('plans').filter(p => p.date === date);
+    const existingById = new Map(existing.map(p => [p.id, p]));
     const fixed = existing.filter(p => ['done', 'skip', 'defer', 'pause'].includes(p.state));
     const fixedIds = new Set(fixed.map(p => p.noteId)), done = completedIds();
     const reviews = new Map(store.records('reviews').map(r => [r.noteId, r]));
@@ -125,10 +126,12 @@ export function createLearning(dependencies) {
         minutes, state: 'pending', depth: depthOf(note), materialWarnings: dependencies.limitationsFor?.(note) || [], ...practiceTags(mistake, note), ...(mistake ? { mistakeId: mistake.id } : {}),
         ...(bundle ? { topicId: bundle.id, topicIndex: (bundle.meta.noteIds || []).indexOf(note.id) } : {}),
       };
-      store.put('plans', item.id, item); pending.push(item); scheduledIds.add(note.id); used += minutes;
+      if (JSON.stringify(existingById.get(item.id)) !== JSON.stringify(item)) store.put('plans', item.id, item);
+      pending.push(item); scheduledIds.add(note.id); used += minutes;
     }
     for (const p of existing) if (!fixedIds.has(p.noteId) && !scheduledIds.has(p.noteId)) {
-      store.put('plans', p.id, { ...p, state: candidateMap.has(p.noteId) ? 'budget_deferred' : 'paused' });
+      const state = candidateMap.has(p.noteId) ? 'budget_deferred' : 'paused';
+      if (p.state !== state) store.put('plans', p.id, { ...p, state });
     }
     const unavailable = all.filter(n => n.kind === 'knowledge' && !scheduledIds.has(n.id)).map(note => {
       const materialIssues = dependencies.limitationsFor?.(note) || note.meta.researchLimitations || [];

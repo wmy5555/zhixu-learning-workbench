@@ -1236,7 +1236,17 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     })().finally(() => { pausing = false; pausePromise = null; });
     return pausePromise;
   }
-  function tick(){if(practice)return runJobs();store.ensureFresh();const cfg=settings(),date=learningDate(),time=new Intl.DateTimeFormat('en-GB',{timeZone:cfg.timezone,hour:'2-digit',minute:'2-digit',hour12:false}).format(date);if(time>=cfg.scheduleTime)today();const last=store.get('schedule','discovery');if(store.list().some(n=>n.kind==='knowledge')&&(!last||date.getTime()-Date.parse(last.at)>cfg.discoveryDays*86400000))queue('discover',{},`discovery:${localDay(date,cfg.timezone)}`);return runJobs();}
+  function tick() {
+    if (practice) return runJobs();
+    const cfg = settings(), date = learningDate();
+    const time = new Intl.DateTimeFormat('en-GB', { timeZone: cfg.timezone, hour: '2-digit', minute: '2-digit', hour12: false }).format(date);
+    // today() performs the same freshness check; each tick needs it only once.
+    if (time >= cfg.scheduleTime) today();
+    else store.ensureFresh();
+    const last = store.get('schedule', 'discovery');
+    if (store.list().some(n => n.kind === 'knowledge') && (!last || date.getTime() - Date.parse(last.at) > cfg.discoveryDays * 86400000)) queue('discover', {}, `discovery:${localDay(date, cfg.timezone)}`);
+    return runJobs();
+  }
   function demo(){const existing=store.list().filter(n=>n.meta.demo);if(existing.length)return{notes:existing};const source=store.create({kind:'source',title:'演示资料 · 小林的读书项目',body:'【虚构演示，不代表用户真实经历】小林正在整理一份读书报告。他保存了原始摘录，希望用自己的话说明观点，再找到能支持或反对它的材料。此条用于体验输入、查找和编辑。',meta:{demo:true,privacy:'local',platform:'内置演示'}});const note=store.create({kind:'knowledge',title:'演示知识 · 给读书报告保留出处',body:'【演示设定】为小林的读书报告记录：一句观点、对应原文、页码，以及哪些条件会限制该观点。\n\n练习：假设你是小林，请用自己的话说明报告中为何要保留出处。这个练习仅针对上述虚构任务，没有预先记录任何学习成绩。',meta:{demo:true,privacy:'local',stage:'candidate',topic:'读书与表达',depth:'explain',sources:[{id:source.id,role:'input'}],promotionReason:'用于试用学习流程，可自行加入学习。'}});return{notes:[source,note]};}
   function diagnostics() {
     store.scan();

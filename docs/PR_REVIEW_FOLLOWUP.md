@@ -1,4 +1,16 @@
 
+## 今日安排空闲调度修复（2026-10-27）
+
+基线 `fed3e956066e96e24b9c3199f493f7a13f0ea613`。已增量读取 PR #100 的评论、行内意见、审阅总结和解决状态，以及后续 PR #102/#103 的空评论列表。#100 两项 P2 已有修复与复审回执，行内线程均已解决；本次保留场景题优先级和引用渲染代码，不重复处理。可见安全总结曾显示运行中，不能据此声称本轮完整安全验收。
+
+根因是 tick 的增量检查后，`today()` 又做完整扫描，并无条件写回待办和未安排计划。现在 `today()` 复用既有新鲜度机制，tick 避免第二次检查；重算与排序规则不变，比较持久化内容或状态后才写回，没有新增长期缓存。局部源码仅涉及 `src/learning.mjs` 和 `src/service.mjs`，不改 HTTP/API、前端、Store 格式、权限或外发机制。
+
+实际验证：新增 `scheduler-plan` 五项在旧代码为三项预期失败、两项通过；修复后五项通过。补验 `learning-alignment` 中七项今日排序、未安排原因、前置关系与预算重算回归，共 12/12，通过且无跳过。两篇合成 Markdown 的三次空闲 tick，旧代码六次扫描、重读六个文件，修复后三次增量检查、重读零个文件；单项待办旧代码写入三次，修复后零次。待办、预算延期和暂停三种稳定状态均无计划写入，SQLite `total_changes()` 不增长。还覆盖直接读取今日、内部改题、同尺寸并恢复 mtime 的外部编辑、移动/删除、学习记录到期、跳过、设置恢复、北京时间跨午夜、安排时间前检查及 60 秒完整校对。上述为合成调用计数，不代表真实大库耗时或加速比例。
+
+执行环境为 Node 24.21.0；只读复用既有安装并用临时 `--import=./.tmp/runtime-deps.mjs` 解析依赖，锁文件 SHA-256 与候选一致：`b6378e902b3b71bef022905d66c049993f4c7b0133e4d2a3e961cb269aa63f63`，未安装或更新依赖。实际定向命令为 `node --import=./.tmp/runtime-deps.mjs --test --test-concurrency=1 --test-name-pattern='idle scheduled|unchanged pending|scheduled plans pick|due reviews|freshness checks|overdue reviews|unscheduled knowledge|unavailable prerequisites|a prerequisite omitted|topic membership order|an inactive prerequisite|replanning remains' tests/scheduler-plan.test.mjs tests/learning-alignment.test.mjs`。正常冻结安装后无需临时解析器。
+
+仓库检查 463 个跟踪文件及 `git diff --check` 通过。公开增量检查只涉及原创源码、合成测试和说明；无个人资料、凭据、真实日志、第三方资产或许可证变化，依赖及执行配置不变。本轮没有当前 PR，未新增云端审阅请求；日批候选由主执行者按现行规则去重触发。本地全套测试、CI、真实知识库、大库长期性能与运行服务均未验收，不将定向结果扩大为这些结论。
+
 ## v0.2.0 整合候选（2026-10-24）
 
 - f197ca9 的四项 CI 全部通过，安全初审公开回执未发现问题；代码初审的 [场景题优先级](https://github.com/wmy5555/zhixu-learning-workbench/pull/100#discussion_r4367224254) 与 [引用转义](https://github.com/wmy5555/zhixu-learning-workbench/pull/100#discussion_r4367224258) 两项 P2 均采纳，先实际复现再定向修复，27 项回归通过。只对这两处修复请求一次代码复审及不可信文本/链接的定向安全复审，未扩大到全仓，最终回执保留 PR。
