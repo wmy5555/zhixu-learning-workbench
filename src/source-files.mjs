@@ -4,7 +4,7 @@ import { fail, now, hash } from './store.mjs';
 
 export const sourceAttachments = note => [note.meta?.sourceFile, ...(note.meta?.attachments || [])].filter(Boolean);
 export const MAX_UPLOAD_RECEIPTS = 5000;
-export function createSourceFiles({ store, getNote }) {
+export function createSourceFiles({ store }) {
   const receipt = id => {
     if (typeof id !== 'string' || !/^[a-f0-9-]{36}$/.test(id)) fail('上传回执无效。');
     const value = store.get('attachmentUploads', id);
@@ -78,7 +78,18 @@ export function createSourceFiles({ store, getNote }) {
     return { attachments, complete: () => values.forEach(value => store.put('attachmentUploads', value.id, { ...value, noteId: note.id, state: 'bound' })) };
   }
   function read(noteId, assetId) {
-    const note = getNote(noteId), descriptor = sourceAttachments(note).find(item => item.id === assetId);
+    store.ensureFresh({ freshFrontmatter: true });
+    let note = store.read(noteId);
+    // Rehash this note on every read: cached metadata must not retain a removed
+    // attachment reference, even when a filesystem reports unchanged stamps.
+    try { note = store.readPersisted(noteId); }
+    catch (error) {
+      if (error.code !== 'PERSISTED_MISMATCH') throw error;
+      // Reconcile changed bytes/identity using the normal conflict and error rules.
+      store.scan();
+      note = store.read(noteId);
+    }
+    const descriptor = sourceAttachments(note).find(item => item.id === assetId);
     if (note.kind !== 'source' || !descriptor) fail('该原始资料没有此附件。', 'NOT_FOUND', 404);
     return readAttachment(store.vaultDir, descriptor);
   }
