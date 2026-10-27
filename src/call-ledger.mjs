@@ -42,9 +42,13 @@ export function createCallLedger({ store, getStore = () => store, at = () => new
       const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: config.timezone || 'Asia/Singapore', year: 'numeric', month: '2-digit', day: '2-digit' });
       const dayOf = value => { const date = new Date(value); return Number.isFinite(date.getTime()) ? formatter.format(date) : null; };
       const now = timestamp(), today = dayOf(now), calls = current.records('calls');
-      if (calls.some(call => !dayOf(call.createdAt))) fail('BUDGET_UNKNOWN', '调用记录日期无效，无法核对预算。');
-      const todayCalls = calls.filter(call => dayOf(call.createdAt) === today);
-      const monthly = calls.filter(call => dayOf(call.createdAt).startsWith(today.slice(0, 7)));
+      const callDays = calls.map(call => {
+        const day = dayOf(call.createdAt);
+        if (!day) fail('BUDGET_UNKNOWN', '调用记录日期无效，无法核对预算。');
+        return day;
+      });
+      const todayCalls = calls.filter((_, index) => callDays[index] === today);
+      const monthly = calls.filter((_, index) => callDays[index].startsWith(today.slice(0, 7)));
       const dailyLimit = costValue(config.ai?.dailyCallLimit), monthlyBudget = costValue(config.ai?.monthlyBudget);
       if (dailyLimit !== null && todayCalls.length >= dailyLimit) fail('BUDGET_EXCEEDED', '今日外部调用次数已达到上限。');
       if (monthlyBudget > 0) {
