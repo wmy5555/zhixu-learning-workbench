@@ -1327,7 +1327,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     confirmRestore(input) { requireCapture(); return undoController.confirmRestore(input, undoAuthority); },
   };
   const chatgpt = createChatgptBridge({ getStore: () => store, settings, search: tracked(search), getNote, readStructure: id => readImportedView(store,getNote(id)), related, undo: chatgptUndo, receiveSnapshot: receiveHistorySnapshot });
-  sourceFiles = createSourceFiles({ store, getNote });
+  sourceFiles = createSourceFiles({ store });
   const uploadFile = input => sourceFiles.receive(input);
   const revertUpload = id => sourceFiles.revert(id);
   const commitFile = tracked(input => sourceFiles.commit(input));
