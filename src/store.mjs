@@ -102,6 +102,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS versions (id TEXT PRIMARY KEY,noteId TEXT NOT NULL,path TEXT NOT NULL,hash TEXT NOT NULL,raw TEXT NOT NULL,reason TEXT NOT NULL,createdAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS versions_note ON versions(noteId);
       CREATE TABLE IF NOT EXISTS index_chunks (id TEXT PRIMARY KEY,noteId TEXT NOT NULL,body TEXT NOT NULL,vector TEXT,model TEXT);
+      CREATE INDEX IF NOT EXISTS index_chunks_note ON index_chunks(noteId);
       CREATE TABLE IF NOT EXISTS restore_transactions (id TEXT PRIMARY KEY,digest TEXT NOT NULL,committed INTEGER NOT NULL DEFAULT 0);`);
     this.conflicts = [];
     this.scanCache = new Map(); this.lastFullScan = 0;
@@ -242,7 +243,8 @@ export class Store {
     const reusable = new Map();
     for (const chunk of previous) if (!reusable.has(chunk.body) || chunk.vector !== null) reusable.set(chunk.body, chunk);
     const keep = new Set();
-    const insert = this.db.prepare('INSERT INTO index_chunks(id,noteId,body,vector,model) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body,vector=excluded.vector,model=excluded.model');
+    const insert = this.db.prepare(`INSERT INTO index_chunks(id,noteId,body,vector,model) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body,vector=excluded.vector,model=excluded.model
+      WHERE index_chunks.body IS NOT excluded.body OR index_chunks.vector IS NOT excluded.vector OR index_chunks.model IS NOT excluded.model`);
     for (let i = 0; i < body.length; i += 700) {
       const chunkId = `${id}:${i}`, text = body.slice(i, i + 900), old = reusable.get(text);
       keep.add(chunkId); insert.run(chunkId, id, text, old?.vector ?? null, old?.model ?? null);

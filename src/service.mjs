@@ -1175,8 +1175,11 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     const snapshots = job.payload.snapshots;
     if (!validMaterialSnapshots(snapshots)) fail('索引任务缺少点击时的资料版本；请主动重试以使用当前资料。', 'OUTBOUND_INTENT_REQUIRED');
     const ids=snapshots.map(n=>n.noteId);
+    // Share the reconciled store within each synchronous stretch. The scan after
+    // every embedding await refreshes it before response writes and later notes.
+    if(ids.length)store.scan();
     for(let i=0;i<ids.length;i++) {
-      store.scan(); if(!store.row(ids[i]))continue;
+      if(!store.row(ids[i]))continue;
       const n=store.read(ids[i]), model=settings().embedding.model;
       store.index(n.id,`${n.title}\n${n.body}`);
       if(n.hash===snapshots[i].hash&&settings().embedding.enabled&&privacyFor(n)==='cloud'&&['knowledge','source','topic'].includes(n.kind)&&n.meta.stage!=='retired'&&!n.meta.supersededBy) {
