@@ -1,4 +1,9 @@
 
+## 2026-10-27 集中候选的冻结核心对照夹具
+
+- CI 40539559356 的两平台唯一失败均为 `frozen portable core retains baseline planner/topic behavior and complete graded settlement rules`：测试内存 Store 没有网页学习核心新使用的 `ensureFresh`。Windows 1507 通过/1 失败；Linux 1503 通过/1 失败/4 项平台跳过，Secrets 与 Dependencies 成功，首轮不得记为通过。
+- 本机先执行 `node --test --test-name-pattern='frozen portable core retains' tests/android-learning.test.mjs`，实际同样 TypeError；仅在测试 `parityHarness` 添加 `ensureFresh` 到既有内存 `scan` 的适配后同命令 1/1 通过。完整计划、主题、结算、复习间隔和学习证据断言均保留，apps 冻结源码和产品逻辑未改。测试语法及差异检查通过，没有重跑本机全套；新候选仍等待完整 CI 门禁。
+
 ## 2026-10-27 附件哈希复用（独立后续候选）
 
 - 基线为 f04c85508c74bcb7834f857082a66e0a16b8c1ec，沿用 Node 24.21.0、同一隔离工作树与正确版本依赖。`decodeFile` 原先在同一次同步调用、同一 `bytes` Buffer 上分别为 ID 和 `sha256` 重复计算摘要；未发现两次计算之间的字节读取、异步操作或其他安全核验。
