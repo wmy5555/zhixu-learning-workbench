@@ -1,4 +1,14 @@
 
+## 2026-10-28 导入、恢复、导航与索引回归
+
+- 基于 main `c51c8ff97de1cfab92a5b1a3475daf53c6748e6c` 的独立副本，Node 24.21.0；已用固定 pnpm 11.19.0 冻结安装，依赖及锁文件没有变化。以下仅使用随机临时合成资料、受控适配器和独立本地端口，没有正式服务或真实供应商验收。
+- 恢复与导入的新 9 项回归在原实现中 8 失败、1 通过。修后执行 `node --test --test-concurrency=1 tests/history-restore-conflict.test.mjs tests/import-validation.test.mjs tests/history-events.test.mjs`，13/13 通过；另用 `--test-name-pattern='history HTTP pagination|backup includes live/history attachments|local blank-title placeholder'` 执行 `tests/web-parity.test.mjs tests/source-files.test.mjs tests/capture-title.test.mjs`，19/19 通过。覆盖路径占用、外部改名、重复身份、检查后占用、写失败后重试，以及无效后项不改变前项或任务。
+- 导航新 4 项回归在原实现中 3 失败、1 通过；修后与 `tests/web-library-return.test.mjs` 的既有返回回归共 8/8 通过。独立浏览器实测修前叠出 2 个确认框；修后仅 1 个，取消一次后多行输入及焦点保留，确认后退和前进正常。临时服务和页面已关闭；未全面验收所有旅程、浅色或窄屏。
+- 索引新 3 项回归在原实现中 2 失败、1 通过；修后执行 `node --test --test-concurrency=1 tests/search-index-metadata.test.mjs tests/search.test.mjs tests/chunk-index-writes.test.mjs`，23/23 通过。合成长文的 14 个分段在只改主题/阶段时，从 14 次删除及 14 次插入降为 0；摘要、哈希、修订、筛选和退役状态仍更新。原标题/正文变化、删除、重建、事务回滚及有界分段回归保持通过。此为写入计数证据，不是全应用提速比例或真实大库耗时测量。
+- 新增 16 项测试均先在旧实现观察实际失败或合法对照；定向验证共 63 项通过，最终综合检查与当前 PR CI 另记。导入修复仅保证输入验证失败无部分写入，不承诺磁盘故障时整批事务。
+- 首次受限进程运行综合检查时，Windows DPAPI 用户配置不可用，`backup and restore retain sessions and history while excluding API secrets` 失败，后续 HTTP 加密测试停滞，该次运行已中止，不记为通过。同一备份用例在正常用户环境定向 1/1 通过；正常用户检查首次因隔离副本所有权被 Git 拒绝，在进程级指定该副本为可信目录后重新验证，未改变全局配置或产品加密实现。
+- 正常用户环境中的最终综合验证在完成前已停止，没有完整测试汇总，不能声明 `pnpm verify` 通过。已完成的仓库检查覆盖 477 个跟踪文件；检索质量阶段尚未运行，当前 PR CI 和本批安全初审尚未执行。
+
 ## 2026-10-27 集中候选的冻结核心对照夹具
 
 - CI 40539559356 的两平台唯一失败均为 `frozen portable core retains baseline planner/topic behavior and complete graded settlement rules`：测试内存 Store 没有网页学习核心新使用的 `ensureFresh`。Windows 1507 通过/1 失败；Linux 1503 通过/1 失败/4 项平台跳过，Secrets 与 Dependencies 成功，首轮不得记为通过。
