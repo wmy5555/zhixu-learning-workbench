@@ -50,12 +50,15 @@ export class SearchIndex {
       const put = this.db.prepare('INSERT INTO search_documents VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET hash=excluded.hash,summary=excluded.summary,title=excluded.title,text=excluded.text');
       const fts = this.db.prepare('INSERT INTO search_fts(rowid,grams) VALUES(?,?)');
       const segment = this.db.prepare('INSERT INTO search_segments(noteId) VALUES(?)');
-      for (const row of this.db.prepare('SELECT d.id,n.json FROM search_dirty d LEFT JOIN notes n ON n.id=d.id').iterate()) {
+      for (const row of this.db.prepare('SELECT d.id,n.json,s.text FROM search_dirty d LEFT JOIN notes n ON n.id=d.id LEFT JOIN search_documents s ON s.id=d.id').iterate()) {
         count++;
-        remove.run(row.id);removeSegments.run(row.id);
         if (row.json) {
           const { body, ...summary } = JSON.parse(row.json), text = `${summary.title}\n${body}`.toLowerCase();
           put.run(row.id, summary.hash, JSON.stringify(summary), summary.title.toLowerCase(), text);
+          // Metadata still refreshes above, but identical normalized title/body
+          // cannot change the grams. Compare within this synchronous transaction.
+          if (row.text === text) continue;
+          remove.run(row.id);removeSegments.run(row.id);
           // Bound the temporary Set/array/token string independently of note
           // length. Overlap contains any supported query (512 UTF-16 units,
           // at most 1024 after Unicode lowercasing), including boundary hits.
@@ -63,7 +66,10 @@ export class SearchIndex {
             const rowid=segment.run(row.id).lastInsertRowid;
             fts.run(rowid,grams(text.slice(start,start+8192)).join(' '));
           }
-        } else this.db.prepare('DELETE FROM search_documents WHERE id=?').run(row.id);
+        } else {
+          remove.run(row.id);removeSegments.run(row.id);
+          this.db.prepare('DELETE FROM search_documents WHERE id=?').run(row.id);
+        }
       }
       this.db.exec('DELETE FROM search_dirty; RELEASE search_sync');
     } catch (error) { this.db.exec('ROLLBACK TO search_sync; RELEASE search_sync'); throw error; }

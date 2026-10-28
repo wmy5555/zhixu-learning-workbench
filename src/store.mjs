@@ -581,9 +581,13 @@ export class Store {
     if (!version) fail('找不到历史版本。', 'NOT_FOUND', 404);
     const parsed = parse(version.raw);
     if (this.row(id)) return this.update(id, { body: parsed.body, title: parsed.meta.title, meta: parsed.meta, expectedHash });
+    // A missing index entry is not proof that the file or its stable identity is free.
+    this.scan();
+    if (this.row(id) || this.conflicts.some(conflict => conflict.id === id || conflict.path === version.path)) fail('恢复目标已存在或存在文件冲突，请刷新后核对。', 'CONFLICT', 409);
     if (expectedHash) fail('已删除文件恢复不应携带现行哈希。', 'CONFLICT', 409);
+    const result = this.create({ id, kind: parsed.meta.kind, title: parsed.meta.title, body: parsed.body, meta: parsed.meta, exclusive: true });
     this.remove('deleted', id);
-    return this.create({ id, kind: parsed.meta.kind, title: parsed.meta.title, body: parsed.body, meta: parsed.meta });
+    return result;
   }
   restoreVersionExact(id, versionId, { expectedHash, expectMissing = false, operationId } = {}) {
     if (!/^[A-Za-z0-9_-]{1,100}$/.test(id || '') || typeof versionId !== 'string' ||
