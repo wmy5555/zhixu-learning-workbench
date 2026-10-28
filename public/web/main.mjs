@@ -514,7 +514,7 @@ document.addEventListener('keydown',event=>{
 });
 $('#nav-shade').onclick=()=>document.documentElement.classList.remove('nav-open');
 window.addEventListener('beforeunload',event=>{if(state.dirty||$$('dialog').some(dialog=>dialog.hasUnsavedInput?.())){event.preventDefault();event.returnValue='unsaved';}});
-window.addEventListener('popstate',async()=>{const target=location.hash.slice(1)||'today';if(await go(target,{replace:true})===false)history.replaceState(null,'',`#${state.route}`);});
+// Back/forward also emits hashchange; a second popstate handler would ask twice before go resolves.
 window.addEventListener('hashchange',async()=>{const target=location.hash.slice(1)||'today';if(target!==state.route){if(await go(target,{replace:true})===false)history.replaceState(null,'',`#${state.route}`);}});
 try { await onboarding.initialize();await refreshBoot();await go(location.hash.slice(1)||'today',{replace:true});await onboarding.ready(); }
 catch(error){$('#main').innerHTML=empty('暂时连接不上知识空间',error.message,btn('重新连接','reload','primary'));}
