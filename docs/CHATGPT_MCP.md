@@ -81,3 +81,5 @@ HTTP 入口是 `/api/chatgpt/*`，仅供 stdio 桥接使用；不是 Streamable 
 本功能的具体审阅意见、处理依据与主分支整合记录见 [ChatGPT MCP 审阅记录](CHATGPT_MCP_REVIEW.md)。
 
 状态诊断文件被 OneDrive 或杀毒软件临时占用时，守护继续维护连接；实时管道仍可返回状态，不因诊断落盘失败重启隧道。
+
+Windows 定时检查通过 `wscript.exe` 与 `Start-ChatgptRuntimeHidden.vbs` 无控制台入口启动。隐藏样式在创建 PowerShell 时传入，避免直接启动控制台程序后才处理 `-WindowStyle Hidden` 导致闪窗；任务等待检查完成并保留真实退出码。任务仍可在计划任务程序中查看和管理。

@@ -21,7 +21,7 @@ $rollback = Join-Path $installRoot ('rollback-' + (Get-Date -Format 'yyyyMMdd-HH
 New-Item -ItemType Directory -Path $kit, $state, $rollback -Force | Out-Null
 Copy-Item -LiteralPath $FormalLauncherPath -Destination (Join-Path $rollback 'Start-Formal4318.ps1')
 Export-ScheduledTask -TaskName $task.TaskName | Set-Content -LiteralPath (Join-Path $rollback 'autostart.xml') -Encoding UTF8
-foreach ($name in @('chatgpt-runtime.mjs', 'Ensure-ChatgptRuntime.ps1')) {
+foreach ($name in @('chatgpt-runtime.mjs', 'Ensure-ChatgptRuntime.ps1', 'Start-ChatgptRuntimeHidden.vbs')) {
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $kit $name) -Force
 }
 $config = [ordered]@{
@@ -56,8 +56,8 @@ try {
   [Management.Automation.Language.Parser]::ParseFile($temporary, [ref]$parseTokens, [ref]$parseErrors) | Out-Null
   if ($parseErrors.Count) { throw 'Patched launcher did not parse.' }
   Move-Item -LiteralPath $temporary -Destination $FormalLauncherPath -Force
-  $arguments = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + (Join-Path $kit 'Ensure-ChatgptRuntime.ps1') + '" -ConfigPath "' + $configPath + '"'
-  $action = New-ScheduledTaskAction -Execute $previous.powershellPath -Argument $arguments -WorkingDirectory $previous.workRoot
+  $arguments = '//B //Nologo "' + (Join-Path $kit 'Start-ChatgptRuntimeHidden.vbs') + '" "' + $previous.powershellPath + '" "' + $configPath + '"'
+  $action = New-ScheduledTaskAction -Execute (Join-Path $env:SystemRoot 'System32\wscript.exe') -Argument $arguments -WorkingDirectory $previous.workRoot
   $logon = New-ScheduledTaskTrigger -AtLogOn -User $task.Principal.UserId
   $repeat = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 1)
   Set-ScheduledTask -TaskName $task.TaskName -Action $action -Trigger @($logon, $repeat) | Out-Null

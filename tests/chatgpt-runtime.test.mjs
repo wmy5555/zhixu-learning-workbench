@@ -22,6 +22,7 @@ test('Windows cold launcher returns with a running detached supervisor and warm 
   const stopFile = path.join(root, 'stop');
   const runtimeUrl = new URL('../scripts/chatgpt-runtime.mjs', import.meta.url).href;
   fs.copyFileSync('scripts/Ensure-ChatgptRuntime.ps1', path.join(root, 'Ensure-ChatgptRuntime.ps1'));
+  fs.copyFileSync('scripts/Start-ChatgptRuntimeHidden.vbs', path.join(root, 'Start-ChatgptRuntimeHidden.vbs'));
   fs.writeFileSync(formalConfigPath, JSON.stringify({ port: 4318, sourceSha: 'b'.repeat(40), appRoot: root, dataDir: root }));
   fs.writeFileSync(configPath, JSON.stringify({ formalConfigPath, stateRoot: root, nodePath: process.execPath, pollMs: 30,
     tunnelClientPath: process.execPath, profileFile: path.join(root, 'unused.yaml'), credentialEnvFile: path.join(root, 'unused.env') }));
@@ -29,16 +30,22 @@ test('Windows cold launcher returns with a running detached supervisor and warm 
     import fs from 'node:fs'; import {spawn} from 'node:child_process';
     const config=process.argv[2];
     if(process.argv[3]==='run') await runSupervisor(config,{backendProbe:async()=>true,tunnelProbe:async()=>true,stop:()=>fs.existsSync(${JSON.stringify(stopFile)}),launch:()=>spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{windowsHide:true,stdio:['ignore','pipe','pipe']})});
-    else {let s; const until=Date.now()+(process.argv.includes('--wait-ready')?4000:0); do {try{s=await query(config)}catch{s={phase:'unavailable',tunnelReady:false}}; if(s.tunnelReady||Date.now()>=until)break; await new Promise(r=>setTimeout(r,20));}while(true);console.log(JSON.stringify(s));}`);
-  const args = ['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',path.join(root,'Ensure-ChatgptRuntime.ps1'),'-ConfigPath',configPath,'-WaitReady'];
+    else {let s; const until=Date.now()+(process.argv.includes('--wait-ready')?4000:2500); do {try{s=await query(config)}catch{s={phase:'unavailable',tunnelReady:false}}; if((process.argv.includes('--wait-ready')?s.tunnelReady:s.phase!=='unavailable')||Date.now()>=until)break; await new Promise(r=>setTimeout(r,20));}while(true);console.log(JSON.stringify(s));}`);
+  const powershell = path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe');
+  const args = ['//B', '//Nologo', path.join(root, 'Start-ChatgptRuntimeHidden.vbs'), powershell, configPath];
   try {
     const execute = promisify(execFile);
-    const powershell = path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe');
-    const cold = await execute(powershell, args, { windowsHide: true, timeout: 12000 });
-    const first = JSON.parse(cold.stdout.trim());
+    const wscript = path.join(process.env.SystemRoot, 'System32/wscript.exe');
+    const binary = fs.readFileSync(wscript), peOffset = binary.readUInt32LE(60);
+    assert.equal(binary.readUInt16LE(peOffset + 24 + 68), 2, 'periodic entry must have no console subsystem');
+    await execute(wscript, args, { windowsHide: true, timeout: 12000 });
+    let first = await query(configPath);
+    for (let n = 0; n < 50 && !first.tunnelReady; n++) { await new Promise(resolve => setTimeout(resolve, 30)); first = await query(configPath); }
     assert.equal(first.tunnelReady, true);
-    const warm = await execute(powershell, args, { windowsHide: true, timeout: 6000 });
-    assert.equal(JSON.parse(warm.stdout.trim()).supervisorPid, first.supervisorPid);
+    await execute(wscript, args, { windowsHide: true, timeout: 6000 });
+    assert.equal((await query(configPath)).supervisorPid, first.supervisorPid);
+    fs.writeFileSync(path.join(root, 'Ensure-ChatgptRuntime.ps1'), 'exit 23');
+    await assert.rejects(execute(wscript, args, { windowsHide: true, timeout: 6000 }), { code: 23 });
   } finally {
     fs.writeFileSync(stopFile, 'stop synthetic owner');
     for (let n=0;n<100;n++) { try { await query(configPath); await new Promise(resolve=>setTimeout(resolve,50)); } catch { break; } }
