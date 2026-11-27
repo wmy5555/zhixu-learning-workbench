@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import YAML from 'yaml';
-import { fail, hash } from './store.mjs';
+import { fail, hash } from './core.mjs';
 import { readAttachment, attachmentPath } from './attachments.mjs';
 
 const metadata = raw => YAML.parseDocument(raw.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] || '{}').toJS({ maxAliasCount: 50 });

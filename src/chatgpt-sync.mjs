@@ -2,7 +2,7 @@ import { structuredSchema, validateImportedStructure, conversationSegments, impo
 export { structuredSchema };
 import { z } from 'zod';
 import { conversationOrigin } from './chatgpt-source-metadata.mjs';
-import { fail, hash, now } from './store.mjs';
+import { fail, hash, now } from './core.mjs';
 import { readCapturePersisted, assertCaptureRecord, captureVerification, historicalVerification } from './chatgpt-integrity.mjs';
 
 const identifier = z.string().trim().min(1).max(200).regex(/^[A-Za-z0-9_-]+$/);

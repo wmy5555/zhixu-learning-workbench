@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
 import { z } from 'zod';
-import { fail, hash, now } from './store.mjs';
+import { fail, hash, now } from './core.mjs';
 
 const namespace = 'chatgptUndo';
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/);

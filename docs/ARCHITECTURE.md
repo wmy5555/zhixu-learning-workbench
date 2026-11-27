@@ -1,5 +1,30 @@
 # 架构与协作边界
 
+从入口找模块，可看[网页架构地图](WEB_ARCHITECTURE.md)。架构决定、迁移批次和待处理项见[治理进度](ARCHITECTURE_PROGRESS.md)。`node scripts/check-architecture.mjs --json` 输出当前 Git 跟踪的网页与服务端模块依赖，包括重导出、延迟导入与本地 Word 工作线程。图中不含运行时 HTTP、文件监听、原生进程调用和样式级联，这些边界见下表。
+
+```mermaid
+flowchart LR
+  Web["网页 / 帮助"] --> HTTP["server · 同源 HTTP"]
+  Tools["同机与 ChatGPT 工具"] --> HTTP
+  HTTP --> Service["service · 本地业务编排"]
+  Service --> Study["学习、主题、晋级建议"]
+  Service --> Capture["收集、资料成员、导入结构"]
+  Service --> AI["模型、研究、预算与账本"]
+  Service --> Store["Store · 本地读写"]
+  Store --> Files["Markdown / 附件"]
+  Store --> DB["SQLite 记录及派生索引"]
+```
+
+| 修改的概念 | 权威实现与边界 |
+| --- | --- |
+| 服务入口与身份 | `src/server.mjs` 分派正式库、练习库和工具请求，拥有会话、同源写入与调度。两个 stdio 入口通过 HTTP 调用既有服务。普通工具许可与 ChatGPT 读取许可分别生效。 |
+| 原文、知识与附件 | `Store` 负责 Markdown、版本、冲突和 SQLite 访问，`attachments.mjs` 负责原件字节和容量。笔记与附件是资料原件，检索索引可重建。 |
+| 分组与结构 | `source-structure.mjs` 管来源绑定、成员排序、结构依据和过期判定。历史分批导入的补齐及签名顺序由 `chatgpt-structure.mjs` 处理。知识库只在本次同步读取中复用快照。 |
+| 分类、学习与晋级 | `public/note-classification.mjs` 定义资料类型、存储目录、阶段、深度和可练习的阶段子集。`learning.mjs` 拥有计划、会话、复习及其写入时机。`knowledge-lifecycle.mjs` 生成采用建议。用户回答、反馈及本人确认分别保存。 |
+| 配置、外发与费用 | `service.defaults` 给出设置初值，`settings-validation.mjs` 校验候选配置，`secrets.mjs` 管理凭据绑定。`ai.mjs` 在实际执行处核对授权与预算，`call-ledger.mjs` 记录预留、发送、响应和记账，`usage.mjs` 提供统计视图。 |
+| 错误、重试与观察 | `core.mjs` 提供错误代码和状态、时间与字节摘要。HTTP 输出受控错误；队列、账本分别记录任务能否重试和外部请求是否确实完成。`atomic-write.mjs` 的有限重试只用于本地文件替换。启动日志、业务任务状态和费用证据分别归各自所有者。 |
+| 工具链和发布 | Node 24、锁定 pnpm 和现有 Quality 工作流执行项目检查；架构检查使用开发依赖 Acorn，仅解析版本控制内的代码。Windows 静态资源和更新包由 `packaging/windows/` 处理。发布基线和产品数据分开管理。 |
+
 ## 今日安排与后台调度
 
 `today()` 使用 `Store.ensureFresh()`，每次重算前仍检查文件指纹，沿用 60 秒完整哈希校对兜底。正式库 tick 到达每日安排时间后由 `today()` 执行该检查；未到时间时直接检查，两条分支均只检查一次。三秒定时器及防重入保持原样，不保证每次任务都在三秒内完成。计划每次按当前资料、学习记录、设置和学习时钟重新计算，不缓存整日结果；仅在待办内容或延期/暂停状态发生变化时写回，保留已完成、跳过、延期和暂停操作。
@@ -18,7 +43,7 @@
 
 ## 网页收集的可选标题
 
-空白标题按原文空白归一化后的前 36 字符临时命名，正文原样保存。来源 meta 的 titlePending、titlePlaceholder 与 titleOrigin 记录待生成及名称来源；只有当前标题仍与占位值相同才可生成。单独 title 任务使用同一个 ai.generate、模型配置、外发限制与任务预算；勾选拆解时 sourceExtract 在同次回答中附带可选 sourceTitle，旧自定义模板继续收到系统输出约定。标题结果须为单行纯文本 1–80 字符；缺失或无效标题不阻断有效候选保存，只留下可单独重试的失败标题任务。
+空白标题由 `source-title.mjs` 从可见 Markdown 标题或首段生成，跳过代码围栏并按字素缩短；没有可用文字时显示“未命名资料”。正文原样保存。来源 meta 的 titlePending、titlePlaceholder 与 titleOrigin 记录待生成及名称来源；只有当前标题仍与占位值相同才可生成。单独 title 任务使用同一个 ai.generate、模型配置、外发限制与任务预算；勾选拆解时 sourceExtract 在同次回答中附带可选 sourceTitle，旧自定义模板继续收到系统输出约定。标题结果须为单行纯文本 1–80 字符；缺失或无效标题不阻断有效候选保存，只留下可单独重试的失败标题任务。
 
 写回前核对原文完整 hash、取消状态和有效外发权限，人工或外部标题修改不被覆盖。只有这一次严格核对的自动补标题允许将原版本的 processKey、加工任务/savedCandidates、已有研究缓存和仍有效的结构 basis 衔接到新 hash；正文、人工候选、确认与晋级状态不变。匹配的待确认修订建议同步其预期 hash。迁移候选时收集其精确 beforeHash→afterHash 绑定；未结束的学习会话仅在 sourceHash 匹配 beforeHash，且教学 material 等于正文或已有 confirmedNoteId 明确确认该知识时同步 sourceHash；确认追加个人理解会保留原教学快照，之后正文编辑仍因 hash 不匹配被拒绝，不改回答、反馈、任务或状态。candidate/suggested 关联仅在双方当前版本都有效时同步端点 hash，任一旧端点都会让整条建议继续失效；不修改既有学习 hash 校验或晋级规则。已结束历史、旧教学快照和已陈旧结构不会借此变为有效。重复导入只增加出处，尚未运行且未拆解的标题/加工请求更新到对应新版本；运行中的旧请求仍按冲突保护停止。后台不自动重试模型请求；所有失败保留原文和临时标题。
 

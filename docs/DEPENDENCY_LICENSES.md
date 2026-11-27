@@ -1,3 +1,7 @@
+## 网页架构检查
+
+Acorn 8.19.0 用于开发期解析浏览器模块语法，由锁文件固定。应用启动、网页资源与正式运行依赖均不加载该包。随包 `LICENSE` 声明 MIT，SHA-256 为 `76a876cf886ff9be2a8b5e2e86514fed06223c8c9f0c1e9ee9606e93841e00b7`。[包的来源](https://registry.npmjs.org/acorn/8.19.0)
+
 ## 2026-10-22 传递依赖安全更新
 
 通过 `pnpm-workspace.yaml` 的限定覆盖与 pnpm 11.19.0 生成的锁文件更新以下包；不更改直接依赖或项目许可证。实际安装包的声明、随包许可及 registry integrity 记录于 [本次增量清单](dependency-security-20261022.json)。旧表与旧机器清单保留为历史证据。
@@ -173,20 +177,22 @@
 - 设计与接口文档包含 MDN、Obsidian、PubMed、Microsoft、MCP、OWASP、OpenAI 和 Tavily 的来源链接；未打包其网页、课程、论文或书籍全文。供应商接口兼容不等于获得商标背书或外部服务使用权。
 - 所有者已确认源码、界面、默认提示词和文档由本项目编写或 AI 辅助生成，没有另行复制的受限内容；这项是来源声明，不是代码相似度或法律鉴定。
 
-## Android / Capacitor 增量记录（2026-10-07）
+## Android / Capacitor 增量记录（2026-10-07，历史）
+
+以下是移出前的历史依赖和许可记录，并非当前网页依赖清单。原工程和 Gradle Wrapper 已从当前仓库移出；历史路径只适用于当时版本。
 
 上方 93 个 npm 包清单是 2026-09-20 的旧基线，不涵盖此后新增的 Capacitor runtime、CLI、Android Gradle 插件、Gradle distribution、AndroidX 或 Maven 依赖。本节只记录本次 Android 原型中已能从清单文件和本地包核对的直接依赖及其已知许可；没有解析 Maven 传递依赖树或审计 SDK/插件工具链的全部二进制，因此不表示全部 Android 组件已审计。
 
 | 组件 | 版本/来源 | 许可证与核验范围 |
 |---|---|---|
-| `@capacitor/core`、`@capacitor/android` | npm `8.5.2`，锁文件对应包 | MIT；本地包 `LICENSE` 与官方仓库 [core](https://github.com/ionic-team/capacitor/blob/8.5.2/LICENSE)、[android](https://github.com/ionic-team/capacitor/blob/8.5.2/LICENSE) 一致。APK 随附的 [Android 第三方 notices](../public/android-third-party-notices.txt) 保存完整文本。 |
+| `@capacitor/core`、`@capacitor/android` | npm `8.5.2`，锁文件对应包 | MIT；本地包 `LICENSE` 与官方仓库 [core](https://github.com/ionic-team/capacitor/blob/8.5.2/LICENSE)、[android](https://github.com/ionic-team/capacitor/blob/8.5.2/LICENSE) 一致。APK 随附的 [Android 第三方 notices](https://github.com/wmy5555/zhixu-learning-workbench/blob/9608a4705c77fd1b6ad9160d45cb353f33ff63fa/public/android-third-party-notices.txt) 保存完整文本。 |
 | `@capacitor/cli` | npm `8.5.2`，开发依赖 | MIT；CLI 只在开发/同步时使用。npm 旧清单未列入这个后续新增包，运行时 APK 不打包 CLI。 |
-| Gradle Wrapper | `gradle-8.14.3-all.zip`；wrapper JAR 已存在 | Gradle 发行版采用 Apache-2.0；校验和应来自 Gradle 官方 sidecar（[SHA-256](https://services.gradle.org/distributions/gradle-8.14.3-all.zip.sha256)）。Wrapper JAR 内嵌 `META-INF/LICENSE` 的 Apache-2.0 文本复制到同目录 [LICENSE](../apps/android/android/gradle/wrapper/LICENSE)。wrapper properties 记载官方 SHA-256。 |
+| Gradle Wrapper | `gradle-8.14.3-all.zip`；wrapper JAR 已存在 | Gradle 发行版采用 Apache-2.0；校验和应来自 Gradle 官方 sidecar（[SHA-256](https://services.gradle.org/distributions/gradle-8.14.3-all.zip.sha256)）。Wrapper JAR 内嵌 `META-INF/LICENSE` 的 Apache-2.0 文本复制到同目录 LICENSE（历史工程内）。wrapper properties 记载官方 SHA-256。 |
 | AndroidX | AndroidX AOSP/Google Maven；项目明确引用 AppCompat `1.7.1`、CoordinatorLayout `1.3.0`、Core Splashscreen `1.2.0`；Capacitor 还依赖 Activity `1.11.0`、Core `1.17.0`、Fragment `1.8.9`、Webkit `1.14.0` | AndroidX 源码仓库声明 Apache-2.0；各 Maven 发布物来自 Google Maven。官方 [AndroidX 源码](https://github.com/androidx/androidx) 与 [Android 内容许可说明](https://source.android.com/license)为核验来源。未在该上游仓库找到独立 `NOTICE` 文件；APK notice 保留其 Apache-2.0 正文及来源说明。 |
 | Apache Cordova Android framework | Maven `org.apache.cordova:framework:14.0.1` | Apache-2.0；核对 [14.0.1 上游 LICENSE](https://github.com/apache/cordova-android/blob/14.0.1/LICENSE) 与 [NOTICE](https://github.com/apache/cordova-android/blob/14.0.1/NOTICE)。上游 NOTICE 的 Apache Software Foundation 归属声明已复制到 APK notice。 |
 | Android Gradle Plugin | `com.android.tools.build:gradle:8.13.0` | 构建工具，不是应用运行时依赖。此处记录坐标但未展开其传递组件许可证。 |
 
-Capacitor 生成的默认图标和启动图属于模板资源，其许可范围随上述 Capacitor MIT 许可说明；本次未重绘、替换或另行引入媒体。2026-10-07 已在 b129246 构建的实际 APK ZIP 条目中确认 [android-third-party-notices.txt](../public/android-third-party-notices.txt) 随包收录；这不扩展上文注明的传递依赖审计范围。
+Capacitor 生成的默认图标和启动图属于模板资源，其许可范围随上述 Capacitor MIT 许可说明；本次未重绘、替换或另行引入媒体。2026-10-07 已在 b129246 构建的实际 APK ZIP 条目中确认 [android-third-party-notices.txt](https://github.com/wmy5555/zhixu-learning-workbench/blob/9608a4705c77fd1b6ad9160d45cb353f33ff63fa/public/android-third-party-notices.txt) 随包收录；这不扩展上文注明的传递依赖审计范围。
 
 2026-10-07 依赖安全修复：MCP SDK 从 1.30.0 升至 1.31.0（MIT，许可文件保持存在），修复 GHSA-6qxp-vccf-f47h。旧清单版本不代表当前锁文件。
 

@@ -6,7 +6,7 @@ import { createAI } from '../src/ai.mjs';
 import { createCallLedger } from '../src/call-ledger.mjs';
 import { createService } from '../src/service.mjs';
 import { promptDefaults } from '../src/prompts.mjs';
-import { hash } from '../src/store.mjs';
+import { hash } from '../src/core.mjs';
 
 const feedback = { assessment: 'correct', feedback: '合成批改反馈，仅用于回归。', nextQuestion: '请解释这条合成规则。' };
 const response = () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(feedback) } }], usage: { prompt_tokens: 100, completion_tokens: 20 } }));

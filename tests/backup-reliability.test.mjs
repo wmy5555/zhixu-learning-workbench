@@ -5,9 +5,11 @@ import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import YAML from 'yaml';
-import { Store, hash } from '../src/store.mjs';
+import { Store } from '../src/store.mjs';
+import { hash } from '../src/core.mjs';
 import { createCallLedger } from '../src/call-ledger.mjs';
-import { assertBackupSize, BACKUP_MAX_BYTES, BACKUP_REQUEST_MAX_BYTES } from '../src/backup-contract.mjs';
+import { noteKinds, learningStages, learningDepths } from '../public/note-classification.mjs';
+import { validateBackupMarkdown, assertBackupSize, BACKUP_MAX_BYTES, BACKUP_REQUEST_MAX_BYTES } from '../src/backup-contract.mjs';
 
 const tempRoot = path.resolve(import.meta.dirname, '..', '.tmp');
 fs.mkdirSync(tempRoot, { recursive: true });
@@ -33,6 +35,25 @@ function noteMeta(backup, fields) {
   const item = backup.notes[0], match = item.raw.match(/^---\n([\s\S]*?)\n---\n/);
   item.raw = `---\n${YAML.stringify({ ...YAML.parse(match[1]), ...fields })}---\n${item.raw.slice(match[0].length)}`;
 }
+
+test('persisted note classifications retain their Vault directories and backup acceptance rules', t => {
+  const { store } = harness(t);
+  const folders = ['01 原始资料', '02 知识', '03 错题修正', '04 主题', '05 发现'];
+  assert.deepEqual(noteKinds, ['source', 'knowledge', 'mistake', 'topic', 'report']);
+  assert.deepEqual(learningStages, ['reference', 'candidate', 'learning', 'integrated', 'core', 'retired']);
+  assert.deepEqual(learningDepths, ['aware', 'find', 'explain', 'apply']);
+  for (const [i, kind] of noteKinds.entries()) {
+    const note = store.create({ kind, title: kind, body: '合成资料' });
+    assert.equal(path.dirname(note.path), folders[i]);
+  }
+  const read = (key, value) => validateBackupMarkdown('---\n' + JSON.stringify({ [key]: value }) + '\n---\n合成资料', 'example');
+  for (const [key, values] of Object.entries({ kind: noteKinds, stage: learningStages, depth: learningDepths })) {
+    assert.ok(Object.isFrozen(values));
+    for (const value of values) assert.equal(read(key, value)[key], value);
+    for (const invalid of ['', 'unknown', 'constructor', null, 1])
+      assert.throws(() => read(key, invalid), { code: 'INVALID', status: 400, message: `备份 Markdown 的 ${key} 属性无效。` });
+  }
+});
 
 test('invalid backup payloads leave Markdown, runtime records, indexes and history untouched', t => {
   const h = harness(t), original = h.store.backup(), before = snapshot(h);

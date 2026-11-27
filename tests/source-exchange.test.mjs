@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { parseSourceFile } from "../public/source-exchange.mjs";
-import { parseSourceFile as parseAndroidSourceFile } from "../apps/android/web/source-exchange.mjs";
 import { createService } from "../src/service.mjs";
 
 const fixture = source => `---\n${JSON.stringify({
@@ -13,7 +12,7 @@ const fixture = source => `---\n${JSON.stringify({
 
 test("native exports with optional missing source fields import on both platforms", () => {
   const text = `---\n${JSON.stringify({ format: "zhixu-source-exchange", version: 1, title: "无来源原文", source: { author: "合成作者" } })}\n---\n正文  \n`;
-  for (const parse of [parseSourceFile, parseAndroidSourceFile]) {
+  for (const parse of [parseSourceFile]) {
     const item = parse({ name: "zhixu-source.md", text });
     assert.equal(item.author, "合成作者");
     assert.equal(item.body, "正文  \n");
@@ -24,7 +23,7 @@ test("native exports with optional missing source fields import on both platform
 });
 
 test("exchange titles cannot exceed the desktop UTF-16 persistence limit", () => {
-  for (const parse of [parseSourceFile, parseAndroidSourceFile]) {
+  for (const parse of [parseSourceFile]) {
     const make = title => ({ name: "标题.md", text: `---\n${JSON.stringify({ format: "zhixu-source-exchange", version: 1, title, source: {} })}\n---\n正文` });
     const accepted = "😀".repeat(100);
     assert.equal(parse(make(accepted)).title, accepted);
@@ -59,7 +58,7 @@ test("only a root JSON format declaration identifies an exchange file", () => {
     '{"for\\u006dat":"zhixu-source-exchange","version":1}',
     '{"format":"zhixu-source-exchange","extra":"' + 'x'.repeat(33000) + '"}',
   ];
-  for (const parse of [parseSourceFile, parseAndroidSourceFile]) {
+  for (const parse of [parseSourceFile]) {
     for (const header of ordinaryHeaders) {
       const text = `---\n${header}\n---\n正文  \n`;
       assert.equal(parse({ name: "普通.md", text }).body, text, header);
@@ -72,7 +71,7 @@ test("only a root JSON format declaration identifies an exchange file", () => {
 });
 
 test("single-line exchange metadata rejects CR and LF before a form can silently remove them", () => {
-  for (const parse of [parseSourceFile, parseAndroidSourceFile]) {
+  for (const parse of [parseSourceFile]) {
     for (const field of ["platform", "author", "date", "locator", "topic", "title"]) {
       for (const value of ["前\n后", "前\r后", "前\r\n后", "\n前", "后\r"]) {
         const data = { format: "zhixu-source-exchange", version: 1, title: "交换标题", source: {} };
@@ -85,12 +84,11 @@ test("single-line exchange metadata rejects CR and LF before a form can silently
   }
 });
 
-test("desktop ordinary files retain the 500000-character import allowance while Android keeps its prototype limit", t => {
+test("desktop ordinary files retain the 500000-character import allowance", t => {
   const body = "原".repeat(200000);
   const parsed = parseSourceFile({ name: "大篇幅.txt", text: body });
   assert.equal(parsed.body.length, 200000);
   assert.equal(Buffer.byteLength(parsed.body, "utf8") > 128 * 1024, true);
-  assert.throws(() => parseAndroidSourceFile({ name: "大篇幅.txt", text: body }), { code: "SOURCE_FILE_INVALID" });
   assert.throws(() => parseSourceFile({ name: "超额.txt", text: "x".repeat(500001) }), { code: "SOURCE_FILE_INVALID" });
 
   const root = fs.mkdtempSync(path.join(path.resolve(import.meta.dirname, "../.tmp"), "source-exchange-large-"));
@@ -102,7 +100,7 @@ test("desktop ordinary files retain the 500000-character import allowance while 
 });
 
 test("exchange fields reject boundary whitespace that either platform would trim", () => {
-  for (const parse of [parseSourceFile, parseAndroidSourceFile]) {
+  for (const parse of [parseSourceFile]) {
     for (const field of ["title", "platform", "author", "url", "date", "locator", "topic"]) {
       for (const boundary of [" ", "\t", "\u001f", "\u00a0", "\u2000", "\u3000", "\ufeff"]) {
         for (const value of [boundary + "text", "text" + boundary]) {
@@ -141,8 +139,8 @@ test("recognized exchange rejects unsupported versions, fields, and source value
   assert.throws(() => parseSourceFile({ name: "x.md", text: fixture("正".repeat(500001)) }), { code: "SOURCE_FILE_INVALID" });
 });
 
-test("both exchange parsers match native URL acceptance without rewriting source values", () => {
-  const parsers = [parseSourceFile, parseAndroidSourceFile];
+test("exchange parser preserves URL acceptance without rewriting source values", () => {
+  const parsers = [parseSourceFile];
   const exchange = url => `---\n${JSON.stringify({
     format: "zhixu-source-exchange", version: 1, title: "网址样例", source: { url },
   })}\n---\n正文`;

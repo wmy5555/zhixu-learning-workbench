@@ -44,6 +44,42 @@ test('HTTP search retains tail context, provides stable pages and fetches full b
   assert.equal(stale.status,409);assert.equal(stale.body.code,'SEARCH_CURSOR_STALE');
 });
 
+test('notes and search share one local title-job lookup and keep practice projections separate', async t => {
+  const app = await startApp(t), { headers } = await webSession(app);
+  const session = await request(app.baseUrl, '/api/onboarding/start', { method: 'POST', headers, body: {} });
+  assert.equal(session.status, 200);
+  const id = session.body.practiceId;
+  const lease = app.onboarding.acquire(id, { resource: 'notes', method: 'GET' });
+  const practice = lease.service;
+  lease.release();
+  for (const [label, service, prefix] of [['main', app.service, '/api'], ['practice', practice, '/api/practice/' + id]]) {
+    for (const n of [1, 2]) {
+      const noteId = 'synthetic-title-' + n, title = '待标题 ' + n;
+      service.store.create({ id: noteId, kind: 'source', title, body: 'quartzpending ' + label,
+        meta: { titlePending: true, titlePlaceholder: title, privacy: 'local', evidence: [{ excerpt: 'hidden-ledger-detail' }] } });
+      service.store.put('jobs', noteId, { id: noteId, type: 'title', payload: { noteId }, code: label, state: 'failed' });
+    }
+    service.store.create({ kind: 'source', title: '已命名资料', body: 'quartzfixed' });
+    const records = t.mock.method(service.store, 'records');
+    for (const [route, key] of [['notes', 'notes'], ['search', 'results']]) {
+      for (const [q, reads] of [['quartzpending', 1], ['quartzfixed', 0]]) {
+        records.mock.resetCalls();
+        const result = await request(app.baseUrl, prefix + '/' + route + '?q=' + q, { headers });
+        assert.equal(result.status, 200);
+        assert.equal(records.mock.calls.filter(call => call.arguments[0] === 'jobs').length, reads);
+        const notes = result.body[key];
+        assert.equal(notes.length, reads ? 2 : 1);
+        for (const note of notes) {
+          assert.equal(note.meta.privacy, undefined);
+          assert.equal(note.meta.evidence, undefined);
+          if (reads) assert.deepEqual(note.titleGeneration, { state: 'failed', code: label });
+        }
+      }
+    }
+    records.mock.restore();
+  }
+});
+
 test('only the public guide allows same-origin framing; help assets need no API session', async (t) => {
   const app = await startApp(t);
   for (const [asset, type] of [['/', 'text/html'], ['/guide.html', 'text/html'], ['/guide.css', 'text/css'], ['/help.mjs', 'text/javascript']]) {

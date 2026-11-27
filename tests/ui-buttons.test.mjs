@@ -1,9 +1,9 @@
+import { loadLegacyUi } from './fixtures/legacy-ui.mjs';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
 
-const source = await readFile(new URL('../public/ui.mjs', import.meta.url), 'utf8');
 const css = await readFile(new URL('../public/styles.css', import.meta.url), 'utf8');
 
 function makeButton(label, options) {
@@ -14,7 +14,8 @@ function makeButton(label, options) {
       append() {},
     }),
   } });
-  vm.runInContext(source.replaceAll('export ', '') + '\nthis.makeButton = button;', context);
+  loadLegacyUi(context);
+  vm.runInContext('\nthis.makeButton = button;', context);
   return context.makeButton(label, options);
 }
 

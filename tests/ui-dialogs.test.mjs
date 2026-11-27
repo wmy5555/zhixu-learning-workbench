@@ -1,9 +1,8 @@
+import { loadLegacyUi } from './fixtures/legacy-ui.mjs';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
 
-const source = await readFile(new URL('../public/ui.mjs', import.meta.url), 'utf8');
 function browser() {
   let document;
   class Element {
@@ -26,7 +25,8 @@ function browser() {
   document = { createElement: tag => new Element(tag), createTextNode: text => Object.assign(new Element('text'), { textContent: text }), body: new Element('body'), activeElement: null };
   const launcher = document.createElement('button'); document.body.append(launcher); launcher.focus();
   const context = vm.createContext({ document, Node: Element });
-  vm.runInContext(source.replaceAll('export ', '') + '\nthis.actions = { confirmAction, promptAction, showReadingDialog };', context);
+  loadLegacyUi(context);
+  vm.runInContext('\nthis.actions = { confirmAction, promptAction, showReadingDialog };', context);
   const key = (dialog, value, shiftKey = false) => {
     const event = { key: value, shiftKey, prevented: false, stopped: false, preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; } };
     dialog.events.keydown(event); return event;

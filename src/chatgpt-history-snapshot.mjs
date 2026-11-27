@@ -3,7 +3,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fail } from './store.mjs';
+import { fail } from './core.mjs';
 import { readHistoryHandoffKey } from './chatgpt-history-auth.mjs';
 
 const referencePattern = /^zhixu-history-v1:([a-f0-9]{64})$/;

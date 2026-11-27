@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
 import { dimensions, roles, relationTypes } from './knowledge-structure.mjs';
-import { structureRecord, structureView } from './source-structure.mjs';
+import { sourceChildren, structureRecord, structureView } from './source-structure.mjs';
 const hash = value => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
 const id = z.string().trim().min(1).max(200).regex(/^[A-Za-z0-9_-]+$/);
 const text = max => z.string().min(1).max(max);
@@ -137,8 +137,7 @@ export function verifyImportedRecord(store,state) {
 // Reuse the existing graph reader; only bound batch siblings are added to its context.
 export function importedContext(store, source, stored=store.get('sourceStructures',source.id)) {
   const marker=stored?.pendingCandidate?.chatgptStructure||stored?.chatgptStructure;
-  let notes=store.list().filter(n=>n.kind==='knowledge'&&!n.meta.excerptOnly&&((n.meta.sources||[]).some(r=>r.id===source.id&&r.role==='input')||n.meta.processKey?.split(':')[0]===source.id));
-  notes.sort((a,b)=>(Number(a.meta.processKey?.split(':').at(-1))||0)-(Number(b.meta.processKey?.split(':').at(-1))||0));
+  let notes=sourceChildren(store.list(),source.id);
   if(!marker)return{source,notes,stored};
   notes=notes.filter(n=>marker.noteIds.includes(n.id)||!(n.meta.chatgptImport?.sessionHash===marker.owner||n.meta.chatgptHistoryBatchImport?.batchId===marker.owner));
   const sources=marker.sourceIds.map(id=>store.row(id)?store.read(id):{id,hash:'missing',body:''});

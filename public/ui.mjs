@@ -1,3 +1,4 @@
+import { noteKindNames, learningStageNames } from './note-classification.mjs';
 export function el(tag, options = {}, children = []) {
   const node = document.createElement(tag);
   Object.entries(options).forEach(([key, value]) => {
@@ -75,11 +76,7 @@ export function safeExternalUrl(value) {
   }
 }
 
-const STAGES = {
-  reference: "仅供查阅", candidate: "待选学", learning: "正在学习",
-  integrated: "已整理个人理解", core: "重点知识", retired: "不再使用",
-};
-const KINDS = { source: "原始资料", knowledge: "知识", mistake: "错题", topic: "主题学习包", report: "AI 整理建议" };
+const STAGES = { ...learningStageNames, integrated: "已整理个人理解" };
 const STATES = {
   queued: "排队中", running: "处理中", waiting: "等待条件", failed: "失败",
   done: "已完成", cancelled: "已取消", pending: "待确认", accepted: "已接受", rejected: "已拒绝", superseded: "已有更新建议",
@@ -89,7 +86,7 @@ const STATES = {
 
 export const labels = {
   stage: (value) => STAGES[value] || value || "未分层",
-  kind: (value) => KINDS[value] || value || "资料",
+  kind: (value) => noteKindNames[value] || value || "资料",
   state: (value) => STATES[value] || value || "未知",
 };
 

@@ -1,3 +1,4 @@
+import { loadLegacyUi } from './fixtures/legacy-ui.mjs';
 import assert from 'node:assert/strict';
 import { readFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import path from 'node:path';
@@ -18,7 +19,6 @@ const usageSource = await readFile(new URL('../public/usage.mjs', import.meta.ur
 const onboardingCss = await readFile(new URL('../public/onboarding.css', import.meta.url), 'utf8');
 
 const discoverySource = (await readFile(new URL('../public/model-discovery.mjs', import.meta.url), 'utf8')).replace(/^import.*;$/m, '').replaceAll('export ', '');
-const uiSource = await readFile(new URL('../public/ui.mjs', import.meta.url), 'utf8');
 const markdownSource = await readFile(new URL('../public/markdown-reader.mjs', import.meta.url), 'utf8');
 const appSource = await readFile(new URL('../public/app.mjs', import.meta.url), 'utf8');
 const editorSource = await readFile(new URL('../public/markdown-editor.mjs', import.meta.url), 'utf8');
@@ -366,7 +366,8 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat, savedSession = 
   // is covered by the separate browser flow, not the minimal DOM fixture.
   vm.runInContext(fileUiSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') +
     '\ncreateFilePicker = async (_input, options) => { api.onImagePicker?.(options); return { getFiles: () => [] }; };\nthis.attachmentUrl = (id, asset, download = false) => "/api/notes/" + id + "/attachments?asset=" + asset + (download ? "&download=1" : "");', context);
-  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + discoverySource + '\n' + ('const renderMarkdown = (() => {\n' + markdownSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn renderMarkdown;\n})();') + '\nconst createMarkdownEditor = (() => {\n' + editorSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn createMarkdownEditor;\n})();\n' + knowledgeViewSource + '\n' + sourceMapSource + '\n' + relatedSourceUi + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { attachModelDiscovery, renderSourceGroupDrawer, conversationReading, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
+  loadLegacyUi(context);
+  vm.runInContext('\n' + discoverySource + '\n' + ('const renderMarkdown = (() => {\n' + markdownSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn renderMarkdown;\n})();') + '\nconst createMarkdownEditor = (() => {\n' + editorSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn createMarkdownEditor;\n})();\n' + knowledgeViewSource + '\n' + sourceMapSource + '\n' + relatedSourceUi + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { attachModelDiscovery, renderSourceGroupDrawer, conversationReading, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
   context.app.beginStudy = vm.runInContext('beginStudy', context);
   context.app.mcpSettingsPanel = vm.runInContext('mcpSettingsPanel', context);
   context.app.callHistoryPanel = vm.runInContext('callHistoryPanel', context);
@@ -716,27 +717,7 @@ test('source maps switch layouts and selection locally, collapse branches, keep 
   assert.equal(node('a').attributes['aria-pressed'], 'true');
 });
 
-test('Android capture remains local and never starts processing or research, including after reset', async () => {
-  const imports = [];
-  const app = browser({ runtime: { kind: 'android-prototype' }, import: async payload => { imports.push(plain(payload)); return { notes: [{}] }; }, bootstrap: async () => ({}) });
-  app.renderCapture();
-  const form = app.refs.main.querySelector('[data-tour="capture-form"]');
-  assert.equal(control(form, 'localOnly'), undefined);
-  const process = control(form, 'process');
-  const research = control(form, 'research');
-  assert.equal(process.disabled, true);
-  assert.equal(research.disabled, true);
 
-  form.reset();
-  await Promise.resolve();
-  assert.equal(process.disabled, true);
-  assert.equal(research.disabled, true);
-  await form.events.submit({ preventDefault() {} });
-  assert.equal(imports.length, 1);
-  assert.equal(Object.hasOwn(imports[0].items[0], 'privacy'), false);
-  assert.equal(imports[0].process, false);
-  assert.equal(imports[0].research, false);
-});
 
 test('capture form uses the full available column and source metadata stays readable', () => {
   const app = browser();
@@ -759,26 +740,9 @@ test('closed drawer clears the onboarding offset without disabling its open stat
   assert.match(onboardingCss, /\.onboarding-open \.drawer\.is-open\s*\{\s*transform:\s*translateX\(0\);\s*pointer-events:\s*auto;/);
 });
 
-test('Android source editing omits disabled privacy, depth, and research interval fields', async () => {
-  const updates = [];
-  const app = browser({ runtime: { kind: 'android-prototype' }, updateNote: async (id, payload) => { updates.push({ id, payload: plain(payload) }); return { id, hash: 'new-hash' }; }, bootstrap: async () => ({}) });
-  app.renderNoteEditor({ id: 'synthetic-source', kind: 'source', title: '原始资料', body: '原文', hash: 'old-hash', meta: { privacy: 'cloud', depth: 'advanced', researchIntervalDays: 14 } });
-  const form = app.refs.drawerBody.querySelector('form');
-  assert.equal(control(form, 'privacy'), undefined);
-  for (const name of ['depth', 'researchIntervalDays']) assert.equal(control(form, name).disabled, true, `${name} should be disabled`);
-  control(form, 'title').value = '更新标题';
-  await form.events.submit({ preventDefault() {} });
-  assert.equal(updates.length, 1);
-  for (const name of ['privacy', 'depth', 'researchIntervalDays']) assert.equal(Object.hasOwn(updates[0].payload.meta, name), false);
-});
 
-test('Android source drawer disables version history entry', () => {
-  const app = browser({ runtime: { kind: 'android-prototype' } });
-  app.renderSourceGroupDrawer({ id: 'synthetic-source', kind: 'source', title: '原始资料', body: '原文', meta: {}, children: [] });
-  const history = findButton(app.refs.drawerBody, '查看版本');
-  assert.ok(history);
-  assert.equal(history.disabled, true);
-});
+
+
 
 test('AI decomposition shows pending progress, prevents repeat submission, and releases controls after completion or failure', async () => {
   let release, requests = 0, jobs = [], fail = false;

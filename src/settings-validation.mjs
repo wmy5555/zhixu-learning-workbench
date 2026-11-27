@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { fail } from './store.mjs';
+import { fail } from './core.mjs';
 import { validatePromptOverrides } from './prompts.mjs';
 
 const numeric = z.union([z.number(), z.string().trim().min(1)]).transform(Number).pipe(z.number().finite());

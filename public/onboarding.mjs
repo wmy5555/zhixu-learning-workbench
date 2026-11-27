@@ -1,3 +1,4 @@
+import { learningDepths } from './note-classification.mjs';
 import { api } from "./api.mjs";
 import { renderMarkdown } from "./markdown-reader.mjs";
 import { el, button, badge, clear, toast, confirmAction, containDialogKeyboard } from "./ui.mjs";
@@ -375,7 +376,7 @@ export function createOnboarding(adapter) {
       el("p", { text: "选中的解释知识还未加入学习。选好主线之后，还需要打开知识详情，点击“加入学习”并填写理由，才能安排今日清单。" }),
       button("回到加入学习这一步", { kind: "text compact", disabled: working, onClick: () => run(() => goTo(flatSteps.find(item => item.id === "library-explain"))) }),
     ]));
-    if (material && /^library-(aware|find|explain|apply)$/.test(active.id)) {
+    if (material && active.id.startsWith('library-') && learningDepths.includes(active.id.slice(8))) {
       const role = active.id.slice(8), selectedNote = current.roles?.[role];
       const select = el("select", { ariaLabel: "选择本原文的实际知识", disabled: working || role === "explain" && current.learningStarted, on: { change: event => run(async () => {
         if (!event.target.value) return;

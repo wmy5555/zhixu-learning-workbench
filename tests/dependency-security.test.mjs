@@ -12,8 +12,6 @@ import { docx } from './fixtures/source-files.mjs';
 
 const require = createRequire(import.meta.url);
 const sdkRequire = createRequire(require.resolve('@modelcontextprotocol/sdk/server/stdio.js'));
-const capacitorRequire = createRequire(require.resolve('@capacitor/cli/package.json'));
-const xcodeRequire = createRequire(capacitorRequire.resolve('xcode'));
 
 test('SDK static middleware does not decode a protected path twice and still serves normal names', async () => {
   const { Hono } = sdkRequire('hono');
@@ -34,24 +32,7 @@ test('SDK static middleware does not decode a protected path twice and still ser
   }
 });
 
-test('xcode UUID dependency rejects partial writes while its CommonJS UUID generation remains compatible', () => {
-  const uuid = xcodeRequire('uuid');
-  for (const method of ['v3', 'v5', 'v6']) {
-    for (const [length, offset] of [[8, 4], [16, -1], [16, 1]]) {
-      const buffer = new Uint8Array(length).fill(170);
-      const call = method === 'v6' ? () => uuid.v6({}, buffer, offset)
-        : () => uuid[method]('fixture', uuid[method].DNS, buffer, offset);
-      assert.throws(call, RangeError, method + ':' + length + ':' + offset);
-      assert.ok(buffer.every(value => value === 170), 'invalid bounds must not mutate output');
-    }
-  }
-  assert.equal(uuid.v5('www.example.com', uuid.v5.DNS), '2ed6657d-e927-568b-95e1-2665a8aea6a2');
-  const project = capacitorRequire('xcode').project('synthetic.pbxproj');
-  project.hash = { project: { objects: {} } };
-  const generated = Array.from({ length: 8 }, () => project.generateUuid());
-  assert.ok(generated.every(value => /^[0-9A-F]{24}$/.test(value)));
-  assert.equal(new Set(generated).size, generated.length);
-});
+
 
 test('Mammoth CLI retains v1 argument compatibility without the vulnerable sprintf dependency', async t => {
   const lock = parse(readFileSync(new URL('../pnpm-lock.yaml', import.meta.url), 'utf8'));

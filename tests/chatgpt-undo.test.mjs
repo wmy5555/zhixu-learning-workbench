@@ -5,7 +5,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createService } from '../src/service.mjs';
 import { createChatgptUndo } from '../src/chatgpt-undo.mjs';
-import { hash } from '../src/store.mjs';
+import { hash } from '../src/core.mjs';
 import { tinyPng } from './fixtures/source-files.mjs';
 
 const tempRoot = path.resolve(import.meta.dirname, '../.tmp');

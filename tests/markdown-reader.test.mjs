@@ -1,9 +1,9 @@
+import { loadLegacyUi } from './fixtures/legacy-ui.mjs';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
 
-const uiSource = await readFile(new URL('../public/ui.mjs', import.meta.url), 'utf8');
 const readerSource = await readFile(new URL('../public/markdown-reader.mjs', import.meta.url), 'utf8');
 
 class Element {
@@ -30,7 +30,8 @@ function browser() {
   const context = vm.createContext({ document, Node: Element, URL, Intl, Date,
     fetch() { throw new Error('Rendering must not request a network resource'); },
   });
-  vm.runInContext(uiSource.replaceAll('export ', '') + '\n'
+  loadLegacyUi(context);
+  vm.runInContext('\n'
     + readerSource.replace(/^import .*;$/m, '').replaceAll('export ', '')
     + '\nthis.render = renderMarkdown;', context);
   return { render: context.render, created };

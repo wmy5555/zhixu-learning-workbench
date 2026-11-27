@@ -8,7 +8,7 @@
 - `public/`：浏览器 UI 与用户指南；`tests/`：Node 内置测试，临时数据位于 `.tmp/`；`docs/`：架构、能力边界和验收证据。
 - 安装：Node 24 + `package.json` 指定的 pnpm，`pnpm install --frozen-lockfile`；Windows 用户可运行 `install.cmd`。
 - 运行：`pnpm start`，打开 `http://127.0.0.1:4318`；Windows 后台启动/停止用 `start.cmd` / `stop.cmd`。
-- 验证：`pnpm verify`（语法/仓库规则、全部测试、本地检索质量检查）；`pnpm audit --prod --audit-level high`（需联网）。Web/Node 部分没有编译、打包或 TypeScript 步骤；Android 有独立构建与 lint，见 `docs/MAINTENANCE.md`。
+- 验证：`pnpm verify`（语法/仓库规则、全部测试、本地检索质量检查）；`pnpm audit --prod --audit-level high`（需联网）。网页和 Node 部分没有编译、打包或 TypeScript 步骤。
 - Linux/macOS 运行加密测试需临时随机 `LEARNING_MASTER_KEY`，不得复用真实密钥。应用不自动读取 `.env`，显式加载用 `node --env-file=.env src/server.mjs`。
 
 ## 开始修改前

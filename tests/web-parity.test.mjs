@@ -6,7 +6,7 @@ import {createApp} from '../src/server.mjs';
 import {createService} from '../src/service.mjs';
 import {freshClock,transition,elapsed,readClock,clampPosition,dailyFocus} from '../public/web/focus-model.mjs';
 import {aidUsed,markAid,clearAid} from '../public/web/study-aid.mjs';
-import {evidenceHTML,feedbackHTML,completionHTML} from '../public/web/parity.mjs';
+import {evidenceHTML,feedbackHTML,completionHTML} from '../public/web/learning-display.mjs';
 import {accentPalette,contrast,validAccent} from '../public/web/management.mjs';
 import {prepareTexts} from '../public/web/batch-import.mjs';
 import {capturePayload} from '../public/web/api.mjs';

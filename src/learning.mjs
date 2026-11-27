@@ -1,17 +1,17 @@
+import { isStudyStage, learningDepthNames } from '../public/note-classification.mjs';
 import { randomUUID } from 'node:crypto';
-import { hash, fail } from './store.mjs';
+import { hash, fail } from './core.mjs';
 import { outboundText } from './outbound-text.mjs';
 import { learningPractice } from './learning-guidance.mjs';
 
 const dayAt = (date, timezone) => new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
-const learningStages = new Set(['learning', 'integrated', 'core']);
 const goals = {
   aware: { label: '知道存在', minutes: 2, question: title => `「${title}」主要处理哪类问题？遇到什么情形时，你会想到它？`, hint: '只需指出它的用途和出现的情形，不要求背出机制或细节。' },
   find: { label: '知道去哪找', minutes: 3, question: title => `如果需要使用「${title}」，你会用什么线索、关键词或来源找到它？找到后先核对什么条件？`, hint: '想想可搜索的关键词、资料出处，以及重新使用前要核对的条件。' },
   explain: { label: '能够解释', minutes: 5, question: title => `请用自己的话解释「${title}」：核心内容是什么？请用材料中的一个依据说明；材料未解释的原因可以直说。`, hint: '先抓一个核心观点，用材料中的条件、步骤或例子说明；不要补写材料未提供的理由。' },
   apply: { label: '能够迁移应用', minutes: 8, question: title => `请为「${title}」提出一个不同于材料例子的具体场景，说明如何应用、需要哪些条件，以及何时不能套用。`, hint: '换一个具体场景，逐步对应机制与条件，并说明一个不能直接应用的边界。' },
 };
-const depthOf = note => Object.hasOwn(goals, note.meta.depth) ? note.meta.depth : 'explain';
+const depthOf = note => Object.hasOwn(learningDepthNames, note.meta.depth) ? note.meta.depth : 'explain';
 const uniqueStrings = value => [...new Set(value)];
 const textList = value => Array.isArray(value) ? value.filter(x => typeof x === 'string') : typeof value === 'string' && value.trim() ? [value] : [];
 
@@ -52,13 +52,13 @@ export function createLearning(dependencies) {
     const pausedIds = settings().pausedIds || [];
     const members = textList(topic.meta.noteIds).map((id, index) => {
       const n = byId.get(id);
-      return { id, index, title: n?.title || '内容已删除或暂不可读', stage: n?.meta.stage, depth: n ? depthOf(n) : null, completed: done.has(id), available: Boolean(n && eligible(n) && learningStages.has(n.meta.stage) && !pausedIds.includes(id)) };
+      return { id, index, title: n?.title || '内容已删除或暂不可读', stage: n?.meta.stage, depth: n ? depthOf(n) : null, completed: done.has(id), available: Boolean(n && eligible(n) && isStudyStage(n.meta.stage) && !pausedIds.includes(id)) };
     });
     const path = topicPath(topic, all);
     // A missing/inactive prerequisite remains a visible gap, rather than being silently skipped.
     const nextId = path.find(id => !done.has(id));
     const next = nextId ? byId.get(nextId) : null;
-    const canStart = next && eligible(next) && learningStages.has(next.meta.stage) && !pausedIds.includes(next.id) && !topicPaused(topic);
+    const canStart = next && eligible(next) && isStudyStage(next.meta.stage) && !pausedIds.includes(next.id) && !topicPaused(topic);
     return {
       ...topic, ...topic.meta, paused: topicPaused(topic), members,
       progress: { total: members.length, completedCount: members.filter(m => m.completed).length, completedNoteIds: members.filter(m => m.completed).map(m => m.id), nextNoteId: canStart ? next.id : null, nextNoteTitle: canStart ? next.title : null, blockedNoteId: next && !canStart ? next.id : null },
@@ -78,7 +78,7 @@ export function createLearning(dependencies) {
     const all = store.list(), byId = new Map(all.map(n => [n.id, n]));
     const bundles = all.filter(n => n.kind === 'topic').sort((a, b) => Number(config.focusTopics.includes(b.title)) - Number(config.focusTopics.includes(a.title)) || a.id.localeCompare(b.id));
     const pausedMembers = new Set(bundles.filter(topicPaused).flatMap(n => textList(n.meta.noteIds)));
-    const candidates = all.filter(n => eligible(n) && learningStages.has(n.meta.stage) && !config.pausedIds.includes(n.id) && !pausedMembers.has(n.id));
+    const candidates = all.filter(n => eligible(n) && isStudyStage(n.meta.stage) && !config.pausedIds.includes(n.id) && !pausedMembers.has(n.id));
     const candidateMap = new Map(candidates.map(n => [n.id, n]));
     const existing = store.records('plans').filter(p => p.date === date);
     const existingById = new Map(existing.map(p => [p.id, p]));
@@ -155,7 +155,7 @@ export function createLearning(dependencies) {
       if (note.meta.supersededBy) return result('superseded', '这条知识已被合并或替代，请查看保留的知识；重新加工不能恢复旧条目的学习状态。');
       if (note.meta.stage === 'retired') return result('retired', '这条知识已设为不再使用，因此不进入今日清单。若想继续，请打开知识详情重新选择学习状态并填写理由。');
       if (!eligible(note)) return result('material', materialIssues.join('；') || '这条知识暂不符合学习条件，请查看知识详情。');
-      if (!learningStages.has(note.meta.stage)) return result('stage', '还未加入学习。请打开知识详情，选择“加入学习”并填写理由。');
+      if (!isStudyStage(note.meta.stage)) return result('stage', '还未加入学习。请打开知识详情，选择“加入学习”并填写理由。');
       if (config.pausedIds.includes(note.id) || pausedMembers.has(note.id)) return result('paused', '这条知识或所属主题已暂停，请在系统的暂停项或主题详情中恢复。');
       const fixedPlan = fixed.find(p => p.noteId === note.id);
       if (fixedPlan) return result('today_action', fixedPlan.state === 'done' ? '今天已完成这项学习。' : '今天已跳过、延期或暂停，请查看今日安排；下一天会重新按规则安排。');
@@ -215,7 +215,7 @@ export function createLearning(dependencies) {
     }
     const note = getNote(noteId);
     if (!eligible(note)) fail('这条知识已停用、被替代或不是可学习的知识，请先调整学习安排。', 'NOTE_UNAVAILABLE');
-    if (!learningStages.has(note.meta.stage)) fail('请先将知识加入学习。');
+    if (!isStudyStage(note.meta.stage)) fail('请先将知识加入学习。');
     if (planId && (plan?.noteId !== noteId || plan.state !== 'pending')) fail('学习安排已变化，请刷新今日清单。');
     let topic;
     if (topicId) {

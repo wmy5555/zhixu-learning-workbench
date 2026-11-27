@@ -1,3 +1,4 @@
+import { learningStages as stages, learningDepths as depths } from '../public/note-classification.mjs';
 import { discoveryFindings, discoveryMarkdown } from './discovery-guidance.mjs';
 import { importedContext, readImportedView } from './chatgpt-structure.mjs';
 import { makeLearningPractice, learningSourceIds } from './learning-guidance.mjs';
@@ -5,7 +6,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import { Store, now, hash, fail } from './store.mjs';
+import { Store } from './store.mjs';
+import { now, hash, fail } from './core.mjs';
 import { createSecrets } from './secrets.mjs';
 import { validateSettings, credentialBinding } from './settings-validation.mjs';
 import { assertBackupSize } from './backup-contract.mjs';
@@ -19,12 +21,13 @@ import { createChatgptBridge } from './chatgpt.mjs';
 import { createChatgptUndo } from './chatgpt-undo.mjs';
 import { buildUsageReport } from './usage.mjs';
 import { callPurpose, callPurposes } from './call-purpose.mjs';
-import { structureBasis, structureRecord, structureView } from './source-structure.mjs';
+import { groupSourceChildren, sourceParentIds, structureBasis, structureRecord, structureView } from './source-structure.mjs';
 import { createSourceFiles } from './source-files.mjs';
 import { assertTextSource, processingText } from './attachments.mjs';
 import { outboundText, outboundTitle } from './outbound-text.mjs';
 import { searchContext } from './search-index.mjs';
 import { performance } from 'node:perf_hooks';
+import { sourceTitlePlaceholder, needsTitle, validSourceTitle } from './source-title.mjs';
 
 export const defaults = {
   dailyMinutes: 25, timezone: 'Asia/Shanghai', scheduleTime: '08:00', focusTopics: [], pausedIds: [],
@@ -33,8 +36,6 @@ export const defaults = {
   search: { enabled: false, baseUrl: 'https://api.tavily.com', requestPrice: null }, fetch: { enabled: false },
   mcp: { enabled: false, allowProposals: false, chatgptEnabled: false, chatgptAllowRead: false }, discoveryDays: 7, prompts: {},
 };
-const stages = ['reference','candidate','learning','integrated','core','retired'];
-const depths = ['aware','find','explain','apply'];
 const usable = (n, timestamp) => n.kind === 'knowledge' && !['retired'].includes(n.meta.stage) && !n.meta.supersededBy && !(n.meta.researchLimitations?.length) && (!n.meta.reviewAfter || n.meta.reviewAfter >= timestamp);
 const practicePurpose = 'onboarding-practice';
 const practicePreferences = ['dailyMinutes','timezone','scheduleTime','focusTopics','pausedIds','discoveryDays','prompts'];
@@ -44,92 +45,6 @@ function parseJSON(text) { try { return JSON.parse(text.replace(/^```(?:json)?\s
 function cosine(a, b) {
   if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return 0;
   let dot = 0, na = 0, nb = 0; for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i] ** 2; nb += b[i] ** 2; } return dot / (Math.sqrt(na * nb) || 1);
-}
-
-// Mirror the reader's bounded container traversal without rendering or changing source text.
-function titleTextLines(lines, depth = 0) {
-  if (depth >= 16) return [];
-  const visible = [];
-  for (let i = 0; i < lines.length;) {
-    const line = lines[i], marker = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
-    if (marker && !(marker[1][0] === '`' && marker[2].includes('`'))) {
-      i++;
-      while (i < lines.length) {
-        const close = lines[i++].match(/^ {0,3}(`{3,}|~{3,})[ \t]*$/);
-        if (close && close[1][0] === marker[1][0] && close[1].length >= marker[1].length) break;
-      }
-      visible.push('');
-      continue;
-    }
-    if (/^ {0,3}>/.test(line)) {
-      const quote = [];
-      while (i < lines.length && /^ {0,3}>/.test(lines[i])) quote.push(lines[i++].replace(/^ {0,3}> ?/, ''));
-      visible.push('');
-      for (const value of titleTextLines(quote, depth + 1)) visible.push(value);
-      visible.push('');
-      continue;
-    }
-    const item = line.match(/^( {0,3})(?:[-+*]|\d{1,9}[.)])[ \t]+(.*)$/);
-    if (item) {
-      const itemLines = [item[2].replace(/^\[[ xX]\][ \t]+/, '')], width = item[0].length - item[2].length;
-      i++;
-      while (i < lines.length) {
-        if (!lines[i].trim()) { itemLines.push(''); i++; continue; }
-        const indent = lines[i].match(/^ */)[0].length;
-        if (indent <= item[1].length) break;
-        itemLines.push(lines[i++].slice(Math.min(indent, width)));
-      }
-      visible.push('');
-      for (const value of titleTextLines(itemLines, depth + 1)) visible.push(value);
-      visible.push('');
-      continue;
-    }
-    visible.push(line); i++;
-  }
-  return visible;
-}
-
-// A local display hint only: preserve the body and keep AI title generation pending.
-function sourceTitlePlaceholder(body) {
-  const visible = titleTextLines(body.replace(/\r\n?/g, '\n').split('\n'));
-  const plain = value => value
-    .replace(/^\s*(?:>\s*)+/, '').replace(/^\s*(?:[-+*]|\d+[.)])\s+(?:\[[ xX]\]\s*)?/, '')
-    .replace(/!?\[([^\]\n]*)\]\([^\n]*?\)/g, '$1')
-    .replace(/(`+)(.*?)\1/g, '$2').replace(/(\*\*|__|~~)(.*?)\1/g, '$2')
-    .replace(/(^|\s)[*_]([^*_]+)[*_](?=\s|$|[，。！？、])/g, '$1$2')
-    .replace(/\s+/gu, ' ').trim();
-  let heading = '', paragraph = [];
-  for (let i = 0; i < visible.length; i++) {
-    const line = visible[i], atx = line.match(/^ {0,3}#{1,6}\s+(.+?)(?:\s+#+)?\s*$/);
-    const setext = line.trim() && /^ {0,3}(?:=+|-+)\s*$/.test(visible[i + 1] || '');
-    if (atx || setext) {
-      heading = plain(atx ? atx[1] : line);
-      if (heading) break;
-    }
-  }
-  for (const line of visible) {
-    if (!line.trim() || /^\s*(?:[-*_]\s*){3,}$/.test(line)) {
-      if (paragraph.length) break;
-      continue;
-    }
-    const value = plain(line);
-    if (value) paragraph.push(value);
-  }
-  const text = heading || paragraph.join(' ') || '未命名资料';
-  const segments = [];
-  for (const { segment } of new Intl.Segmenter('zh', { granularity: 'grapheme' }).segment(text)) {
-    segments.push(segment);
-    if (segments.length > 36) break;
-  }
-  if (segments.length <= 36) return text;
-  let excerpt = segments.slice(0, 35).join('');
-  const sentence = excerpt.match(/^.*[。！？.!?](?=\s|[^\x00-\x7f]|$)/u);
-  if (sentence) excerpt = sentence[0];
-  else {
-    const boundary = excerpt.replace(/\s+\S*$/, '');
-    if ([...boundary].length >= 18) excerpt = boundary;
-  }
-  return excerpt.trimEnd() + '…';
 }
 
 export function createService({ dataDir, vaultDir, aiOverride, learningClock = () => new Date(), getExternalSettings, practice = false, getPracticeQuestion, receiveHistorySnapshot, allowUncertainContinuation = false } = {}) {
@@ -343,8 +258,6 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     if (extracted) payload.extracted = structuredClone(extracted);
     return processReply(queue('process', payload, `process:${id}:${source.hash}${payload.research ? ':research' : ''}`));
   }
-  const needsTitle = source => source.meta.titlePending === true && source.title === source.meta.titlePlaceholder;
-  const validSourceTitle = value => typeof value === 'string' && value.trim().length > 0 && value.trim().length <= 80 && !/[\r\n\u0000-\u001f\u007f\u2028\u2029]/u.test(value) && !/^[#>*\x60]|\x60/u.test(value.trim());
   function titleJob(source, failure = false) {
     const task = queue('title', { noteId: source.id, hash: source.hash }, `title:${source.id}:${source.hash}`);
     return failure ? putJob({ ...task, state: 'failed', code: 'MODEL_FORMAT', error: '标题结果缺失或格式不正确；暂用原文片段，拆解结果已保留。' }) : task;
@@ -356,7 +269,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     if (privacyFor(current) !== 'cloud') fail('资料或引用已变化，旧标题未写入。', 'PRIVACY_LOCAL');
     if (!needsTitle(current)) fail('标题已经填写，保留当前标题。', 'TITLE_ALREADY_SET');
     if (!validSourceTitle(value)) fail('标题结果缺失或格式不正确；原文与临时标题已保留。', 'MODEL_FORMAT');
-    const structure = store.get('sourceStructures', source.id), children = sourceChildren(source.id);
+    const structure = store.get('sourceStructures', source.id), children = storedSourceChildren(source.id);
     const structureCurrent = structure && JSON.stringify(structure.basis) === JSON.stringify(structureBasis(source, children));
     const saved = store.update(source.id, { title: value.trim(), expectedHash: source.hash, meta: { titlePending: false, titleOrigin: 'ai' } });
     // Only this strictly checked automatic title change can carry body-derived evidence forward.
@@ -399,7 +312,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
       const cached = store.get('research', hash(claim + ':' + source.hash));
       if (cached) store.put('research', hash(claim + ':' + saved.hash), cached);
     }
-    if (structureCurrent) store.put('sourceStructures', source.id, { ...structure, basis: structureBasis(saved, sourceChildren(source.id)) });
+    if (structureCurrent) store.put('sourceStructures', source.id, { ...structure, basis: structureBasis(saved, storedSourceChildren(source.id)) });
     return saved;
   }
   async function generateSourceTitle(job, signal) {
@@ -441,18 +354,35 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     }
     return { notes: result, jobs };
   }
+  const matchesNote = (note, filters) => (!filters.kind || note.kind === filters.kind)
+    && (!filters.stage || note.meta.stage === filters.stage)
+    && (!filters.q || `${note.title}\n${note.body}`.toLowerCase().includes(filters.q.toLowerCase()));
   function listNotes(filters = {}) {
-    store.scan(); return store.list().filter(n => (!filters.kind || n.kind === filters.kind) && (!filters.stage || n.meta.stage === filters.stage) && (!filters.q || `${n.title}\n${n.body}`.toLowerCase().includes(filters.q.toLowerCase())));
+    store.scan(); return store.list().filter(note => matchesNote(note, filters));
   }
   const operationalIssue = text => /今日外部调用次数已达到上限|BUDGET|预算|请求次数.*上限/.test(text);
-  function publicNote(note) {
+  const titleJobSource = job => job.type === 'title' || (job.type === 'process' && job.payload?.titleRequested)
+    ? job.payload?.noteId : undefined;
+  const publicNote = note => projectNote(note);
+  function publicNotes(notes, jobs) {
+    const titleJobs = new Map();
+    if (notes.some(note => note.kind === 'source' && needsTitle(note))) {
+      // records() yields newest row first, matching the single-note lookup.
+      for (const job of jobs ?? store.records('jobs')) {
+        const id = titleJobSource(job);
+        if (id && !titleJobs.has(id)) titleJobs.set(id, job);
+      }
+    }
+    return notes.map(note => projectNote(note, titleJobs));
+  }
+  function projectNote(note, titleJobs) {
     const n = structuredClone(note);
     delete n.meta.privacy;
     delete n.meta.effectivePrivacy;
     delete n.meta.evidence;
     if (n.kind === 'source' && n.meta.titlePending) n.meta.titlePending = needsTitle(note);
     if (n.kind === 'source' && needsTitle(n)) {
-      const job = store.records('jobs').find(j => j.payload?.noteId === n.id && (j.type === 'title' || j.type === 'process' && j.payload.titleRequested));
+      const job = titleJobs ? titleJobs.get(n.id) : store.records('jobs').find(item => titleJobSource(item) === n.id);
       n.titleGeneration = { state: job?.state || 'idle', code: job?.code || null };
     } else if (n.meta.titleOrigin === 'ai') n.titleGeneration = { state: 'done' };
     n.meta.sources = (n.meta.sources || []).filter(s => s.role === 'input' || !store.row(s.id) || !store.read(s.id).meta.excerptOnly);
@@ -464,12 +394,10 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     }
     return n;
   }
-  const parentIds = n => [...new Set([...(n.meta.sources || []).filter(s => s.role === 'input').map(s => s.id), n.meta.processKey?.split(':')[0]].filter(Boolean))];
-  const parentId = n => parentIds(n)[0];
-  const childOrder = (a,b) => (Number(a.meta.processKey?.split(':').at(-1)) || 0) - (Number(b.meta.processKey?.split(':').at(-1)) || 0);
-  const sourceChildren = id => store.list().filter(n => n.kind === 'knowledge' && !n.meta.excerptOnly && parentIds(n).includes(id)).sort(childOrder);
+  const parentId = n => sourceParentIds(n)[0];
+  const storedSourceChildren = id => groupSourceChildren(store.list(), [id]).get(id);
   function requestSourceStructure(id) {
-    const source = getNote(id), notes = sourceChildren(id);
+    const source = getNote(id), notes = storedSourceChildren(id);
     assertTextSource(source);
     if (source.kind !== 'source' || source.meta.excerptOnly) fail('请选择原始资料。');
     if (!notes.length) fail('请先拆解或手动整理资料，再分析逻辑关系。');
@@ -477,11 +405,11 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     return processReply(queue('structure', { noteId: id, basis }, `structure:${id}:${hash(JSON.stringify(basis))}`));
   }
   async function analyzeSourceStructure(job, signal) {
-    const source = getNote(job.payload.noteId), notes = sourceChildren(source.id);
+    const source = getNote(job.payload.noteId), notes = storedSourceChildren(source.id);
     const assertCurrent = () => {
       store.scan();
       if (!store.row(source.id)) fail('原始资料已删除。', 'SOURCE_CHANGED');
-      const current = store.read(source.id), children = sourceChildren(source.id);
+      const current = store.read(source.id), children = storedSourceChildren(source.id);
       if (current.kind !== 'source' || current.meta.excerptOnly || !children.length) fail('资料组已变化，请先确认当前条目。', 'SOURCE_CHANGED');
       if ([current, ...children].some(n => privacyFor(n) !== 'cloud')) fail('原文或参与分析的引用已变化，请重新核对。', 'PRIVACY_LOCAL');
       if (JSON.stringify(structureBasis(current, children)) !== JSON.stringify(job.payload.basis)) fail('资料已变化，请重试以分析当前版本。', 'SOURCE_CHANGED');
@@ -524,11 +452,20 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     return readPublicNote(id);
   }
   function library(filters = {}) {
-    const all = listNotes().filter(n=>!n.meta.excerptOnly).map(publicNote), matching = new Set(listNotes(filters).filter(n=>!n.meta.excerptOnly).map(n => n.id)), grouped = new Set();
-    const groups = all.filter(n => n.kind === 'source').map(source => {
-      const children = all.filter(n => n.kind === 'knowledge' && parentIds(n).includes(source.id)).sort(childOrder);
+    const notes = listNotes().filter(n => !n.meta.excerptOnly);
+    const jobs = notes.some(note => note.kind === 'source') ? store.records('jobs') : [];
+    const all = publicNotes(notes, jobs);
+    const matching = new Set(notes.filter(note => matchesNote(note, filters)).map(n => n.id)), grouped = new Set();
+    const sources = all.filter(n => n.kind === 'source');
+    const childrenBySource = groupSourceChildren(all, sources.map(source => source.id));
+    const jobsBySource = new Map(sources.map(source => [source.id, []]));
+    for (const job of jobs) {
+      if (job.type === 'process') jobsBySource.get(job.payload.noteId)?.push({ id: job.id, state: job.state, progress: job.progress });
+    }
+    const groups = sources.map(source => {
+      const children = childrenBySource.get(source.id);
       children.forEach(n => grouped.add(n.id)); grouped.add(source.id);
-      return { source, children, jobs: store.records('jobs').filter(j => j.type === 'process' && j.payload.noteId === source.id).map(j => ({id:j.id,state:j.state,progress:j.progress})) };
+      return { source, children, jobs: jobsBySource.get(source.id) };
     }).filter(g => matching.has(g.source.id) || g.children.some(n => matching.has(n.id)));
     return { groups, standalone: all.filter(n => !grouped.has(n.id) && matching.has(n.id)), matchingIds: [...matching] };
   }
@@ -1011,7 +948,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
       // Structure is a derived view: never rewrite the source or user-edited knowledge to save it.
       store.scan();
       if (store.row(source.id)?.hash === source.hash) {
-        const children = sourceChildren(source.id);
+        const children = storedSourceChildren(source.id);
         const keys = new Map(extracted.candidates.flatMap((candidate, index) => {
           const note = children.find(n => n.meta.processKey === `${source.id}:${source.hash}:${index}`);
           return note && note.body.includes(candidate.body) ? [[String(index), note.id]] : [];
@@ -1229,7 +1166,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     catch(error){if(store.get('jobs',job.id)?.state!=='cancelled')putJob({...job,state:['OUTBOUND_INTENT_REQUIRED','PRIVACY_LOCAL','DISABLED','NOT_CONFIGURED','BUDGET_EXCEEDED','SOURCE_BUDGET','BUDGET_UNKNOWN','RESEARCH_INCOMPLETE','AI_DISABLED','MISSING_KEY','CAPABILITY_DISABLED','MISSING_CREDENTIALS','CALL_RECOVERY_REQUIRED','CALL_ACCOUNTING_FAILED','CALL_RESULT_SAVE_FAILED','CALL_PERSISTENCE_FAILED','CALL_RESULT_MISSING'].includes(error.code)?'waiting':'failed',error:String(error.message).slice(0,800),code:error.code||'TASK_FAILED'});}
     finally{processing=false;controller=null;currentJob=null;}
   }
-  function jobAction(id,{action}){if(pausing||stopped)fail('任务正在暂停，请稍后继续。','BUSY',409);const job=store.get('jobs',id);if(!job)fail('任务不存在。','NOT_FOUND',404);if(action==='cancel'){if(currentJob===id)controller?.abort();return putJob({...job,state:'cancelled',error:'用户取消；已保存的输入和回答保留。'});}if(action==='retry'){if(job.type==='structure'&&!['running','done'].includes(job.state)){const source=getNote(job.payload.noteId);job.payload.basis=structureBasis(source,sourceChildren(source.id));job.dedupKey=`structure:${source.id}:${hash(JSON.stringify(job.payload.basis))}`;const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}if(['running','done'].includes(job.state))fail('该任务当前不可重试。');if(job.type==='title'){const source=getNote(job.payload.noteId);if(!needsTitle(source))fail('标题已经填写，保留当前标题。','TITLE_ALREADY_SET');job.payload={noteId:source.id,hash:source.hash};job.dedupKey=`title:${source.id}:${source.hash}`;const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}if(job.type==='process'){const source=getNote(job.payload.noteId);if(source.hash!==job.payload.hash){job.payload={noteId:source.id,hash:source.hash,research:job.payload.research===true,...(needsTitle(source)?{titleRequested:true}:{})};job.dedupKey=`process:${source.id}:${source.hash}${job.payload.research ? ':research' : ''}`;job.progress=0;}const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}if(needsMaterialScope(job.type,job.payload))job.payload={...job.payload,snapshots:materialSnapshots(job.type)};return putJob({...job,outboundIntentVersion:1,state:'queued',error:'',code:null});}fail('任务操作无效。');}
+  function jobAction(id,{action}){if(pausing||stopped)fail('任务正在暂停，请稍后继续。','BUSY',409);const job=store.get('jobs',id);if(!job)fail('任务不存在。','NOT_FOUND',404);if(action==='cancel'){if(currentJob===id)controller?.abort();return putJob({...job,state:'cancelled',error:'用户取消；已保存的输入和回答保留。'});}if(action==='retry'){if(job.type==='structure'&&!['running','done'].includes(job.state)){const source=getNote(job.payload.noteId);job.payload.basis=structureBasis(source,storedSourceChildren(source.id));job.dedupKey=`structure:${source.id}:${hash(JSON.stringify(job.payload.basis))}`;const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}if(['running','done'].includes(job.state))fail('该任务当前不可重试。');if(job.type==='title'){const source=getNote(job.payload.noteId);if(!needsTitle(source))fail('标题已经填写，保留当前标题。','TITLE_ALREADY_SET');job.payload={noteId:source.id,hash:source.hash};job.dedupKey=`title:${source.id}:${source.hash}`;const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}if(job.type==='process'){const source=getNote(job.payload.noteId);if(source.hash!==job.payload.hash){job.payload={noteId:source.id,hash:source.hash,research:job.payload.research===true,...(needsTitle(source)?{titleRequested:true}:{})};job.dedupKey=`process:${source.id}:${source.hash}${job.payload.research ? ':research' : ''}`;job.progress=0;}const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}if(needsMaterialScope(job.type,job.payload))job.payload={...job.payload,snapshots:materialSnapshots(job.type)};return putJob({...job,outboundIntentVersion:1,state:'queued',error:'',code:null});}fail('任务操作无效。');}
   function pauseJobs() {
     if (pausePromise) return pausePromise;
     pausing = true;
@@ -1341,9 +1278,19 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   const commitFile = tracked(input => sourceFiles.commit(input));
   const readFile = (id, assetId) => sourceFiles.read(id, assetId);
   const pendingUploads = () => sourceFiles.pending();
-  return { get store(){return store;}, get processing(){return processing;}, get hasPendingOperations(){return processing||activeOperations>0||pausing;}, chatgpt, chatgptUndo, learningNow, settings, updateSettings, capabilityTests, getPrompts, updatePrompts, usage, usageReport, updateUsageSettings, callRecovery, recoverCall, ai, importItems, processNote, requestSourceStructure, editSourceStructure, listNotes, publicNote, publicJob, library, readPublicNote, noteEvidence, linksPreview, syncLinks, getNote, editNote, extractNote, promote, confirmNote, merge, search:tracked(search), today, planAction, startStudy, session, answerStudy, hintStudy, confirmStudy, finishStudy, mistakeAction, topics, createTopic, updateTopic, topicAction, recommendations, recommendationAction, requestRelations, relationReview, relationAction, related, ask:tracked(ask), updateDraft, propose, proposalAction, queue, runJobs, pauseJobs, jobAction, tick, demo, diagnostics, backup, restore,
+  return { get store(){return store;}, get processing(){return processing;}, get hasPendingOperations(){return processing||activeOperations>0||pausing;}, chatgpt, chatgptUndo, learningNow, settings, updateSettings, capabilityTests, getPrompts, updatePrompts, usage, usageReport, updateUsageSettings, callRecovery, recoverCall, ai, importItems, processNote, requestSourceStructure, editSourceStructure, listNotes, publicNote, publicNotes, publicJob, library, readPublicNote, noteEvidence, linksPreview, syncLinks, getNote, editNote, extractNote, promote, confirmNote, merge, search:tracked(search), today, planAction, startStudy, session, answerStudy, hintStudy, confirmStudy, finishStudy, mistakeAction, topics, createTopic, updateTopic, topicAction, recommendations, recommendationAction, requestRelations, relationReview, relationAction, related, ask:tracked(ask), updateDraft, propose, proposalAction, queue, runJobs, pauseJobs, jobAction, tick, demo, diagnostics, backup, restore,
     jobStatuses, rebuildLocalSearch,
-    bootstrap(){return{settings:settings(),stats:{notes:store.list().filter(n=>!n.meta.excerptOnly).length,sources:store.list().filter(n=>n.kind==='source'&&!n.meta.excerptOnly).length,knowledge:store.list().filter(n=>n.kind==='knowledge').length,pending:store.records('jobs').filter(j=>['waiting','failed'].includes(j.state)).length},today:today(),notes:listNotes().filter(n=>!n.meta.excerptOnly).map(publicNote),jobs:store.records('jobs').map(publicJob),jobRevision,jobSnapshot:++jobSnapshot,conflicts:store.conflicts,capabilities:{offline:true,model:settings().ai.enabled,embedding:settings().embedding.enabled,search:settings().search.enabled}};},
+    bootstrap() {
+      const config = settings(), before = store.list();
+      const stats = { notes: before.filter(n => !n.meta.excerptOnly).length,
+        sources: before.filter(n => n.kind === 'source' && !n.meta.excerptOnly).length,
+        knowledge: before.filter(n => n.kind === 'knowledge').length,
+        pending: store.records('jobs').filter(j => ['waiting', 'failed'].includes(j.state)).length };
+      const plan = today(), notes = listNotes().filter(n => !n.meta.excerptOnly), jobs = store.records('jobs');
+      return { settings: config, stats, today: plan, notes: publicNotes(notes, jobs), jobs: jobs.map(publicJob),
+        jobRevision, jobSnapshot: ++jobSnapshot, conflicts: store.conflicts,
+        capabilities: { offline: true, model: settings().ai.enabled, embedding: settings().embedding.enabled, search: settings().search.enabled } };
+    },
     uploadFile, revertUpload, commitFile, readFile, pendingUploads,
     async close(){stopped=true;if(practice)await pauseJobs();else{controller?.abort();while(processing||activeOperations)await new Promise(resolve=>setTimeout(resolve,20));}store.close();}
   };

@@ -1,12 +1,11 @@
 import { batchSegments, importedRecord, saveImportedRecord, verifyImportedRecord } from './chatgpt-structure.mjs';
 import { conversationOrigin } from './chatgpt-source-metadata.mjs';
-import { createHash } from 'node:crypto';
+import { hash as digest } from './core.mjs';
 import { planHistoryBatch, verifyHistoryBatchReceipts } from './chatgpt-history-batch.mjs';
 import { literalBlock } from './chatgpt-sync.mjs';
 
 const states = 'chatgptHistoryBatches', leaves = 'chatgptHistoryBatchLeaves';
 const active = new WeakSet();
-const digest = value => createHash('sha256').update(value).digest('hex');
 const jsonHash = value => digest(JSON.stringify(value));
 const copy = value => JSON.parse(JSON.stringify(value));
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);

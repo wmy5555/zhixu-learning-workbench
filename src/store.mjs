@@ -1,35 +1,15 @@
+import { noteFolders as folders } from '../public/note-classification.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { randomUUID, createHash } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import YAML from 'yaml';
+import { fail, hash, now } from './core.mjs';
+import { atomicWrite } from './atomic-write.mjs';
 import { SearchIndex } from './search-index.mjs';
 import { assertBackupSize, backupObject, validBackupId, validateBackupPath, validateBackupMarkdown, validateBackupRecord, BACKUP_ITEM_MAX_BYTES, BACKUP_MAX_BYTES } from './backup-contract.mjs';
 import { includeAttachments, validateAttachments, installAttachments } from './attachment-backup.mjs';
 
-export const now = () => new Date().toISOString();
-export const hash = value => createHash('sha256').update(value).digest('hex');
-export function fail(message, code = 'INVALID', status = 400) {
-  const error = new Error(message); Object.assign(error, { code, status }); throw error;
-}
-export function atomicWrite(file, content) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${randomUUID()}.tmp`;
-  try {
-    fs.writeFileSync(tmp, content, { mode: 0o600 });
-    const delays = [20, 50, 100];
-    for (let attempt = 0; ; attempt++) {
-      try { fs.renameSync(tmp, file); break; }
-      catch (error) {
-        // Windows scanners and synced folders may briefly hold the destination open.
-        // Retry the same atomic replacement; never remove the previous good file.
-        if (!['EPERM', 'EACCES', 'EBUSY'].includes(error.code) || attempt >= delays.length) throw error;
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delays[attempt]);
-      }
-    }
-  }
-  finally { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); }
-}
 function atomicWriteExclusive(file, content) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${randomUUID()}.tmp`;
@@ -45,7 +25,6 @@ function durableWrite(file, content) {
   const fd = fs.openSync(file, 'r+');
   try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
 }
-const folders = { source: '01 原始资料', knowledge: '02 知识', mistake: '03 错题修正', topic: '04 主题', report: '05 发现' };
 const reserved = new Set(['id', 'kind', 'title', 'createdAt', 'updatedAt']);
 const linkStart = '<!-- zhixu-managed-links:start -->';
 const linkEnd = '<!-- zhixu-managed-links:end -->';

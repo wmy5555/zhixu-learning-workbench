@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { validateSettings } from './settings-validation.mjs';
-import { fail } from './store.mjs';
+import { fail } from './core.mjs';
 
 const fields = {
   model: ['enabled', 'baseUrl', 'model', 'apiKey', 'timeoutMs'],

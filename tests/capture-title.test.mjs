@@ -4,7 +4,7 @@ import path from 'node:path';
 import test from 'node:test';
 import YAML from 'yaml';
 import { createService } from '../src/service.mjs';
-import { hash } from '../src/store.mjs';
+import { hash } from '../src/core.mjs';
 
 const tempRoot = path.resolve(import.meta.dirname, '../.tmp');
 await mkdir(tempRoot, { recursive: true });

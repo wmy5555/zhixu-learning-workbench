@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { atomicWrite, fail } from './store.mjs';
+import { atomicWrite } from './atomic-write.mjs';
+import { fail } from './core.mjs';
 import { credentialBinding } from './settings-validation.mjs';
 
 export function createSecrets(dataDir, { db, getBinding } = {}) {

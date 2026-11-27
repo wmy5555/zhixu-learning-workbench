@@ -12,16 +12,11 @@
     "test": "node --test --test-concurrency=1 tests/*.test.mjs",
     "mcp": "node src/mcp.mjs",
     "mcp:chatgpt": "node src/mcp-chatgpt.mjs",
-    "check": "node scripts/check-project.mjs",
+    "check": "node scripts/check-project.mjs && node scripts/check-architecture.mjs",
     "quality": "node scripts/quality-check.mjs",
-    "verify": "pnpm check && pnpm test && pnpm quality",
-    "android:prepare": "node scripts/prepare-android.mjs",
-    "android:sync": "node scripts/prepare-android.mjs && node node_modules/@capacitor/cli/bin/capacitor sync android",
-    "android:test-device": "node scripts/test-android-device.mjs"
+    "verify": "pnpm check && pnpm test && pnpm quality"
   },
   "dependencies": {
-    "@capacitor/android": "8.5.2",
-    "@capacitor/core": "8.5.2",
     "@modelcontextprotocol/sdk": "1.32.0",
     "filepond": "4.32.12",
     "filepond-plugin-file-validate-size": "2.2.8",
@@ -34,6 +29,6 @@
     "zod": "4.6.6"
   },
   "devDependencies": {
-    "@capacitor/cli": "8.5.2"
+    "acorn": "8.19.0"
   }
 }

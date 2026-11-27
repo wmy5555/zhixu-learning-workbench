@@ -7,7 +7,7 @@ import test from 'node:test';
 import { parseDocument } from 'yaml';
 import { createService } from '../src/service.mjs';
 import { createApp } from '../src/server.mjs';
-import { hash } from '../src/store.mjs';
+import { hash } from '../src/core.mjs';
 
 const tempRoot = path.resolve(import.meta.dirname, '../.tmp');
 fs.mkdirSync(tempRoot, { recursive: true });

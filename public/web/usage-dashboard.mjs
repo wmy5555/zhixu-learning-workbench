@@ -1,8 +1,6 @@
 import { escape as e } from './markdown.mjs';
-import { $, field, heading, routeButton, notify } from './ui.mjs';
-import { select, facts } from './parity.mjs';
+import { $, field, heading, routeButton, notify, select, facts, list as rows } from './ui.mjs';
 
-const rows = value => Array.isArray(value) ? value : [];
 const names = { model:'文本模型', embedding:'语义嵌入', search:'联网搜索', fetch:'网页读取' };
 const periods = [['today','今天'],['7d','近 7 天'],['30d','近 30 天'],['month','本月']];
 const metrics = { totalTokens:'Token', calls:'调用', knownCost:'费用' };

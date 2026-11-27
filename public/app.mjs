@@ -1,3 +1,4 @@
+import { noteKinds, learningStages, learningDepths, learningDepthNames } from './note-classification.mjs';
 import { localCheckStatus, callFailureReason } from "./mcp-status.mjs";
 import { renderRecycleBin } from './recycle-bin.mjs';
 import { attachModelDiscovery } from "./model-discovery.mjs";
@@ -141,8 +142,6 @@ function historyReadingBody(note, version) {
   ]);
 }
 let onboarding = null;
-function isMobilePrototype() { return api.runtime?.kind === "android-prototype"; }
-function mobileNotice() { return el("div", { class: "notice info", text: "Android 共用界面样机：可在手机保存、搜索、查看和编辑原文。资料仅存本机；学习、AI、同步和备份尚未接入，请只使用可丢弃的试用资料。" }); }
 const processFeedback = createProcessFeedback({
   getContext: () => api.getContext(), readJobs: () => api.jobStatuses(), notify: toast,
   onChange: changed => {
@@ -290,7 +289,6 @@ async function navigate(view, options = {}) {
 }
 
 function capabilityNotice() {
-  if (isMobilePrototype()) return mobileNotice();
   const capabilities = asObject(state.bootstrap?.capabilities);
   const aiReady = capabilities.ai ?? state.bootstrap?.settings?.ai?.enabled;
   if (aiReady) return null;
@@ -461,19 +459,17 @@ async function renderCapture() {
   const sourceForm = el("form", { class: "panel capture-form", dataset: { tour: "capture-form" } });
   const title = el("input", { name: "title", placeholder: "可留空，根据原文生成便于检索的标题" });
   const body = el("textarea", { name: "body", placeholder: "粘贴原文。系统会保留这份原始快照，不用摘要替代。", required: true, rows: 12 });
-  const bodyEditor = !isMobilePrototype() ? createMarkdownEditor(body) : null;
+  const bodyEditor = createMarkdownEditor(body);
   let fileDrafts = [], fileLoadVersion = 0, filesLoading = false, importing = false, saving = false;
   const process = el("input", { name: "process", type: "checkbox" });
   const research = el("input", { name: "research", type: "checkbox", disabled: true });
   const syncResearchOption = () => {
-    if (isMobilePrototype()) { process.checked = false; process.disabled = true; }
     research.disabled = !process.checked;
     if (research.disabled) research.checked = false;
   };
   process.addEventListener("change", syncResearchOption);
   // reset 事件在浏览器恢复默认值之前触发，等恢复完成后再同步依赖。
   sourceForm.addEventListener("reset", () => queueMicrotask(() => { bodyEditor?.setValue(body.defaultValue || ""); syncResearchOption(); }));
-  if (isMobilePrototype()) syncResearchOption();
   const titleField = field("标题（可选）", title, "留空会先使用原文片段作为标题；主动 AI 拆解时一同生成标题，也可手动填写。");
   titleField.classList.add("span-2");
   const bodyField = bodyEditor ? el("div", { class: "field" }, [el("span", { class: "field-label", text: "原文" }), bodyEditor,
@@ -536,10 +532,6 @@ async function renderCapture() {
     el("div", { class: "form-actions" }, [button("导入所选文件", { kind: "primary", disabled: true }), button("清空导入预览", { onClick: () => resetFileDrafts() })]),
   ]);
   const importButton = batchPanel.querySelector(".primary-button");
-  if (isMobilePrototype()) {
-    fileInput.disabled = true;
-    batchPanel.append(el("p", { class: "muted", text: "样机暂不支持文件导入，请先粘贴文本。" }));
-  }
   const syncImportButton = () => { importButton.disabled = filesLoading || importing || !fileDrafts.length; };
   function resetFileDrafts() {
     if (importing) return;
@@ -594,7 +586,7 @@ async function renderCapture() {
       if (JSON.stringify(importItems()) === JSON.stringify(items)) resetFileDrafts();
       await refreshBootstrap();
     } catch (error) { handleError(error); }
-    finally { importing = false; fileInput.disabled = isMobilePrototype(); syncImportButton(); }
+    finally { importing = false; fileInput.disabled = false; syncImportButton(); }
   });
 
   const flowPanel = el("section", { class: "panel soft" }, [
@@ -606,7 +598,7 @@ async function renderCapture() {
       step("4. 个人理解", "只有你的确认，才能形成正式的个人知识。", false),
     ]),
   ]);
-  const filesPanel = !isMobilePrototype() ? createFileImportPanel({ onSaved: () => refreshBootstrap(), onError: handleError }) : null;
+  const filesPanel = createFileImportPanel({ onSaved: () => refreshBootstrap(), onError: handleError });
   clear(refs.main).append(el("div", { class: "page-stack" }, [capabilityNotice(), el("div", { class: "split-layout capture-layout" }, [sourceForm, el("div", { class: "page-stack" }, [batchPanel, filesPanel, flowPanel])])]));
   bodyEditor?.mount(refs.main);
 }
@@ -638,8 +630,8 @@ async function renderLibrary() {
   const q = el("input", { name: "q", value: filters.q, placeholder: "搜索标题和正文" });
   form.append(
     el("div", { class: "search-input" }, q),
-    selectControl([["", "内容类别"], ["source", "原始资料"], ["knowledge", "知识"], ["mistake", "错题"], ["topic", "主题学习包"], ["report", "AI 整理建议"]], filters.kind, "kind"),
-    selectControl([["", "学习状态"], ["reference", "仅供查阅"], ["candidate", "待选学"], ["learning", "正在学习"], ["integrated", "已整理个人理解"], ["core", "重点知识"], ["retired", "不再使用"]], filters.stage, "stage"),
+    selectControl([["", "内容类别"], ...noteKinds.map(id => [id, labels.kind(id)])], filters.kind, "kind"),
+    selectControl([["", "学习状态"], ...learningStages.map(id => [id, labels.stage(id)])], filters.stage, "stage"),
     button("筛选", { kind: "primary", type: "submit" }),
   );
   form.addEventListener("submit", (event) => {
@@ -680,7 +672,7 @@ async function renderLibrary() {
     visibleIds = new Set(asArray(data.matchingIds));
     for (const group of groups) if (visibleIds.has(group.source.id)) for (const child of asArray(group.children)) visibleIds.add(child.id);
   }
-  const advice = isMobilePrototype() ? mobileNotice() : await recommendationsPanel(visibleIds);
+  const advice = await recommendationsPanel(visibleIds);
   if (!current()) return;
   const page = el("div", { class: "page-stack" }, [
     conflictPanel,
@@ -895,8 +887,8 @@ function renderSourceGroupDrawer(source) {
   const headActions = el("div", { class: "form-actions" }, [
     button("全屏阅读原文", { onClick: () => openSourceReader(source) }),
     button("编辑原始资料", { kind: "primary", onClick: () => renderNoteEditor(source, { returnToSourceId: source.id }) }),
-    button("查看版本", { disabled: isMobilePrototype(), title: isMobilePrototype() ? "样机暂不支持查看版本" : "", onClick: () => renderHistory(source, { returnToSourceId: source.id }) }),
-    button("移入回收站", { kind: "danger", disabled: isMobilePrototype(), title: isMobilePrototype() ? "样机暂不支持删除" : "", onClick: () => deleteNote(source) }),
+    button("查看版本", { onClick: () => renderHistory(source, { returnToSourceId: source.id }) }),
+    button("移入回收站", { kind: "danger", onClick: () => deleteNote(source) }),
   ]);
   content.append(noteMeta(source), headActions);
   if (source.meta?.titlePending) content.append(el('p', { class: 'muted', text: '暂用原文片段作为标题，标题尚未生成。可手动编辑，或在主动 AI 拆解时生成。' }));
@@ -925,7 +917,6 @@ function renderSourceGroupDrawer(source) {
     ]),
     sourceReadingBody(source.body, 'original-body', '暂无原文', source),
   ]);
-  if (isMobilePrototype()) original.open = true;
   content.prepend(original);
   if (attachmentPanel(source)) content.append(attachmentPanel(source));
 
@@ -942,11 +933,6 @@ function renderSourceGroupDrawer(source) {
     ]),
   ]));
 
-  if (isMobilePrototype()) {
-    content.append(el("p", { class: "muted", text: "加工、核验和学习尚未迁移到手机，本次保存只保留原文。" }));
-    clear(refs.drawerBody).append(content);
-    return;
-  }
   content.append(el("section", { class: "panel soft group-process-actions" }, [
     sectionHeading("继续整理", "生成的拆解会继续归入这个窗口。"),
     el("div", { class: "form-actions" }, [
@@ -1174,8 +1160,8 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
   const title = el("input", { name: "title", value: note.title || "", required: true });
   const body = el("textarea", { name: "body", textContent: note.body || "", rows: 18, required: true });
   const imageUploads = [];
-  const imageControls = note.kind === "source" && !isMobilePrototype() ? imageInsertControls(body, imageUploads, { getNote: () => note }) : null;
-  const bodyEditor = !isMobilePrototype() ? createMarkdownEditor(body, { value: note.body || "", ...imageControls?.editorOptions }) : null;
+  const imageControls = note.kind === "source" ? imageInsertControls(body, imageUploads, { getNote: () => note }) : null;
+  const bodyEditor = createMarkdownEditor(body, { value: note.body || "", ...imageControls?.editorOptions });
   const editorValues = () => { const values = serializeForm(form); if (bodyEditor) values.body = bodyEditor.getValue(); if (imageControls) values.attachmentUploadIds = [...imageUploads]; return values; };
   const sourceFields = note.kind === "source" ? el("section", { class: "panel soft" }, [
     sectionHeading("来源信息", "补充或修正当前来源，不会改写最初收集快照"),
@@ -1219,9 +1205,6 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
     } })]),
   );
   let initialFields = editorValues();
-  if (isMobilePrototype()) {
-    for (const name of ["depth", "researchIntervalDays"]) form.querySelector(`[name="${name}"]`).disabled = true;
-  }
   let originalValues = JSON.stringify(editorValues()), saving = false;
   form.hasUnsavedChanges = () => JSON.stringify(editorValues()) !== originalValues;
   let confirmingDiscard = false;
@@ -1260,10 +1243,9 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
     saving = true; submit.disabled = true;
     try {
       if (bodyEditor && !data.body.trim()) throw new Error("正文不能为空。");
-      if (!isMobilePrototype() && note.kind === "source" && (!Number.isInteger(Number(data.researchIntervalDays)) || Number(data.researchIntervalDays) < 1 || Number(data.researchIntervalDays) > 365)) throw new Error("核验有效天数应为 1–365 的整数。");
+      if (note.kind === "source" && (!Number.isInteger(Number(data.researchIntervalDays)) || Number(data.researchIntervalDays) < 1 || Number(data.researchIntervalDays) > 365)) throw new Error("核验有效天数应为 1–365 的整数。");
       const sourceMeta = note.kind === "source" ? { platform: data.platform || "", author: data.author || "", url: data.url || "", date: data.date || "", locator: data.locator || "", researchIntervalDays: Number(data.researchIntervalDays) } : {};
       const changedMeta = Object.fromEntries(Object.entries({ topic: data.topic, depth: data.depth, ...sourceMeta }).filter(([key]) => data[key] !== initialFields[key]));
-      if (isMobilePrototype()) for (const key of ["depth", "researchIntervalDays"]) delete changedMeta[key];
       const updated = await api.updateNote(note.id, { body: data.body, title: data.title, expectedHash: previousHash, meta: changedMeta,
         ...(imageControls ? { attachmentUploadIds: data.attachmentUploadIds } : {}) });
       if (!currentEditor(context, open)) return;
@@ -1491,17 +1473,17 @@ async function restoreVersion(note, version, returnToSourceId = "") {
 }
 
 const learningGoals = {
-  aware: { label: "了解用途", summary: "知道何时会用到", description: "知道它有什么用，遇到什么问题时会想到它；不要求记住原理和细节。" },
-  find: { label: "会查资料", summary: "需要时能找到", description: "需要时能用关键词或出处找到资料，并核对适用条件；不要求脱离资料背出内容。" },
-  explain: { label: "讲清原理", summary: "用自己的话说明", description: "不看原文，用自己的话说明它为什么成立、适用条件，并举一个例子。" },
-  apply: { label: "换场景应用", summary: "用于新的问题", description: "换一个不同于原文例子的问题，说明怎么用、需要哪些条件，以及什么时候不适用。" },
+  aware: { summary: "知道何时会用到", description: "知道它有什么用，遇到什么问题时会想到它；不要求记住原理和细节。" },
+  find: { summary: "需要时能找到", description: "需要时能用关键词或出处找到资料，并核对适用条件；不要求脱离资料背出内容。" },
+  explain: { summary: "用自己的话说明", description: "不看原文，用自己的话说明它为什么成立、适用条件，并举一个例子。" },
+  apply: { summary: "用于新的问题", description: "换一个不同于原文例子的问题，说明怎么用、需要哪些条件，以及什么时候不适用。" },
 };
 function depthLabel(value) {
-  return Object.hasOwn(learningGoals, value) ? learningGoals[value].label : value;
+  return Object.hasOwn(learningDepthNames, value) ? learningDepthNames[value] : value;
 }
 function learningGoalField(value) {
-  const selected = Object.hasOwn(learningGoals, value) ? value : "explain";
-  const select = selectControl(Object.entries(learningGoals).map(([key, goal]) => [key, `${goal.label} · ${goal.summary}`]), selected, "depth");
+  const selected = Object.hasOwn(learningDepthNames, value) ? value : "explain";
+  const select = selectControl(learningDepths.map(key => [key, `${learningDepthNames[key]} · ${learningGoals[key].summary}`]), selected, "depth");
   const hint = el("small", { class: "field-hint", id: "learning-goal-hint", ariaLive: "polite" });
   select.setAttribute("aria-describedby", "learning-goal-hint");
   const updateHint = () => { hint.textContent = learningGoals[select.value].description; };
@@ -1621,8 +1603,8 @@ async function studySessionPanel() {
   const turns = asArray(session.turns);
   const latest = turns.at(-1);
   const goalPanel = () => el("div", { class: "notice info" }, [
-    el("strong", { text: `本次目标：${Object.hasOwn(learningGoals, session.depth) ? depthLabel(session.depth) + (session.presetCase ? "（预设演示案例）" : "") : session.goal || depthLabel("explain")}` }),
-    Object.hasOwn(learningGoals, session.depth) ? el("p", { text: learningGoals[session.depth].description }) : null,
+    el("strong", { text: `本次目标：${Object.hasOwn(learningDepthNames, session.depth) ? depthLabel(session.depth) + (session.presetCase ? "（预设演示案例）" : "") : session.goal || depthLabel("explain")}` }),
+    Object.hasOwn(learningDepthNames, session.depth) ? el("p", { text: learningGoals[session.depth].description }) : null,
     session.mistakeId ? el("p", { text: "误解专项练习：重点检查此前的遗漏或错误，实际反馈会保留为后续纠正依据。" }) : null,
     session.topicId ? el("p", { text: "本次属于主题学习包，结束后可按顺序继续。" }) : null,
     el("p", { text: "结束练习保存本轮表现；确认个人理解保存你自己的表达。这两项记录分别保留，均不等于永久掌握。" }),
@@ -1963,8 +1945,8 @@ async function renderDiscover() {
   form.append(sectionHeading("检索知识库", "关键词适合精确术语，语义检索适合不同措辞，混合检索结合两者"), el("div", { class: "filter-bar" }, [
     el("div", { class: "search-input" }, query),
     searchMode,
-    selectControl([["", "内容类别"], ["source", "原始资料"], ["knowledge", "知识"], ["mistake", "错题"], ["topic", "主题学习包"], ["report", "AI 整理建议"]], state.searchFilters.kind, "kind"),
-    selectControl([["", "学习状态"], ["reference", "仅供查阅"], ["candidate", "待选学"], ["learning", "正在学习"], ["integrated", "已整理个人理解"], ["core", "重点知识"], ["retired", "不再使用"]], state.searchFilters.stage, "stage"),
+    selectControl([["", "内容类别"], ...noteKinds.map(id => [id, labels.kind(id)])], state.searchFilters.kind, "kind"),
+    selectControl([["", "学习状态"], ...learningStages.map(id => [id, labels.stage(id)])], state.searchFilters.stage, "stage"),
     button("搜索", { kind: "primary", type: "submit" }),
   ]), el("label", { class: "check-field" }, [allowCloudQuery, el("span", { text: "允许将本次查询发给已配置的外部服务" })]), el("p", { class: "fine-print", text: "默认关闭：只运行本地关键词检索。开启后，本次查询可用于语义检索；仅在主动操作中发送所需材料，不因保存资料自动建外部索引。" }), el("details", {}, [el("summary", { text: "按来源、主题与时间进一步筛选" }), el("div", { class: "form-grid" }, [
     field("来源", selectControl([["", "全部来源"], ...sources.map((source) => [source.id, source.title || source.id])], state.searchFilters.source, "source")),
@@ -2993,10 +2975,6 @@ function conflictsPanel() {
 }
 
 async function renderCurrent() {
-  if (isMobilePrototype() && !["capture", "library"].includes(state.view)) {
-    clear(refs.main).append(emptyState("这项功能尚未迁移到手机", "当前样机支持原文收集、查看、搜索和编辑。", button("打开知识库", { onClick: () => navigate("library") })));
-    return;
-  }
   const renderers = { trash: () => renderRecycleBin({ main: refs.main, refresh: refreshBootstrap, onError: handleError, isActive: () => state.view === 'trash' }), today: renderToday, capture: renderCapture, library: renderLibrary, study: renderStudy, topics: renderTopics, discover: renderDiscover, output: renderOutput, system: renderSystem };
   await (renderers[state.view] || renderSystem)();
   onboarding?.rendered();
@@ -3010,7 +2988,7 @@ async function navigateTutorial(step, tutorial) {
     if (step.noteRole === "createdTopic") return prerequisite("topic-create", "尚未找到对应主题，请先创建并保存一个练习主题。");
     if (step.noteRole === "capturedSource") return prerequisite("capture-save", "尚未找到收集的资料，请先保存练习资料。");
     if (tutorial?.materialId && step.noteRole === "source") return prerequisite("capture-save", "尚未找到本场景原文，请先保存练习资料。");
-    if (tutorial?.materialId && ["aware", "find", "explain", "apply"].includes(step.noteRole) && !value) return { target: "onboarding-knowledge", message: "请在引导中选择本原文的一条实际候选，再查看内容并设置学习目标；待核验事实先联网加工。" };
+    if (tutorial?.materialId && learningDepths.includes(step.noteRole) && !value) return { target: "onboarding-knowledge", message: "请在引导中选择本原文的一条实际候选，再查看内容并设置学习目标；待核验事实先联网加工。" };
     return { target: "onboarding-reset", message: "初始示例已删除或缺失。可点击框选的“重置练习”重新准备；确认后会清理当前练习进度，正式资料不受影响。" };
   };
   const value = tutorial?.roles?.[step.noteRole];
@@ -3202,18 +3180,10 @@ window.addEventListener("beforeunload", (event) => {
 async function init() {
   const [hashView, systemTab] = window.location.hash.slice(1).split("/");
   if (hashView === "system" && ["settings", "usage", "appearance", "jobs", "data", "diagnostics", "proposals", "conflicts"].includes(systemTab)) state.systemTab = systemTab;
-  setPage(pages[hashView] ? hashView : isMobilePrototype() ? "library" : "today");
-  if (isMobilePrototype()) {
-    document.documentElement.classList.add("android-prototype");
-    refs.nav.querySelectorAll("[data-view]").forEach(item => {
-      item.disabled = !["capture", "library"].includes(item.dataset.view);
-      if (item.disabled) item.title = "后续版本接入";
-    });
-    for (const id of ["onboarding-launcher", "onboarding-reset"]) { const control = document.querySelector(`#${id}`); if (control) { control.disabled = true; control.title = "新手引导尚未迁移到手机"; } }
-  }
+  setPage(pages[hashView] ? hashView : "today");
   try {
     await startSession();
-    if (!onboarding && !isMobilePrototype()) {
+    if (!onboarding) {
       const { createOnboarding } = await import("./onboarding.mjs");
       onboarding = createOnboarding({
         processStatus: noteId => processFeedback.status(noteId),
@@ -3240,7 +3210,7 @@ async function init() {
     }
     await refreshBootstrap();
     await renderCurrent();
-    if (!isMobilePrototype()) processFeedback.start();
+    processFeedback.start();
   } catch (error) {
     renderFailure(error, init);
   }

@@ -10,7 +10,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { createApp } from '../src/server.mjs';
 import { createChatgptClient } from '../src/mcp-chatgpt.mjs';
 import { renderLegacyConversation } from '../src/chatgpt.mjs';
-import { hash } from '../src/store.mjs';
+import { hash } from '../src/core.mjs';
 
 const projectDir = path.resolve(import.meta.dirname, '..');
 const tempRoot = path.join(projectDir, '.tmp');

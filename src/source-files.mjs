@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { decodeFile, readAttachment, writeAttachment, extractWord } from './attachments.mjs';
-import { fail, now, hash } from './store.mjs';
+import { fail, now, hash } from './core.mjs';
 
 export const sourceAttachments = note => [note.meta?.sourceFile, ...(note.meta?.attachments || [])].filter(Boolean);
 export const MAX_UPLOAD_RECEIPTS = 5000;

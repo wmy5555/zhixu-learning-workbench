@@ -23,8 +23,6 @@ const shapes = {
 export const icon = name => `<svg viewBox="0 0 24 24" aria-hidden="true">${shapes[name] || shapes.book}</svg>`;
 export const $ = selector => document.querySelector(selector);
 export const $$ = selector => [...document.querySelectorAll(selector)];
-export const kind = value => ({ source:'原始资料', knowledge:'知识', topic:'主题学习包', mistake:'错题', report:'AI 整理建议' }[value] || '资料');
-export const stage = value => ({ reference:'仅供查阅', candidate:'待选学', learning:'正在学习', integrated:'个人理解', core:'重点知识', retired:'不再使用' }[value] || '尚未分类');
 export const jobState = value => ({ queued:'等待处理', running:'正在处理', waiting:'等待条件', failed:'未完成', done:'已完成', cancelled:'已取消', reading:'正在阅读', awaiting_feedback:'等待反馈', feedback:'可继续练习', completed:'已结束' }[value] || value || '');
 export const button = (label, action, css = '', attributes = '') => `<button type="button" class="${css}" data-action="${action}" ${attributes}>${label}</button>`;
 export const routeButton = (label, route, css = '') => button(label, 'navigate', css, `data-route="${e(route)}"`);
@@ -74,4 +72,18 @@ export async function busy(control, work) {
   if (control) { control.disabled = true; control.setAttribute('aria-busy', 'true'); }
   try { return await work(); } catch (error) { notify(error.message || '操作未完成。', true); }
   finally { if (control) { control.disabled = false; control.removeAttribute('aria-busy'); } }
+}
+
+export const list = value => Array.isArray(value) ? value : [];
+export const select = (label, name, options, value = '') => `<label class="field"><span>${e(label)}</span><select name="${name}">${options.map(([id,text])=>`<option value="${e(id)}" ${String(value)===String(id)?'selected':''}>${e(text)}</option>`).join('')}</select></label>`;
+export const details = (title, body, open = false) => `<details class="quiet-details" ${open?'open':''}><summary>${e(title)}</summary><div class="disclosure-body">${body}</div></details>`;
+export const readable = value => value == null ? '未记录' : typeof value === 'object' ? JSON.stringify(value,null,2) : String(value);
+export const facts = pairs => `<dl class="parity-facts">${pairs.filter(([,v])=>v!==undefined&&v!==null&&v!=='').map(([k,v])=>`<div><dt>${e(k)}</dt><dd>${e(readable(v))}</dd></div>`).join('')}</dl>`;
+export function paginate(host, rows, render, {size=20,filter=()=>true}={}) {
+  let page=0;
+  const draw=()=>{
+    const visible=rows.filter(filter),pages=Math.max(1,Math.ceil(visible.length/size));page=Math.min(page,pages-1);
+    host.innerHTML=`<div>${visible.slice(page*size,(page+1)*size).map(render).join('')||'<p class="empty">没有符合条件的记录。</p>'}</div><div class="parity-pagination"><button type="button" class="text-button" data-page="previous" ${page?'':'disabled'}>上一页</button><span>${page+1} / ${pages} · 共 ${visible.length} 条</span><button type="button" class="text-button" data-page="next" ${page+1<pages?'':'disabled'}>下一页</button></div>`;
+    host.querySelector('[data-page="previous"]').onclick=()=>{page--;draw();};host.querySelector('[data-page="next"]').onclick=()=>{page++;draw();};
+  };draw();return ()=>{page=0;draw();};
 }
