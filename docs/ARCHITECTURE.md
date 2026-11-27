@@ -1,6 +1,6 @@
 # 架构与协作边界
 
-从入口找模块，可看[网页架构地图](WEB_ARCHITECTURE.md)。架构决定和迁移证据见[治理进度](ARCHITECTURE_PROGRESS.md)，需要产品定夺的事项见[待决事项](ARCHITECTURE_PROGRESS.md#待决事项)。`node scripts/check-architecture.mjs --json` 输出当前 Git 跟踪的网页与服务端模块依赖，包括重导出、延迟导入与本地 Word 工作线程。图中不含运行时 HTTP、文件监听、原生进程调用和样式级联，这些边界见下表。
+从入口找模块，可看[网页架构地图](WEB_ARCHITECTURE.md)。架构决定和迁移证据见[治理进度](ARCHITECTURE_PROGRESS.md)，三项产品规则见[编辑返回、分类确认与来源安排](ARCHITECTURE_PROGRESS.md#编辑返回分类确认与来源安排)。`node scripts/check-architecture.mjs --json` 输出当前 Git 跟踪的网页与服务端模块依赖，包括重导出、延迟导入与本地 Word 工作线程。图中不含运行时 HTTP、文件监听、原生进程调用和样式级联，这些边界见下表。
 
 ```mermaid
 flowchart LR
