@@ -71,6 +71,7 @@ async function go(route, { replace = false, force = false, guide = false, speed 
   const dialogs=$$('dialog[open]');
   if(!force)for(const dialog of [...dialogs].reverse())if(dialog.beforeClose&&!await dialog.beforeClose())return false;
   if (state.dirty && !force && !await confirm('放弃还没保存的输入？','当前输入还没有保存。取消可继续编辑，确认后会放弃这次输入。','放弃输入并离开')) return false;
+  const fromVersion = api.getContext().version;
   await onboarding.prepareRoute(route);
   const libraryVisit = route?.split('/')[0] === 'library' ? library.visit(!guide && route === 'library') : null;
   const cachedLibrary = libraryVisit?.nodes;
@@ -82,7 +83,13 @@ async function go(route, { replace = false, force = false, guide = false, speed 
   focus.capture();
   state.dirty = false;
   state.scroll.set(state.route, window.scrollY);
-  if (route.startsWith('read/') && !state.route.startsWith('read/')) state.readerReturn = state.route;
+  if (route !== state.route) {
+    const version = api.getContext().version;
+    const resumesReader = state.readerEdit?.route === route && state.readerEdit.version === version;
+    if (route.startsWith('read/') && !state.route.startsWith('read/') && !resumesReader) state.readerReturn = state.route;
+    const editsReader = state.route.startsWith('read/') && route === 'edit/' + state.route.slice(5);
+    state.readerEdit = editsReader && fromVersion === version ? { route: state.route, version } : null;
+  }
   state.route = route || 'today';
   const sequence = ++state.sequence;
   document.documentElement.classList.toggle('reading-mode', state.route.startsWith('read/'));
@@ -171,8 +178,12 @@ function capturePage() {
     }};
 }
 function readPage(id) {
-  const sequence=state.sequence,boot=state.boot,key=libraryKey();
-  const current=()=>sequence===state.sequence&&boot===state.boot&&key===libraryKey();
+  const sequence = state.sequence, boot = state.boot;
+  const { version, revision } = api.getContext();
+  const current = () => {
+    const latest = api.getContext();
+    return sequence === state.sequence && boot === state.boot && version === latest.version && revision === latest.revision;
+  };
   const display=data=>{
     if(current()){state.note=data.note;state.readiness=data.readiness;}
     return reader(data.note,list(boot.notes),state.readerReturn,data.related,data.readiness);

@@ -6,20 +6,30 @@ import { parse } from 'acorn';
 import {createClient} from '../public/web/api.mjs';
 import {createLibraryPage} from '../public/web/library-page.mjs';
 import {createStudyWorkspace} from '../public/web/study-workspace.mjs';
-import {createReaderData} from '../public/web/reader-data.mjs';
+import {createReaderData, sameReaderData} from '../public/web/reader-data.mjs';
+import {reader, updateReader} from '../public/web/reader.mjs';
+import {list} from '../public/web/ui.mjs';
 const source=fs.readFileSync(new URL('../public/web/main.mjs',import.meta.url),'utf8');
 const root = parse(source, { ecmaVersion: 'latest', sourceType: 'module' });
-const navigation = ['refreshBoot','go'].map(name => {
+function declaration(name) {
  const declaration = root.body.find(node => node.type === 'FunctionDeclaration' && node.id.name === name);
  return source.slice(declaration.start, declaration.end);
-}).join('\n');
+}
+const navigation = ['refreshBoot', 'go', 'readPage'].map(declaration).join('\n');
 
 function harness(){
  const counts={library:0,bind:0,loading:0},context={version:0,revision:0};
  const main={dataset:{},childNodes:[],style:{},focus(){},set innerHTML(value){if(value.includes('page-loading'))counts.loading++;this.childNodes=[{html:value}];},replaceChildren(...nodes){this.childNodes=nodes;}};
- const state={route:'today',sequence:0,dirty:false,saving:0,scroll:new Map()},window={scrollY:0,scrollTo({top}){this.scrollY=top;},dispatchEvent(){}};
+ const state={boot:{notes:[]},readerReturn:'library',route:'today',sequence:0,dirty:false,saving:0,scroll:new Map()},window={scrollY:0,scrollTo({top}){this.scrollY=top;},dispatchEvent(){}};
  const page=async()=>({html:'reader'});
  const sandbox={state,window,document:{documentElement:{classList:{toggle(){},remove(){}}}},history:{pushState(){},replaceState(){}},matchMedia:()=>({matches:true}),CustomEvent:class{},api:{getContext:()=>context,get:async()=>({})},onboarding:{travelling:false,prepareRoute:async()=>{}},focus:{capture(){},mount(){}},study:{leave(){},page},shell(){},$:()=>main,$$:()=>[],notify(){},confirm:async()=>true,empty:(_title,message)=>{throw Error(message);},btn(){},link(){},springEnter(){},parity:{},management:{},readPage:page};
+ Object.assign(sandbox, { reader, updateReader, sameReaderData, list });
+ sandbox.api.get = async url => {
+   if (url === '/api/bootstrap') return { notes: [] };
+   if (url === '/api/relations') return { relations: [] };
+   const id = url.split('/').at(-1);
+   return { id, kind:'source', title:'合成标题 '+id, body:'阅读回归正文 '+id, meta:{}, hash:id };
+ };
  sandbox.readerData=createReaderData(sandbox.api);
  sandbox.library=createLibraryPage(sandbox.api);
  sandbox.library.page=async()=>{counts.library++;return {html:'library',bind(){counts.bind++;}};};
@@ -30,7 +40,9 @@ function harness(){
 }
 test('returning from a reader restores the same library nodes without requests, loading screen or rebinding',async()=>{
  const h=harness();await h.sandbox.goPage('library');const nodes=h.main.childNodes;nodes[0].filter='saved query';nodes[0].expanded=true;h.window.scrollY=320;
- await h.sandbox.goPage('read/one');const loading=h.counts.loading;await h.sandbox.goPage('library');
+ assert.equal(await h.sandbox.goPage('read/one'),true);
+ assert.match(h.main.childNodes[0].html,/阅读回归正文 one/);assert.equal(h.sandbox.state.note.id,'one');
+ const loading=h.counts.loading;await h.sandbox.goPage('library');
  assert.equal(h.counts.library,1);assert.equal(h.counts.bind,1);assert.equal(h.counts.loading,loading);assert.equal(h.main.childNodes[0],nodes[0]);assert.equal(h.main.childNodes[0].filter,'saved query');assert.equal(h.main.childNodes[0].expanded,true);assert.equal(h.window.scrollY,320);
 });
 test('successful writes, space changes and explicit refresh invalidate the library snapshot',async()=>{
@@ -91,6 +103,34 @@ test('guide visits render a fresh library and superseded visits cannot cache ano
  assert.equal(await pending,false);
  assert.match(h.main.childNodes[0].html,/reader/);
  assert.equal(h.sandbox.library.visit(true).nodes,null);
+});
+
+test('returning from editing the same reader preserves its actual origin, including after saving', async () => {
+ for (const origin of ['library','history']) {
+  const h=harness();
+  if (origin === 'history') h.sandbox.parity.history=async()=>({html:'history'});
+  await h.sandbox.goPage(origin); await h.sandbox.goPage('read/one');
+  await h.sandbox.goPage('edit/one'); await h.sandbox.goPage('edit/one',{replace:true});
+  h.context.revision++;
+  assert.equal(await h.sandbox.goPage('read/one',{replace:true,force:true}),true);
+  assert.equal(h.sandbox.state.readerReturn,origin);
+  assert.match(h.main.childNodes[0].html,new RegExp('data-route="'+origin+'"'));
+  assert.equal(await h.sandbox.goPage(h.sandbox.state.readerReturn),true);
+  assert.equal(h.sandbox.state.route,origin);
+ }
+});
+
+test('editor origin is never guessed for a bookmark, another note or a different space', async () => {
+ for (const scenario of ['bookmark','different note','different space','unrelated visit']) {
+  const h=harness();
+  if(scenario !== 'bookmark'){await h.sandbox.goPage('library');await h.sandbox.goPage('read/one');}
+  await h.sandbox.goPage('edit/one');
+  if(scenario==='different space')h.context.version++;
+  if(scenario==='unrelated visit'){await h.sandbox.goPage('capture');await h.sandbox.goPage('edit/one');}
+  const id=scenario==='different note'?'two':'one';
+  await h.sandbox.goPage('read/'+id);
+  assert.equal(h.sandbox.state.readerReturn,'edit/one');
+ }
 });
 
 test('client content revision changes on successful writes, not reads or rejected writes',async()=>{
