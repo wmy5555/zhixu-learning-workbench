@@ -227,6 +227,64 @@ test('library groups children, applies filters, hides internal evidence, and doe
   assert.equal(service.getNote(bySourceRole.id).meta.evidence[0].excerpt, 'INTERNAL_EVIDENCE_0');
 });
 
+test('library, analysis and ChatGPT share ordered source membership from current and legacy links', async t => {
+  const { service } = await harness(t);
+  const source = createSource(service, { title: '第一份原文', body: '第一份合成原文。' });
+  const other = createSource(service, { title: '另一份原文', body: '第二份合成原文。' });
+  const input = id => ({ id, role: 'input' });
+  const create = (title, meta, kind = 'knowledge') => service.store.create({ kind, title, body: title, meta });
+  const manual = create('兼有两个来源的人工知识', { sources: [input(source.id), input(other.id), input(source.id)] });
+  const legacy = create('旧拆解依据', { processKey: `${source.id}:${source.hash}:2` });
+  const sameOrder = create('同一顺序中后保存的知识', { processKey: `${source.id}:${source.hash}:2` });
+  const noOrder = create('旧键没有有效顺序的知识', { sources: [input(source.id)], processKey: `${other.id}:${other.hash}:旧顺序` });
+  create('只作证据的知识', { sources: [{ id: source.id, role: 'support' }], processKey: null });
+  create('不展示的核验摘录', { sources: [input(source.id)], excerptOnly: true });
+  create('相关但并非知识的笔记', { sources: [input(source.id)] }, 'report');
+  const expected = [noOrder.id, manual.id, sameOrder.id, legacy.id];
+
+  const scan = t.mock.method(service.store, 'scan');
+  const records = t.mock.method(service.store, 'records');
+  const library = service.library({ kind: 'knowledge', q: legacy.title });
+  assert.deepEqual(library.matchingIds, [legacy.id]);
+  assert.deepEqual(library.groups.map(group => group.source.id), [source.id]);
+  assert.deepEqual(library.groups[0].children.map(note => note.id), expected);
+  assert.equal(scan.mock.callCount(), 1);
+  assert.equal(records.mock.calls.filter(call => call.arguments[0] === 'jobs').length, 1);
+  records.mock.restore();
+  scan.mock.restore();
+
+  assert.deepEqual(service.readPublicNote(source.id).children.map(note => note.id), expected);
+  assert.deepEqual(service.readPublicNote(other.id).children.map(note => note.id), [noOrder.id, manual.id]);
+  const job = service.requestSourceStructure(source.id);
+  assert.deepEqual(job.payload.basis.notes.map(([id]) => id).sort(), expected.toSorted());
+  assert.throws(() => service.requestSourceStructure(manual.id), { code: 'INVALID' });
+
+  service.updateSettings({ mcp: { chatgptEnabled: true, chatgptAllowRead: true } });
+  const graph = JSON.parse(service.chatgpt.readStructure(source.id).body);
+  assert.deepEqual(graph.nodes.map(note => note.id), expected);
+  assert.throws(() => service.chatgpt.readStructure(manual.id), { code: 'NOT_FOUND' });
+});
+
+test('source reads keep an explicit member with an externally edited legacy key, while analysis rejects it', async t => {
+  const { root, service } = await harness(t);
+  const source = createSource(service, { title: '仍可阅读的原文', body: '合成原文。' });
+  const child = service.store.create({ kind: 'knowledge', title: '仍可阅读的知识', body: '合成知识。', meta: {
+    sources: [{ id: source.id, role: 'input' }], processKey: `${source.id}:${source.hash}:0`, userEdited: true,
+  } });
+  const file = path.join(root, 'vault', child.path);
+  const fields = { ...child.meta, id: child.id, kind: child.kind, title: child.title, processKey: 7 };
+  await writeFile(file, ['---', JSON.stringify(fields), '---', child.body].join('\n'), 'utf8');
+  assert.equal(service.getNote(child.id).meta.processKey, 7);
+
+  assert.deepEqual(service.readPublicNote(source.id).children.map(note => note.id), [child.id]);
+  service.updateSettings({ mcp: { chatgptEnabled: true, chatgptAllowRead: true } });
+  const graph = JSON.parse(service.chatgpt.readStructure(source.id).body);
+  assert.deepEqual(graph.nodes.map(note => note.id), [child.id]);
+
+  assert.throws(() => service.requestSourceStructure(source.id), TypeError);
+  assert.equal(service.store.records('jobs').length, 0);
+});
+
 test('public reads preserve a body that was actually edited outside the service', async t => {
   const { service } = await harness(t);
   const source = createSource(service, { title: '外部编辑来源', body: '来源正文。' });
