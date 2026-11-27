@@ -15,7 +15,7 @@ function declaration(name) {
  const declaration = root.body.find(node => node.type === 'FunctionDeclaration' && node.id.name === name);
  return source.slice(declaration.start, declaration.end);
 }
-const navigation = ['createBootstrapLoader', 'refreshBoot', 'go', 'readPage', 'actions', 'processSource'].map(declaration).join('\n');
+const navigation = ['createBootstrapLoader', 'refreshBoot', 'go', 'readPage', 'editReturn', 'editPage', 'actions', 'processSource'].map(declaration).join('\n');
 
 function harness(api){
  const counts={library:0,bind:0,loading:0},context={version:0,revision:0};
@@ -35,7 +35,9 @@ function harness(api){
  sandbox.library=createLibraryPage(sandbox.api);
  sandbox.library.page=async()=>{counts.library++;return {html:'library',bind(){counts.bind++;}};};
  sandbox.search={page};
- for(const name of ['todayPage','capturePage','editPage','topicsPage','outputPage','settingsPage'])sandbox[name]=page;
+ for(const name of ['todayPage','capturePage','topicsPage','outputPage','settingsPage'])sandbox[name]=page;
+ Object.assign(sandbox,{heading:(_a,_b,_c,action)=>action,field:()=>'',e:String,icon:()=>'',mountNoteEditor:()=>({getValue:()=> '正文'}),watchForm(){},submit:(_form,handler)=>{sandbox.saveEdit=handler;},noteEditSession:()=>({save:async()=>({snapshot:{title:'合成标题 one',body:'正文'}})})});
+ sandbox.btn=(label,action,_css,attributes='')=>`<button data-action="${action}" ${attributes}>${label}</button>`;
  vm.createContext(sandbox);
  vm.runInContext(navigation+';const bootstrap=createBootstrapLoader(api,state);globalThis.goPage=go;globalThis.refresh=refreshBoot;globalThis.act=actions;globalThis.process=processSource;',sandbox);
  return {sandbox,counts,context,main,window};
@@ -255,8 +257,37 @@ test('editor origin is never guessed for a bookmark, another note or a different
   if(scenario==='unrelated visit'){await h.sandbox.goPage('capture');await h.sandbox.goPage('edit/one');}
   const id=scenario==='different note'?'two':'one';
   await h.sandbox.goPage('read/'+id);
-  assert.equal(h.sandbox.state.readerReturn,'edit/one');
+  assert.equal(h.sandbox.state.readerReturn,'library');
  }
+});
+
+test('editor cancel and save return to a matching reader or directly to the current library', async t => {
+ for(const scenario of ['reader','bookmark','different note','different space','unrelated visit']) for(const finish of ['cancel','save']) {
+  await t.test(`${scenario}: ${finish}`,async()=>{
+   const h=harness();
+   if(scenario!=='bookmark'){await h.sandbox.goPage('history');await h.sandbox.goPage('read/one');}
+   const id=scenario==='different note'?'two':'one';
+   await h.sandbox.goPage('edit/'+id);
+   if(scenario==='different space')h.context.version++;
+   if(scenario==='unrelated visit'){await h.sandbox.goPage('capture');await h.sandbox.goPage('edit/one');}
+   const form={elements:{title:{value:'合成标题 '+id}},dataset:{}};
+   h.sandbox.$=selector=>selector==='#edit-form'?form:h.main;
+   h.sandbox.noteEditSession=()=>({save:async()=>({snapshot:{title:form.elements.title.value,body:'正文'}})});
+   const page=await h.sandbox.editPage(id);
+   assert.match(page.html,scenario==='reader'?/回到阅读/:/回到知识库/);
+   if(finish==='save'){page.bind();await h.sandbox.saveEdit();}
+   else await h.sandbox.act({dataset:{action:'edit-return',id},closest:()=>null});
+   assert.equal(h.sandbox.state.route,scenario==='reader'?'read/one':'library');
+   if(scenario==='reader')assert.equal(h.sandbox.state.readerReturn,'history');
+  });
+ }
+});
+
+test('a space change during navigation invalidates the editor reader return', async () => {
+ const h=harness();await h.sandbox.goPage('library');await h.sandbox.goPage('read/one');await h.sandbox.goPage('edit/one');
+ h.sandbox.onboarding.prepareRoute=async()=>{h.context.version++;};
+ await h.sandbox.act({dataset:{action:'edit-return',id:'one'},closest:()=>null});
+ assert.equal(h.sandbox.state.route,'library');
 });
 
 test('client content revision changes on successful writes, not reads or rejected writes',async()=>{
