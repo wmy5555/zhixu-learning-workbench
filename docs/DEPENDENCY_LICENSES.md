@@ -1,3 +1,7 @@
+## 网页架构检查
+
+Acorn 8.19.0 用于开发期解析浏览器模块语法，由锁文件固定。应用启动、网页资源与正式运行依赖均不加载该包。随包 `LICENSE` 声明 MIT，SHA-256 为 `76a876cf886ff9be2a8b5e2e86514fed06223c8c9f0c1e9ee9606e93841e00b7`。[包的来源](https://registry.npmjs.org/acorn/8.19.0)
+
 ## 2026-10-22 传递依赖安全更新
 
 通过 `pnpm-workspace.yaml` 的限定覆盖与 pnpm 11.19.0 生成的锁文件更新以下包；不更改直接依赖或项目许可证。实际安装包的声明、随包许可及 registry integrity 记录于 [本次增量清单](dependency-security-20261022.json)。旧表与旧机器清单保留为历史证据。
