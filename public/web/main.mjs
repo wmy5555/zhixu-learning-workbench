@@ -5,13 +5,14 @@ import { installInputModality } from './input-modality.mjs';
 import { api, endpoint, pendingPlan, capturePayload } from './api.mjs';
 import { escape as e, markdown } from './markdown.mjs';
 import { $, $$, icon, button as btn, routeButton as link, field, area, empty, heading, calendar, notify, modal, confirm, busy, list, paginate, details } from './ui.mjs';
-import { kind, stage, purposeOptions, depthOptions } from './classification.mjs';
+import { kind, purposeOptions, depthOptions } from './classification.mjs';
 import { reader, updateReader } from './reader.mjs';
 import { createReaderData, sameReaderData } from './reader-data.mjs';
 import { readerMenu } from './reader-actions.mjs';
 import { processOutcome, createProcessOutcomeRenderer } from './process-outcome.mjs';
 import { springEnter } from './cds/motion-bridge.mjs';
 import { mountNoteEditor, noteEditSession } from './note-editor.mjs';
+import { createLibraryPage } from './library-page.mjs';
 import { createParity } from './parity.mjs';
 import { evidenceHTML } from './learning-display.mjs';
 import { createManagement, initializeAccent } from './management.mjs';
@@ -24,7 +25,8 @@ installInputModality(document.documentElement, document);
 
 const navigation = [['home','今日','today'],['plus','收集与加工','capture'],['book','知识库','library'],['check','学习与错题','study'],['layers','主题学习包','topics'],['network','检索与发现','search'],['chat','问答与输出','output']];
 const state = { boot:null, route:'today', sequence:0, dirty:false, saving:0, readerReturn:'library', note:null, session:null, scroll:new Map() };
-const context={api,state,go,refreshBoot,formModal,submit,watchForm,savedForm,processSource,noteCard:note=>noteCard(note)};
+const context={api,state,go,refreshBoot,formModal,submit,watchForm,savedForm,processSource};
+const library = createLibraryPage(api);
 const parity=createParity(context),management=createManagement(context,initializeAccent()),focus=createFocus(context);
 const onboarding=createWebOnboarding({api,state,go,refreshBoot,beforeLeave});
 const readerData=createReaderData(api);
@@ -36,7 +38,6 @@ async function beforeLeave(){
 const formData = form => Object.fromEntries(new FormData(form));
 const aiConnectionValues = form => { const {enabled,...values}=formData(form); return JSON.stringify(values); };
 const noteTitle = id => list(state.boot?.notes).find(note=>note.id===id)?.title || '继续上次的学习';
-const noteCard = note => `<article class="library-note"><div class="note-kind">${icon(note.kind==='source'?'file':'book')}<span>${e(kind(note.kind))}</span><small>${e(stage(note.meta?.stage))}</small></div><h2>${e(note.title)}</h2><p>${e(String(note.body||'').replace(/<!-- zhixu-managed-links:start -->[\s\S]*?<!-- zhixu-managed-links:end -->/g,'').replace(/<!--[\s\S]*?-->/g,'').replace(/[#>*`]/g,'').replace(/\s+/g,' ').slice(0,135))}</p><footer><span>${e(note.meta?.topic || '未归入主题')}</span>${link('打开阅读 ↗',`read/${note.id}`,'text-button')}</footer></article>`;
 const study = createStudyWorkspace({
   api, getNotes: () => state.boot.notes, noteTitle, go,
   view: () => ({ sequence: state.sequence, route: state.route }),
@@ -61,9 +62,7 @@ function shell() {
   theme.setAttribute('aria-label', dark ? '切换日间模式' : '切换夜间模式');
   theme.title = dark ? '切换日间模式' : '切换夜间模式';
 }
-let librarySnapshot=null;
-const libraryKey=()=>{const {version,revision}=api.getContext();return `${version}:${revision}`;};
-async function refreshBoot() { librarySnapshot=null;state.boot = await api.get('/api/bootstrap'); return state.boot; }
+async function refreshBoot() { library.invalidate();state.boot = await api.get('/api/bootstrap'); return state.boot; }
 async function go(route, { replace = false, force = false, guide = false, speed = 1 } = {}) {
   if(onboarding.travelling&&!guide)return false;
   if(state.saving&&!force){notify('正在保存，请等这次操作返回后再切换。');return false;}
@@ -71,7 +70,8 @@ async function go(route, { replace = false, force = false, guide = false, speed 
   if(!force)for(const dialog of [...dialogs].reverse())if(dialog.beforeClose&&!await dialog.beforeClose())return false;
   if (state.dirty && !force && !await confirm('放弃还没保存的输入？','当前输入还没有保存。取消可继续编辑，确认后会放弃这次输入。','放弃输入并离开')) return false;
   await onboarding.prepareRoute(route);
-  const snapshotKey=libraryKey(),cachedLibrary=!guide&&route==='library'&&librarySnapshot?.key===snapshotKey?librarySnapshot:null;
+  const libraryVisit = route?.split('/')[0] === 'library' ? library.visit(!guide && route === 'library') : null;
+  const cachedLibrary = libraryVisit?.nodes;
   const main=$('#main'),reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
   let ghost;
   if(guide&&!reduce){ghost=main.cloneNode(true);ghost.removeAttribute('id');ghost.classList.add('onboard-page-ghost');ghost.inert=true;ghost.setAttribute('aria-hidden','true');ghost.querySelectorAll('[id]').forEach(n=>n.removeAttribute('id'));const r=main.getBoundingClientRect();Object.assign(ghost.style,{left:r.x+'px',top:r.y+'px',width:r.width+'px',height:r.height+'px'});document.body.append(ghost);main.style.opacity='0';}
@@ -92,11 +92,11 @@ async function go(route, { replace = false, force = false, guide = false, speed 
   if(!cachedLibrary&&!immediateReader)$('#main').innerHTML = '<div class="page-loading" role="status"><span></span>正在把内容放到书桌上…</div>';
   try {
     const [view,id] = state.route.split('/');
-    const page = cachedLibrary?null:await ({ today:todayPage, capture:capturePage, library:parity.library, read:()=>readPage(id), edit:()=>editPage(id), study:()=>study.page(id), topics:topicsPage, search:parity.search, output:outputPage, settings:settingsPage, jobs:parity.jobs, relations:parity.relations, history:parity.history, manage:()=>management.page(id), focus:focus.page }[view] || todayPage)();
+    const page = cachedLibrary?null:await ({ today:todayPage, capture:capturePage, library:library.page, read:()=>readPage(id), edit:()=>editPage(id), study:()=>study.page(id), topics:topicsPage, search:parity.search, output:outputPage, settings:settingsPage, jobs:parity.jobs, relations:parity.relations, history:parity.history, manage:()=>management.page(id), focus:focus.page }[view] || todayPage)();
     if (sequence !== state.sequence) {ghost?.remove();main.style.opacity='';return false;}
-    if(cachedLibrary)main.replaceChildren(...cachedLibrary.nodes);
+    if(cachedLibrary)main.replaceChildren(...cachedLibrary);
     else{main.innerHTML=page.html;page.bind?.();}
-    if(view==='library')librarySnapshot={key:snapshotKey,nodes:[...main.childNodes]};
+    libraryVisit?.remember(main);
     $('#main').dataset.route=state.route;
     focus.mount();
     $('#main').focus({preventScroll:true});
