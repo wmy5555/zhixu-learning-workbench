@@ -1,3 +1,4 @@
+import { saveTestedCapability } from '../capability-test.mjs';
 import { createRestoreSelection } from '../restore-selection.mjs';
 import { escape as e, markdown } from './markdown.mjs';
 import { $, button as btn, routeButton as link, field, area, heading, modal, confirm, busy, notify, list, details, facts } from './ui.mjs';
@@ -63,18 +64,44 @@ export function createManagement(ctx,appearance) {
   function bindCapability(form) {
     watchForm(form);const key=form.dataset.capability,status=form.querySelector('[data-status]');
     const values=()=>{const v=Object.fromEntries(new FormData(form));return {enabled:form.elements.enabled.checked,...Object.fromEntries(Object.entries(v).filter(([k,v])=>k!=='enabled'&&(k!=='apiKey'||v)))};};
-    submit(form,async()=>{await api.put('/api/settings',{[key]:values()});if(form.elements.apiKey)form.elements.apiKey.value='';savedForm(form);status.textContent='配置已保存，尚未测试。';});
+    const scope = api.getContext();
+    const isCurrent = () => {
+      const latest = api.getContext();
+      return form.isConnected && latest.practiceId === scope.practiceId && latest.version === scope.version;
+    };
+    function acknowledge(fingerprint, message) {
+      if (!isCurrent()) return;
+      if (JSON.stringify(values()) !== fingerprint) {
+        form.dataset.dirty = 'true'; state.dirty = true;
+        status.textContent = message + ' 当前有新输入，尚未保存。';
+        return;
+      }
+      if (form.elements.apiKey) form.elements.apiKey.value = '';
+      savedForm(form); status.textContent = message;
+    }
+    submit(form, async () => {
+      const snapshot = values(), fingerprint = JSON.stringify(snapshot);
+      await api.put('/api/settings', { [key]: snapshot });
+      acknowledge(fingerprint, '配置已保存，尚未测试。');
+    });
     form.querySelector('[data-test]').onclick=ev=>busy(ev.currentTarget,async()=>{
-      if(!await confirm('发送一次配置测试？','可能联网或产生费用。只发送测试所需内容。','发送测试'))return;
+      if(!await confirm('发送一次配置测试？','可能联网或产生费用。只发送测试所需内容。','发送测试') || !isCurrent())return;
       const snapshot=values(),fingerprint=JSON.stringify(snapshot),wasInert=form.inert;
       state.saving++;form.inert=true;$('#main').setAttribute('aria-busy','true');status.textContent='正在测试…';
       try{
         const result=await api.post('/api/settings/test',{capability:key,config:snapshot});
+        if(!isCurrent()) return;
         if(JSON.stringify(values())!==fingerprint){status.textContent='测试期间配置已改变，请重新测试。';return;}
         if(!result.receipt){status.textContent=result.message||'测试未返回可保存凭据，请检查结果。';return;}
-        await api.post('/api/settings/save-tested',{capability:key,config:snapshot,receipt:result.receipt});
-        if(form.elements.apiKey)form.elements.apiKey.value='';savedForm(form);status.textContent=result.message||'测试通过，配置已保存。';
-      }catch(error){status.textContent='测试未完成，配置尚未确认保存。请核对后再重试。';throw error;}
+        let saved;
+        try {
+          saved = await saveTestedCapability(() => api.post('/api/settings/save-tested', { capability: key, config: snapshot, receipt: result.receipt }));
+        } catch (error) {
+          if (isCurrent()) status.textContent = error.message;
+          return;
+        }
+        acknowledge(fingerprint, saved.warning || result.message || '测试通过，配置已保存。');
+      }catch(error){if(isCurrent()){status.textContent='测试未完成，配置尚未确认保存。请核对后再重试。';throw error;}}
       finally{state.saving--;form.inert=wasInert;if(!state.saving)$('#main').removeAttribute('aria-busy');}
     });
   }

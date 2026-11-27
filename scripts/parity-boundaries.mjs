@@ -24,11 +24,19 @@ const check=name=>{checks.push(name);console.log('PASS '+name);};
     if(mode==='stale')await page.locator('[data-capability="embedding"] [name="model"]').evaluate(input=>{input.value='changed-during-test';input.dispatchEvent(new Event('input',{bubbles:true}));});
     await route.fulfill({status:mode==='failure'?503:200,json:mode==='failure'?{error:'合成测试失败'}:{receipt:'synthetic-receipt',message:'模拟测试通过，配置已保存。'}});
   });
-  await page.route('**/api/settings/save-tested',route=>{saves.push(route.request().postDataJSON());return route.fulfill({json:{saved:true}});});
+  const tutorialWarning = '配置已保存，但引导进度未更新；无需重复测试，请刷新后检查引导状态。';
+  const editDraftKey = value => page.locator('[data-capability="embedding"] [name="apiKey"]').evaluate((input, next) => {
+    input.value = next; input.dispatchEvent(new Event('input', { bubbles: true }));
+  }, value);
+  await page.route('**/api/settings/save-tested', async route => {
+    const body = route.request().postDataJSON(); saves.push(body);
+    if (mode === 'save-edited') await editDraftKey('synthetic-later-draft');
+    return route.fulfill({ json: { saved: true, ...(body.capability === 'fetch' ? { warning: tutorialWarning } : {}) } });
+  });
   for(const key of ['embedding','search','fetch']){
     const form=page.locator(`[data-capability="${key}"]`);await form.locator('xpath=ancestor::details[1]').locator('summary').click();
     await form.locator('[data-test]').click();await page.locator('[data-confirm]').click();
-    await form.locator('[data-status]').getByText('模拟测试通过，配置已保存。',{exact:true}).waitFor();
+    await form.locator('[data-status]').getByText(key === 'fetch' ? tutorialWarning : '模拟测试通过，配置已保存。',{exact:true}).waitFor();
   }
   assert.deepEqual(tests.map(x=>x.capability),['embedding','search','fetch']);assert.equal(saves.length,3);
   assert.deepEqual(saves.map(x=>x.receipt),Array(3).fill('synthetic-receipt'));
@@ -41,6 +49,28 @@ const check=name=>{checks.push(name);console.log('PASS '+name);};
   await page.locator('[data-route="manage/usage"]').click();await page.locator('[data-cancel]').click();
   assert.equal(await page.locator('#main').getAttribute('data-route'),'manage');
   check('MOCK: each capability uses its own receipt; stale/failed tests retain input and cannot save');
+
+  mode = 'save-edited';
+  await embed.locator('[name="apiKey"]').fill('synthetic-submitted');
+  await embed.locator('[data-test]').click(); await page.locator('[data-confirm]').click();
+  await embed.locator('[data-status]').getByText(/当前有新输入，尚未保存/).waitFor();
+  assert.equal(saves.at(-1).config.apiKey, 'synthetic-submitted');
+  assert.equal(await embed.locator('[name="apiKey"]').inputValue(), 'synthetic-later-draft');
+  assert.equal(await embed.getAttribute('data-dirty'), 'true');
+
+  let manual;
+  const manualSave = async route => {
+    manual = route.request().postDataJSON(); await editDraftKey('synthetic-after-manual');
+    await route.fulfill({ json: {} });
+  };
+  await page.route('**/api/settings', manualSave);
+  await embed.locator('[type="submit"]').click();
+  await embed.locator('[data-status]').getByText('配置已保存，尚未测试。 当前有新输入，尚未保存。', { exact: true }).waitFor();
+  assert.equal(manual.embedding.apiKey, 'synthetic-later-draft');
+  assert.equal(await embed.locator('[name="apiKey"]').inputValue(), 'synthetic-after-manual');
+  assert.equal(await embed.getAttribute('data-dirty'), 'true');
+  await page.unroute('**/api/settings', manualSave);
+  check('MOCK: late tested and manual save receipts preserve newer input');
   await page.locator('[data-route="manage/usage"]').click();await page.locator('[data-confirm]').click();
   await page.locator('#usage-filter').waitFor();await page.locator('#usage-filter [name="period"][value="7d"]').check();
   await page.locator('#usage-filter [type="submit"]').click();await page.waitForFunction(()=>!document.querySelector('[aria-busy="true"]'));

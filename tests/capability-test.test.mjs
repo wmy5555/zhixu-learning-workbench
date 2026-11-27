@@ -52,9 +52,16 @@ test('UI saves unchanged snapshot, skips edited/detached forms, distinguishes sa
   assert.deepEqual(await testAndSaveCapability(common), { saved: true });
   assert.deepEqual(saves, [['model', config, 'mock-proof']]);
   assert.deepEqual(locks, [true, false]);
+  let tests = 0, writes = 0;
+  const testOnce = { ...common, test: async () => { tests++; return { receipt: 'valid' }; } };
+  const warning = '配置已保存，但引导进度未更新；无需重复测试，请刷新后检查引导状态。';
+  assert.deepEqual(await testAndSaveCapability({ ...testOnce, save: async () => { writes++; return { saved: true, warning }; } }), { saved: true, warning });
+  assert.equal(tests, 1); assert.equal(writes, 1);
+  await assert.rejects(testAndSaveCapability({ ...testOnce, save: async () => { writes++; return {}; } }), { code: 'SAVE_UNCONFIRMED', message: /未能确认保存/ });
+  assert.equal(tests, 2); assert.equal(writes, 2);
   assert.deepEqual(await testAndSaveCapability({ ...common, unchanged: () => false }), { saved: false, changed: true });
   assert.equal(saves.length, 1);
-  await assert.rejects(testAndSaveCapability({ ...common, save: async () => { throw new Error('storage full'); } }), /测试成功，但未能确认保存/);
+  await assert.rejects(testAndSaveCapability({ ...common, save: async () => { throw new Error('storage full'); } }), { code: 'SAVE_UNCONFIRMED', message: /测试成功，但未能确认保存/ });
   assert.equal(locks.at(-1), false);
   await assert.rejects(testAndSaveCapability({ ...common, test: async () => { throw new Error('mock offline'); } }), /mock offline/);
   assert.equal(saves.length, 1);
