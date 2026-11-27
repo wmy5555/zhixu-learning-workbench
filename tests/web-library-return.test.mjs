@@ -38,6 +38,38 @@ test('successful writes, space changes and explicit refresh invalidate the libra
  await h.sandbox.goPage('read/one');h.context.version++;await h.sandbox.goPage('library');assert.equal(h.counts.library,3);
  await h.sandbox.refresh();await h.sandbox.goPage('library');assert.equal(h.counts.library,4);
 });
+test('an in-flight library visit cannot repopulate the snapshot after a same-context refresh', async () => {
+ for (const bootstrapFirst of [false, true]) {
+  const { sandbox, context, main } = harness();
+  const oldPage = Promise.withResolvers(), started = Promise.withResolvers(), bootstrap = Promise.withResolvers();
+  let libraryLoads = 0;
+  sandbox.library.page = () => {
+   if (++libraryLoads > 1) return { html: '已刷新内容' };
+   started.resolve();
+   return oldPage.promise;
+  };
+  sandbox.api.get = path => {
+   assert.equal(path, '/api/bootstrap');
+   return bootstrap.promise;
+  };
+  const visiting = sandbox.goPage('library');
+  await started.promise;
+  const refresh = sandbox.refresh();
+  if (bootstrapFirst) {
+   bootstrap.resolve({});
+   await refresh;
+  }
+  oldPage.resolve({ html: '刷新前内容' });
+  await visiting;
+  if (!bootstrapFirst) bootstrap.resolve({});
+  await refresh;
+
+  assert.deepEqual(context, { version: 0, revision: 0 });
+  assert.equal(await sandbox.goPage('library', { replace: true }), true);
+  assert.equal(main.childNodes[0].html, '已刷新内容');
+  assert.equal(libraryLoads, 2);
+ }
+});
 test('guide visits render a fresh library and superseded visits cannot cache another page',async()=>{
  const h=harness();await h.sandbox.goPage('library');const initial=h.main.childNodes[0];
  await h.sandbox.goPage('library',{guide:true});

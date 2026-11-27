@@ -9,13 +9,16 @@ const noteCard = note => `<article class="library-note"><div class="note-kind">$
 export function createLibraryPage(api) {
   const libraryPreferences = createLibraryPreferences();
   let snapshot = null;
+  let generation = 0;
 
   function visit(reuse) {
     const { version, revision } = api.getContext();
+    const visitGeneration = generation;
     const nodes = reuse && snapshot?.version === version && snapshot.revision === revision ? snapshot.nodes : null;
     return {
       nodes,
       remember(host) {
+        if (visitGeneration !== generation) return;
         snapshot = { version, revision, nodes: [...host.childNodes] };
       },
     };
@@ -74,5 +77,12 @@ export function createLibraryPage(api) {
     };
   }
 
-  return { page, visit, invalidate() { snapshot = null; } };
+  return {
+    page,
+    visit,
+    invalidate() {
+      generation++;
+      snapshot = null;
+    },
+  };
 }

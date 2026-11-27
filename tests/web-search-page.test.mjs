@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createSearchPage } from '../public/web/search-page.mjs';
+import { notify } from '../public/web/ui.mjs';
 
 const pageOf = (title, nextCursor = null) => ({
   results: [{ id: title, title }],
@@ -23,6 +24,7 @@ function harness(t, respond) {
   const results = {
     innerHTML: '',
     isConnected: true,
+    inert: false,
     querySelector(selector) {
       assert.equal(selector, '[data-more]');
       return this.innerHTML.includes(paginationHTML) ? more : null;
@@ -33,13 +35,16 @@ function harness(t, respond) {
     },
   };
   const browser = { sequence: 1, navigation: true, mounted: true };
+  const toast = { textContent: '', hidden: true, classList: { toggle() {} } };
   const document = { querySelector: selector => ({
     '#parity-search': browser.mounted ? form : null,
     '#parity-results': results,
+    '#toast': toast,
   })[selector] };
   const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
   Object.defineProperty(globalThis, 'document', { configurable: true, value: document });
   t.after(() => {
+    clearTimeout(notify.timer);
     if (originalDocument) Object.defineProperty(globalThis, 'document', originalDocument);
     else delete globalThis.document;
   });
@@ -64,7 +69,7 @@ function harness(t, respond) {
   });
   const page = search.page();
   page.bind();
-  return { search, page, form, mode, cloud, more, results, requests, browser };
+  return { search, page, form, mode, cloud, more, results, requests, browser, toast };
 }
 
 test('closing semantic consent disables both modes, resets the selection and submits locally', async t => {
@@ -97,6 +102,7 @@ test('a failed fresh search leaves the previous result page and its query and cu
   await h.form.submit(filters);
   await assert.rejects(h.form.submit({ q: '失效的检索' }), /合成错误/);
   assert.match(h.results.innerHTML, /第一页/);
+  assert.equal(h.results.inert, false);
   await h.more.onclick({ currentTarget: h.more });
   assert.deepEqual(h.requests.at(-1), { ...filters, mode: 'keyword', privacy: 'local', limit: '20', cursor: 'fixed-cursor' });
   assert.match(h.results.innerHTML, /第一页[\s\S]*第二页/);
@@ -117,6 +123,38 @@ test('superseded queries and answers arriving after navigation cannot write resu
   await beforeLeave;
   assert.match(h.results.innerHTML, /新结果/);
   assert.doesNotMatch(h.results.innerHTML, /旧结果|离开后的结果/);
+});
+
+test('previous results cannot start pagination while a new search is pending', async t => {
+  const fresh = Promise.withResolvers();
+  const h = harness(t, ({ q, cursor }) => q === '新查询' ? fresh.promise : cursor ? pageOf('旧第二页') : pageOf('旧第一页', 'old-cursor'));
+  await h.form.submit({ q: '旧查询' });
+  const pending = h.form.submit({ q: '新查询' });
+  assert.equal(h.results.inert, true);
+  await h.more.onclick({ currentTarget: h.more });
+  fresh.resolve(pageOf('新结果'));
+  await pending;
+  assert.equal(h.results.inert, false);
+  assert.equal(h.requests.length, 2);
+  assert.match(h.results.innerHTML, /新结果/);
+  assert.doesNotMatch(h.results.innerHTML, /旧第一页|旧第二页/);
+});
+
+test('pagination failures notify only when their search still belongs to the visible page', async t => {
+  for (const interruption of ['new search', 'navigation', 'no interruption']) {
+    await t.test(interruption, async subtest => {
+      const next = Promise.withResolvers();
+      const h = harness(subtest, ({ q, cursor }) => cursor ? next.promise : q === '新查询' ? pageOf('新结果') : pageOf('旧结果', 'cursor'));
+      await h.form.submit({ q: '旧查询' });
+      const pending = h.more.onclick({ currentTarget: h.more });
+      if (interruption === 'new search') await h.form.submit({ q: '新查询' });
+      if (interruption === 'navigation') h.browser.sequence++;
+      next.reject(Error('合成分页失败'));
+      await pending;
+      assert.equal(h.toast.textContent, interruption === 'no interruption' ? '合成分页失败' : '');
+      assert.equal(h.more.disabled, false);
+    });
+  }
 });
 
 test('a sidebar topic submits only after search navigation succeeds and the form is mounted', async t => {

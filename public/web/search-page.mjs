@@ -23,10 +23,21 @@ export function createSearchPage({ api, getNotes, getSequence, go, submit }) {
         cloud.onchange = syncMode;
 
         async function render(parameters, cursor) {
+          if (cursor && host.inert) return;
           const request = ++revision;
+          const isCurrent = () => request === revision && mountedSequence === getSequence() && host.isConnected;
           const query = new URLSearchParams({ ...parameters, ...(cursor ? { cursor } : {}) });
-          const data = await api.get('/api/search?' + query);
-          if (request !== revision || mountedSequence !== getSequence() || !host.isConnected) return;
+          if (!cursor) host.inert = true;
+          let data;
+          try {
+            data = await api.get('/api/search?' + query);
+          } catch (error) {
+            if (isCurrent()) throw error;
+            return;
+          } finally {
+            if (!cursor && request === revision) host.inert = false;
+          }
+          if (!isCurrent()) return;
           const { nextCursor } = data;
           if (!cursor) host.innerHTML = '';
           host.querySelector('[data-more]')?.remove();
