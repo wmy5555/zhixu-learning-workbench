@@ -9,7 +9,7 @@ export const chatgptToolNames = Object.freeze([
 const files = ['src/chatgpt-structure.mjs', 'src/source-structure.mjs', 'src/knowledge-structure.mjs', 'src/chatgpt-source-metadata.mjs', 'package.json', 'src/chatgpt-build.mjs', 'src/chatgpt-integrity.mjs', 'src/chatgpt.mjs',
   'src/chatgpt-sync.mjs', 'src/chatgpt-history-snapshot.mjs', 'src/chatgpt-history-auth.mjs',
   'src/mcp-chatgpt.mjs', 'src/mcp.mjs', 'src/core.mjs', 'src/atomic-write.mjs', 'src/store.mjs', 'src/server.mjs', 'src/service.mjs',
-  'src/chatgpt-history-batch.mjs', 'src/chatgpt-history-batch-store.mjs', 'src/chatgpt-undo.mjs'];
+  'src/chatgpt-history-batch.mjs', 'src/chatgpt-history-batch-store.mjs', 'src/chatgpt-undo.mjs', 'src/source-title.mjs'];
 const packageInfo = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 // Only public code inputs enter this identity; never read settings, Vault or credentials.
 export const chatgptBuild = Object.freeze({ version: packageInfo.version,
