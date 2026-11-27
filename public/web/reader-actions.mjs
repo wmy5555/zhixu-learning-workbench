@@ -42,15 +42,22 @@ export function learningHelp(note, readiness) {
     <div class="reader-help-links">${button('查看依据与来源', 'evidence', 'text-button', id)}${routeButton('查看处理任务', 'jobs', 'text-button')}</div></div>`;
 }
 
-export function readerMenu(note, readiness) {
+export function mistakeClassificationTarget(note, notes = []) {
+  if (hasUnknownClassification(note)) return note.id;
+  const related=notes.find(item=>item.id===note.meta?.noteId);
+  return related && hasUnknownClassification(related) ? related.id : null;
+}
+
+export function readerMenu(note, readiness, notes = []) {
   const id = `data-id="${e(note.id)}"`;
   const row = (label, action, symbol = 'book', css = '') => button(`${icon(symbol)}<span>${label}</span>`, action, `reader-menu-row ${css}`, id);
   const knowledge = note.kind === 'knowledge', source = note.kind === 'source';
   const unknown = hasUnknownClassification(note);
   const primary = unknown ? button('核对分类','classification-review','primary',id) : knowledge ? button(readiness.ready ? '开始学习' : '处理学习条件', readiness.ready ? 'start-note' : 'prepare-learning', 'primary', id)
     : source ? button('AI 拆解这份资料', 'process', 'primary', id) : '';
+  const relatedClassification=note.kind === 'mistake' && mistakeClassificationTarget(note,notes);
   const learning = unknown ? '' : knowledge ? row('调整学习安排','promote','calendar') + row('确认我的理解','understanding','check') + row('查看依据与来源','evidence','file')
-    : source ? row('自己整理一条知识','extract','plus') : note.kind === 'mistake' ? button('针对这次误解练习','start-mistake','reader-menu-row',`${id} data-note="${e(note.meta?.noteId || '')}"`) : '';
+    : source ? row('自己整理一条知识','extract','plus') : relatedClassification ? routeButton('核对关联知识分类',`read/${relatedClassification}`,'reader-menu-row') : note.kind === 'mistake' ? button('针对这次误解练习','start-mistake','reader-menu-row',`${id} data-note="${e(note.meta?.noteId || '')}"`) : '';
   return `<div class="reader-menu"><p class="reader-menu-title">${e(note.title)}</p>
     ${primary ? `<section class="reader-menu-primary">${knowledge && !unknown && !readiness.ready ? `<p class="form-note">${e(readiness.heading)} · ${e(readiness.reasons[0])}</p>` : ''}${primary}</section>` : ''}
     <section class="reader-menu-group" aria-label="常用操作">${routeButton(`${icon('file')}<span>编辑正文</span>`,`edit/${note.id}`,'reader-menu-row')}${learning}</section>

@@ -1786,16 +1786,22 @@ async function mistakesPanel() {
 function mistakeRow(mistake) {
   const meta = asObject(mistake.meta);
   const status = mistake.status || meta.correctionState || meta.status || "open";
+  const ownUnknown=hasUnknownClassification(mistake);
+  const relatedId=meta.noteId || mistake.noteId;
+  const related=asArray(state.bootstrap?.notes).find(note=>note.id===relatedId);
+  const relatedUnknown=related && hasUnknownClassification(related);
   const actions = el("div", { class: "item-actions wrap" }, [
-    button("查看", { kind: "quiet compact", onClick: () => { recordTourEvent("mistake-open"); return mistake.noteId || mistake.kind ? openNote(mistake.noteId || mistake.id) : showMistake(mistake); } }),
-    status === "open" ? button("专项练习", { kind: "primary compact", disabled: !(meta.noteId || mistake.noteId), onClick: event => beginStudy(meta.noteId || mistake.noteId, undefined, { mistakeId: mistake.id }, event.currentTarget || event.target) }) : null,
+    button("查看", { kind: "quiet compact", onClick: () => { recordTourEvent("mistake-open"); return mistake.noteId || mistake.kind ? openNote(ownUnknown ? mistake.id : mistake.noteId || mistake.id) : showMistake(mistake); } }),
+    ownUnknown ? button('核对错题分类',{onClick:()=>openNote(mistake.id)}) : null,
+    relatedUnknown ? button('核对关联知识分类',{onClick:()=>openNote(relatedId)}) : null,
+    status === "open" && !ownUnknown && !relatedUnknown ? button("专项练习", { kind: "primary compact", disabled: !(meta.noteId || mistake.noteId), onClick: event => beginStudy(meta.noteId || mistake.noteId, undefined, { mistakeId: mistake.id }, event.currentTarget || event.target) }) : null,
     status === "disputed" ? button("重新打开", { kind: "text compact", onClick: () => actMistake(mistake.id, "reopen") }) : status !== "revoked" ? button("质疑判定", { kind: "text compact", onClick: () => actMistake(mistake.id, "dispute") }) : null,
     status !== "resolved" && status !== "revoked" ? button("手动标记已纠正", { kind: "primary compact", onClick: () => actMistake(mistake.id, "resolve") }) : status === "resolved" ? badge("已标记纠正", "good") : null,
     status !== "revoked" ? button("撤销记录", { kind: "text compact", onClick: () => actMistake(mistake.id, "revoke") }) : badge("已撤销"),
   ]);
   return el("article", { class: "list-item" }, [
     el("div", { class: "item-symbol", text: "错" }),
-    el("div", { class: "item-copy" }, [el("h3", { text: mistake.title || mistake.question || "未命名错误记录" }), el("p", { text: truncate(mistake.error || mistake.body || mistake.feedback, 160) || "等待补充错误说明" }), el("div", { class: "item-meta" }, [badge(labels.state(status), stateTone(status)), meta.category ? badge(meta.category) : null])]),
+    el("div", { class: "item-copy" }, [el("h3", { text: mistake.title || mistake.question || "未命名错误记录" }), el("p", { text: truncate(mistake.error || mistake.body || mistake.feedback, 160) || "等待补充错误说明" }), el("div", { class: "item-meta" }, [badge(labels.state(status), stateTone(status)), ownUnknown || relatedUnknown ? badge('分类待确认','warn') : null, meta.category ? badge(meta.category) : null])]),
     actions,
   ]);
 }

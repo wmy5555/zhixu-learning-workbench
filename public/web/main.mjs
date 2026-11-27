@@ -406,7 +406,7 @@ async function actions(control) {
   if(action==='reader-section') {const target=document.getElementById(control.dataset.target);target?.scrollIntoView({block:'start',behavior:'instant'});target?.focus({preventScroll:true});$$('.reader-toc button').forEach(node=>node.removeAttribute('aria-current'));control.setAttribute('aria-current','location');return;}
   if(action==='prepare-learning')return study.prepare(id);
   if(action==='research-source')return processSource(id,{research:true});
-  if(action==='reader-actions') {const note=state.note;if(!note||note.id!==id)return;modal('资料操作',readerMenu(note,state.readiness));return;}
+  if(action==='reader-actions') {const note=state.note;if(!note||note.id!==id)return;modal('资料操作',readerMenu(note,state.readiness,list(state.boot?.notes)));return;}
   if(action==='trash-source') {const note=await api.get(endpoint('notes',id));if(note.kind!=='source')return;if(!await confirm('把这份原文暂时放下？','原始资料会进入回收站，可以恢复。','移入回收站'))return;await api.remove(endpoint('notes',id),{expectedHash:note.hash});$$('dialog[open]').forEach(dialog=>dialog.close());await refreshBoot();await go('library');notify('原文已移入回收站。');return;}
   if(action==='process')return processSource(id);
   if(action==='extract')return extract(id);

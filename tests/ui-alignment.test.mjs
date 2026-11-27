@@ -388,6 +388,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat, savedSession = 
   context.app.processFeedback = vm.runInContext('processFeedback', context);
   context.app.renderSourceGroupDrawer = vm.runInContext('renderSourceGroupDrawer', context);
   context.app.renderNoteDrawer = vm.runInContext('renderNoteDrawer', context);
+  context.app.mistakeRow = vm.runInContext('mistakeRow', context);
   context.app.toasts = document.querySelector('#toast-region');
   context.app.document = document;
   context.app.window = context.window;
@@ -447,6 +448,22 @@ test('legacy reader reviews only unknown classification without exposing learnin
  assert.equal(requests[0].path,'/api/notes/synthetic/classification');
  assert.deepEqual(JSON.parse(JSON.stringify(requests[0].options.body)),{expectedHash:'hash-1',classification:{depth:'apply'}});
  assert.equal(note.body,'合成原文');assert.equal(note.meta.stage,'learning');
+});
+
+test('legacy mistake actions block unknown classifications and link to each affected record',async()=>{
+ const reads=[];
+ const app=browser({note:async id=>{reads.push(id);return {id,kind:'knowledge',title:id,body:'合成原文',meta:{depth:'constructor'}};}});
+ const good={id:'good',kind:'knowledge',meta:{stage:'learning',depth:'explain'}};
+ const bad={id:'bad',kind:'knowledge',meta:{stage:'learning',depth:'constructor'}};
+ app.state.bootstrap={notes:[good,bad],settings:{}};
+ const make=(id,noteId,depth)=>({id,kind:'mistake',title:id,meta:{noteId,...(depth?{depth}:{})}});
+ const normal=app.mistakeRow(make('normal','good')),own=app.mistakeRow(make('own','good','constructor')),related=app.mistakeRow(make('related','bad'));
+ assert.ok(findButton(normal,'专项练习'));
+ assert.equal(findButton(own,'专项练习'),undefined);assert.ok(findButton(own,'核对错题分类'));
+ assert.equal(findButton(related,'专项练习'),undefined);assert.ok(findButton(related,'核对关联知识分类'));
+ assert.match(own.textContent,/分类待确认/);assert.match(related.textContent,/分类待确认/);
+ await findButton(own,'核对错题分类').events.click();await findButton(related,'核对关联知识分类').events.click();
+ assert.deepEqual(reads,['own','bad']);
 });
 
 test('library advice uses exact matches and expands children only for a matching original source', async () => {

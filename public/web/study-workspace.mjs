@@ -4,12 +4,12 @@ import { endpoint } from './api.mjs';
 import { escape as e, markdown } from './markdown.mjs';
 import { $, icon, button as btn, routeButton as link, area, empty, heading, jobState, notify, modal, list } from './ui.mjs';
 import { kind, stage } from './classification.mjs';
-import { learningReadiness, learningHelp, credibilityNotice } from './reader-actions.mjs';
+import { learningReadiness, learningHelp, credibilityNotice, mistakeClassificationTarget } from './reader-actions.mjs';
 import { feedbackHTML, completionHTML } from './learning-display.mjs';
 import { watchStudyFeedback, feedbackPending } from './study-feedback.mjs';
 import { aidUsed, markAid, clearAid } from './study-aid.mjs';
 
-const noteRows = notes => notes.map((note,index)=>`<article class="knowledge-row"><span class="task-index">${String(index+1).padStart(2,'0')}</span><div><h3>${e(note.title)}</h3><p>${e(kind(note.kind))} · ${e(stage(note.meta?.stage))}</p></div>${link('阅读 ↗',`read/${note.id}`,'text-button')}</article>`).join('');
+const noteRows = (notes, allNotes) => notes.map((note,index)=>`<article class="knowledge-row"><span class="task-index">${String(index+1).padStart(2,'0')}</span><div><h3>${e(note.title)}</h3><p>${e(kind(note.kind))} · ${mistakeClassificationTarget(note,allNotes)?'分类待确认':e(stage(note.meta?.stage))}</p></div>${link('阅读 ↗',`read/${note.id}`,'text-button')}</article>`).join('');
 
 export function createStudyWorkspace({ api, getNotes, noteTitle, view, go, setSession, bindAnswer,
   showHelp = (note, readiness) => modal(readiness.heading, learningHelp(note, readiness)) }) {
@@ -23,7 +23,7 @@ export function createStudyWorkspace({ api, getNotes, noteTitle, view, go, setSe
     return {html:heading('UNDERSTANDING TAKES PRACTICE','慢一点，把理解说清楚。','先尝试回忆，再核对材料。回答、反馈与自己确认的理解分别保留。')+
       `<div class="study-overview"><section><div class="section-title"><h2>正在学习 <small>${notes.length} 条</small></h2></div>${notes.map((note,index)=>`<article class="task-row"><span class="task-index">${String(index+1).padStart(2,'0')}</span><div class="task-copy"><h3>${e(note.title)}</h3><div class="task-meta">${e(note.meta?.topic||'我的学习')}</div></div>${btn(`开始 ${icon('arrow')}`,'start-note','start',`data-id="${e(note.id)}"`)}</article>`).join('')||empty('还没选好要学什么','在知识的书桌中选择“加入学习”，再从这里开始。',link('去知识库看看','library','text-button'))}</section>
     <aside class="study-history"><p class="eyebrow">PICK UP WHERE YOU LEFT OFF</p><h2>接着上一次思考</h2><div class="actions">${link('完整学习历史 ↗','history','text-button')}${link('学习时长 ↗','focus','text-button')}</div>${sessions.slice(0,6).map(s=>link(`<strong>${e(noteTitle(s.noteId))}</strong><small>${e(jobState(s.status))} · ${list(s.turns).length} 次回答</small>`,`study/${s.id}`,'history-item')).join('')||'<p class="muted">开始之后，你的思考会留在这里。</p>'}</aside></div>
-    <section class="recent"><div class="section-title"><h2>再想一想 <small>${mistakes.length} 条错题</small></h2></div>${mistakes.length?noteRows(mistakes):'<p class="muted">遇到的误解会保留下来，成为下一次理解的起点。</p>'}</section>`};
+    <section class="recent"><div class="section-title"><h2>再想一想 <small>${mistakes.length} 条错题</small></h2></div>${mistakes.length?noteRows(mistakes,list(getNotes())):'<p class="muted">遇到的误解会保留下来，成为下一次理解的起点。</p>'}</section>`};
   }
   async function sessionPage(id, loaded) {
     const session=loaded || await api.get(endpoint('study',id));
