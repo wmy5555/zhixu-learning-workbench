@@ -227,6 +227,42 @@ test('library groups children, applies filters, hides internal evidence, and doe
   assert.equal(service.getNote(bySourceRole.id).meta.evidence[0].excerpt, 'INTERNAL_EVIDENCE_0');
 });
 
+test('library and bootstrap reuse title jobs across all pending sources and preserve the full public projection', async t => {
+  const { service } = await harness(t);
+  const records = t.mock.method(service.store, 'records');
+  const jobReads = () => records.mock.calls.filter(call => call.arguments[0] === 'jobs').length;
+  assert.deepEqual(service.library(), { groups: [], standalone: [], matchingIds: [] });
+  assert.equal(jobReads(), 0);
+
+  const { notes: [first, second, idle] } = service.importItems({ items: ['第一份无标题', '第二份无标题', '尚无任务'].map(body => ({ body })) });
+  const add = (id, type, noteId, state, progress, code, titleRequested) =>
+    service.store.put('jobs', id, { id, type, payload: { noteId, titleRequested }, state, progress, code });
+  add('first-old', 'title', first.id, 'done', 2, null);
+  add('first-latest', 'process', first.id, 'failed', 1, 'TITLE_FAILED', true);
+  add('first-ignored', 'process', first.id, 'waiting', 0, 'PROCESS_ONLY', false);
+  add('second-old', 'process', second.id, 'failed', 1, 'PREVIOUS', true);
+  add('second-latest', 'title', second.id, 'queued', 0, null);
+  const all = [idle, second, first];
+  const expected = all.map(note => service.publicNote(service.getNote(note.id)));
+  assert.deepEqual(expected.map(n => n.titleGeneration), [
+    { state: 'idle', code: null }, { state: 'queued', code: null }, { state: 'failed', code: 'TITLE_FAILED' },
+  ]);
+  const processJobs = [
+    [],
+    [{ id: 'second-old', state: 'failed', progress: 1 }],
+    [{ id: 'first-ignored', state: 'waiting', progress: 0 }, { id: 'first-latest', state: 'failed', progress: 1 }],
+  ];
+  records.mock.resetCalls();
+  assert.deepEqual(service.library(), {
+    groups: expected.map((source, i) => ({ source, children: [], jobs: processJobs[i] })),
+    standalone: [], matchingIds: all.map(n => n.id),
+  });
+  assert.equal(jobReads(), 1);
+  records.mock.resetCalls();
+  assert.deepEqual(service.bootstrap().notes, expected);
+  assert.equal(jobReads(), 2, 'read the initial pending count and the post-refresh jobs snapshot');
+});
+
 test('library, analysis and ChatGPT share ordered source membership from current and legacy links', async t => {
   const { service } = await harness(t);
   const source = createSource(service, { title: '第一份原文', body: '第一份合成原文。' });

@@ -449,14 +449,28 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     store.scan(); return store.list().filter(note => matchesNote(note, filters));
   }
   const operationalIssue = text => /今日外部调用次数已达到上限|BUDGET|预算|请求次数.*上限/.test(text);
-  function publicNote(note) {
+  const titleJobSource = job => job.type === 'title' || (job.type === 'process' && job.payload?.titleRequested)
+    ? job.payload?.noteId : undefined;
+  const publicNote = note => projectNote(note);
+  function publicNotes(notes, jobs) {
+    const titleJobs = new Map();
+    if (notes.some(note => note.kind === 'source' && needsTitle(note))) {
+      // records() yields newest row first, matching the single-note lookup.
+      for (const job of jobs ?? store.records('jobs')) {
+        const id = titleJobSource(job);
+        if (id && !titleJobs.has(id)) titleJobs.set(id, job);
+      }
+    }
+    return notes.map(note => projectNote(note, titleJobs));
+  }
+  function projectNote(note, titleJobs) {
     const n = structuredClone(note);
     delete n.meta.privacy;
     delete n.meta.effectivePrivacy;
     delete n.meta.evidence;
     if (n.kind === 'source' && n.meta.titlePending) n.meta.titlePending = needsTitle(note);
     if (n.kind === 'source' && needsTitle(n)) {
-      const job = store.records('jobs').find(j => j.payload?.noteId === n.id && (j.type === 'title' || j.type === 'process' && j.payload.titleRequested));
+      const job = titleJobs ? titleJobs.get(n.id) : store.records('jobs').find(item => titleJobSource(item) === n.id);
       n.titleGeneration = { state: job?.state || 'idle', code: job?.code || null };
     } else if (n.meta.titleOrigin === 'ai') n.titleGeneration = { state: 'done' };
     n.meta.sources = (n.meta.sources || []).filter(s => s.role === 'input' || !store.row(s.id) || !store.read(s.id).meta.excerptOnly);
@@ -526,15 +540,15 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     return readPublicNote(id);
   }
   function library(filters = {}) {
-    const notes = listNotes().filter(n => !n.meta.excerptOnly), all = notes.map(publicNote);
+    const notes = listNotes().filter(n => !n.meta.excerptOnly);
+    const jobs = notes.some(note => note.kind === 'source') ? store.records('jobs') : [];
+    const all = publicNotes(notes, jobs);
     const matching = new Set(notes.filter(note => matchesNote(note, filters)).map(n => n.id)), grouped = new Set();
     const sources = all.filter(n => n.kind === 'source');
     const childrenBySource = groupSourceChildren(all, sources.map(source => source.id));
     const jobsBySource = new Map(sources.map(source => [source.id, []]));
-    if (sources.length) {
-      for (const job of store.records('jobs')) {
-        if (job.type === 'process') jobsBySource.get(job.payload.noteId)?.push({ id: job.id, state: job.state, progress: job.progress });
-      }
+    for (const job of jobs) {
+      if (job.type === 'process') jobsBySource.get(job.payload.noteId)?.push({ id: job.id, state: job.state, progress: job.progress });
     }
     const groups = sources.map(source => {
       const children = childrenBySource.get(source.id);
@@ -1352,9 +1366,19 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   const commitFile = tracked(input => sourceFiles.commit(input));
   const readFile = (id, assetId) => sourceFiles.read(id, assetId);
   const pendingUploads = () => sourceFiles.pending();
-  return { get store(){return store;}, get processing(){return processing;}, get hasPendingOperations(){return processing||activeOperations>0||pausing;}, chatgpt, chatgptUndo, learningNow, settings, updateSettings, capabilityTests, getPrompts, updatePrompts, usage, usageReport, updateUsageSettings, callRecovery, recoverCall, ai, importItems, processNote, requestSourceStructure, editSourceStructure, listNotes, publicNote, publicJob, library, readPublicNote, noteEvidence, linksPreview, syncLinks, getNote, editNote, extractNote, promote, confirmNote, merge, search:tracked(search), today, planAction, startStudy, session, answerStudy, hintStudy, confirmStudy, finishStudy, mistakeAction, topics, createTopic, updateTopic, topicAction, recommendations, recommendationAction, requestRelations, relationReview, relationAction, related, ask:tracked(ask), updateDraft, propose, proposalAction, queue, runJobs, pauseJobs, jobAction, tick, demo, diagnostics, backup, restore,
+  return { get store(){return store;}, get processing(){return processing;}, get hasPendingOperations(){return processing||activeOperations>0||pausing;}, chatgpt, chatgptUndo, learningNow, settings, updateSettings, capabilityTests, getPrompts, updatePrompts, usage, usageReport, updateUsageSettings, callRecovery, recoverCall, ai, importItems, processNote, requestSourceStructure, editSourceStructure, listNotes, publicNote, publicNotes, publicJob, library, readPublicNote, noteEvidence, linksPreview, syncLinks, getNote, editNote, extractNote, promote, confirmNote, merge, search:tracked(search), today, planAction, startStudy, session, answerStudy, hintStudy, confirmStudy, finishStudy, mistakeAction, topics, createTopic, updateTopic, topicAction, recommendations, recommendationAction, requestRelations, relationReview, relationAction, related, ask:tracked(ask), updateDraft, propose, proposalAction, queue, runJobs, pauseJobs, jobAction, tick, demo, diagnostics, backup, restore,
     jobStatuses, rebuildLocalSearch,
-    bootstrap(){return{settings:settings(),stats:{notes:store.list().filter(n=>!n.meta.excerptOnly).length,sources:store.list().filter(n=>n.kind==='source'&&!n.meta.excerptOnly).length,knowledge:store.list().filter(n=>n.kind==='knowledge').length,pending:store.records('jobs').filter(j=>['waiting','failed'].includes(j.state)).length},today:today(),notes:listNotes().filter(n=>!n.meta.excerptOnly).map(publicNote),jobs:store.records('jobs').map(publicJob),jobRevision,jobSnapshot:++jobSnapshot,conflicts:store.conflicts,capabilities:{offline:true,model:settings().ai.enabled,embedding:settings().embedding.enabled,search:settings().search.enabled}};},
+    bootstrap() {
+      const config = settings(), before = store.list();
+      const stats = { notes: before.filter(n => !n.meta.excerptOnly).length,
+        sources: before.filter(n => n.kind === 'source' && !n.meta.excerptOnly).length,
+        knowledge: before.filter(n => n.kind === 'knowledge').length,
+        pending: store.records('jobs').filter(j => ['waiting', 'failed'].includes(j.state)).length };
+      const plan = today(), notes = listNotes().filter(n => !n.meta.excerptOnly), jobs = store.records('jobs');
+      return { settings: config, stats, today: plan, notes: publicNotes(notes, jobs), jobs: jobs.map(publicJob),
+        jobRevision, jobSnapshot: ++jobSnapshot, conflicts: store.conflicts,
+        capabilities: { offline: true, model: settings().ai.enabled, embedding: settings().embedding.enabled, search: settings().search.enabled } };
+    },
     uploadFile, revertUpload, commitFile, readFile, pendingUploads,
     async close(){stopped=true;if(practice)await pauseJobs();else{controller?.abort();while(processing||activeOperations)await new Promise(resolve=>setTimeout(resolve,20));}store.close();}
   };

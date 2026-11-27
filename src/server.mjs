@@ -54,8 +54,8 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
     res.writeHead(status, { 'Content-Type':'application/json; charset=utf-8', 'Cache-Control':'no-store', 'X-Content-Type-Options':'nosniff', ...headers }); res.end(JSON.stringify(data));
   }
   function publicSearch(result, query, service) {
-    result.results = result.results.map(n => {
-      const clean = service.publicNote(n), context = searchContext(clean,query,n.location?.type === 'semantic' ? n.location.offset : undefined);
+    result.results = service.publicNotes(result.results).map(clean => {
+      const context = searchContext(clean,query,clean.location?.type === 'semantic' ? clean.location.offset : undefined);
       // Full Markdown is fetched by the detail route only when opened.
       return { ...clean, ...context, body: context.snippet };
     });
@@ -191,7 +191,7 @@ export function createApp({ dataDir = path.resolve(process.env.LEARNING_DATA_DIR
       }
       else if(resource==='bootstrap'&&method==='GET'){result=service.bootstrap();if(practiceId)result.conflicts.push(...service.store.records('onboardingConflicts'));}
       else if(resource==='library'&&method==='GET')result=service.library(query);
-      else if(resource==='notes'&&!id&&method==='GET')result={notes:service.listNotes(query).filter(n=>!n.meta.excerptOnly).map(service.publicNote)};
+      else if(resource==='notes'&&!id&&method==='GET')result={notes:service.publicNotes(service.listNotes(query).filter(n=>!n.meta.excerptOnly))};
       else if(resource==='notes'&&id==='merge'&&method==='POST')result=service.merge(body);
       else if(resource==='notes'&&id&&!action&&method==='GET')result=service.readPublicNote(id);
       else if(resource==='notes'&&id&&!action&&method==='PUT')result=service.editNote(id,body);
