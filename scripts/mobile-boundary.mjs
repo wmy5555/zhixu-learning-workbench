@@ -2,7 +2,7 @@
 export function mobileBoundaryErrors(files, pkg) {
   const errors = [];
   for (const file of files) {
-    if (/^(?:(?:apps\/)?(?:android|ios)\/|capacitor\.config\.(?:json|js|mjs|ts)$)/i.test(file))
+    if (/^(?:(?:apps\/)?(?:android|ios)\/|apps\/mobile\/|capacitor\.config\.(?:json|js|mjs|ts)$)/i.test(file))
       errors.push(`${file}: 原生工程已迁出，请在对应移动端仓库维护。`);
   }
   for (const group of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
