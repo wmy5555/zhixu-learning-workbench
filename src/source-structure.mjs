@@ -1,5 +1,5 @@
 import { validateKnowledgeStructure } from './knowledge-structure.mjs';
-import { hash, now } from './store.mjs';
+import { hash, now } from './core.mjs';
 
 const types = new Set(['support', 'explain', 'prerequisite', 'example', 'counterexample', 'limit', 'application', 'sequence']);
 const text = (value, max) => typeof value === 'string' ? value.trim().slice(0, max) : '';

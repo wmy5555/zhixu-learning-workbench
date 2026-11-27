@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
-import { atomicWrite } from '../src/store.mjs';
+import { atomicWrite } from '../src/atomic-write.mjs';
 
 const tempRoot = path.resolve('.tmp');
 fs.mkdirSync(tempRoot, { recursive: true });

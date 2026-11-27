@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createAI } from '../src/ai.mjs';
 import { createService } from '../src/service.mjs';
-import { hash } from '../src/store.mjs';
+import { hash } from '../src/core.mjs';
 
 const json = value => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
 function transport(limit = 120, redirects = false, transientFailure = false) {

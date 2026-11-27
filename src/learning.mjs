@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { hash, fail } from './store.mjs';
+import { hash, fail } from './core.mjs';
 import { outboundText } from './outbound-text.mjs';
 import { learningPractice } from './learning-guidance.mjs';
 

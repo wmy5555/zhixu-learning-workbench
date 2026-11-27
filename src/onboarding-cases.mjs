@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { fail, hash } from './store.mjs';
+import { fail, hash } from './core.mjs';
 
 const label = '【预设演示案例：虚构内容与预设记录，不是你的作答，也不是实际 AI 返回】';
 const practice = { demo: true, practice: true, privacy: 'local' };

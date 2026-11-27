@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
+import { hash as digest } from './core.mjs';
 import { Worker } from 'node:worker_threads';
 import { MAX_FILE_BYTES } from '../public/source-file-limits.mjs';
 import { outboundText } from './outbound-text.mjs';
@@ -9,7 +10,6 @@ export { MAX_FILE_BYTES };
 export const MAX_ATTACHMENT_STORAGE_BYTES = 256 * 1024 * 1024;
 export const MAX_ATTACHMENT_STORAGE_FILES = 1000;
 const types = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', pdf: 'application/pdf', doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
-const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const reject = (message, code = 'ATTACHMENT_INVALID', status = 400) => { throw Object.assign(new Error(message), { code, status }); };
 function fileType(input) {
   const name = input?.name;

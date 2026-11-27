@@ -1,4 +1,4 @@
-import { fail, hash, now } from './store.mjs';
+import { fail, hash, now } from './core.mjs';
 
 export function readCapturePersisted(store, id) {
   try { return store.readPersisted(id); }

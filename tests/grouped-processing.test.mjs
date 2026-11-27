@@ -4,7 +4,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { createService } from '../src/service.mjs';
-import { hash } from '../src/store.mjs';
+import { hash } from '../src/core.mjs';
 
 const projectDir = path.resolve(import.meta.dirname, '..');
 const tempRoot = path.join(projectDir, '.tmp');

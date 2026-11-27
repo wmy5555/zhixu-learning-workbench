@@ -1,4 +1,4 @@
-import { hash, now, fail } from './store.mjs';
+import { hash, now, fail } from './core.mjs';
 
 // These are reviewable suggestions from recorded behaviour, never mastery scores.
 export function createLifecycle(deps) {

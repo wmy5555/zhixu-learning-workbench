@@ -1,13 +1,12 @@
 import { validateImportedStructure } from './chatgpt-structure.mjs';
 import { historySourceMetadata } from './chatgpt-source-metadata.mjs';
-import { createHash } from 'node:crypto';
+import { hash as digest } from './core.mjs';
 
 export const historyBatchLimits = Object.freeze({ maxCharacters: 500000, maxMessages: 200,
   maxMessageCharacters: 120000, maxSummaryCharacters: 30000, maxPayloadJsonCharacters: 1000000,
   maxFrameBytes: 2 * 1024 * 1024, snapshotLifetimeMilliseconds: 5 * 60 * 1000 });
 const id = /^[A-Za-z0-9_-]{1,200}$/;
 const sha = /^[a-f0-9]{64}$/;
-const digest = value => createHash('sha256').update(value).digest('hex');
 const jsonHash = value => digest(JSON.stringify(value));
 const equal = (a, b) => a?.message === b?.message && a?.offset === b?.offset;
 const after = (a, b) => a.message > b.message || a.message === b.message && a.offset > b.offset;

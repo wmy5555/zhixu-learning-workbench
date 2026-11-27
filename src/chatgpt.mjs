@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { conversationOrigin, validSourceDate } from './chatgpt-source-metadata.mjs';
-import { fail, hash, now } from './store.mjs';
+import { fail, hash, now } from './core.mjs';
 import { syncSchema, structuredSchema, validateSync, captureIncremental, checkSource, checkStructuredCandidates, verifySyncReceipt, literalBlock } from './chatgpt-sync.mjs';
 import { receiveHistorySnapshot, verifiedHistoryCapture } from './chatgpt-history-snapshot.mjs';
 import { readCapturePersisted, assertCaptureRecord, captureVerification, historicalVerification } from './chatgpt-integrity.mjs';

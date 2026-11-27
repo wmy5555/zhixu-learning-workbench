@@ -9,7 +9,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createService } from '../src/service.mjs';
 import { createApp } from '../src/server.mjs';
 import { createChatgptClient, createChatgptMcpServer } from '../src/mcp-chatgpt.mjs';
-import { hash } from '../src/store.mjs';
+import { hash } from '../src/core.mjs';
 
 const temp = path.resolve(import.meta.dirname, '../.tmp');
 fs.mkdirSync(temp, { recursive: true });

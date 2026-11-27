@@ -5,7 +5,8 @@ import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import YAML from 'yaml';
-import { Store, hash } from '../src/store.mjs';
+import { Store } from '../src/store.mjs';
+import { hash } from '../src/core.mjs';
 import { createCallLedger } from '../src/call-ledger.mjs';
 import { assertBackupSize, BACKUP_MAX_BYTES, BACKUP_REQUEST_MAX_BYTES } from '../src/backup-contract.mjs';
 

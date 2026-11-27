@@ -1,5 +1,4 @@
-import { createHash } from 'node:crypto';
-const hash = value => createHash('sha256').update(value).digest('hex');
+import { hash } from './core.mjs';
 const practiceBody = body => body.split('\n## 我的理解（用户确认）')[0].trimEnd();
 
 export const learningPolicies = Object.freeze({

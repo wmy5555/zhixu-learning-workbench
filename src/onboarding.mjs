@@ -2,14 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createService } from './service.mjs';
-import { atomicWrite, fail, hash } from './store.mjs';
+import { atomicWrite } from './atomic-write.mjs';
+import { fail, hash, now as iso } from './core.mjs';
 import { chapters, getCurriculum } from '../public/onboarding-curriculum.mjs';
 import { seedPractice, loadCase, caseIds } from './onboarding-cases.mjs';
 import { getMaterial, customSample } from '../public/onboarding-materials.mjs';
 
 const capabilityGroups = ['ai', 'embedding', 'search', 'fetch'];
 const isId = id => typeof id === 'string' && /^[0-9a-f-]{36}$/.test(id);
-const iso = () => new Date().toISOString();
 const emptyRecord = () => ({ version: 1, practice: null, receipts: {}, events: {}, dismissed: false });
 const checkAliases = {
   'ai-test': 'model-test', 'embedding-test': 'test-embedding', 'search-test': 'test-search', 'fetch-test': 'test-fetch',

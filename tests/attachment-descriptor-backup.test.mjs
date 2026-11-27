@@ -5,7 +5,7 @@ import test from 'node:test';
 import YAML from 'yaml';
 import { randomUUID } from 'node:crypto';
 import { createService } from '../src/service.mjs';
-import { hash } from '../src/store.mjs';
+import { hash } from '../src/core.mjs';
 import { validateAttachments } from '../src/attachment-backup.mjs';
 import { tinyPng } from './fixtures/source-files.mjs';
 

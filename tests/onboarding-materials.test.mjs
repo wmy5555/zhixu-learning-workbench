@@ -6,7 +6,7 @@ import { once } from 'node:events';
 import { randomUUID, createHash } from 'node:crypto';
 import { createApp } from '../src/server.mjs';
 import { createService } from '../src/service.mjs';
-import { fail } from '../src/store.mjs';
+import { fail } from '../src/core.mjs';
 import { materials, getMaterial, materialSample, customSample } from '../public/onboarding-materials.mjs';
 import { getCurriculum } from '../public/onboarding-curriculum.mjs';
 

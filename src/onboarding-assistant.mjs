@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { fail } from './store.mjs';
+import { fail } from './core.mjs';
 import { guideSteps, intents, prerequisite } from '../public/web/onboarding-model.mjs';
 
 const system = `你是知序的学习引导助手，唯一目标是帮助用户更好地理解、记住并运用知识。
