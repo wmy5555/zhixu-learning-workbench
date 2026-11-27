@@ -1,6 +1,6 @@
 # 架构与协作边界
 
-从入口找模块，可看[网页架构地图](WEB_ARCHITECTURE.md)。架构决定、迁移批次和待处理项见[治理进度](ARCHITECTURE_PROGRESS.md)。`node scripts/check-architecture.mjs --json` 输出当前 Git 跟踪的网页与服务端模块依赖，包括重导出、延迟导入与本地 Word 工作线程。图中不含运行时 HTTP、文件监听、原生进程调用和样式级联，这些边界见下表。
+从入口找模块，可看[网页架构地图](WEB_ARCHITECTURE.md)。架构决定和迁移证据见[治理进度](ARCHITECTURE_PROGRESS.md)，需要产品定夺的事项见[待决事项](ARCHITECTURE_PROGRESS.md#待决事项)。`node scripts/check-architecture.mjs --json` 输出当前 Git 跟踪的网页与服务端模块依赖，包括重导出、延迟导入与本地 Word 工作线程。图中不含运行时 HTTP、文件监听、原生进程调用和样式级联，这些边界见下表。
 
 ```mermaid
 flowchart LR
@@ -19,7 +19,7 @@ flowchart LR
 | --- | --- |
 | 服务入口与身份 | `src/server.mjs` 分派正式库、练习库和工具请求，拥有会话、同源写入与调度。两个 stdio 入口通过 HTTP 调用既有服务。普通工具许可与 ChatGPT 读取许可分别生效。 |
 | 原文、知识与附件 | `Store` 负责 Markdown、版本、冲突和 SQLite 访问，`attachments.mjs` 负责原件字节和容量。笔记与附件是资料原件，检索索引可重建。 |
-| 分组与结构 | `source-structure.mjs` 管来源绑定、成员排序、结构依据和过期判定。历史分批导入的补齐及签名顺序由 `chatgpt-structure.mjs` 处理。知识库只在本次同步读取中复用快照。 |
+| 分组与结构 | `public/source-membership.mjs` 负责来源绑定与成员顺序。`source-structure.mjs` 核对结构依据和过期状态。`chatgpt-structure.mjs` 处理历史分批导入的补齐及签名顺序。知识库只在本次同步读取中复用快照。 |
 | 分类、学习与晋级 | `public/note-classification.mjs` 定义资料类型、存储目录、阶段、深度和可练习的阶段子集。`learning.mjs` 拥有计划、会话、复习及其写入时机。`knowledge-lifecycle.mjs` 生成采用建议。用户回答、反馈及本人确认分别保存。 |
 | 配置、外发与费用 | `service.defaults` 给出设置初值，`settings-validation.mjs` 校验候选配置，`secrets.mjs` 管理凭据绑定。`ai.mjs` 在实际执行处核对授权与预算，`call-ledger.mjs` 记录预留、发送、响应和记账，`usage.mjs` 提供统计视图。 |
 | 错误、重试与观察 | `core.mjs` 提供错误代码和状态、时间与字节摘要。HTTP 输出受控错误；队列、账本分别记录任务能否重试和外部请求是否确实完成。`atomic-write.mjs` 的有限重试只用于本地文件替换。启动日志、业务任务状态和费用证据分别归各自所有者。 |
@@ -49,7 +49,7 @@ flowchart LR
 
 ## 拆解与分批核验检查点
 
-`process` 保留既有任务状态，新增 `phase`、`extractionSaved`、`savedCount`、`researchProgress`（total/covered/verified）及 `stopCode`。保存候选及结构后才启动研究；公开状态按当前来源 hash 和实际候选重新核对拆解完成，兼容旧记录，不把预设案例当真实结果。状态投影不读取或传送模型正文。
+`process` 保留既有任务状态，另外提供 `phase`、`extractionSaved`、`savedCount`、`researchProgress`（total/covered/verified）及 `stopCode`。保存候选及结构后才启动研究。完整任务与轻量轮询都核对当前来源版本、候选数组数量、实际保存的拆解键数量及预设标记，两处预设标记中的任一有效值均视为演示。轻量轮询直接从 SQLite 投影必要字段与候选数量，完整任务继续提供原有详情。
 
 研究记录保留覆盖状态和尝试次数；批次逐项保存，未覆盖项优先，完成有效缓存继续复用。每批至多 3 项主张，整个任务共用 `withBudget`；网页读取为评价保留一次请求，重试和重定向仍计费计数。中断不抹除已完成批次，不变的候选正文及证据不重复写版本或关联任务。
 
@@ -129,7 +129,7 @@ JSON 请求/响应；正常状态 200/201；错误 `{error,code}`。GET /api/boo
 - GET /api/mistakes → `{mistakes}`；POST /api/mistakes/:id/action `{action:'dispute'|'resolve'|'reopen'|'revoke',reason}`。
 - GET /api/topics → `{topics}`；POST /api/topics `{title,body,noteIds:[],prerequisites:[],minutes:20}`；PUT /api/topics/:id 使用 notes 编辑接口同类字段；POST /api/topics/:id/action `{action:'pause'|'resume'}`。
 - GET /api/relations → `{relations,reports}`；POST /api/relations/:id/action `{action:'accept'|'reject',reason?}`；POST /api/discover → job。
-- GET /api/jobs → `{jobs}`；POST /api/jobs/:id/action `{action:'retry'|'cancel'}`。
+- GET /api/jobs 返回 `{jobs}`。GET /api/jobs?view=status 返回加工、结构和标题任务的轻量状态及快照标识。POST /api/jobs/:id/action 接受 `{action:'retry'|'cancel'}`。
 - GET /api/settings → sanitized settings；PUT /api/settings 更新非空字段，apiKey 仅写入且不返回，空值保持旧密钥；POST /api/settings/test `{capability:'model'|'embedding'|'search'|'fetch'}` 仍测试已保存配置；正式设置可另传 `config` 测试单项表单快照，不落盘，返回短期一次性 `receipt`。POST /api/settings/save-tested 提交同一 `capability/config/receipt`，校验草稿摘要和设置/加密凭据版本后经原安全保存路径提交；练习路由拒绝草稿测试和保存。回执最多保留 16 个，5 分钟过期，不含明文密钥。
 - GET /api/usage → `{totals,daily,models,recentCalls,budget}`；按正式库时区汇总完整调用记录。PUT /api/usage/settings → 只更新预算与单价，验证当前模型标识；练习只读共用统计。详见 [用量说明](USAGE.md)。
 - GET /api/call-recovery → `{pending}`；POST /api/call-recovery/:id `{action:'recover'}` 补记已有响应或取消未发预留，`{action:'confirm',cost:number|null,reason}` 核对无响应调用费用；不重新发送请求，练习只读。

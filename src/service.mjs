@@ -21,7 +21,8 @@ import { createChatgptBridge } from './chatgpt.mjs';
 import { createChatgptUndo } from './chatgpt-undo.mjs';
 import { buildUsageReport } from './usage.mjs';
 import { callPurpose, callPurposes } from './call-purpose.mjs';
-import { groupSourceChildren, sourceParentIds, structureBasis, structureRecord, structureView } from './source-structure.mjs';
+import { groupSourceChildren, sourceParentIds } from '../public/source-membership.mjs';
+import { structureBasis, structureRecord, structureView } from './source-structure.mjs';
 import { createSourceFiles } from './source-files.mjs';
 import { assertTextSource, processingText } from './attachments.mjs';
 import { outboundText, outboundTitle } from './outbound-text.mjs';
@@ -491,13 +492,17 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   }
   function linksPreview(id) { getNote(id); return store.managedLinksPreview(id); }
   function syncLinks(id, input) { getNote(id); return store.syncManagedLinks(id, input); }
+  function hasSavedExtraction(expectedCount, savedCount, currentSource, presetCase) {
+    return Boolean(currentSource && expectedCount > 0 && savedCount === expectedCount && !presetCase);
+  }
   function processSummary(job) {
     if (job.type !== 'process') return {};
-    const expected = job.payload?.extracted?.candidates?.length || 0;
-    const current = store.row(job.payload?.noteId);
+    const candidates = job.payload?.extracted?.candidates;
+    const expectedCount = Array.isArray(candidates) ? candidates.length : 0;
+    const current = store.row(job.payload?.noteId ?? null);
     const prefix = job.payload?.noteId + ':' + job.payload?.hash + ':';
     const savedCount = store.db.prepare("SELECT count(DISTINCT json_extract(json,'$.meta.processKey')) count FROM notes WHERE json_extract(json,'$.kind')='knowledge' AND substr(json_extract(json,'$.meta.processKey'),1,?)=?").get(prefix.length, prefix).count;
-    const extractionSaved = Boolean(expected && savedCount === expected && current?.hash === job.payload?.hash && !job.presetCase && !job.payload?.presetCase);
+    const extractionSaved = hasSavedExtraction(expectedCount, savedCount, current && current.hash === job.payload?.hash, job.presetCase || job.payload?.presetCase);
     return { extractionSaved, savedCount, phase: extractionSaved ? job.phase || (job.payload.research ? 'research_pending' : 'complete') : 'extracting' };
   }
   function publicJob(job) {
@@ -511,7 +516,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     const jobs = store.db.prepare(`SELECT j.key AS id,
       json_extract(j.json,'$.type') AS type, json_extract(j.json,'$.state') AS state, json_extract(j.json,'$.code') AS code,
       json_extract(j.json,'$.payload.noteId') AS noteId, json_extract(j.json,'$.payload.research') AS research,
-      coalesce(json_extract(j.json,'$.presetCase'), json_extract(j.json,'$.payload.presetCase')) AS presetCase,
+      json_extract(j.json,'$.presetCase') AS topPresetCase, json_extract(j.json,'$.payload.presetCase') AS payloadPresetCase,
       json_extract(j.json,'$.createdAt') AS createdAt, json_extract(j.json,'$.updatedAt') AS updatedAt,
       substr(json_extract(n.json,'$.title'),1,70) AS title,
       json_extract(j.json,'$.phase') AS phase, json_extract(j.json,'$.stopCode') AS stopCode,
@@ -523,9 +528,12 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
         json_extract(j.json,'$.payload.noteId') || ':' || json_extract(j.json,'$.payload.hash') || ':') AS savedCount
       FROM records j LEFT JOIN notes n ON n.id=json_extract(j.json,'$.payload.noteId')
       WHERE j.namespace='jobs' AND json_extract(j.json,'$.type') IN ('process','structure','title')
-      ORDER BY j.rowid DESC`).all().map(({ expectedCount, currentSource, researchProgress, ...job }) => ({ ...job,
-      research: job.research === 1, researchProgress: researchProgress ? JSON.parse(researchProgress) : null,
-      extractionSaved: Boolean(job.type === 'process' && currentSource && expectedCount && job.savedCount === expectedCount && !job.presetCase) }));
+      ORDER BY j.rowid DESC`).all().map(({ expectedCount, currentSource, researchProgress, topPresetCase, payloadPresetCase, ...job }) => {
+        const presetCase = topPresetCase || payloadPresetCase || null;
+        return { ...job, presetCase, research: job.research === 1,
+          researchProgress: researchProgress ? JSON.parse(researchProgress) : null,
+          extractionSaved: job.type === 'process' && hasSavedExtraction(expectedCount, job.savedCount, currentSource, presetCase) };
+      });
     return { jobs, jobRevision, jobSnapshot: ++jobSnapshot };
   }
   function editNote(id, input) {

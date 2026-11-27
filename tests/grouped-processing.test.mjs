@@ -5,6 +5,7 @@ import test from 'node:test';
 
 import { createService } from '../src/service.mjs';
 import { hash } from '../src/core.mjs';
+import { createReaderData } from '../public/web/reader-data.mjs';
 
 const projectDir = path.resolve(import.meta.dirname, '..');
 const tempRoot = path.join(projectDir, '.tmp');
@@ -277,6 +278,11 @@ test('library, analysis and ChatGPT share ordered source membership from current
   create('不展示的核验摘录', { sources: [input(source.id)], excerptOnly: true });
   create('相关但并非知识的笔记', { sources: [input(source.id)] }, 'report');
   const expected = [noOrder.id, manual.id, sameOrder.id, legacy.id];
+  const boot = service.bootstrap(), reader = createReaderData({ getContext: () => ({ version: 0, revision: 0 }) });
+  for (const id of [source.id, other.id]) {
+    assert.deepEqual(reader.peek(id, boot).note.children, service.readPublicNote(id).children);
+  }
+
 
   const scan = t.mock.method(service.store, 'scan');
   const records = t.mock.method(service.store, 'records');
@@ -311,6 +317,12 @@ test('source reads keep an explicit member with an externally edited legacy key,
   const fields = { ...child.meta, id: child.id, kind: child.kind, title: child.title, processKey: 7 };
   await writeFile(file, ['---', JSON.stringify(fields), '---', child.body].join('\n'), 'utf8');
   assert.equal(service.getNote(child.id).meta.processKey, 7);
+  const boot = { notes: service.publicNotes(service.listNotes().filter(note => !note.meta.excerptOnly)) };
+  const immediate = createReaderData({ getContext: () => ({ version: 0, revision: 0 }) }).peek(source.id, boot);
+  assert.deepEqual(immediate.note.children, service.readPublicNote(source.id).children);
+  assert.strictEqual(immediate.note.children[0], boot.notes.find(note => note.id === child.id));
+  assert.equal(Object.hasOwn(immediate.note.children[0].meta, 'privacy'), false);
+
 
   assert.deepEqual(service.readPublicNote(source.id).children.map(note => note.id), [child.id]);
   service.updateSettings({ mcp: { chatgptEnabled: true, chatgptAllowRead: true } });

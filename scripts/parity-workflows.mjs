@@ -1,13 +1,16 @@
+import { previewMetadata, evidenceDirectory } from './preview-context.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import {createRequire} from 'node:module';
 import assert from 'node:assert/strict';
 const {chromium}=createRequire(import.meta.url)(process.argv[2]||'playwright');
-const meta=JSON.parse(fs.readFileSync('.tmp/parity-preview.json','utf8'));assert.equal(meta.synthetic,true);
-const out=path.resolve('.tmp/parity-evidence'),browser=await chromium.launch({executablePath:process.argv[3],headless:true});
-const context=await browser.newContext({viewport:{width:1365,height:900},reducedMotion:'reduce'}),page=await context.newPage(),checks=[],errors=[];
+const meta=await previewMetadata(process.argv[4]);
+const out=evidenceDirectory(meta,'parity-workflows'),browser=await chromium.launch({executablePath:process.argv[3],headless:true});
+let page;
+try{
+const context=await browser.newContext({viewport:{width:1365,height:900},reducedMotion:'reduce'});page=await context.newPage();const checks=[],errors=[];
 page.on('pageerror',e=>errors.push(e.message));page.setDefaultTimeout(12000);
-await context.route('**/*',r=>r.request().url().startsWith(meta.candidate)?r.continue():r.abort());
+await context.route('**/*',r=>r.request().url().startsWith(meta.candidate+'/')?r.continue():r.abort());
 const api=(route,method='get',body)=>page.evaluate(async({route,method,body})=>{const {api}=await import('/web/api.mjs');return api[method](route,body);},{route,method,body});
 async function open(route){await page.waitForFunction(()=>!document.querySelector('[aria-busy="true"]'));await page.goto(meta.candidate+'/#'+route);await page.waitForFunction(r=>document.querySelector('#main')?.dataset.route===r,route);}
 const waitToast=()=>page.locator('#toast:not([hidden])').waitFor();
@@ -15,7 +18,6 @@ const check=name=>{checks.push(name);console.log('PASS '+name);fs.writeFileSync(
 async function action(a){await page.locator(`[data-action="${a}"]`).first().click();}
 async function readerAction(id,a){await open(`read/${id}`);await action('reader-actions');await action(a);}
 async function saveDialog(){await page.locator('dialog[open] form button[type="submit"]').last().click();await page.locator('dialog[open]').waitFor({state:'hidden'});}
-try{
   if(!process.argv.includes('--tail')){
   if(!process.argv.includes('--remaining')){
   await open('relations');
@@ -134,7 +136,7 @@ try{
   assert.deepEqual(errors,[]);
   fs.writeFileSync(path.join(out,'workflow-results.json'),JSON.stringify({checks,errors,syntheticRoot:meta.root,at:new Date().toISOString()},null,2));
 }catch(error){
-  await page.screenshot({path:path.join(out,'workflow-failure.png'),fullPage:true});
-  console.error(JSON.stringify(await page.evaluate(()=>({hash:location.hash,route:document.querySelector('#main')?.dataset.route,dialogs:[...document.querySelectorAll('dialog')].map(d=>d.innerText),toast:document.querySelector('#toast')?.innerText,busy:document.querySelectorAll('[aria-busy="true"]').length}))));
+  if(page) { await page.screenshot({path:path.join(out,'workflow-failure.png'),fullPage:true}).catch(()=>{});
+  console.error(JSON.stringify(await page.evaluate(()=>({hash:location.hash,route:document.querySelector('#main')?.dataset.route,dialogs:[...document.querySelectorAll('dialog')].map(d=>d.innerText),toast:document.querySelector('#toast')?.innerText,busy:document.querySelectorAll('[aria-busy="true"]').length})))); }
   throw error;
 }finally{await browser.close();}

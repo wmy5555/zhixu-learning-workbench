@@ -1,10 +1,11 @@
+import { previewMetadata, evidenceDirectory } from './preview-context.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
 const {chromium}=createRequire(import.meta.url)(process.argv[2]);
-const meta=JSON.parse(fs.readFileSync(process.argv[4],'utf8'));assert.equal(meta.synthetic,true);
-const out=path.resolve('../evidence/focus-expiry');fs.mkdirSync(out,{recursive:true});
+const meta=await previewMetadata(process.argv[4]);
+const out=evidenceDirectory(meta,'focus-expiry-browser');fs.mkdirSync(out,{recursive:true});
 const browser=await chromium.launch({executablePath:process.argv[3],headless:true}),checks=[];
 async function expire(p){await p.evaluate(()=>{const k=Object.keys(localStorage).find(k=>k.startsWith('zhixu-focus-v1'));const s=JSON.parse(localStorage.getItem(k));s.active.startedAt=Date.now()-s.active.durationMs-1000;localStorage.setItem(k,JSON.stringify(s));});}
 try{

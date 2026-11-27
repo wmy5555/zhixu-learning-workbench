@@ -27,14 +27,17 @@ test('禁止页面模块反向依赖入口，并发现经由异步导入形成�
   assert.ok(errors.some(error => error.includes('可静态定位')));
 });
 
-test('共用控件不能再从业务页面集引入，即使没有形成循环', () => {
-  const { errors } = inspectWebModules(new Map([
-    ['web/main.mjs', "import './parity.mjs';"],
-    ['web/parity.mjs', ''],
-    ['web/focus.mjs', "import './parity.mjs';"],
-  ]));
-  assert.equal(errors.length, 1);
-  assert.match(errors[0], /web\/focus\.mjs:1 .*主入口装配/);
+test('知识库、检索和原业务页面集由主入口装配，共享展示可以由各页直接引用', () => {
+  for (const page of ['library-page', 'search-page', 'parity']) {
+    const { errors } = inspectWebModules(new Map([
+      ['web/main.mjs', `import './${page}.mjs';`],
+      [`web/${page}.mjs`, "import './knowledge-display.mjs';"],
+      ['web/knowledge-display.mjs', ''],
+      ['web/focus.mjs', `import './knowledge-display.mjs'; export * from './${page}.mjs';`],
+    ]));
+    assert.equal(errors.length, 1, page);
+    assert.match(errors[0], /web\/focus\.mjs:1 .*主入口装配/);
+  }
 });
 
 test('供应商模块须有实际资源或已知的挂载入口，错误地址带文件与行号', () => {

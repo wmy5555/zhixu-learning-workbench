@@ -266,6 +266,62 @@ test('process status polling requires a session, omits task bodies and changes r
   assert.equal(practiceStatus.body.jobs.some(value => value.id === job.id), false);
 });
 
+test('restored process status agrees with full jobs for saved results and legacy preset markers', async t => {
+  const app = await startApp(t), { headers } = await webSession(app);
+  const store = app.service.store;
+  const source = store.create({ kind: 'source', title: '合成状态来源', body: '合成原文' });
+  store.create({
+    kind: 'knowledge', title: '合成保存知识', body: '合成保存记录',
+    meta: { processKey: `${source.id}:${source.hash}:0` },
+  });
+  const candidates = [{ title: '合成候选', body: 'synthetic-candidate-body', claims: [] }];
+  const cases = [
+    { id: 'saved', candidates, saved: true, marker: null },
+    { id: 'top-marker', top: 'top-case', nested: 'nested-case', candidates, saved: false, marker: 'top-case' },
+    { id: 'nested-marker', nested: 'nested-case', candidates, saved: false, marker: 'nested-case' },
+    ...['', false, 0].map((top, index) => ({
+      id: 'legacy-marker-' + index, top, nested: 'nested-case', candidates, saved: false, marker: 'nested-case',
+    })),
+    { id: 'string-candidates', candidates: 'x', saved: false, marker: null },
+    { id: 'object-candidates', candidates: { length: 1 }, saved: false, marker: null },
+  ];
+  const backup = app.service.backup();
+  for (const sample of cases) {
+    const job = {
+      id: sample.id, type: 'process', state: 'waiting', attempts: 1, presetCase: sample.top,
+      payload: { noteId: source.id, hash: source.hash, presetCase: sample.nested, extracted: { candidates: sample.candidates } },
+    };
+    backup.records.push({ namespace: 'jobs', key: job.id, json: JSON.stringify(job) });
+  }
+  const preview = await request(app.baseUrl, '/api/restore', { method: 'POST', headers, body: { backup, preview: true } });
+  assert.equal(preview.status, 200, preview.text);
+  const restored = await request(app.baseUrl, '/api/restore', {
+    method: 'POST', headers, body: { backup, preview: false, token: preview.body.token },
+  });
+  assert.equal(restored.status, 200, restored.text);
+
+  const records = t.mock.method(store, 'records');
+  const polling = await request(app.baseUrl, '/api/jobs?view=status', { headers });
+  assert.equal(polling.status, 200, polling.text);
+  assert.ok(!records.mock.calls.some(call => call.arguments[0] === 'jobs'), 'polling projects the database rows without loading full jobs into JS');
+  records.mock.restore();
+  const all = await request(app.baseUrl, '/api/jobs', { headers });
+  assert.equal(all.status, 200, all.text);
+  assert.doesNotMatch(polling.text, /synthetic-candidate-body|"payload"/);
+  for (const { id, top, nested, saved, marker } of cases) {
+    const compact = polling.body.jobs.find(job => job.id === id);
+    const full = all.body.jobs.find(job => job.id === id);
+    assert.equal(compact.savedCount, 1, id);
+    assert.equal(full.savedCount, 1, id);
+    assert.equal(compact.extractionSaved, saved, id);
+    assert.equal(full.extractionSaved, saved, id);
+    assert.equal(compact.presetCase, marker, id);
+    assert.equal(full.presetCase, top, id);
+    assert.equal(full.payload.presetCase, nested, id);
+    assert.equal(compact.state, 'waiting', id);
+  }
+});
+
 test('HTTP repeated decomposition shares pending and completed jobs and orders the returned job before later snapshots', async t => {
   const app = await startApp(t), session = await webSession(app);
   const source = app.service.store.create({ kind: 'source', title: 'HTTP 合成去重', body: '本机测试原文', meta: { privacy: 'local' } });

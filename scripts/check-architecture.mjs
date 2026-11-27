@@ -35,6 +35,8 @@ const mountedModules = [
   'filepond-plugin-file-validate-size', 'filepond-plugin-image-preview',
 ].map(name => 'vendor/' + name + '.esm.js');
 
+const routedPages = new Set(['web/parity.mjs', 'web/library-page.mjs', 'web/search-page.mjs']);
+
 export function inspectWebModules(sources, vendorFiles = []) {
   const vendor = new Set([...mountedModules, ...vendorFiles]);
   const graph = {};
@@ -61,7 +63,7 @@ export function inspectWebModules(sources, vendorFiles = []) {
       else if (vendor.has(target)) continue;
       else if (!sources.has(target)) errors.push(at + ' 找不到网页模块 ' + target + '，请核对浏览器地址及 Git 跟踪文件。');
       else if (target === 'web/main.mjs' || target === 'app.mjs') errors.push(at + ' 请直接引用功能模块，页面入口只能负责组装。');
-      else if (target === 'web/parity.mjs' && file !== 'web/main.mjs') errors.push(at + ' 请从所属模块引用控件或学习展示，业务页面集只由主入口装配。');
+      else if (routedPages.has(target) && file !== 'web/main.mjs') errors.push(at + ' 请直接引用共享展示或控件模块，' + target + ' 只由主入口装配。');
     }
   }
   errors.push(...cycles(graph));
@@ -88,7 +90,7 @@ function cycles(graph) {
 
 // Both environments consume these data-only files. Their dependencies must also
 // belong to this set so importing one cannot bring a browser page into Node.
-const shared = new Set(['public/note-classification.mjs', 'public/source-file-limits.mjs', 'public/onboarding-curriculum.mjs',
+const shared = new Set(['public/source-membership.mjs', 'public/note-classification.mjs', 'public/source-file-limits.mjs', 'public/onboarding-curriculum.mjs',
   'public/onboarding-materials.mjs', 'public/web/onboarding-model.mjs']);
 
 export function inspectServerModules(sources, webGraph, dependencies) {

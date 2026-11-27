@@ -1,15 +1,17 @@
+import { previewMetadata, evidenceDirectory } from './preview-context.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import {createRequire} from 'node:module';
 import assert from 'node:assert/strict';
 const {chromium}=createRequire(import.meta.url)(process.argv[2]||'playwright');
-const meta=JSON.parse(fs.readFileSync(process.argv[4]||'.tmp/parity-preview.json','utf8'));assert.equal(meta.synthetic,true);
-const out=path.resolve('.tmp/parity-evidence'),browser=await chromium.launch({executablePath:process.argv[3],headless:true});
-const context=await browser.newContext({viewport:{width:1365,height:900}}),a=await context.newPage(),b=await context.newPage(),checks=[];
+const meta=await previewMetadata(process.argv[4]);
+const out=evidenceDirectory(meta,'parity-focus-browser'),browser=await chromium.launch({executablePath:process.argv[3],headless:true});
+let a;
+try{
+const context=await browser.newContext({viewport:{width:1365,height:900}});a=await context.newPage();const b=await context.newPage(),checks=[];
 a.setDefaultTimeout(12000);b.setDefaultTimeout(12000);
 const state=p=>p.evaluate(()=>JSON.parse(localStorage.getItem(Object.keys(localStorage).find(k=>k.startsWith('zhixu-focus-v1')))));
 const check=name=>{checks.push(name);console.log('PASS '+name);};
-try{
   await a.bringToFront();
   await a.goto(meta.candidate+'/#today');await a.locator('[data-action="focus-start"]').click();
   await a.locator('#focus-start-form [name="minutes"]').fill('1');await a.locator('#focus-start-form [type="submit"]').click();
@@ -74,6 +76,6 @@ try{
   check('blocked timer storage does not replace the rest of the application with an error page');
   fs.writeFileSync(path.join(out,'focus-browser-results.json'),JSON.stringify({checks,syntheticRoot:meta.root,at:new Date().toISOString()},null,2));
 }catch(error){
-  console.error(JSON.stringify(await a.evaluate(()=>({viewport:[innerWidth,innerHeight],clock:document.querySelector('.focus-clock')?.getBoundingClientRect().toJSON(),style:document.querySelector('.focus-clock')?.getAttribute('style'),active:JSON.parse(localStorage.getItem(Object.keys(localStorage).find(k=>k.startsWith('zhixu-focus-v1'))))}))));
-  await a.screenshot({path:path.join(out,'focus-failure.png')});throw error;
+  if(a) { console.error(JSON.stringify(await a.evaluate(()=>({viewport:[innerWidth,innerHeight],clock:document.querySelector('.focus-clock')?.getBoundingClientRect().toJSON(),style:document.querySelector('.focus-clock')?.getAttribute('style'),active:JSON.parse(localStorage.getItem(Object.keys(localStorage).find(k=>k.startsWith('zhixu-focus-v1'))))}))));
+  await a.screenshot({path:path.join(out,'focus-failure.png')}).catch(()=>{}); } throw error;
 }finally{await browser.close();}

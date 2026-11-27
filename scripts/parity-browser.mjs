@@ -1,3 +1,4 @@
+import { previewMetadata, evidenceDirectory } from './preview-context.mjs';
 // Run against scripts/parity-preview.mjs only, with an already-installed Playwright.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -5,14 +6,14 @@ import {createRequire} from 'node:module';
 import assert from 'node:assert/strict';
 const require=createRequire(import.meta.url);
 const {chromium}=require(process.argv[2]||'playwright');
-const meta=JSON.parse(fs.readFileSync(path.resolve('.tmp/parity-preview.json'),'utf8'));
-assert.equal(meta.synthetic,true);
-const out=path.resolve('.tmp/parity-evidence');fs.mkdirSync(out,{recursive:true});
+const meta=await previewMetadata(process.argv[4]);
+const out=evidenceDirectory(meta,'parity-browser');fs.mkdirSync(out,{recursive:true});
 const browser=await chromium.launch({executablePath:process.argv[3]||undefined,headless:true});
+try{
 const context=await browser.newContext({viewport:{width:1440,height:1000},reducedMotion:'reduce'});
 const page=await context.newPage(),errors=[],network=[];
 page.on('pageerror',err=>errors.push(err.message));
-await context.route('**/*',route=>{if(!route.request().url().startsWith('http://127.0.0.1:')&&!route.request().url().startsWith('data:')){network.push(route.request().url());return route.abort();}return route.continue();});
+await context.route('**/*',route=>{if(![meta.candidate,meta.baseline].some(base=>base && route.request().url().startsWith(base+'/'))&&!route.request().url().startsWith('data:')){network.push(route.request().url());return route.abort();}return route.continue();});
 async function open(base,route){
   await page.goto(base+'/?parity-check='+Date.now()+'#'+route);await page.locator('#main').waitFor();
   if(base===meta.baseline)await page.waitForFunction(()=>!document.querySelector('.page-loading'));
@@ -21,7 +22,6 @@ async function open(base,route){
   await page.evaluate(()=>document.fonts.ready);
 }
 const checks=[],check=(name)=>{checks.push(name);console.log('PASS '+name);};
-try{
   for(const width of [1440,390]){
     await page.setViewportSize({width,height:width===1440?1000:844});
     for(const [version,base,fixture] of [['baseline',meta.baseline,meta.baselineFixture],['candidate',meta.candidate,meta.fixture]]){

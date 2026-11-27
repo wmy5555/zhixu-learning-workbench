@@ -4,7 +4,7 @@ import { createLibraryPreferences } from '../public/web/library-preferences.mjs'
 import { labels } from '../public/ui.mjs';
 import { noteKinds, learningStages, learningDepths, isStudyStage } from '../public/note-classification.mjs';
 import { kind, stage, kindOptions, stageOptions, quickKindOptions, purposeOptions, depthOptions } from '../public/web/classification.mjs';
-import { createParity } from '../public/web/parity.mjs';
+import { createLibraryPage } from '../public/web/library-page.mjs';
 function memory(initial) { let value=initial; return {getItem:()=>value,setItem:(_,v)=>{value=v;}}; }
 test('all library choices survive recreation and explicit clearing',()=>{
   const storage=memory(); const first=createLibraryPreferences(()=>storage);
@@ -26,17 +26,33 @@ test('blocked browser storage retains navigation preferences in memory',()=>{
 test('real library binding saves user events and restores controls on navigation and reload',async()=>{
   const previousDocument=globalThis.document,previousStorage=globalThis.localStorage;
   const storage=memory(); globalThis.localStorage=storage;
-  const parity=()=>createParity({api:{get:async()=>({groups:[],standalone:[]})},state:{},noteCard:()=>''});
-  function node(value='') { return {value,checked:false,open:false,isConnected:true,events:{},addEventListener(n,fn){this.events[n]=fn;},setAttribute(n,v){this[n]=v;},querySelector(){return null;}}; }
+  const source={id:'source',kind:'source',title:'合成原文',body:'原文内容',updatedAt:'2026-01-02'};
+  const child={id:'child',kind:'knowledge',title:'合成知识',body:'独有关键词',updatedAt:'2026-01-03',meta:{stage:'candidate'}};
+  const report={id:'report',kind:'report',title:'合成整理报告',body:'报告内容',updatedAt:'2026-01-01'};
+  const createPage=()=>createLibraryPage({get:async path=>path==='/api/library'
+    ? {groups:[{source,children:[child]}],standalone:[report]} : {suggestions:[{id:'suggestion',title:'合成知识建议'}]}});
+  function node(value='') { return {value,checked:false,open:false,isConnected:true,events:{},addEventListener(n,fn){this.events[n]=fn;},setAttribute(n,v){this[n]=v;},querySelector(){return this.innerHTML?.includes('<article ') ? {} : null;}}; }
   const query=node(),kind=node(),stage=node(),group=node(),options=node(),advice=node(),host=node(),button=node(); button.dataset={kind:'knowledge'};
   const controls={'[name="libraryQuery"]':query,'[name="libraryKind"]':kind,'[name="libraryStage"]':stage,'[name="sourceGroups"]':group,'[data-library-options]':options,'[data-library-advice]':advice,'#parity-library':host};
   globalThis.document={querySelector:s=>controls[s],querySelectorAll:()=>[button]};
   try {
-    const client=parity();(await client.library()).bind();
+    const client=createPage();
+    const page=await client.page();
+    assert.match(page.html,/1 份原文 · 1 条知识/);
+    assert.match(page.html,/data-id="suggestion"/);
+    page.bind();
+    assert.ok(host.innerHTML.indexOf('合成知识') < host.innerHTML.indexOf('合成原文'));
+    assert.match(host.innerHTML,/合成整理报告/);
+    group.checked=true;group.events.input();assert.match(host.innerHTML,/parity-source-group/);
+    query.value='独有关键词';query.events.input();
+    assert.match(host.innerHTML,/合成原文/);
+    assert.match(host.innerHTML,/合成知识/);
+    assert.doesNotMatch(host.innerHTML,/合成整理报告/);
     button.onclick();assert.equal(button['aria-pressed'],'true');
     query.value='"<MCP>';query.events.input();stage.value='candidate';stage.events.input();group.checked=true;group.events.input();options.open=true;options.events.toggle();advice.open=true;advice.events.toggle();
-    for(const clientAfterNavigation of [client,parity()]){
-      const html=(await clientAfterNavigation.library()).html;
+    assert.match(host.innerHTML,/没有符合条件的资料/);
+    for(const clientAfterNavigation of [client,createPage()]){
+      const html=(await clientAfterNavigation.page()).html;
       assert.match(html,/data-kind="knowledge" aria-pressed="true"/);
       assert.match(html,/value="&quot;&lt;MCP&gt;"/);
       assert.match(html,/<option value="candidate" selected>/);
@@ -45,8 +61,8 @@ test('real library binding saves user events and restores controls on navigation
       assert.match(html,/<details data-library-advice class="quiet-details" open/);
     }
     options.open=false;options.events.toggle();group.checked=false;group.events.input();
-    assert.doesNotMatch((await parity().library()).html,/name="sourceGroups" checked/);
-    assert.doesNotMatch((await parity().library()).html,/<details data-library-options class="quiet-details" open/);
+    assert.doesNotMatch((await createPage().page()).html,/name="sourceGroups" checked/);
+    assert.doesNotMatch((await createPage().page()).html,/<details data-library-options class="quiet-details" open/);
   } finally {globalThis.document=previousDocument;globalThis.localStorage=previousStorage;}
 });
 

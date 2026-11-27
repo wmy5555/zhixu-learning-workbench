@@ -1,3 +1,4 @@
+import { createStudyStarter } from '../study-start.mjs';
 import { isStudyStage } from '../note-classification.mjs';
 import { endpoint } from './api.mjs';
 import { escape as e, markdown } from './markdown.mjs';
@@ -12,7 +13,7 @@ const noteRows = notes => notes.map((note,index)=>`<article class="knowledge-row
 
 export function createStudyWorkspace({ api, getNotes, noteTitle, view, go, setSession, bindAnswer,
   showHelp = (note, readiness) => modal(readiness.heading, learningHelp(note, readiness)) }) {
-  const intents = new Map();
+  const submitStart = createStudyStarter(() => api.getContext(), body => api.post('/api/study/start', body));
   let stopStudyFeedback = () => {};
 
   async function studyPage(id) {
@@ -63,27 +64,30 @@ export function createStudyWorkspace({ api, getNotes, noteTitle, view, go, setSe
     };
   }
 
-  async function startStudy(noteId, planId) {
-    const key=`${noteId}:${planId||''}`;
-    const intent=intents.get(key)||{requestId:crypto.randomUUID(),pending:null};
-    if(intent.pending)return intent.pending;
-    intents.set(key,intent);
-    intent.pending=(async()=>{
-      const sequence=view().sequence;
-      const note=await api.get(endpoint('notes',noteId)),readiness=await readReadiness(note);
-      if(sequence!==view().sequence)return;
-      if(!readiness.ready){showHelp(note,readiness);return;}
-      try {
-        const session=await api.post('/api/study/start',{noteId,...(planId?{planId}:{}),requestId:intent.requestId});
-        if(sequence===view().sequence)await go(`study/${session.id}`);
-        intents.delete(key);
-      } catch(error) {
-        if(sequence!==view().sequence)return;
-        if(error.code==='NOTE_UNAVAILABLE'){await prepareLearning(noteId);return;}
+  function startStudy(noteId, planId, { topicId, mistakeId, dialog } = {}) {
+    const sequence = view().sequence, library = api.getContext().version;
+    const current = () => sequence === view().sequence && library === api.getContext().version
+      && (!dialog || (dialog.isConnected && dialog.open));
+    const input = { noteId, ...(planId ? { planId } : {}), ...(topicId ? { topicId } : {}), ...(mistakeId ? { mistakeId } : {}) };
+    return submitStart(input, async submit => {
+      if (!topicId && !mistakeId) {
+        const note = await api.get(endpoint('notes', noteId));
+        if (!current()) return;
+        const readiness = await readReadiness(note);
+        if (!current()) return;
+        if (!readiness.ready) { showHelp(note, readiness); return; }
+      }
+      let session;
+      try { session = await submit(); }
+      catch (error) {
+        if (!current()) return;
+        if (!topicId && !mistakeId && error.code === 'NOTE_UNAVAILABLE') return prepareLearning(noteId);
         throw error;
       }
-    })();
-    try{return await intent.pending;}finally{intent.pending=null;}
+      if (!current()) return;
+      dialog?.close();
+      return go(`study/${session.id}`);
+    });
   }
   async function readReadiness(note) {
     const data=await api.get(endpoint('notes',note.id,'evidence'));

@@ -1,3 +1,5 @@
+import { createRestoreSelection } from '../public/restore-selection.mjs';
+import { createStudyStarter } from '../public/study-start.mjs';
 import { loadLegacyUi } from './fixtures/legacy-ui.mjs';
 import assert from 'node:assert/strict';
 import { readFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
@@ -353,7 +355,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat, savedSession = 
   };
   document.createTextNode = value => { const node = new Element('text'); node.textContent = value; return node; };
   const context = vm.createContext({
-    testAndSaveCapability, localCheckStatus, callFailureReason, AbortController, setTimeout, clearTimeout, setInterval() {}, clearInterval() {}, api, document, request: async () => ({ uploads: [] }), uploadAttachment: (...args) => api.uploadAttachment(...args), initSidebar, createProcessFeedback, parseSourceFile, TextDecoder, Node: Element, URL, Intl: Object.assign(Object.create(Intl), { DateTimeFormat: dateTimeFormat }), Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => `request-ui-${++browserRequestSequence}` },
+    createStudyStarter, testAndSaveCapability, localCheckStatus, callFailureReason, AbortController, setTimeout, clearTimeout, setInterval() {}, clearInterval() {}, api, document, request: async () => ({ uploads: [] }), uploadAttachment: (...args) => api.uploadAttachment(...args), initSidebar, createProcessFeedback, parseSourceFile, TextDecoder, Node: Element, URL, Intl: Object.assign(Object.create(Intl), { DateTimeFormat: dateTimeFormat }), Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => `request-ui-${++browserRequestSequence}` },
     FormData: class {
       constructor(form) { this.form = form; }
       entries() { return descendants(this.form).filter(node => node.name && !node.disabled && ['input', 'textarea', 'select'].includes(node.tagName)).map(node => [node.name, String(node.tagName === 'select' ? node.children.find(option => option.selected)?.value || '' : node.value)]); }
@@ -368,6 +370,8 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat, savedSession = 
     '\ncreateFilePicker = async (_input, options) => { api.onImagePicker?.(options); return { getFiles: () => [] }; };\nthis.attachmentUrl = (id, asset, download = false) => "/api/notes/" + id + "/attachments?asset=" + asset + (download ? "&download=1" : "");', context);
   loadLegacyUi(context);
   vm.runInContext('\n' + discoverySource + '\n' + ('const renderMarkdown = (() => {\n' + markdownSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn renderMarkdown;\n})();') + '\nconst createMarkdownEditor = (() => {\n' + editorSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn createMarkdownEditor;\n})();\n' + knowledgeViewSource + '\n' + sourceMapSource + '\n' + relatedSourceUi + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { attachModelDiscovery, renderSourceGroupDrawer, conversationReading, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
+  context.createRestoreSelection = createRestoreSelection;
+  context.app.dataPanel = vm.runInContext('dataPanel', context);
   context.app.beginStudy = vm.runInContext('beginStudy', context);
   context.app.mcpSettingsPanel = vm.runInContext('mcpSettingsPanel', context);
   context.app.callHistoryPanel = vm.runInContext('callHistoryPanel', context);
@@ -2250,6 +2254,46 @@ test('capture accepts blank titles independently of decomposition and explains l
 });
 
 
+for (const change of ['page', 'drawer', 'space']) test(`late saved study start leaves the current ${change} untouched`, async () => {
+  const response = Promise.withResolvers(), requests = [];
+  const library = { practiceId: '', version: 0 };
+  const child = { id: 'child', title: '合成知识', kind: 'knowledge', body: '合成正文', meta: { stage: 'learning' } };
+  const source = { id: 'source', kind: 'source', title: '合成原文', body: '合成内容', meta: {}, children: [child] };
+  const app = browser({
+    getContext: () => library, note: async () => source,
+    startStudy(input) { requests.push(plain(input)); return response.promise; },
+  });
+  await app.openNote(source.id);
+  const control = findButton(app.refs.drawerBody, '开始学习');
+  const start = click(control);
+  const previous = app.state.currentStudy;
+  let draft;
+  if (change === 'space') {
+    library.practiceId = 'practice-other'; library.version++;
+  } else if (change === 'drawer') {
+    app.renderNoteEditor(source);
+    draft = descendants(app.refs.drawerBody).find(node => node.tagName === 'textarea' && node.name === 'body');
+  } else {
+    await app.navigate('capture');
+    draft = descendants(app.refs.main).find(node => node.tagName === 'textarea' && node.name === 'body');
+  }
+  if (change !== 'space') { assert.ok(draft); draft.value = '尚未保存的新输入'; }
+  const view = app.state.view, page = app.refs.main.children[0], drawer = app.refs.drawerBody.children[0];
+  const open = app.refs.drawer.classList.contains('is-open');
+  response.resolve({ id: 'saved-on-server', noteId: child.id, status: 'reading', turns: [], material: child.body });
+  // Check before awaiting navigation: the regression can open a discard dialog on the new draft.
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(app.state.currentStudy, previous);
+  await start;
+  assert.equal(requests.length, 1);
+  assert.equal(app.state.view, view);
+  assert.equal(app.refs.main.children[0], page);
+  assert.equal(app.refs.drawerBody.children[0], drawer);
+  assert.equal(app.refs.drawer.classList.contains('is-open'), open);
+  if (draft) assert.equal(draft.value, '尚未保存的新输入');
+  assert.equal(control.disabled, false);
+});
+
 test('source drawer start blocks double clicks and other entries until navigation settles, then permits a new intent', async () => {
   let resolveStart, resolveRead;
   const requests = [];
@@ -2827,4 +2871,64 @@ test('floating source reader Escape closes only the top reader and retains drawe
   assert.equal(event.prevented, true);
   await app.document.events.keydown({ key: 'Escape' });
   assert.equal(app.refs.drawer.classList.contains('is-open'), false, 'a later Escape may close the drawer normally');
+});
+
+test('restore preview follows the selected file across delayed reads, previews, confirmation and panel changes', async () => {
+  const gates = [], calls = [], scope = { practiceId: '', version: 0 };
+  const app = browser({ getContext: () => scope, restore: body => {
+    calls.push(plain(body));
+    const gate = Promise.withResolvers(); gates.push(gate); return gate.promise;
+  } });
+  const panel = app.dataPanel(), input = descendants(panel).find(n => n.type === 'file');
+  input.isConnected = true;
+  const preview = findButton(panel, '先预览恢复');
+  const select = file => { input.files = [file]; return input.events.change(); };
+  const file = name => ({ name, text: async () => JSON.stringify({ name }) });
+  const first = Promise.withResolvers();
+  const oldRead = select({ name: 'A', text: () => first.promise });
+  assert.equal(preview.disabled, true);
+  await select(file('B')); first.resolve('{"name":"A"}'); await oldRead;
+  const oldPreview = click(preview);
+  assert.deepEqual(calls[0], { backup: { name: 'B' }, preview: true });
+  await select(file('C')); const nextPreview = click(preview);
+  gates[1].resolve({ token: 'token-C' }); await nextPreview;
+  const applyC = findButton(panel, '确认恢复');
+  gates[0].resolve({ token: 'token-B' }); await oldPreview;
+  assert.equal(findButton(panel, '确认恢复'), applyC);
+
+  for (const change of ['file', 'closed', 'space']) {
+    if (change !== 'file') {
+      await select(file(change)); const pending = click(preview);
+      gates.at(-1).resolve({ token: 'test-' + change }); await pending;
+    }
+    const confirming = click(findButton(panel, '确认恢复'));
+    const ok = findButton(app.document.body, '确认恢复');
+    if (change === 'file') await select(file('D'));
+    if (change === 'closed') input.isConnected = false;
+    if (change === 'space') { scope.practiceId = 'other'; scope.version++; }
+    await click(ok); await confirming;
+    assert.equal(calls.filter(call => !call.preview).length, 0);
+    input.isConnected = true;
+  }
+});
+
+test('a late restore completion leaves the newly previewed backup intact', async () => {
+  const writes = [], done = Promise.withResolvers();
+  const app = browser({
+    restore: async body => {
+      if (body.preview) return { token: 'token-' + body.backup.name };
+      writes.push(plain(body)); return done.promise;
+    },
+    bootstrap: async () => ({ jobs: [] }),
+  });
+  const panel = app.dataPanel(), picker = descendants(panel).find(n => n.type === 'file');
+  picker.isConnected = true;
+  const select = async name => { picker.files = [{ text: async () => JSON.stringify({ name }) }]; await picker.events.change(); await click(findButton(panel, '先预览恢复')); };
+  await select('A');
+  const restoring = click(findButton(panel, '确认恢复'));
+  await click(findButton(app.document.body, '确认恢复'));
+  await select('B'); const applyB = findButton(panel, '确认恢复');
+  done.resolve({ ok: true }); await restoring;
+  assert.deepEqual(writes, [{ backup: { name: 'A' }, preview: false, token: 'token-A' }]);
+  assert.equal(findButton(panel, '确认恢复'), applyB);
 });

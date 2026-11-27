@@ -1,24 +1,17 @@
-import { createLibraryPreferences } from './library-preferences.mjs';
 import { escape as e, markdown } from './markdown.mjs';
-import { $, $$, icon, button as btn, routeButton as link, field, area, heading, jobState, modal, confirm, busy, notify, list, select, details, readable, facts, paginate } from './ui.mjs';
+import { $, $$, button as btn, routeButton as link, field, area, heading, jobState, modal, confirm, busy, notify, list, select, details, readable, facts, paginate } from './ui.mjs';
 import { endpoint } from './api.mjs';
 import { evidenceHTML } from './learning-display.mjs';
-import { kind, stage, kindOptions, stageOptions, quickKindOptions } from './classification.mjs';
+import { knowledgeRow, recommendationsHTML } from './knowledge-display.mjs';
 
 export function createParity(ctx) {
   const {api,state,go,refreshBoot,formModal,submit,watchForm}=ctx;
-  const topicIntents=new Map();
-  const libraryPreferences=createLibraryPreferences();
   const title=id=>list(state.boot?.notes).find(n=>n.id===id)?.title||id;
   const refresh=async()=>{await refreshBoot();if(!state.dirty)await go(state.route,{force:true,replace:true});};
-  const cards=notes=>notes.map(n=>`<article class="knowledge-row"><div><h3>${e(n.title)}</h3><p>${e(kind(n.kind))} · ${e(stage(n.meta?.stage))}</p></div>${link('阅读 ↗',`read/${n.id}`,'text-button')}</article>`).join('');
   async function relations() {
     const [data,suggestions]=await Promise.all([api.get('/api/relations'),api.get('/api/recommendations')]);
     return {html:heading('MAKE A CONNECTION','让想法彼此照亮。','联系与整理都是建议，由你决定是否采用。',link('回到检索','search','text-button'))+
-      `<div class="actions">${btn('发现本地联系','discover-local','secondary')}${btn('用 AI 发现联系','discover-ai','text-button')}</div><section class="recent"><h2>知识之间的联系</h2><p class="form-note">尚有 ${Number(data.deferredCount)||0} 条建议待逐批审阅。</p>${[...list(data.relations),...list(data.candidates)].map(r=>`<article class="parity-card"><h3>${e(title(r.fromId))} → ${e(title(r.toId))}</h3>${facts([['类型',r.type],['关系',r.label||r.explanation],['用途',r.use||r.useCase||r.purpose],['边界',r.boundary||r.boundaries||r.condition],['理由',r.reason||r.rationale],['状态',r.state]])}${details('完整关系信息',`<pre class="parity-json">${e(JSON.stringify(r,null,2))}</pre>`)}<div class="actions">${r.state==='accepted'?btn('移除关系','relation-action','text-button',`data-id="${e(r.id)}" data-value="remove"`):btn('接受','relation-action','secondary',`data-id="${e(r.id)}" data-value="accept"`)+btn('拒绝','relation-action','text-button',`data-id="${e(r.id)}" data-value="reject"`)}</div></article>`).join('')||'<p class="empty">还没有待审阅的联系。</p>'}</section>${suggestionHTML(suggestions)}${details('AI 整理报告',cards(list(data.reports)))}`};
-  }
-  function suggestionHTML(data) {
-    return `<section class="recent"><h2>知识使用建议</h2><p class="form-note">${e(data.summary||'')}</p>${list(data.suggestions).map(s=>`<article class="parity-card"><h3>${e(s.title)}</h3><p>${e(s.reason)}</p>${details('查看依据',list(s.signals).map(x=>`<p>${e(readable(x))}</p>`).join(''))}<div class="actions">${btn('处理建议','recommendation','text-button',`data-id="${e(s.id)}" data-value="accept"`)}${btn('暂不采用','recommendation','text-button',`data-id="${e(s.id)}" data-value="dismiss"`)}</div></article>`).join('')||'<p class="muted">暂时没有新的使用建议。</p>'}</section>`;
+      `<div class="actions">${btn('发现本地联系','discover-local','secondary')}${btn('用 AI 发现联系','discover-ai','text-button')}</div><section class="recent"><h2>知识之间的联系</h2><p class="form-note">尚有 ${Number(data.deferredCount)||0} 条建议待逐批审阅。</p>${[...list(data.relations),...list(data.candidates)].map(r=>`<article class="parity-card"><h3>${e(title(r.fromId))} → ${e(title(r.toId))}</h3>${facts([['类型',r.type],['关系',r.label||r.explanation],['用途',r.use||r.useCase||r.purpose],['边界',r.boundary||r.boundaries||r.condition],['理由',r.reason||r.rationale],['状态',r.state]])}${details('完整关系信息',`<pre class="parity-json">${e(JSON.stringify(r,null,2))}</pre>`)}<div class="actions">${r.state==='accepted'?btn('移除关系','relation-action','text-button',`data-id="${e(r.id)}" data-value="remove"`):btn('接受','relation-action','secondary',`data-id="${e(r.id)}" data-value="accept"`)+btn('拒绝','relation-action','text-button',`data-id="${e(r.id)}" data-value="reject"`)}</div></article>`).join('')||'<p class="empty">还没有待审阅的联系。</p>'}</section>${recommendationsHTML(suggestions)}${details('AI 整理报告',list(data.reports).map(knowledgeRow).join(''))}`};
   }
   async function openTopic(id) {
     const topic=list((await api.get('/api/topics')).topics).find(t=>t.id===id);if(!topic)throw Error('学习包已删除，请刷新。');
@@ -74,33 +67,6 @@ export function createParity(ctx) {
     const d=modal('Obsidian 链接更新预览',`${p.conflict?`<p class="notice">${e(readable(p.conflict))}</p>`:''}<pre class="parity-json">${e(JSON.stringify(p,null,2))}</pre>${btn('确认更新托管链接','confirm-links','primary',p.conflict||!p.changed?'disabled':'')}`,{wide:true});
     d.querySelector('[data-action="confirm-links"]').onclick=ev=>busy(ev.currentTarget,async()=>{await api.post(endpoint('notes',id,'links-sync'),{expectedHash:p.expectedHash});d.close();await refresh();notify('托管链接已更新。');});
   }
-  async function library() {
-    const preferences=libraryPreferences.read();
-    const data=await api.get('/api/library'),recs=await api.get('/api/recommendations');
-    const notes=[...new Map([...list(data.groups).flatMap(g=>[g.source,...list(g.children)]),...list(data.standalone)].map(n=>[n.id,n])).values()].sort((a,b)=>String(b.updatedAt||'').localeCompare(String(a.updatedAt||'')));
-    return {html:heading('YOUR GROWING LIBRARY','让每一个想法，有处可寻。',`${notes.filter(n=>n.kind==='source').length} 份原文 · ${notes.filter(n=>n.kind==='knowledge').length} 条知识，慢慢长成自己的理解。`,link(`${icon('plus')} 收集资料`,'capture','primary'))+`<div class="library-toolbar"><div class="segmented" aria-label="内容类型">${quickKindOptions.map(([value,label])=>btn(label,'library-filter','',`data-kind="${value}" aria-pressed="${value===preferences.kind}"`)).join('')}</div><label class="inline-search">${icon('search')}<input name="libraryQuery" value="${e(preferences.q)}" type="search" placeholder="在这些想法里找一找" aria-label="筛选知识库"></label></div>${details('筛选与分组',`<div class="form-grid">${select('类别','libraryKind',kindOptions,preferences.kind)}${select('学习状态','libraryStage',stageOptions,preferences.stage)}</div><label class="check"><input type="checkbox" name="sourceGroups" ${preferences.grouped?'checked':''}> 按原文分组，展开子知识</label>`,preferences.optionsOpen).replace('<details ', '<details data-library-options ')}<div id="parity-library"></div>${details('知识使用建议',suggestionHTML(recs),preferences.adviceOpen).replace('<details ', '<details data-library-advice ')}`,
-      bind(){const host=$('#parity-library'),groups=list(data.groups),standalone=list(data.standalone);
-        const draw=()=>{libraryPreferences.update({q:$('[name="libraryQuery"]').value,kind:$('[name="libraryKind"]').value,stage:$('[name="libraryStage"]').value,grouped:$('[name="sourceGroups"]').checked});const q=$('[name="libraryQuery"]').value.trim().toLowerCase(),k=$('[name="libraryKind"]').value,s=$('[name="libraryStage"]').value;
-          const matches=n=>(!k||n.kind===k)&&(!s||n.meta?.stage===s)&&(!q||`${n.title} ${n.body} ${n.meta?.topic}`.toLowerCase().includes(q));
-          $$('[data-action="library-filter"]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.kind===k)));
-          const grid=items=>`<div class="library-grid">${items.map(ctx.noteCard).join('')}</div>`;
-          host.innerHTML=($('[name="sourceGroups"]').checked?groups.filter(g=>matches(g.source)||list(g.children).some(matches)).map(g=>`<section class="parity-source-group">${cards([g.source])}${details(`${list(g.children).length} 条子知识`,grid(list(g.children).filter(n=>!q&&!k&&!s||matches(n))),Boolean(q||k||s))}</section>`).join('')+grid(standalone.filter(matches)):grid(notes.filter(matches)));
-          if(!host.querySelector('article'))host.innerHTML='<p class="empty">没有符合条件的资料。</p>';
-        };for(const [selector,key] of [['[data-library-options]','optionsOpen'],['[data-library-advice]','adviceOpen']]){const panel=$(selector);panel.addEventListener('toggle',()=>{if(panel.isConnected)libraryPreferences.update({[key]:panel.open});});}['libraryQuery','libraryKind','libraryStage','sourceGroups'].forEach(n=>$(`[name="${n}"]`).addEventListener('input',draw));$$('[data-action="library-filter"]').forEach(b=>b.onclick=()=>{$('[name="libraryKind"]').value=b.dataset.kind;draw();});draw();}};
-  }
-  async function search() {
-    const sources=list(state.boot.notes).filter(n=>n.kind==='source');
-    return {html:heading('CONNECT THE DOTS','找回一个想法，发现新的联系。','检索结果会保留来源与实际采用的检索方式。',link('知识联系与建议 ↗','relations','text-button'))+
-      `<form id="parity-search" class="search-composer"><div>${icon('search')}<input name="q" type="search" required placeholder="你在找什么？" aria-label="搜索内容"><button class="primary" type="submit">搜索 ${icon('arrow')}</button></div>${details('检索方式与筛选范围',`<div class="form-grid">${select('检索方式','mode',[['keyword','本地文字'],['semantic','纯语义'],['hybrid','语义与文字']])}${select('类别','kind',kindOptions)}${select('学习状态','stage',stageOptions)}</div><label class="check"><input type="checkbox" name="cloud"> 允许本次查询发给已配置的语义服务（可能计费）</label><div class="form-grid">${select('来源','source',[['','全部来源'],...sources.map(n=>[n.id,n.title])])}${field('主题','topic')}${field('起始日期','from',{type:'date'})}${field('结束日期','to',{type:'date'})}</div>`)}</form><div id="parity-results"></div>`,
-      bind(){const form=$('#parity-search');let revision=0,params,cursor;
-        const sync=()=>{[...form.elements.mode.options].forEach(o=>o.disabled=o.value!=='keyword'&&!form.elements.cloud.checked);if(!form.elements.cloud.checked)form.elements.mode.value='keyword';};sync();form.elements.cloud.onchange=sync;
-        const render=async(next=false)=>{const own=++revision,route=state.sequence;const data=await api.get('/api/search?'+new URLSearchParams({...params,...(next&&cursor?{cursor}:{})}));if(own!==revision||route!==state.sequence)return;cursor=data.nextCursor;const host=$('#parity-results');
-          if(!next)host.innerHTML='';host.querySelector('[data-more]')?.remove();
-          host.insertAdjacentHTML('beforeend',list(data.results).map(n=>`<article class="search-result"><h2>${link(e(n.title),`read/${n.id}`,'result-title')}</h2><p class="preserve-text">${e(n.snippet||'')}</p>${facts([['定位',n.location],['检索来源',n.via]])}${details('核验与来源',evidenceHTML(n.meta?.evidence||[],n.limitations))}</article>`).join('')||'<p class="empty">未找到相关资料。</p>');
-          host.insertAdjacentHTML('beforeend',details('本次检索诊断',`<pre class="parity-json">${e(JSON.stringify(data.diagnostics,null,2))}</pre>`)+(cursor?'<button class="text-button" data-more>加载下一页</button>':''));
-          if(cursor)host.querySelector('[data-more]').onclick=ev=>busy(ev.currentTarget,()=>render(true));
-        };submit(form,async values=>{sync();params={...values,mode:form.elements.mode.value,privacy:form.elements.cloud.checked?'cloud':'local',limit:20};delete params.cloud;await render();});}};
-  }
   async function jobs() {
     const rows=list((await api.get('/api/jobs')).jobs);
     return {html:heading('THINGS IN PROGRESS','每一步，都有迹可循。','筛选完整任务记录，重试可能产生外部调用。',btn('刷新进度','reload','secondary'))+`<div class="parity-filters">${select('状态','jobFilter',[['','全部状态'],...['queued','running','waiting','failed','done','cancelled'].map(s=>[s,jobState(s)])])}${field('查找任务','jobQuery',{type:'search'})}</div><div id="parity-jobs"></div>`,bind(){const redraw=paginate($('#parity-jobs'),rows,j=>`<article class="job-row"><span class="job-state">${e(jobState(j.state))}</span><div><h2>${e(j.type)}</h2><p>${e(j.error||j.message||'本机已保留处理记录。')}</p><small>${e(j.createdAt||'')}</small></div><div>${['queued','running','waiting'].includes(j.state)?btn('取消任务','cancel-job','text-button',`data-id="${e(j.id)}"`):''}${['failed','waiting','cancelled'].includes(j.state)?btn('重新尝试','retry-job','text-button',`data-id="${e(j.id)}"`):''}</div></article>`,{filter:j=>(!$('[name="jobFilter"]').value||j.state===$('[name="jobFilter"]').value)&&`${j.type} ${j.error||''} ${j.message||''}`.includes($('[name="jobQuery"]').value)});$('[name="jobFilter"]').onchange=redraw;$('[name="jobQuery"]').oninput=redraw;}};
@@ -141,7 +107,6 @@ export function createParity(ctx) {
       paginate(d.querySelector('[data-deleted-versions]'),list(data.versions),n=>`<article class="parity-card"><p>${e(n.createdAt)}</p>${details('版本正文',`<pre class="preserve-text">${e(n.raw)}</pre>`)}${btn('恢复这个版本','version-restore','secondary',`data-id="${e(id)}" data-version="${e(n.versionId)}"`)}</article>`);
     }
     else if(a==='topic-edit'||a==='topic-copy'){control.closest('dialog')?.close();await editTopic(id,a==='topic-copy');}
-    else if(a==='topic-next'){const key=`${id}:${control.dataset.note}`,requestId=topicIntents.get(key)||crypto.randomUUID();topicIntents.set(key,requestId);const s=await api.post('/api/study/start',{noteId:control.dataset.note,topicId:id,requestId});topicIntents.delete(key);control.closest('dialog')?.close();await go(`study/${s.id}`);}
     else if(a==='topic-toggle'){await api.post(endpoint('topics',id,'action'),{action:v});control.closest('dialog')?.close();await refresh();await openTopic(id);}
     else if(a==='metadata')await metadata(id);
     else if(a==='versions')await versions(id);
@@ -158,5 +123,5 @@ export function createParity(ctx) {
     else if(a==='resume-note'){const paused=list(state.boot.today?.items).find(p=>p.noteId===id&&p.state==='pause');if(paused)await api.post(endpoint('today',paused.id,'action'),{action:'resume'});else{const s=await api.get('/api/settings');await api.put('/api/settings',{pausedIds:list(s.pausedIds).filter(n=>n!==id)});}await refresh();}
     else return false;return true;
   }
-  return {relations,openTopic,editTopic,metadata,versions,merge,links,library,search,jobs,history,draft,handle};
+  return {relations,openTopic,editTopic,metadata,versions,merge,links,jobs,history,draft,handle};
 }
