@@ -1,6 +1,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync, statSync } from 'node:fs';
 import { parse } from 'yaml';
+import { mobileBoundaryErrors } from './mobile-boundary.mjs';
 
 // Scan version-controlled files only: never inspect the user's Vault or secrets.
 const files = execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8' }).split('\0').filter(Boolean);
@@ -28,6 +29,7 @@ for (const file of files) {
 }
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
 const lock = parse(readFileSync('pnpm-lock.yaml', 'utf8'));
+errors.push(...mobileBoundaryErrors(files, pkg));
 for (const group of ['dependencies', 'devDependencies']) for (const [name, version] of Object.entries(pkg[group] || {})) {
   if (lock.importers['.'][group]?.[name]?.specifier !== version) errors.push(`${name}: lockfile mismatch`);
 }

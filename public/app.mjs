@@ -141,8 +141,6 @@ function historyReadingBody(note, version) {
   ]);
 }
 let onboarding = null;
-function isMobilePrototype() { return api.runtime?.kind === "android-prototype"; }
-function mobileNotice() { return el("div", { class: "notice info", text: "Android 共用界面样机：可在手机保存、搜索、查看和编辑原文。资料仅存本机；学习、AI、同步和备份尚未接入，请只使用可丢弃的试用资料。" }); }
 const processFeedback = createProcessFeedback({
   getContext: () => api.getContext(), readJobs: () => api.jobStatuses(), notify: toast,
   onChange: changed => {
@@ -290,7 +288,6 @@ async function navigate(view, options = {}) {
 }
 
 function capabilityNotice() {
-  if (isMobilePrototype()) return mobileNotice();
   const capabilities = asObject(state.bootstrap?.capabilities);
   const aiReady = capabilities.ai ?? state.bootstrap?.settings?.ai?.enabled;
   if (aiReady) return null;
@@ -461,19 +458,17 @@ async function renderCapture() {
   const sourceForm = el("form", { class: "panel capture-form", dataset: { tour: "capture-form" } });
   const title = el("input", { name: "title", placeholder: "可留空，根据原文生成便于检索的标题" });
   const body = el("textarea", { name: "body", placeholder: "粘贴原文。系统会保留这份原始快照，不用摘要替代。", required: true, rows: 12 });
-  const bodyEditor = !isMobilePrototype() ? createMarkdownEditor(body) : null;
+  const bodyEditor = createMarkdownEditor(body);
   let fileDrafts = [], fileLoadVersion = 0, filesLoading = false, importing = false, saving = false;
   const process = el("input", { name: "process", type: "checkbox" });
   const research = el("input", { name: "research", type: "checkbox", disabled: true });
   const syncResearchOption = () => {
-    if (isMobilePrototype()) { process.checked = false; process.disabled = true; }
     research.disabled = !process.checked;
     if (research.disabled) research.checked = false;
   };
   process.addEventListener("change", syncResearchOption);
   // reset 事件在浏览器恢复默认值之前触发，等恢复完成后再同步依赖。
   sourceForm.addEventListener("reset", () => queueMicrotask(() => { bodyEditor?.setValue(body.defaultValue || ""); syncResearchOption(); }));
-  if (isMobilePrototype()) syncResearchOption();
   const titleField = field("标题（可选）", title, "留空会先使用原文片段作为标题；主动 AI 拆解时一同生成标题，也可手动填写。");
   titleField.classList.add("span-2");
   const bodyField = bodyEditor ? el("div", { class: "field" }, [el("span", { class: "field-label", text: "原文" }), bodyEditor,
@@ -536,10 +531,6 @@ async function renderCapture() {
     el("div", { class: "form-actions" }, [button("导入所选文件", { kind: "primary", disabled: true }), button("清空导入预览", { onClick: () => resetFileDrafts() })]),
   ]);
   const importButton = batchPanel.querySelector(".primary-button");
-  if (isMobilePrototype()) {
-    fileInput.disabled = true;
-    batchPanel.append(el("p", { class: "muted", text: "样机暂不支持文件导入，请先粘贴文本。" }));
-  }
   const syncImportButton = () => { importButton.disabled = filesLoading || importing || !fileDrafts.length; };
   function resetFileDrafts() {
     if (importing) return;
@@ -594,7 +585,7 @@ async function renderCapture() {
       if (JSON.stringify(importItems()) === JSON.stringify(items)) resetFileDrafts();
       await refreshBootstrap();
     } catch (error) { handleError(error); }
-    finally { importing = false; fileInput.disabled = isMobilePrototype(); syncImportButton(); }
+    finally { importing = false; fileInput.disabled = false; syncImportButton(); }
   });
 
   const flowPanel = el("section", { class: "panel soft" }, [
@@ -606,7 +597,7 @@ async function renderCapture() {
       step("4. 个人理解", "只有你的确认，才能形成正式的个人知识。", false),
     ]),
   ]);
-  const filesPanel = !isMobilePrototype() ? createFileImportPanel({ onSaved: () => refreshBootstrap(), onError: handleError }) : null;
+  const filesPanel = createFileImportPanel({ onSaved: () => refreshBootstrap(), onError: handleError });
   clear(refs.main).append(el("div", { class: "page-stack" }, [capabilityNotice(), el("div", { class: "split-layout capture-layout" }, [sourceForm, el("div", { class: "page-stack" }, [batchPanel, filesPanel, flowPanel])])]));
   bodyEditor?.mount(refs.main);
 }
@@ -680,7 +671,7 @@ async function renderLibrary() {
     visibleIds = new Set(asArray(data.matchingIds));
     for (const group of groups) if (visibleIds.has(group.source.id)) for (const child of asArray(group.children)) visibleIds.add(child.id);
   }
-  const advice = isMobilePrototype() ? mobileNotice() : await recommendationsPanel(visibleIds);
+  const advice = await recommendationsPanel(visibleIds);
   if (!current()) return;
   const page = el("div", { class: "page-stack" }, [
     conflictPanel,
@@ -895,8 +886,8 @@ function renderSourceGroupDrawer(source) {
   const headActions = el("div", { class: "form-actions" }, [
     button("全屏阅读原文", { onClick: () => openSourceReader(source) }),
     button("编辑原始资料", { kind: "primary", onClick: () => renderNoteEditor(source, { returnToSourceId: source.id }) }),
-    button("查看版本", { disabled: isMobilePrototype(), title: isMobilePrototype() ? "样机暂不支持查看版本" : "", onClick: () => renderHistory(source, { returnToSourceId: source.id }) }),
-    button("移入回收站", { kind: "danger", disabled: isMobilePrototype(), title: isMobilePrototype() ? "样机暂不支持删除" : "", onClick: () => deleteNote(source) }),
+    button("查看版本", { onClick: () => renderHistory(source, { returnToSourceId: source.id }) }),
+    button("移入回收站", { kind: "danger", onClick: () => deleteNote(source) }),
   ]);
   content.append(noteMeta(source), headActions);
   if (source.meta?.titlePending) content.append(el('p', { class: 'muted', text: '暂用原文片段作为标题，标题尚未生成。可手动编辑，或在主动 AI 拆解时生成。' }));
@@ -925,7 +916,6 @@ function renderSourceGroupDrawer(source) {
     ]),
     sourceReadingBody(source.body, 'original-body', '暂无原文', source),
   ]);
-  if (isMobilePrototype()) original.open = true;
   content.prepend(original);
   if (attachmentPanel(source)) content.append(attachmentPanel(source));
 
@@ -942,11 +932,6 @@ function renderSourceGroupDrawer(source) {
     ]),
   ]));
 
-  if (isMobilePrototype()) {
-    content.append(el("p", { class: "muted", text: "加工、核验和学习尚未迁移到手机，本次保存只保留原文。" }));
-    clear(refs.drawerBody).append(content);
-    return;
-  }
   content.append(el("section", { class: "panel soft group-process-actions" }, [
     sectionHeading("继续整理", "生成的拆解会继续归入这个窗口。"),
     el("div", { class: "form-actions" }, [
@@ -1174,8 +1159,8 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
   const title = el("input", { name: "title", value: note.title || "", required: true });
   const body = el("textarea", { name: "body", textContent: note.body || "", rows: 18, required: true });
   const imageUploads = [];
-  const imageControls = note.kind === "source" && !isMobilePrototype() ? imageInsertControls(body, imageUploads, { getNote: () => note }) : null;
-  const bodyEditor = !isMobilePrototype() ? createMarkdownEditor(body, { value: note.body || "", ...imageControls?.editorOptions }) : null;
+  const imageControls = note.kind === "source" ? imageInsertControls(body, imageUploads, { getNote: () => note }) : null;
+  const bodyEditor = createMarkdownEditor(body, { value: note.body || "", ...imageControls?.editorOptions });
   const editorValues = () => { const values = serializeForm(form); if (bodyEditor) values.body = bodyEditor.getValue(); if (imageControls) values.attachmentUploadIds = [...imageUploads]; return values; };
   const sourceFields = note.kind === "source" ? el("section", { class: "panel soft" }, [
     sectionHeading("来源信息", "补充或修正当前来源，不会改写最初收集快照"),
@@ -1219,9 +1204,6 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
     } })]),
   );
   let initialFields = editorValues();
-  if (isMobilePrototype()) {
-    for (const name of ["depth", "researchIntervalDays"]) form.querySelector(`[name="${name}"]`).disabled = true;
-  }
   let originalValues = JSON.stringify(editorValues()), saving = false;
   form.hasUnsavedChanges = () => JSON.stringify(editorValues()) !== originalValues;
   let confirmingDiscard = false;
@@ -1260,10 +1242,9 @@ function renderNoteEditor(note, { returnToSourceId = "" } = {}) {
     saving = true; submit.disabled = true;
     try {
       if (bodyEditor && !data.body.trim()) throw new Error("正文不能为空。");
-      if (!isMobilePrototype() && note.kind === "source" && (!Number.isInteger(Number(data.researchIntervalDays)) || Number(data.researchIntervalDays) < 1 || Number(data.researchIntervalDays) > 365)) throw new Error("核验有效天数应为 1–365 的整数。");
+      if (note.kind === "source" && (!Number.isInteger(Number(data.researchIntervalDays)) || Number(data.researchIntervalDays) < 1 || Number(data.researchIntervalDays) > 365)) throw new Error("核验有效天数应为 1–365 的整数。");
       const sourceMeta = note.kind === "source" ? { platform: data.platform || "", author: data.author || "", url: data.url || "", date: data.date || "", locator: data.locator || "", researchIntervalDays: Number(data.researchIntervalDays) } : {};
       const changedMeta = Object.fromEntries(Object.entries({ topic: data.topic, depth: data.depth, ...sourceMeta }).filter(([key]) => data[key] !== initialFields[key]));
-      if (isMobilePrototype()) for (const key of ["depth", "researchIntervalDays"]) delete changedMeta[key];
       const updated = await api.updateNote(note.id, { body: data.body, title: data.title, expectedHash: previousHash, meta: changedMeta,
         ...(imageControls ? { attachmentUploadIds: data.attachmentUploadIds } : {}) });
       if (!currentEditor(context, open)) return;
@@ -2993,10 +2974,6 @@ function conflictsPanel() {
 }
 
 async function renderCurrent() {
-  if (isMobilePrototype() && !["capture", "library"].includes(state.view)) {
-    clear(refs.main).append(emptyState("这项功能尚未迁移到手机", "当前样机支持原文收集、查看、搜索和编辑。", button("打开知识库", { onClick: () => navigate("library") })));
-    return;
-  }
   const renderers = { trash: () => renderRecycleBin({ main: refs.main, refresh: refreshBootstrap, onError: handleError, isActive: () => state.view === 'trash' }), today: renderToday, capture: renderCapture, library: renderLibrary, study: renderStudy, topics: renderTopics, discover: renderDiscover, output: renderOutput, system: renderSystem };
   await (renderers[state.view] || renderSystem)();
   onboarding?.rendered();
@@ -3202,18 +3179,10 @@ window.addEventListener("beforeunload", (event) => {
 async function init() {
   const [hashView, systemTab] = window.location.hash.slice(1).split("/");
   if (hashView === "system" && ["settings", "usage", "appearance", "jobs", "data", "diagnostics", "proposals", "conflicts"].includes(systemTab)) state.systemTab = systemTab;
-  setPage(pages[hashView] ? hashView : isMobilePrototype() ? "library" : "today");
-  if (isMobilePrototype()) {
-    document.documentElement.classList.add("android-prototype");
-    refs.nav.querySelectorAll("[data-view]").forEach(item => {
-      item.disabled = !["capture", "library"].includes(item.dataset.view);
-      if (item.disabled) item.title = "后续版本接入";
-    });
-    for (const id of ["onboarding-launcher", "onboarding-reset"]) { const control = document.querySelector(`#${id}`); if (control) { control.disabled = true; control.title = "新手引导尚未迁移到手机"; } }
-  }
+  setPage(pages[hashView] ? hashView : "today");
   try {
     await startSession();
-    if (!onboarding && !isMobilePrototype()) {
+    if (!onboarding) {
       const { createOnboarding } = await import("./onboarding.mjs");
       onboarding = createOnboarding({
         processStatus: noteId => processFeedback.status(noteId),
@@ -3240,7 +3209,7 @@ async function init() {
     }
     await refreshBootstrap();
     await renderCurrent();
-    if (!isMobilePrototype()) processFeedback.start();
+    processFeedback.start();
   } catch (error) {
     renderFailure(error, init);
   }

@@ -110,7 +110,7 @@ node --env-file=.env src/server.mjs
 
 ## 当前状态
 
-当前为 **v0.1.0 开发预览版**，主要面向本机单用户使用。具体功能覆盖与验收边界以 [需求覆盖](docs/COVERAGE.md) 和 [测试记录](docs/TEST_RESULTS.md) 为准。
+当前为开发预览版，主要面向本机单用户使用。具体功能覆盖与验收边界以 [需求覆盖](docs/COVERAGE.md) 和 [测试记录](docs/TEST_RESULTS.md) 为准。
 
 本地测试和受控模拟不能代表你的供应商已经接通。真实资料的联网核验、语义检索和教学反馈质量仍需单独验收。
 
@@ -132,7 +132,7 @@ node --env-file=.env src/server.mjs
 - [架构与接口](docs/ARCHITECTURE.md)
 - [产品目标与施工计划](docs/BUILD_PLAN_v1.md)
 - [2026-09-29 设计对齐记录](docs/DESIGN_ALIGNMENT_2026-09-29.md)
-- [Android 历史样机说明](docs/ANDROID_SHARED_UI.md)：保留历史基线，不作为当前移动端路线或设备验收的承诺。
+- [Android 历史样机说明](docs/ANDROID_SHARED_UI.md)：记录历史实现与验收，不作为当前网页仓库的构建入口。
 
 </details>
 
