@@ -1,5 +1,5 @@
 import { noteFolders as folders } from '../public/note-classification.mjs';
-import { hasInvalidSourceBinding } from '../public/source-membership.mjs';
+import { hasInvalidSourceBinding, sourceParentIds } from '../public/source-membership.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -386,6 +386,7 @@ export class Store {
   }
   outboundPrivacy(noteOrId) {
     const visited = new Set();
+    const missingLocalSource = this.missingLocalSourceCheck();
     const visit = (id, expectedHash) => {
       if (typeof id !== 'string' || !id) return 'local';
       if (visited.has(id)) return 'cloud';
@@ -400,7 +401,7 @@ export class Store {
         ({ meta, body } = parse(raw));
       } catch { return 'local'; }
       // Legacy privacy is retained in Markdown for rollback, but is no longer a material classification.
-      if ((meta.id !== undefined && meta.id !== id) || hasInvalidSourceBinding(meta)) return 'local';
+      if ((meta.id !== undefined && meta.id !== id) || hasInvalidSourceBinding(meta) || missingLocalSource(meta)) return 'local';
       const ids = meta.managedLinkIds ?? [], start = body.indexOf(linkStart), end = body.indexOf(linkEnd);
       if (!Array.isArray(ids) || ids.some(target => typeof target !== 'string' || !target)) return 'local';
       if (meta.managedLinksHash || ids.length || start !== -1 || end !== -1) {
@@ -545,6 +546,30 @@ export class Store {
     this.syncMirrors(); this.completeFileOperation(operation); return { deleted: true };
   }
   history(id) { this.assertAvailable(); return this.db.prepare('SELECT id as versionId,noteId,path,hash,raw,reason,createdAt FROM versions WHERE noteId=? ORDER BY createdAt DESC').all(id); }
+  missingLocalSourceCheck(currentNotesById) {
+    let current, removed;
+    const checked = new Map();
+    return meta => sourceParentIds({ meta }).some(id => {
+      if (currentNotesById?.has(id)) return false;
+      if (checked.has(id)) return checked.get(id);
+      let missing = false;
+      if (currentNotesById || !(current ??= this.db.prepare('SELECT 1 FROM notes WHERE id=?')).get(id)) {
+        // Both UI deletion and external removal record a version. A never-seen
+        // reference, or an active file conflict, is insufficient to prove removal.
+        removed ??= this.db.prepare(`SELECT path, raw FROM versions WHERE noteId=?
+          AND reason IN ('用户删除','文件移除或冲突隔离') ORDER BY createdAt DESC,rowid DESC LIMIT 1`);
+        const version = removed.get(id);
+        if (version && !this.conflicts.some(conflict => conflict.id === id || conflict.path === version.path || conflict.other === version.path)) {
+          try {
+            const original = parse(version.raw).meta;
+            missing = original.kind === 'source' && (original.id === undefined || original.id === id);
+          } catch { /* A corrupt historical version cannot establish the local identity. */ }
+        }
+      }
+      checked.set(id, missing);
+      return missing;
+    });
+  }
   deletedNotes() {
     this.scan();
     return this.records('deleted').flatMap(item=>{

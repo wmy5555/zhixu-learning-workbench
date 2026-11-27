@@ -6,10 +6,12 @@ export function createLifecycle(deps) {
   function recommendations() {
     const store = deps.store;
     store.scan();
-    const notes = store.list().filter(n => n.kind === 'knowledge' && n.meta.stage !== 'retired' && !n.meta.supersededBy && !hasInvalidSourceBinding(n.meta));
+    const all = store.list(), missingLocalSource = store.missingLocalSourceCheck(new Map(all.map(n => [n.id, n])));
+    const notes = all.filter(n => n.kind === 'knowledge' && n.meta.stage !== 'retired' && !n.meta.supersededBy
+      && !hasInvalidSourceBinding(n.meta) && !missingLocalSource(n.meta));
     const uses = store.records('uses').filter(u => u.actualUse === true);
     const evidence = store.records('studyEvidence');
-    const topicIds = new Set(store.list().filter(n => n.kind === 'topic' && !n.meta.paused).flatMap(n => n.meta.noteIds || []));
+    const topicIds = new Set(all.filter(n => n.kind === 'topic' && !n.meta.paused).flatMap(n => n.meta.noteIds || []));
     const suggestions = [];
     const add = (note, type, targetStage, reason, signals, extra = {}) => {
       const id = hash(JSON.stringify([note.id, note.hash, type, targetStage, signals, extra]));
@@ -17,7 +19,7 @@ export function createLifecycle(deps) {
       suggestions.push({ id, noteId: note.id, title: note.title, stage: note.meta.stage, targetStage, type, reason, signals, ...extra });
     };
     for (const n of notes) {
-      const limitations = deps.materialLimitations(n);
+      const limitations = deps.materialLimitations(n, missingLocalSource);
       const used = uses.filter(u => u.noteId === n.id);
       const learned = evidence.filter(e => e.noteId === n.id);
       const review = store.get('reviews', n.id);

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createService } from '../src/service.mjs';
-import { sourceBindingWarning } from '../public/source-membership.mjs';
+import { missingLocalSourceWarning, sourceBindingWarning } from '../public/source-membership.mjs';
 import { createReaderData } from '../public/web/reader-data.mjs';
 
 function library(t, aiOverride) {
@@ -172,4 +172,97 @@ test('background discovery still covers valid material and affected structural a
   assert.match(prompts[0], /正常发现乙/);
   assert.ok(prompts.every(prompt => !prompt.includes('隔离材料标记')));
   assert.equal(service.requestSourceStructure(other.id).state, 'queued');
+});
+
+test('confirmed local source removals isolate only their existing references and recovery resumes planning', async t => {
+  const prompts = [];
+  const { service, vaultDir } = library(t, {
+    async generate({ prompt }) { prompts.push(prompt); return { text: JSON.stringify({ findings: [], relations: [] }) }; },
+  });
+  const store = service.store;
+  const source = title => store.create({ kind: 'source', title, body: '可核对的合成原文 ' + title });
+  const appSource = source('由网页删除'), fileSource = source('由外部文件删除'), live = source('仍在库的旧来源'), edited = source('保持学习的改版原文');
+  const explicit = note(service, '显式输入待恢复', appSource);
+  const legacy = note(service, '旧键输入待恢复', null, { processKey: key(appSource, '旧顺序') });
+  const mixed = note(service, '多来源输入待恢复', live, { sources: [ref(live), ref(appSource)], processKey: key(live) });
+  const external = note(service, '外部移除输入待恢复', fileSource);
+  const historical = note(service, '合法历史排序仍可学', null, { processKey: key(live, '旧顺序') });
+  const revised = note(service, '改版输入仍可学', edited, { processKey: key(edited) });
+  const unknown = note(service, '外部来源从未收录仍可学', null, { sources: [{ id: 'never-indexed-external', role: 'input' }], url: 'https://example.invalid/reference' });
+  const independent = note(service, '无关联的知识仍可学', null);
+  const before = service.today();
+  assert.equal(pendingIds(before).size, 8);
+
+  store.delete(appSource.id, appSource.hash);
+  const file = path.join(vaultDir, fileSource.path), raw = fs.readFileSync(file);
+  fs.unlinkSync(file);
+  service.editNote(edited.id, { expectedHash: edited.hash, body: edited.body + '\n合成修订' });
+  assert.equal(store.get('deleted', fileSource.id), null, 'an external removal has history without an application tombstone');
+
+  const prepared = store.db.prepare.bind(store.db), probed = [];
+  const probes = t.mock.method(store.db, 'prepare', sql => {
+    const statement = prepared(sql);
+    if (!sql.includes('FROM versions WHERE noteId=?')) return statement;
+    return { get(id) { probed.push(id); return statement.get(id); } };
+  });
+  const after = service.today();
+  probes.mock.restore();
+  assert.deepEqual(new Set(probed), new Set([appSource.id, fileSource.id, 'never-indexed-external']));
+  assert.equal(probed.length, 3, 'one indexed history probe per distinct missing identity, even when several notes share one source');
+  assert.deepEqual(pendingIds(after), new Set([historical.id, revised.id, unknown.id, independent.id]));
+  for (const damaged of [explicit, legacy, mixed, external]) {
+    const unavailable = after.unavailable.find(item => item.noteId === damaged.id);
+    assert.equal(unavailable.reason, missingLocalSourceWarning);
+    assert.equal(unavailable.sourceId, undefined);
+    assert.equal(store.get('plans', before.items.find(item => item.noteId === damaged.id).id).state, 'paused');
+    assert.ok(service.noteEvidence(damaged.id).limitations.includes(missingLocalSourceWarning));
+    assert.equal(store.outboundPrivacy(service.getNote(damaged.id)), 'local');
+    assert.match(service.readPublicNote(damaged.id).body, /原样可读的末段/);
+  }
+  assert.match(after.items.find(item => item.noteId === revised.id).materialWarnings.join(), /原始资料已修改/);
+  assert.deepEqual(service.noteEvidence(unknown.id).limitations, []);
+  assert.deepEqual(service.noteEvidence(mixed.id).evidence.map(item => [item.sourceId, item.excerpt]), [[live.id, live.body]]);
+  assert.equal(service.readPublicNote(live.id).body, live.body);
+  const boot = service.bootstrap(), reader = createReaderData({
+    getContext: () => ({ version: 0, revision: 0 }),
+    get: async route => route === '/api/relations' ? { relations: [] }
+      : route.endsWith('/evidence') ? service.noteEvidence(mixed.id) : service.readPublicNote(mixed.id),
+  });
+  for (const reading of [reader.peek(mixed.id, boot), await reader.load(mixed.id, boot)]) {
+    assert.deepEqual(reading.readiness.warnings, [missingLocalSourceWarning]);
+    assert.equal(reading.readiness.ready, true);
+    assert.equal(reading.readiness.sourceId, undefined);
+    assert.match(reading.note.body, /原样可读的末段/);
+  }
+  assert.equal(service.getNote(mixed.id).meta.researchLimitations, undefined);
+  assert.throws(() => service.requestSourceStructure(live.id), { code: 'SOURCE_BINDING_INVALID', message: missingLocalSourceWarning });
+
+  await service.tick();
+  const localReport = service.listNotes({ kind: 'report' })[0];
+  assert.match(localReport.body, /合法历史排序仍可学|无关联的知识仍可学/);
+  for (const damaged of [explicit, legacy, mixed, external]) assert.ok(!localReport.body.includes(damaged.title));
+  service.updateSettings({ ai: { enabled: true, model: 'synthetic', baseUrl: 'https://example.invalid/v1' } });
+  const cloud = service.queue('discover', { useAI: true }, 'synthetic-discovery-after-removal');
+  await service.runJobs();
+  assert.equal(store.get('jobs', cloud.id).state, 'done');
+  assert.match(prompts[0], /无关联的知识仍可学/);
+  for (const damaged of [explicit, legacy, mixed, external]) assert.ok(prompts.every(prompt => !prompt.includes(damaged.title)));
+
+  const localStudy = service.startStudy({ noteId: explicit.id, requestId: 'synthetic-study-with-missing-source' });
+  assert.equal(localStudy.privacy, 'local');
+  assert.ok(localStudy.materialWarnings.includes(missingLocalSourceWarning));
+  const saved = service.answerStudy(localStudy.id, { answer: '原件恢复前的本人本地回答', requestId: 'synthetic-answer-before-source-recovery' });
+  const beforeRestore = prompts.length;
+
+  const removedVersion = store.history(appSource.id).find(item => item.reason === '用户删除');
+  store.restoreVersion(appSource.id, removedVersion.versionId);
+  fs.writeFileSync(file, raw);
+  const resumed = service.today();
+  assert.equal(pendingIds(resumed).size, 8);
+  assert.equal(service.readPublicNote(fileSource.id).body, fileSource.body);
+  assert.equal(service.readPublicNote(appSource.id).body, appSource.body);
+  await service.runJobs();
+  assert.equal(store.get('jobs', saved.pendingJobId).code, 'PRIVACY_LOCAL');
+  assert.equal(service.session(localStudy.id).turns[0].answer, '原件恢复前的本人本地回答');
+  assert.equal(prompts.length, beforeRestore);
 });

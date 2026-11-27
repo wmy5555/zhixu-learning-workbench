@@ -1,6 +1,7 @@
 const invalidProcessKey = Object.freeze({ invalid: true });
 const isSourceId = id => typeof id === 'string' && /^[a-zA-Z0-9_-]{1,100}$/.test(id);
 export const sourceBindingWarning = '来源关联损坏，请先核对原始资料和来源记录。';
+export const missingLocalSourceWarning = '本地原始资料已删除，请恢复原文或修正来源关联。';
 
 export function processKeyBinding(value) {
   if (value == null || value === '') return null;

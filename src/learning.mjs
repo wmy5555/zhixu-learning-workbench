@@ -1,5 +1,5 @@
 import { hasUnknownClassification, isStudyStage, learningDepthNames } from '../public/note-classification.mjs';
-import { hasInvalidSourceBinding, reprocessingSourceId, sourceBindingWarning } from '../public/source-membership.mjs';
+import { hasInvalidSourceBinding, missingLocalSourceWarning, reprocessingSourceId, sourceBindingWarning } from '../public/source-membership.mjs';
 import { randomUUID } from 'node:crypto';
 import { hash, fail } from './core.mjs';
 import { outboundText } from './outbound-text.mjs';
@@ -34,7 +34,7 @@ export function createLearning(dependencies) {
       ...(all ?? store.list()).filter(n => n.kind === 'knowledge' && n.meta.confirmedAt).map(n => n.id),
     ]);
   };
-  const usablePlanContext = note => !hasUnknownClassification(note) && !hasInvalidSourceBinding(note.meta);
+  const usablePlanContext = (note, missingLocalSource) => !hasUnknownClassification(note) && !hasInvalidSourceBinding(note.meta) && !missingLocalSource(note.meta);
   const topicPaused = topic => topic.meta.paused ?? storage().get('topics', topic.id, {}).paused ?? false;
   function topicPath(topic, all) {
     const notes = new Map(all.filter(n => n.kind === 'knowledge').map(n => [n.id, n]));
@@ -78,9 +78,10 @@ export function createLearning(dependencies) {
     const store = storage(); store.ensureFresh();
     const config = settings(), timestamp = now(), date = dayAt(new Date(timestamp), config.timezone);
     const all = store.list(), byId = new Map(all.map(n => [n.id, n]));
+    const missingLocalSource = store.missingLocalSourceCheck(byId);
     const bundles = all.filter(n => n.kind === 'topic').sort((a, b) => Number(config.focusTopics.includes(b.title)) - Number(config.focusTopics.includes(a.title)) || a.id.localeCompare(b.id));
     const pausedMembers = new Set(bundles.filter(topicPaused).flatMap(n => textList(n.meta.noteIds)));
-    const candidates = all.filter(n => eligible(n) && !hasInvalidSourceBinding(n.meta) && isStudyStage(n.meta.stage) && !config.pausedIds.includes(n.id) && !pausedMembers.has(n.id));
+    const candidates = all.filter(n => eligible(n) && !hasInvalidSourceBinding(n.meta) && !missingLocalSource(n.meta) && isStudyStage(n.meta.stage) && !config.pausedIds.includes(n.id) && !pausedMembers.has(n.id));
     const candidateMap = new Map(candidates.map(n => [n.id, n]));
     const existing = store.records('plans').filter(p => p.date === date);
     const existingById = new Map(existing.map(p => [p.id, p]));
@@ -89,10 +90,10 @@ export function createLearning(dependencies) {
     const reviews = new Map(store.records('reviews').map(r => [r.noteId, r]));
     // Older review records may not carry noteId; read by key for compatibility.
     for (const n of candidates) if (!reviews.has(n.id)) { const review = store.get('reviews', n.id); if (review) reviews.set(n.id, review); }
-    const mistakes = new Map(all.filter(n => n.kind === 'mistake' && n.meta.correctionState === 'open' && usablePlanContext(n)).map(n => [n.meta.noteId, n]));
+    const mistakes = new Map(all.filter(n => n.kind === 'mistake' && n.meta.correctionState === 'open' && usablePlanContext(n, missingLocalSource)).map(n => [n.meta.noteId, n]));
     // Paths depend only on each topic and this notes snapshot, not on candidates.
     const bundleFor = new Map(), bundlePaths = new Map();
-    for (const bundle of bundles.filter(n => !topicPaused(n) && usablePlanContext(n))) {
+    for (const bundle of bundles.filter(n => !topicPaused(n) && usablePlanContext(n, missingLocalSource))) {
       const path = topicPath(bundle, all);
       bundlePaths.set(bundle, path);
       for (const id of path) if (!bundleFor.has(id)) bundleFor.set(id, bundle);
@@ -136,7 +137,7 @@ export function createLearning(dependencies) {
       const item = {
         id: `${date}:${note.id}`, date, noteId: note.id, title: note.title, kind: mistake ? 'mistake' : review ? 'review' : 'learn',
         reason: mistake ? '针对尚未解决的具体误解练习' : review ? '优先安排已经到期的复习' : bundle ? `按「${bundle.title}」的前置知识与顺序学习` : `当前主题 ${note.meta.topic || '自主学习'} 的新知识`,
-        minutes, state: 'pending', depth: depthOf(note), materialWarnings: dependencies.limitationsFor?.(note) || [], ...practiceTags(mistake, note), ...(mistake ? { mistakeId: mistake.id } : {}),
+        minutes, state: 'pending', depth: depthOf(note), materialWarnings: dependencies.limitationsFor?.(note, missingLocalSource) || [], ...practiceTags(mistake, note), ...(mistake ? { mistakeId: mistake.id } : {}),
         ...(bundle ? { topicId: bundle.id, topicIndex: (bundle.meta.noteIds || []).indexOf(note.id) } : {}),
       };
       if (JSON.stringify(existingById.get(item.id)) !== JSON.stringify(item)) store.put('plans', item.id, item);
@@ -149,7 +150,7 @@ export function createLearning(dependencies) {
     const unavailable = all.filter(n => n.kind === 'knowledge' && !scheduledIds.has(n.id)).map(note => {
       if (hasUnknownClassification(note)) return { noteId: note.id, title: note.title, code: 'material',
         reason: '分类尚未确认，请先核对资料类型、学习阶段或学习目标。' };
-      const materialIssues = dependencies.limitationsFor?.(note) || note.meta.researchLimitations || [];
+      const materialIssues = dependencies.limitationsFor?.(note, missingLocalSource) || note.meta.researchLimitations || [];
       const result = (code, reason) => {
         const targetId = code === 'material' && materialIssues.length ? reprocessingSourceId(note.meta) : null;
         const sourceId = byId.get(targetId)?.kind === 'source' ? targetId : null;
@@ -158,6 +159,7 @@ export function createLearning(dependencies) {
       if (note.meta.supersededBy) return result('superseded', '这条知识已被合并或替代，请查看保留的知识；重新加工不能恢复旧条目的学习状态。');
       if (note.meta.stage === 'retired') return result('retired', '这条知识已设为不再使用，因此不进入今日清单。若想继续，请打开知识详情重新选择学习状态并填写理由。');
       if (hasInvalidSourceBinding(note.meta)) return result('material', sourceBindingWarning);
+      if (missingLocalSource(note.meta)) return { noteId: note.id, title: note.title, code: 'material', reason: missingLocalSourceWarning };
       if (!eligible(note)) return result('material', materialIssues.join('；') || '这条知识暂不符合学习条件，请查看知识详情。');
       if (!isStudyStage(note.meta.stage)) return result('stage', '还未加入学习。请打开知识详情，选择“加入学习”并填写理由。');
       if (config.pausedIds.includes(note.id) || pausedMembers.has(note.id)) return result('paused', '这条知识或所属主题已暂停，请在系统的暂停项或主题详情中恢复。');
@@ -231,9 +233,10 @@ export function createLearning(dependencies) {
       if (topicPaused(topic)) fail('这个主题学习包已暂停。');
     }
     const depth = depthOf(note), goal = goals[depth].label;
-    const damagedContext = [mistake, topic].some(item => item && hasInvalidSourceBinding(item.meta));
-    const warnings = dependencies.limitationsFor?.(note) || note.meta.researchLimitations || [];
-    const materialWarnings = damagedContext && !warnings.includes(sourceBindingWarning) ? [...warnings, sourceBindingWarning] : warnings;
+    const missingLocalSource = store.missingLocalSourceCheck();
+    const damagedContext = [mistake, topic].some(item => item && (hasInvalidSourceBinding(item.meta) || missingLocalSource(item.meta)));
+    const warnings = dependencies.limitationsFor?.(note, missingLocalSource) || note.meta.researchLimitations || [];
+    const materialWarnings = damagedContext && !warnings.includes(sourceBindingWarning) && !warnings.includes(missingLocalSourceWarning) ? [...warnings, sourceBindingWarning] : warnings;
     const mistakeContext = mistake ? {
       id: mistake.id, omission: mistake.meta.omission || mistakeSection(mistake, 'AI 指出的误解或遗漏（可质疑）'),
       correction: mistake.meta.correction || mistakeSection(mistake, '修正与依据'),
@@ -243,7 +246,7 @@ export function createLearning(dependencies) {
     const practicePlan = !customQuestion && learningPractice(note, depth);
     const question = mistake ? mistakeContext.nextQuestion || `请针对上次的误解「${mistakeContext.omission || mistake.title}」重新解释，并说明修正依据和适用边界。` : customQuestion || practicePlan?.question || goals[depth].question(note.title);
     const id = randomUUID();
-    const damagedSource = hasInvalidSourceBinding(note.meta);
+    const damagedSource = hasInvalidSourceBinding(note.meta) || missingLocalSource(note.meta);
     const privacy = !damagedSource && !damagedContext && privacyFor(note) === 'cloud' && (!mistake || privacyFor(mistake) === 'cloud') ? 'cloud' : 'local';
     const outboundIntent = damagedSource || damagedContext ? { sourceBindingInvalid: true } : { outboundIntentVersion: 1 };
     store.put('sessions', id, { id, noteId, planId, ...outboundIntent, ...(requestId ? { startRequestId: requestId, startIntent } : {}), status: 'reading', question, ...(practicePlan && !mistake ? { practiceQuestion: question, practiceCriteria: practicePlan.criteria } : {}), material: note.body, materialWarnings, sourceHash: note.hash, depth, goal, privacy, turns: [], createdAt: now(), hintCount: 0, ...practiceTags(mistake, note), ...(topic ? { topicId, topicIndex: textList(topic.meta.noteIds).indexOf(noteId) } : {}), ...(mistake ? { mistakeId, mistakeContext } : {}) });
@@ -396,12 +399,12 @@ export function createLearning(dependencies) {
     store.put('topics', id, { id, noteIds: n.meta.noteIds || [], paused: action === 'pause' });
     return topicDetails(result);
   }
-  function localStudyContext(session, store) {
+  function localStudyContext(session, store, missingLocalSource) {
     // Earlier mistake sessions could carry an intent marker even when their captured
     // mistake text was explicitly local. Repairing the current file does not authorize that snapshot.
     if (session.sourceBindingInvalid || (session.mistakeId && session.privacy === 'local')) return true;
     for (const id of [session.mistakeId, session.topicId]) {
-      if (id && store.row(id) && !usablePlanContext(store.read(id))) return true;
+      if (id && store.row(id) && !usablePlanContext(store.read(id), missingLocalSource)) return true;
     }
     return false;
   }
@@ -412,14 +415,15 @@ export function createLearning(dependencies) {
     if (!t) fail('找不到对应的学习回答。', 'NOT_FOUND', 404);
     if (t.feedback) return;
     const n = getNote(s.noteId);
+    const missingLocalSource = store.missingLocalSourceCheck();
     checkSessionClassification(s, n);
     if (n.hash !== s.sourceHash) fail('学习材料已有更新；本次回答已保存，请按当前材料重新开始。', 'SOURCE_CHANGED');
-    if (hasInvalidSourceBinding(n.meta)) fail('资料来源尚待核对，回答已保存。', 'PRIVACY_LOCAL');
-    if (localStudyContext(s, store)) fail('练习来源尚待核对，已保留本地回答。', 'PRIVACY_LOCAL');
+    if (hasInvalidSourceBinding(n.meta) || missingLocalSource(n.meta)) fail('资料来源尚待核对，回答已保存。', 'PRIVACY_LOCAL');
+    if (localStudyContext(s, store, missingLocalSource)) fail('练习来源尚待核对，已保留本地回答。', 'PRIVACY_LOCAL');
     const currentMistake = s.mistakeId && store.row(s.mistakeId) ? store.read(s.mistakeId) : null;
     if (s.mistakeId && (!currentMistake || ['disputed', 'revoked'].includes(currentMistake.meta.correctionState))) fail('这条错题已被质疑、撤销或删除，请重新选择学习材料。', 'MISTAKE_INACTIVE');
     // Retained local/unknown histories are not newly authorized by removing material labels.
-    const allowedHistory = other => !localStudyContext(other, store) && (other.outboundIntentVersion === 1 || other.privacy === 'cloud') && (!other.mistakeId || store.row(other.mistakeId) && privacyFor(store.read(other.mistakeId)) === 'cloud');
+    const allowedHistory = other => !localStudyContext(other, store, missingLocalSource) && (other.outboundIntentVersion === 1 || other.privacy === 'cloud') && (!other.mistakeId || store.row(other.mistakeId) && privacyFor(store.read(other.mistakeId)) === 'cloud');
     const previous = store.records('sessions').filter(other => other.noteId === s.noteId && other.id !== s.id && allowedHistory(other)).slice(0, 2).flatMap(other => other.turns.slice(-2));
     const history = JSON.stringify([...previous, ...s.turns.filter(turn => turn.id !== t.id && (s.outboundIntentVersion === 1 || s.privacy === 'cloud' || turn.outboundIntentVersion === 1)).slice(-4)].map(turn => ({ question: turn.question, answer: outboundText(String(turn.answer)).slice(0, 2000), hintUsed: turn.hintUsed, feedback: turn.feedback })));
     const goal = `${s.goal || goals[s.depth || 'explain'].label}；${goals[s.depth || 'explain'].hint}`;
@@ -435,7 +439,8 @@ export function createLearning(dependencies) {
     if (t.feedback) return;
     const currentNote = getNote(s.noteId);
     checkSessionClassification(s, currentNote);
-    if (localStudyContext(s, store)) fail('练习来源已变化，已保留本地回答。', 'PRIVACY_LOCAL');
+    const currentMissingLocalSource = store.missingLocalSourceCheck();
+    if (currentMissingLocalSource(currentNote.meta) || localStudyContext(s, store, currentMissingLocalSource)) fail('练习来源已变化，已保留本地回答。', 'PRIVACY_LOCAL');
     if (currentNote.hash !== s.sourceHash) fail('学习材料已有更新；本次回答已保存，请按当前材料重新开始。', 'SOURCE_CHANGED');
     t.feedback = result; s.feedback = result; s.question = result.nextQuestion || goals[s.depth || 'explain'].question(n.title); s.status = 'feedback'; s.pendingJobId = null;
     store.put('sessions', s.id, s);

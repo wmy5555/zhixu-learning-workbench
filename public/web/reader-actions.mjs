@@ -1,6 +1,6 @@
 import { isStudyStage, hasUnknownClassification } from '../note-classification.mjs';
 import { escape as e } from './markdown.mjs';
-import { hasInvalidSourceBinding, reprocessingSourceId, sourceBindingWarning } from '../source-membership.mjs';
+import { hasInvalidSourceBinding, missingLocalSourceWarning, reprocessingSourceId, sourceBindingWarning } from '../source-membership.mjs';
 import { button, routeButton, icon } from './ui.mjs';
 
 // Reasons come from the existing evidence endpoint; eligibility stays on the server.
@@ -9,7 +9,7 @@ export function learningReadiness(note, notes = [], limitations = note.meta?.res
   if (hasUnknownClassification(note)) return { ready:false, classification:true, heading:'分类待确认', reasons:['请先核对原有分类，再选择有效的分类。'] };
   const damaged = note.sourceBindingInvalid === true || hasInvalidSourceBinding(meta);
   const warnings = limitations.filter(value => typeof value === 'string' && value.trim());
-  if (damaged) warnings.push(sourceBindingWarning);
+  if (damaged && !warnings.includes(missingLocalSourceWarning)) warnings.push(sourceBindingWarning);
   const reasons = [...new Set(warnings)];
   if (meta.supersededBy) return { ready:false, heading:'这条知识已有替代条目', reasons:['请查看保留的知识，旧条目不能继续学习。'], replacementId:meta.supersededBy };
   if (meta.stage === 'retired') return { ready:false, heading:'这条知识已暂停使用', reasons:['如需继续，请在学习安排中重新选择用途，理由可选填。'], arrange:true };

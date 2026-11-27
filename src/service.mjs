@@ -21,7 +21,7 @@ import { createChatgptBridge } from './chatgpt.mjs';
 import { createChatgptUndo } from './chatgpt-undo.mjs';
 import { buildUsageReport } from './usage.mjs';
 import { callPurpose, callPurposes } from './call-purpose.mjs';
-import { groupSourceChildren, hasInvalidSourceBinding, processKeyBinding, sourceBindingWarning, sourceParentIds, sourceReferences } from '../public/source-membership.mjs';
+import { groupSourceChildren, hasInvalidSourceBinding, missingLocalSourceWarning, processKeyBinding, sourceBindingWarning, sourceParentIds, sourceReferences } from '../public/source-membership.mjs';
 import { structureBasis, structureRecord, structureView } from './source-structure.mjs';
 import { createSourceFiles } from './source-files.mjs';
 import { assertTextSource, processingText } from './attachments.mjs';
@@ -154,17 +154,22 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   const putJob = job => store.put('jobs', job.id, { ...job, updatedAt: now() });
   const getNote = id => { store.scan(); return store.read(id); };
   const privacyFor = n => store.outboundPrivacy(n);
-  const materialLimitations = n => {
+  function sourceBindingIssue(meta, missingLocalSource = store.missingLocalSourceCheck()) {
+    if (hasInvalidSourceBinding(meta)) return sourceBindingWarning;
+    return missingLocalSource(meta) ? missingLocalSourceWarning : '';
+  }
+  const materialLimitations = (n, missingLocalSource) => {
     const issues = [...(n.meta.researchLimitations || [])];
     if (n.meta.reviewAfter && n.meta.reviewAfter < learningNow()) issues.push('材料可能陈旧，需要重新研究。');
-    if (hasInvalidSourceBinding(n.meta)) issues.push(sourceBindingWarning);
+    const bindingIssue = sourceBindingIssue(n.meta, missingLocalSource);
+    if (bindingIssue) issues.push(bindingIssue);
     else {
       const binding = processKeyBinding(n.meta.processKey);
       if (binding && store.row(binding.sourceId)?.hash !== binding.sourceHash) issues.push('底层原始资料已修改或删除，需要重新加工。');
     }
     return issues;
   };
-  const eligible = n => usable(n, learningNow()) && !materialLimitations(n).length;
+  const eligible = (n, missingLocalSource) => usable(n, learningNow()) && !materialLimitations(n, missingLocalSource).length;
   // Practising a material does not certify its claims for retrieval or generated answers.
   const learnable = n => n.kind === 'knowledge' && !hasUnknownClassification(n) && n.meta.stage !== 'retired' && !n.meta.supersededBy;
   const needsMaterialScope = (type, payload) => type === 'index' || type === 'topics' || ['relate','discover'].includes(type) && payload?.useAI === true;
@@ -275,12 +280,14 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     if (!needsTitle(current)) fail('标题已经填写，保留当前标题。', 'TITLE_ALREADY_SET');
     if (!validSourceTitle(value)) fail('标题结果缺失或格式不正确；原文与临时标题已保留。', 'MODEL_FORMAT');
     const structure = store.get('sourceStructures', source.id), children = storedSourceChildren(source.id);
-    const structureCurrent = structure && !children.some(note => hasInvalidSourceBinding(note.meta))
+    const missingLocalSource = store.missingLocalSourceCheck();
+    const affected = child => sourceBindingIssue(child.meta, missingLocalSource);
+    const structureCurrent = structure && !children.some(affected)
       && JSON.stringify(structure.basis) === JSON.stringify(structureBasis(source, children));
     const saved = store.update(source.id, { title: value.trim(), expectedHash: source.hash, meta: { titlePending: false, titleOrigin: 'ai' } });
     // Only this strictly checked automatic title change can carry body-derived evidence forward.
     const prefix = `${source.id}:${source.hash}:`, claims = new Set(), bindings = new Map();
-    for (const child of children.filter(note => !hasInvalidSourceBinding(note.meta) && note.meta.processKey?.startsWith(prefix))) {
+    for (const child of children.filter(note => !affected(note) && note.meta.processKey?.startsWith(prefix))) {
       for (const claim of child.meta.claims || []) claims.add(claim);
       const processKey = child.meta.processKey.replace(prefix, `${source.id}:${saved.hash}:`);
       const updated = store.update(child.id, { expectedHash: child.hash, meta: { processKey } });
@@ -379,9 +386,10 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
         if (id && !titleJobs.has(id)) titleJobs.set(id, job);
       }
     }
-    return notes.map(note => projectNote(note, titleJobs));
+    const missingLocalSource = store.missingLocalSourceCheck();
+    return notes.map(note => projectNote(note, titleJobs, missingLocalSource));
   }
-  function projectNote(note, titleJobs) {
+  function projectNote(note, titleJobs, missingLocalSource) {
     const n = structuredClone(note);
     delete n.meta.privacy;
     delete n.meta.effectivePrivacy;
@@ -391,9 +399,11 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
       const job = titleJobs ? titleJobs.get(n.id) : store.records('jobs').find(item => titleJobSource(item) === n.id);
       n.titleGeneration = { state: job?.state || 'idle', code: job?.code || null };
     } else if (n.meta.titleOrigin === 'ai') n.titleGeneration = { state: 'done' };
-    if (hasInvalidSourceBinding(n.meta)) n.sourceBindingInvalid = true;
+    const bindingIssue = sourceBindingIssue(n.meta, missingLocalSource);
+    if (bindingIssue) n.sourceBindingInvalid = true;
     n.meta.sources = sourceReferences(n.meta).filter(s => s.role === 'input' || !store.row(s.id) || !store.read(s.id).meta.excerptOnly);
     n.meta.researchLimitations = [...new Set((n.meta.researchLimitations || []).map(l => operationalIssue(l) ? (l.match(/^“[^”]+”/)?.[0] || '该事实')+'尚待核验。' : l))];
+    if (bindingIssue === missingLocalSourceWarning && !n.meta.researchLimitations.includes(bindingIssue)) n.meta.researchLimitations.push(bindingIssue);
     if (!n.sourceBindingInvalid && n.meta.processKey && !n.meta.userEdited && (!n.meta.generatedBodyHash || hash(n.body) === n.meta.generatedBodyHash)) {
       const original = n.body.split('\n\n## 证据与适用范围')[0];
       const conclusions = (n.meta.researchConclusions || n.body.split('## 证据与适用范围\n\n')[1]?.split('\n\n- [')[0]?.split('### 研究范围')[0]?.split('## 尚需补充的研究')[0] || '').replace('此条未取得可引用的外部正文。','').trim();
@@ -405,8 +415,10 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   const storedSourceChildren = id => groupSourceChildren(store.list(), [id]).get(id);
   function analysisChildren(source) {
     const notes = storedSourceChildren(source.id);
-    if (hasInvalidSourceBinding(source.meta) || notes.some(note => hasInvalidSourceBinding(note.meta))) {
-      fail(sourceBindingWarning, 'SOURCE_BINDING_INVALID', 409);
+    const missingLocalSource = store.missingLocalSourceCheck();
+    for (const note of [source, ...notes]) {
+      const issue = sourceBindingIssue(note.meta, missingLocalSource);
+      if (issue) fail(issue, 'SOURCE_BINDING_INVALID', 409);
     }
     return notes;
   }
@@ -944,6 +956,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     }
     async function saveResults(research) {
       assertCurrent();
+      const missingLocalSource = store.missingLocalSourceCheck();
       for (let i=0;i<extracted.candidates.length;i++) {
         if (signal.aborted) throw new Error('任务已取消');
         const candidate = extracted.candidates[i];
@@ -951,7 +964,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
         if (typeof candidate.title !== 'string' || typeof candidate.body !== 'string' || !Array.isArray(candidate.claims) || candidate.claims.some(x => typeof x !== 'string')) fail('待选学知识格式不正确。', 'MODEL_FORMAT');
         const processKey = `${source.id}:${source.hash}:${i}`, savedId = job.payload.savedCandidates.ids[i];
         const existing = store.list().find(n => savedId ? n.id === savedId : n.meta.processKey === processKey);
-        if (existing && (!research || hasInvalidSourceBinding(existing.meta))) continue;
+        if (existing && (!research || sourceBindingIssue(existing.meta, missingLocalSource))) continue;
         const evidence = [], limitations = [], conclusions = [], notices = [];
         for (const claim of candidate.claims) {
           if (!research) { limitations.push(`“${claim}”尚待核验（未执行联网检验）。`); continue; }
@@ -993,7 +1006,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
       store.scan();
       if (store.row(source.id)?.hash === source.hash) {
         const children = storedSourceChildren(source.id);
-        if (children.some(note => hasInvalidSourceBinding(note.meta))) return;
+        if (children.some(note => sourceBindingIssue(note.meta, missingLocalSource))) return;
         const keys = new Map(extracted.candidates.flatMap((candidate, index) => {
           const note = children.find(n => n.meta.processKey === `${source.id}:${source.hash}:${index}`);
           return note && note.body.includes(candidate.body) ? [[String(index), note.id]] : [];
@@ -1127,7 +1140,9 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   }
   async function discover(job, signal) {
     const scope=job.payload.useAI===true ? materialScope(job) : null;
-    store.scan(); const notes=store.list().filter(n=>n.kind==='knowledge'&&n.meta.stage!=='retired'&&!hasInvalidSourceBinding(n.meta));
+    store.scan();
+    const all = store.list(), missingLocalSource = store.missingLocalSourceCheck(new Map(all.map(n => [n.id, n])));
+    const notes=all.filter(n=>n.kind==='knowledge'&&n.meta.stage!=='retired'&&!sourceBindingIssue(n.meta, missingLocalSource));
     const relations=store.records('relations').filter(r=>r.state==='accepted'), linked=new Set(relations.flatMap(r=>[r.fromId,r.toId]));
     const useCounts=new Map();
     if(notes.length)for(const use of store.records('uses'))useCounts.set(use.noteId,(useCounts.get(use.noteId)||0)+1);
@@ -1146,11 +1161,13 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
       body+='\n\n## AI 发现建议（待审阅）\n'+discoveryMarkdown(discoveryResult);
     }catch(error){summaryStatus='failed';discoveryIssue=error;body+='\n\n## AI 探索未完成\n'+error.message;}}
     else body+='\n\n## 探索限制\n当前仅完成本地结构检查，没有生成 AI 发现建议。';
-    const cursor=store.get('schedule','discoveryCursor',{offset:0}).offset, available=notes.filter(eligible);
+    const currentMissingLocalSource = job.payload.useAI === true ? store.missingLocalSourceCheck() : missingLocalSource;
+    const eligibleForDiscovery = n => eligible(n, currentMissingLocalSource);
+    const cursor=store.get('schedule','discoveryCursor',{offset:0}).offset, available=notes.filter(eligibleForDiscovery);
     const batch=[...available.slice(cursor),...available.slice(0,cursor)].slice(0,16);
     for(const n of batch)await relate({payload:{noteId:n.id,useAI:false},snapshot:n},signal);
     store.put('schedule','discoveryCursor',{offset:available.length?(cursor+batch.length)%available.length:0});
-    if(job.payload.useAI===true&&!discoveryIssue)for(const n of selected.filter(eligible).slice(0,2)){try{detailStatus='complete';await relate({payload:{noteId:n.id,useAI:true,snapshots:job.payload.snapshots}},signal);}catch(error){detailStatus='incomplete';discoveryIssue=error;body+=`\n\n## 关联细查未完成\n${error.message}`;break;}}
+    if(job.payload.useAI===true&&!discoveryIssue)for(const n of selected.filter(eligibleForDiscovery).slice(0,2)){try{detailStatus='complete';await relate({payload:{noteId:n.id,useAI:true,snapshots:job.payload.snapshots}},signal);}catch(error){detailStatus='incomplete';discoveryIssue=error;body+=`\n\n## 关联细查未完成\n${error.message}`;break;}}
     body+=`\n\n本次本地比较 ${batch.length} 条；AI 细查最多2条。每次轮换覆盖，不能视为全库穷尽。`;
     const actions=recommendations().suggestions;
     body+='\n\n## 可处理的建议\n'+(actions.map(a=>`- ${a.title}：${a.reason}`).join('\n') || '暂无有记录依据的阶段调整建议。');
@@ -1234,7 +1251,12 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     if (time >= cfg.scheduleTime) today();
     else store.ensureFresh();
     const last = store.get('schedule', 'discovery');
-    if (store.list().some(n => n.kind === 'knowledge' && !hasInvalidSourceBinding(n.meta)) && (!last || date.getTime() - Date.parse(last.at) > cfg.discoveryDays * 86400000)) queue('discover', {}, `discovery:${localDay(date, cfg.timezone)}`);
+    if (!last || date.getTime() - Date.parse(last.at) > cfg.discoveryDays * 86400000) {
+      const notes = store.list(), missingLocalSource = store.missingLocalSourceCheck(new Map(notes.map(n => [n.id, n])));
+      if (notes.some(n => n.kind === 'knowledge' && !sourceBindingIssue(n.meta, missingLocalSource))) {
+        queue('discover', {}, `discovery:${localDay(date, cfg.timezone)}`);
+      }
+    }
     return runJobs();
   }
   function demo(){const existing=store.list().filter(n=>n.meta.demo);if(existing.length)return{notes:existing};const source=store.create({kind:'source',title:'演示资料 · 小林的读书项目',body:'【虚构演示，不代表用户真实经历】小林正在整理一份读书报告。他保存了原始摘录，希望用自己的话说明观点，再找到能支持或反对它的材料。此条用于体验输入、查找和编辑。',meta:{demo:true,privacy:'local',platform:'内置演示'}});const note=store.create({kind:'knowledge',title:'演示知识 · 给读书报告保留出处',body:'【演示设定】为小林的读书报告记录：一句观点、对应原文、页码，以及哪些条件会限制该观点。\n\n练习：假设你是小林，请用自己的话说明报告中为何要保留出处。这个练习仅针对上述虚构任务，没有预先记录任何学习成绩。',meta:{demo:true,privacy:'local',stage:'candidate',topic:'读书与表达',depth:'explain',sources:[{id:source.id,role:'input'}],promotionReason:'用于试用学习流程，可自行加入学习。'}});return{notes:[source,note]};}

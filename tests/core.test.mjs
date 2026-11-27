@@ -85,9 +85,10 @@ test('material reprocessing targets the tracked input source and never substitut
   assert.match(warnings().join(), /修改或删除/, 'changed tracked input remains a learning warning');
   assert.match(s.noteEvidence(note.id).limitations.join(), /修改或删除/);
   s.store.delete(tracked.id, changed.hash);
-  assert.match(warnings().join(), /修改或删除/, 'the surviving unrelated input cannot clear the missing tracked-source warning');
+  assert.equal(s.today().items.some(item => item.noteId === note.id && item.state === 'pending'), false);
+  assert.match(s.today().unavailable.find(item => item.noteId === note.id).reason, /本地原始资料已删除/, 'the surviving unrelated input cannot clear confirmed source loss');
   assert.equal(s.getNote(first.id).body, first.body);
-  const untracked = createKnowledge(s, { title: '合成未明确来源的限制', meta: { sources: refs, researchLimitations: ['合成待核验'] } });
+  const untracked = createKnowledge(s, { title: '合成未明确来源的限制', meta: { sources: [refs[0], { id: 'external-untracked-source', role: 'input' }], researchLimitations: ['合成待核验'] } });
   assert.ok(s.today().items.find(item => item.noteId === untracked.id).materialWarnings.includes('合成待核验'));
   assert.equal(calls.length, 0);
 });
