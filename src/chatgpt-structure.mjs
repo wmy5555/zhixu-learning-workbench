@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
 import { dimensions, roles, relationTypes } from './knowledge-structure.mjs';
-import { sourceChildren, structureRecord, structureView } from './source-structure.mjs';
+import { sourceChildren } from '../public/source-membership.mjs';
+import { structureRecord, structureView } from './source-structure.mjs';
 const hash = value => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
 const id = z.string().trim().min(1).max(200).regex(/^[A-Za-z0-9_-]+$/);
 const text = max => z.string().min(1).max(max);
