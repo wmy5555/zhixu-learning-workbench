@@ -1,18 +1,22 @@
+import { previewMetadata, evidenceDirectory } from './preview-context.mjs';
 // Synthetic-only browser checks. Capability responses are deliberately mocked.
 import fs from 'node:fs';
 import path from 'node:path';
 import {createRequire} from 'node:module';
 import assert from 'node:assert/strict';
 const {chromium}=createRequire(import.meta.url)(process.argv[2]||'playwright');
-const meta=JSON.parse(fs.readFileSync('.tmp/parity-preview.json','utf8'));assert.equal(meta.synthetic,true);
+const meta=await previewMetadata(process.argv[4]);
+const out=evidenceDirectory(meta,'parity-boundaries');
 const browser=await chromium.launch({executablePath:process.argv[3],headless:true});
-const context=await browser.newContext({reducedMotion:'reduce'}),page=await context.newPage(),checks=[],external=[],errors=[];
+let page;
+try{
+const context=await browser.newContext({reducedMotion:'reduce'});page=await context.newPage();const checks=[],external=[],errors=[];
 page.setDefaultTimeout(12000);page.on('pageerror',e=>errors.push(e.message));
-await context.route('**/*',route=>{if(!route.request().url().startsWith(meta.candidate)){external.push(route.request().url());return route.abort();}return route.continue();});
+await context.addInitScript(()=>localStorage.setItem('zhixu.guide.welcome-seen','1'));
+await context.route('**/*',route=>{if(!route.request().url().startsWith(meta.candidate+'/')){external.push(route.request().url());return route.abort();}return route.continue();});
 const api=(url,method='get',body)=>page.evaluate(async({url,method,body})=>{const{api}=await import('/web/api.mjs');return api[method](url,body);},{url,method,body});
 async function open(route){await page.waitForFunction(()=>!document.querySelector('[aria-busy="true"]'));await page.goto(meta.candidate+'/#'+route);await page.waitForFunction(r=>document.querySelector('#main')?.dataset.route===r,route);}
 const check=name=>{checks.push(name);console.log('PASS '+name);};
-try{
   await open('manage');
   const tests=[],saves=[];let mode='success';
   await page.route('**/api/settings/test',async route=>{
@@ -22,7 +26,7 @@ try{
   });
   await page.route('**/api/settings/save-tested',route=>{saves.push(route.request().postDataJSON());return route.fulfill({json:{saved:true}});});
   for(const key of ['embedding','search','fetch']){
-    const form=page.locator(`[data-capability="${key}"]`);await form.locator('..').locator('summary').click();
+    const form=page.locator(`[data-capability="${key}"]`);await form.locator('xpath=ancestor::details[1]').locator('summary').click();
     await form.locator('[data-test]').click();await page.locator('[data-confirm]').click();
     await form.locator('[data-status]').getByText('模拟测试通过，配置已保存。',{exact:true}).waitFor();
   }
@@ -38,7 +42,7 @@ try{
   assert.equal(await page.locator('#main').getAttribute('data-route'),'manage');
   check('MOCK: each capability uses its own receipt; stale/failed tests retain input and cannot save');
   await page.locator('[data-route="manage/usage"]').click();await page.locator('[data-confirm]').click();
-  await page.locator('#usage-filter').waitFor();await page.locator('#usage-filter [name="period"]').selectOption('7d');
+  await page.locator('#usage-filter').waitFor();await page.locator('#usage-filter [name="period"][value="7d"]').check();
   await page.locator('#usage-filter [type="submit"]').click();await page.waitForFunction(()=>!document.querySelector('[aria-busy="true"]'));
   const download=page.waitForEvent('download');await page.locator('[data-action="export-usage"]').click();
   assert.match((await download).suggestedFilename(),/\.csv$/);
@@ -84,6 +88,6 @@ try{
   await page.locator('#full-study-history article').first().waitFor();
   check('history load failures provide a retry and recover without deleting stored sessions');
   assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
-  fs.writeFileSync(path.resolve('.tmp/parity-evidence/boundary-results.json'),JSON.stringify({checks,errors,externalRequests:external,syntheticRoot:meta.root,at:new Date().toISOString()},null,2));
-}catch(error){await page.screenshot({path:'.tmp/parity-evidence/boundary-failure.png',fullPage:true});throw error;}
+  fs.writeFileSync(path.join(out,'boundary-results.json'),JSON.stringify({checks,errors,externalRequests:external,syntheticRoot:meta.root,at:new Date().toISOString()},null,2));
+}catch(error){if(page)await page.screenshot({path:path.join(out,'boundary-failure.png'),fullPage:true}).catch(()=>{});throw error;}
 finally{await browser.close();}

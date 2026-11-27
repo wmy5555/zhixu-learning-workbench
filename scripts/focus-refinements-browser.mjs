@@ -1,18 +1,19 @@
+import { previewMetadata, evidenceDirectory } from './preview-context.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
 const {chromium}=createRequire(import.meta.url)(process.argv[2]||'playwright');
-const meta=JSON.parse(fs.readFileSync(process.argv[4],'utf8'));
-assert.equal(meta.synthetic,true);
-const out=path.resolve('../evidence/focus-refinements');fs.mkdirSync(out,{recursive:true});
+const meta=await previewMetadata(process.argv[4]);
+const out=evidenceDirectory(meta,'focus-refinements-browser');fs.mkdirSync(out,{recursive:true});
 const browser=await chromium.launch({executablePath:process.argv[3],headless:true});
-const context=await browser.newContext({viewport:{width:1440,height:1000}}),page=await context.newPage(),checks=[],errors=[];
+let page;
+try{
+const context=await browser.newContext({viewport:{width:1440,height:1000}});page=await context.newPage();const checks=[],errors=[];
 page.on('pageerror',e=>errors.push(e.message));page.setDefaultTimeout(10000);
 const snapshot=()=>page.evaluate(()=>JSON.parse(localStorage.getItem(Object.keys(localStorage).find(k=>k.startsWith('zhixu-focus-v1')))));
 const check=s=>{checks.push(s);console.log('PASS '+s);};
 async function dragTo(x,y){const r=await page.locator('.focus-drag').boundingBox();await page.mouse.move(r.x+r.width/2,r.y+r.height/2);await page.mouse.down();await page.mouse.move(x+18,y+18,{steps:12});await page.mouse.up();await page.waitForTimeout(550);}
-try{
   await page.goto(meta.candidate+'/#today');
   await page.locator('[data-action="focus-start"]').click();await page.locator('#focus-start-form [name="minutes"]').fill('1');await page.locator('#focus-start-form [type="submit"]').click();
   await page.locator('#focus-home .focus-clock').waitFor();
@@ -57,5 +58,5 @@ try{
   check('next focus resets docking, narrow topbar fits, and finish-and-save still records');
   assert.deepEqual(errors,[]);
   fs.writeFileSync(path.join(out,'results.json'),JSON.stringify({checks,errors,syntheticRoot:meta.root,at:new Date().toISOString()},null,2));
-}catch(error){await page.screenshot({path:path.join(out,'failure.png'),fullPage:true}).catch(()=>{});throw error;}
+}catch(error){if(page)await page.screenshot({path:path.join(out,'failure.png'),fullPage:true}).catch(()=>{});throw error;}
 finally{await browser.close();}
