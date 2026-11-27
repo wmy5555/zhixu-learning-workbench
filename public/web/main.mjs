@@ -13,6 +13,7 @@ import { processOutcome, createProcessOutcomeRenderer } from './process-outcome.
 import { springEnter } from './cds/motion-bridge.mjs';
 import { mountNoteEditor, noteEditSession } from './note-editor.mjs';
 import { createLibraryPage } from './library-page.mjs';
+import { createSearchPage } from './search-page.mjs';
 import { createParity } from './parity.mjs';
 import { evidenceHTML } from './learning-display.mjs';
 import { createManagement, initializeAccent } from './management.mjs';
@@ -27,6 +28,7 @@ const navigation = [['home','今日','today'],['plus','收集与加工','capture
 const state = { boot:null, route:'today', sequence:0, dirty:false, saving:0, readerReturn:'library', note:null, session:null, scroll:new Map() };
 const context={api,state,go,refreshBoot,formModal,submit,watchForm,savedForm,processSource};
 const library = createLibraryPage(api);
+const search = createSearchPage({ api, getNotes: () => state.boot.notes, getSequence: () => state.sequence, go, submit });
 const parity=createParity(context),management=createManagement(context,initializeAccent()),focus=createFocus(context);
 const onboarding=createWebOnboarding({api,state,go,refreshBoot,beforeLeave});
 const readerData=createReaderData(api);
@@ -92,7 +94,7 @@ async function go(route, { replace = false, force = false, guide = false, speed 
   if(!cachedLibrary&&!immediateReader)$('#main').innerHTML = '<div class="page-loading" role="status"><span></span>正在把内容放到书桌上…</div>';
   try {
     const [view,id] = state.route.split('/');
-    const page = cachedLibrary?null:await ({ today:todayPage, capture:capturePage, library:library.page, read:()=>readPage(id), edit:()=>editPage(id), study:()=>study.page(id), topics:topicsPage, search:parity.search, output:outputPage, settings:settingsPage, jobs:parity.jobs, relations:parity.relations, history:parity.history, manage:()=>management.page(id), focus:focus.page }[view] || todayPage)();
+    const page = cachedLibrary?null:await ({ today:todayPage, capture:capturePage, library:library.page, read:()=>readPage(id), edit:()=>editPage(id), study:()=>study.page(id), topics:topicsPage, search:search.page, output:outputPage, settings:settingsPage, jobs:parity.jobs, relations:parity.relations, history:parity.history, manage:()=>management.page(id), focus:focus.page }[view] || todayPage)();
     if (sequence !== state.sequence) {ghost?.remove();main.style.opacity='';return false;}
     if(cachedLibrary)main.replaceChildren(...cachedLibrary);
     else{main.innerHTML=page.html;page.bind?.();}
@@ -372,7 +374,7 @@ async function actions(control) {
   }
   if(action==='new-topic')return parity.editTopic();
   if(action==='open-topic')return parity.openTopic(id);
-  if(action==='topic-search') {await go('search');const form=$('#parity-search');if(form){form.elements.q.value=control.dataset.topic;form.requestSubmit();}return;}
+  if(action==='topic-search')return search.openQuery(control.dataset.topic);
   if(action==='open-draft')return parity.draft(id);
   if(action==='retry-job') {if(!await confirm('重新尝试这项处理？','这会继续已有任务，可能向已配置的服务发送资料并产生费用。','重新尝试'))return;await api.post(endpoint('jobs',id,'action'),{action:'retry'});return go('jobs',{replace:true});}
   if(action==='test-ai') {

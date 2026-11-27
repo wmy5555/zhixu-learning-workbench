@@ -23,6 +23,7 @@ function harness(){
  sandbox.readerData=createReaderData(sandbox.api);
  sandbox.library=createLibraryPage(sandbox.api);
  sandbox.library.page=async()=>{counts.library++;return {html:'library',bind(){counts.bind++;}};};
+ sandbox.search={page};
  for(const name of ['todayPage','capturePage','editPage','topicsPage','outputPage','settingsPage'])sandbox[name]=page;
  vm.createContext(sandbox);vm.runInContext(navigation+';globalThis.goPage=go;globalThis.refresh=refreshBoot;',sandbox);
  return {sandbox,counts,context,main,window};

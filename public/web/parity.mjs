@@ -1,8 +1,7 @@
 import { escape as e, markdown } from './markdown.mjs';
-import { $, $$, icon, button as btn, routeButton as link, field, area, heading, jobState, modal, confirm, busy, notify, list, select, details, readable, facts, paginate } from './ui.mjs';
+import { $, $$, button as btn, routeButton as link, field, area, heading, jobState, modal, confirm, busy, notify, list, select, details, readable, facts, paginate } from './ui.mjs';
 import { endpoint } from './api.mjs';
 import { evidenceHTML } from './learning-display.mjs';
-import { kindOptions, stageOptions } from './classification.mjs';
 import { knowledgeRow, recommendationsHTML } from './knowledge-display.mjs';
 
 export function createParity(ctx) {
@@ -68,19 +67,6 @@ export function createParity(ctx) {
     const d=modal('Obsidian 链接更新预览',`${p.conflict?`<p class="notice">${e(readable(p.conflict))}</p>`:''}<pre class="parity-json">${e(JSON.stringify(p,null,2))}</pre>${btn('确认更新托管链接','confirm-links','primary',p.conflict||!p.changed?'disabled':'')}`,{wide:true});
     d.querySelector('[data-action="confirm-links"]').onclick=ev=>busy(ev.currentTarget,async()=>{await api.post(endpoint('notes',id,'links-sync'),{expectedHash:p.expectedHash});d.close();await refresh();notify('托管链接已更新。');});
   }
-  async function search() {
-    const sources=list(state.boot.notes).filter(n=>n.kind==='source');
-    return {html:heading('CONNECT THE DOTS','找回一个想法，发现新的联系。','检索结果会保留来源与实际采用的检索方式。',link('知识联系与建议 ↗','relations','text-button'))+
-      `<form id="parity-search" class="search-composer"><div>${icon('search')}<input name="q" type="search" required placeholder="你在找什么？" aria-label="搜索内容"><button class="primary" type="submit">搜索 ${icon('arrow')}</button></div>${details('检索方式与筛选范围',`<div class="form-grid">${select('检索方式','mode',[['keyword','本地文字'],['semantic','纯语义'],['hybrid','语义与文字']])}${select('类别','kind',kindOptions)}${select('学习状态','stage',stageOptions)}</div><label class="check"><input type="checkbox" name="cloud"> 允许本次查询发给已配置的语义服务（可能计费）</label><div class="form-grid">${select('来源','source',[['','全部来源'],...sources.map(n=>[n.id,n.title])])}${field('主题','topic')}${field('起始日期','from',{type:'date'})}${field('结束日期','to',{type:'date'})}</div>`)}</form><div id="parity-results"></div>`,
-      bind(){const form=$('#parity-search');let revision=0,params,cursor;
-        const sync=()=>{[...form.elements.mode.options].forEach(o=>o.disabled=o.value!=='keyword'&&!form.elements.cloud.checked);if(!form.elements.cloud.checked)form.elements.mode.value='keyword';};sync();form.elements.cloud.onchange=sync;
-        const render=async(next=false)=>{const own=++revision,route=state.sequence;const data=await api.get('/api/search?'+new URLSearchParams({...params,...(next&&cursor?{cursor}:{})}));if(own!==revision||route!==state.sequence)return;cursor=data.nextCursor;const host=$('#parity-results');
-          if(!next)host.innerHTML='';host.querySelector('[data-more]')?.remove();
-          host.insertAdjacentHTML('beforeend',list(data.results).map(n=>`<article class="search-result"><h2>${link(e(n.title),`read/${n.id}`,'result-title')}</h2><p class="preserve-text">${e(n.snippet||'')}</p>${facts([['定位',n.location],['检索来源',n.via]])}${details('核验与来源',evidenceHTML(n.meta?.evidence||[],n.limitations))}</article>`).join('')||'<p class="empty">未找到相关资料。</p>');
-          host.insertAdjacentHTML('beforeend',details('本次检索诊断',`<pre class="parity-json">${e(JSON.stringify(data.diagnostics,null,2))}</pre>`)+(cursor?'<button class="text-button" data-more>加载下一页</button>':''));
-          if(cursor)host.querySelector('[data-more]').onclick=ev=>busy(ev.currentTarget,()=>render(true));
-        };submit(form,async values=>{sync();params={...values,mode:form.elements.mode.value,privacy:form.elements.cloud.checked?'cloud':'local',limit:20};delete params.cloud;await render();});}};
-  }
   async function jobs() {
     const rows=list((await api.get('/api/jobs')).jobs);
     return {html:heading('THINGS IN PROGRESS','每一步，都有迹可循。','筛选完整任务记录，重试可能产生外部调用。',btn('刷新进度','reload','secondary'))+`<div class="parity-filters">${select('状态','jobFilter',[['','全部状态'],...['queued','running','waiting','failed','done','cancelled'].map(s=>[s,jobState(s)])])}${field('查找任务','jobQuery',{type:'search'})}</div><div id="parity-jobs"></div>`,bind(){const redraw=paginate($('#parity-jobs'),rows,j=>`<article class="job-row"><span class="job-state">${e(jobState(j.state))}</span><div><h2>${e(j.type)}</h2><p>${e(j.error||j.message||'本机已保留处理记录。')}</p><small>${e(j.createdAt||'')}</small></div><div>${['queued','running','waiting'].includes(j.state)?btn('取消任务','cancel-job','text-button',`data-id="${e(j.id)}"`):''}${['failed','waiting','cancelled'].includes(j.state)?btn('重新尝试','retry-job','text-button',`data-id="${e(j.id)}"`):''}</div></article>`,{filter:j=>(!$('[name="jobFilter"]').value||j.state===$('[name="jobFilter"]').value)&&`${j.type} ${j.error||''} ${j.message||''}`.includes($('[name="jobQuery"]').value)});$('[name="jobFilter"]').onchange=redraw;$('[name="jobQuery"]').oninput=redraw;}};
@@ -137,5 +123,5 @@ export function createParity(ctx) {
     else if(a==='resume-note'){const paused=list(state.boot.today?.items).find(p=>p.noteId===id&&p.state==='pause');if(paused)await api.post(endpoint('today',paused.id,'action'),{action:'resume'});else{const s=await api.get('/api/settings');await api.put('/api/settings',{pausedIds:list(s.pausedIds).filter(n=>n!==id)});}await refresh();}
     else return false;return true;
   }
-  return {relations,openTopic,editTopic,metadata,versions,merge,links,search,jobs,history,draft,handle};
+  return {relations,openTopic,editTopic,metadata,versions,merge,links,jobs,history,draft,handle};
 }
