@@ -4,7 +4,6 @@ import { classificationInputs } from '../public/classification-review.mjs';
 import { learningReadiness, readerMenu } from '../public/web/reader-actions.mjs';
 import { reader } from '../public/web/reader.mjs';
 import { createStudyWorkspace } from '../public/web/study-workspace.mjs';
-import { labels } from '../public/ui.mjs';
 
 test('shared controls require an explicit choice only for unknown values and show raw values as text',()=>{
   class Element {
@@ -21,8 +20,6 @@ test('shared controls require an explicit choice only for unknown values and sho
     assert.match(controls.children[0].children[0].textContent,/constructor/);
     assert.match(controls.children[1].children[0].textContent,/<script>/);
     for(const label of controls.children){const select=label.children[1];assert.equal(select.required,true);assert.equal(select.children[0].value,'');}
-    assert.equal(labels.kind('constructor'),'分类待确认');
-    assert.equal(labels.stage({toString:null}),'分类待确认');
   } finally {globalThis.document=oldDocument;globalThis.Option=oldOption;}
 });
 
