@@ -86,6 +86,8 @@ test('both web generations retain their display language while preferences use p
   assert.equal(stage('integrated'), '个人理解');
   assert.equal(labels.stage('integrated'), '已整理个人理解');
   assert.equal(labels.stage('future-stage'), 'future-stage');
+  assert.equal(labels.kind('constructor'), 'constructor');
+  assert.equal(labels.stage({ toString: 'external' }), '分类待确认');
   assert.equal(stage('future-stage'), '尚未分类');
   assert.equal(kind(['source']), '资料');
   assert.equal(createLibraryPreferences(() => memory(JSON.stringify({ kind: 'constructor', stage: 'future-stage' }))).read().kind, '');

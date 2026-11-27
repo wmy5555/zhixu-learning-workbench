@@ -30,13 +30,13 @@ test('source previews use only visible bound children and yield to the ordered s
   assert.deepEqual(reader.peek(source.id, boot).note.children, [manual, legacy]);
 });
 
-test('an unreadable preview defers to detail and discarded responses cannot refill another space', async () => {
+test('a malformed unrelated source key preserves the preview and old detail cannot refill another space', async () => {
   const response = Promise.withResolvers(), context = { version: 0, revision: 0 };
   const old = { notes: [source, child('damaged', { processKey: 7 })] };
   const next = { notes: [{ ...source, title: '另一资料库' }] };
   const reader = createReaderData({ getContext: () => context,
     get: url => url === '/api/relations' ? Promise.resolve({ relations: [] }) : response.promise });
-  assert.equal(reader.peek(source.id, old), null);
+  assert.deepEqual(reader.peek(source.id, old).note.children, []);
   const loading = reader.load(source.id, old);
   context.version++;
   const current = reader.peek(source.id, next);

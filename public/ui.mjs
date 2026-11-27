@@ -84,9 +84,14 @@ const STATES = {
   suggested: "待确认", open: "待纠正", resolved: "已纠正", disputed: "有争议", revoked: "已撤销",
 };
 
+function classificationLabel(names, value, missing) {
+  if (value === undefined) return missing;
+  if (typeof value !== 'string' || !value) return '分类待确认';
+  return Object.hasOwn(names, value) ? names[value] : value;
+}
 export const labels = {
-  stage: (value) => STAGES[value] || value || "未分层",
-  kind: (value) => noteKindNames[value] || value || "资料",
+  stage: value => classificationLabel(STAGES, value, '未分层'),
+  kind: value => classificationLabel(noteKindNames, value, '资料'),
   state: (value) => STATES[value] || value || "未知",
 };
 

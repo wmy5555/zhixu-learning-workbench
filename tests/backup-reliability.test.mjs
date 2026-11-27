@@ -50,7 +50,8 @@ test('persisted note classifications retain their Vault directories and backup a
   for (const [key, values] of Object.entries({ kind: noteKinds, stage: learningStages, depth: learningDepths })) {
     assert.ok(Object.isFrozen(values));
     for (const value of values) assert.equal(read(key, value)[key], value);
-    for (const invalid of ['', 'unknown', 'constructor', null, 1])
+    assert.equal(read(key, 'future-label')[key], 'future-label');
+    for (const invalid of ['', '\n', 'constructor', null, 1, [], {}])
       assert.throws(() => read(key, invalid), { code: 'INVALID', status: 400, message: `备份 Markdown 的 ${key} 属性无效。` });
   }
 });
@@ -65,7 +66,7 @@ test('invalid backup payloads leave Markdown, runtime records, indexes and histo
     b => { b.notes[0].raw = '---\nkind: knowledge\n'; },
     b => { b.notes[0].raw = '---\n- scalar\n---\n正文'; },
     b => { b.notes[0].raw = b.notes[0].raw.replace('privacy: local', 'privacy: unsafe'); },
-    b => { b.notes[0].raw = b.notes[0].raw.replace('kind: knowledge', 'kind: unsupported'); },
+    b => { b.notes[0].raw = b.notes[0].raw.replace('kind: knowledge', 'kind: {invalid: type}'); },
     b => { b.notes[0].raw = b.notes[0].raw.replace('id: current-note', 'id: other-note'); },
     b => noteMeta(b, { relations: [null] }),
     b => noteMeta(b, { kind: 'topic', noteIds: 'malformed' }),

@@ -2,7 +2,7 @@ import { structureRecord } from '../src/source-structure.mjs';
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdir, readFile, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, readFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import test from 'node:test';
@@ -209,6 +209,45 @@ test('ask identity stays within session/CSRF and library boundaries and prevents
   assert.equal(separate.status, 200);
   assert.notEqual(separate.body.draftId, first.body.draftId);
   assert.equal(app.service.store.records('drafts').length, 1);
+});
+
+test('confirming an external classification leaves its separate damaged source isolated until the file is repaired', async t => {
+  const app = await startApp(t), { headers, cookie } = await webSession(app);
+  const create = (title, meta) => app.service.store.create({ kind: 'knowledge', title, body: '合成原文。\r\n\r\n  保留空格\r\n', meta });
+  const healthy = create('可独立学习', { stage: 'learning', depth: 'explain' });
+  const edited = create('同时存在两个待处理字段', { stage: 'learning', depth: 'explain' });
+  const pathOnDisk = path.join(app.vaultDir, edited.path);
+  const external = ['---', 'id: ' + edited.id, 'kind: knowledge', 'title: ' + edited.title,
+    'stage: learning', 'depth: future-depth', 'processKey: 42', '---', edited.body].join('\n');
+  await writeFile(pathOnDisk, external);
+  const address = '/api/notes/' + edited.id;
+  const get = url => request(app.baseUrl, url, { headers });
+  const post = (url, body, credentials = headers) => request(app.baseUrl, url, { method: 'POST', headers: credentials, body });
+  async function scheduled() {
+    const response = await get('/api/bootstrap');
+    assert.equal(response.status, 200);
+    return response.body.today.items.map(item => item.noteId);
+  }
+  const detail = await get(address);
+  assert.equal(detail.status, 200, JSON.stringify([detail.body, app.service.store.conflicts]));
+  assert.equal(detail.body.meta.depth, 'future-depth');
+  assert.equal(detail.body.body, edited.body);
+  assert.deepEqual(await scheduled(), [healthy.id]);
+  const change = { expectedHash: detail.body.hash, classification: { depth: 'apply' } };
+  assert.equal((await post(address + '/classification', change, {})).status, 401);
+  assert.equal((await post(address + '/classification', change, { Cookie: cookie })).status, 403);
+  assert.equal((await post(address + '/classification', { ...change, expectedHash: edited.hash })).status, 409);
+  const confirmed = await post(address + '/classification', change);
+  assert.equal(confirmed.status, 200);
+  assert.equal(confirmed.body.meta.depth, 'apply');
+  assert.equal(confirmed.body.meta.processKey, 42);
+  assert.equal(confirmed.body.body, edited.body);
+  assert.deepEqual(await scheduled(), [healthy.id]);
+  const corrected = (await readFile(pathOnDisk, 'utf8')).replace(/^processKey: 42\r?\n/m, '');
+  await writeFile(pathOnDisk, corrected);
+  // A real detail read synchronizes the user's external repair before the next plan.
+  assert.equal((await get(address)).body.meta.processKey, undefined);
+  assert.deepEqual(new Set(await scheduled()), new Set([healthy.id, edited.id]));
 });
 
 test('Today reflects an explicitly promoted candidate and generate POST returns its current plan', async t => {

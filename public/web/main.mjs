@@ -21,6 +21,8 @@ import { createFocus } from './focus.mjs';
 import { createStudyWorkspace } from './study-workspace.mjs';
 import { batchImport, prepareTexts } from './batch-import.mjs';
 import { captureFilesHTML, mountCaptureFiles } from './capture-files.mjs';
+import { unknownClassificationFields } from '../note-classification.mjs';
+import { classificationInputs } from '../classification-review.mjs';
 
 installInputModality(document.documentElement, document);
 
@@ -93,6 +95,7 @@ async function go(route, { replace = false, force = false, guide = false, speed 
   if (state.dirty && !force && !await confirm('放弃还没保存的输入？','当前输入还没有保存。取消可继续编辑，确认后会放弃这次输入。','放弃输入并离开')) return false;
   const fromVersion = api.getContext().version;
   await onboarding.prepareRoute(route);
+  if (state.route.startsWith('edit/') && route === state.readerEdit?.route && state.readerEdit.version !== api.getContext().version) route = 'library';
   const libraryVisit = route?.split('/')[0] === 'library' ? library.visit(!guide && route === 'library') : null;
   const cachedLibrary = libraryVisit?.nodes;
   const main=$('#main'),reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -106,7 +109,7 @@ async function go(route, { replace = false, force = false, guide = false, speed 
   if (route !== state.route) {
     const version = api.getContext().version;
     const resumesReader = state.readerEdit?.route === route && state.readerEdit.version === version;
-    if (route.startsWith('read/') && !state.route.startsWith('read/') && !resumesReader) state.readerReturn = state.route;
+    if (route.startsWith('read/') && !state.route.startsWith('read/') && !resumesReader) state.readerReturn = state.route.startsWith('edit/') ? 'library' : state.route;
     const editsReader = state.route.startsWith('read/') && route === 'edit/' + state.route.slice(5);
     state.readerEdit = editsReader && fromVersion === version ? { route: state.route, version } : null;
   }
@@ -219,9 +222,13 @@ function readPage(id) {
     }).catch(error=>{if(current()&&root.isConnected)notify(error.message);});
   }};
 }
+function editReturn(id) {
+  const read = `read/${id}`;
+  return state.route === `edit/${id}` && state.readerEdit?.route === read && state.readerEdit.version === api.getContext().version ? read : 'library';
+}
 async function editPage(id) {
   const note=await api.get(endpoint('notes',id));
-  return {html:heading('KEEP THE ORIGINAL','把想表达的，写得更清楚。','保存时会核对原版本，其他地方的修改不会被覆盖。',link('回到阅读',`read/${id}`,'text-button'))+
+  return {html:heading('KEEP THE ORIGINAL','把想表达的，写得更清楚。','保存时会核对原版本，其他地方的修改不会被覆盖。',btn(editReturn(id)==='library'?'回到知识库':'回到阅读','edit-return','text-button',`data-id="${e(id)}"`))+
     `<form id="edit-form" class="writing-page">${field('标题','title',{value:note.title,required:true})}<div class="field note-body-field"><label for="note-body">正文</label><div id="note-body-editor"><textarea id="note-body" name="body" rows="20" required>${e(note.body||'')}</textarea></div></div><div class="paper-footer"><p class="muted small">原始资料与个人理解各自保留。</p><button class="primary" type="submit">保存修改 ${icon('arrow')}</button></div></form>`,
     bind(){
       const form=$('#edit-form');watchForm(form);
@@ -231,7 +238,7 @@ async function editPage(id) {
         const {snapshot}=await session.save();
         await refreshBoot();
         if(form.elements.title.value!==snapshot.title||editor.getValue()!==snapshot.body){notify('本次修改已保存；保存期间的新输入仍在草稿中，请继续保存。');return;}
-        state.dirty=false;await go(`read/${id}`,{replace:true,force:true});notify('修改已保存。');
+        state.dirty=false;await go(editReturn(id),{replace:true,force:true});notify('修改已保存。');
       });
     }};
 }
@@ -273,6 +280,20 @@ function formModal(title, contents, save, { wide = false } = {}) {
   submit(form,async(values,node)=>{await save(values,node);dirty=false;dialog.close();});
   return dialog;
 }
+async function reviewClassification(id) {
+  const sequence=state.sequence, context=api.getContext();
+  const note=await api.get(endpoint('notes',id));
+  if(sequence!==state.sequence||context.version!==api.getContext().version)return;
+  const fields=unknownClassificationFields(note);
+  if(!fields.length){notify('分类已是可识别的值。');return;}
+  const dialog=formModal('核对分类',`<p>${e(note.title)}</p><div data-classification-fields></div>`,async values=>{
+    if(context.version!==api.getContext().version)throw Error('知识库已切换，请重新打开资料。');
+    const classification=Object.fromEntries(fields.map(key=>[key,values[key]]));
+    await api.post(endpoint('notes',id,'classification'),{expectedHash:note.hash,classification});
+    await refreshBoot();await go(state.route,{force:true,replace:true});notify('分类已更新。');
+  });
+  dialog.querySelector('[data-classification-fields]').append(classificationInputs(note));
+}
 async function processSource(id, { research = false } = {}) {
   const sequence=state.sequence,returnTo=state.route.startsWith('read/')?state.route:`read/${id}`;
   const note=await api.get(endpoint('notes',id));
@@ -307,7 +328,7 @@ async function processSource(id, { research = false } = {}) {
       if(!['queued','running'].includes(job.state)){
         const [proposals,latestBoot]=await Promise.all([api.get('/api/proposals'),bootstrap.read()]);
         boot=latestBoot;
-        pendingProposals=list(proposals.proposals).filter(p=>p.state==='pending'&&p.meta?.processKey?.startsWith(`${id}:`)).length;
+        pendingProposals=list(proposals.proposals).filter(p=>p.state==='pending'&&typeof p.meta?.processKey==='string'&&p.meta.processKey.startsWith(`${id}:`)).length;
       }
       if(!current())return;
       if(boot&&bootstrap.publish(boot))shell();
@@ -359,6 +380,8 @@ async function recycle() {
 async function actions(control) {
   const action=control.dataset.action,id=control.dataset.id;
   if(control.closest('.reader-menu')&&action!=='navigate')control.closest('dialog').close();
+  if(action==='edit-return')return go(editReturn(id));
+  if(action==='classification-review')return reviewClassification(id);
   if(action==='navigate') {
     const dialog=control.closest('dialog');
     if(dialog){if(dialog.beforeClose&&!await dialog.beforeClose())return;dialog.close();}
@@ -383,7 +406,7 @@ async function actions(control) {
   if(action==='reader-section') {const target=document.getElementById(control.dataset.target);target?.scrollIntoView({block:'start',behavior:'instant'});target?.focus({preventScroll:true});$$('.reader-toc button').forEach(node=>node.removeAttribute('aria-current'));control.setAttribute('aria-current','location');return;}
   if(action==='prepare-learning')return study.prepare(id);
   if(action==='research-source')return processSource(id,{research:true});
-  if(action==='reader-actions') {const note=state.note;if(!note||note.id!==id)return;modal('资料操作',readerMenu(note,state.readiness));return;}
+  if(action==='reader-actions') {const note=state.note;if(!note||note.id!==id)return;modal('资料操作',readerMenu(note,state.readiness,list(state.boot?.notes)));return;}
   if(action==='trash-source') {const note=await api.get(endpoint('notes',id));if(note.kind!=='source')return;if(!await confirm('把这份原文暂时放下？','原始资料会进入回收站，可以恢复。','移入回收站'))return;await api.remove(endpoint('notes',id),{expectedHash:note.hash});$$('dialog[open]').forEach(dialog=>dialog.close());await refreshBoot();await go('library');notify('原文已移入回收站。');return;}
   if(action==='process')return processSource(id);
   if(action==='extract')return extract(id);

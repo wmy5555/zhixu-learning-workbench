@@ -23,6 +23,7 @@ const onboardingCss = await readFile(new URL('../public/onboarding.css', import.
 const discoverySource = (await readFile(new URL('../public/model-discovery.mjs', import.meta.url), 'utf8')).replace(/^import.*;$/m, '').replaceAll('export ', '');
 const markdownSource = await readFile(new URL('../public/markdown-reader.mjs', import.meta.url), 'utf8');
 const appSource = await readFile(new URL('../public/app.mjs', import.meta.url), 'utf8');
+const classificationReviewSource = await readFile(new URL('../public/classification-review.mjs', import.meta.url), 'utf8');
 const editorSource = await readFile(new URL('../public/markdown-editor.mjs', import.meta.url), 'utf8');
 const fileUiSource = await readFile(new URL('../public/source-files.mjs', import.meta.url), 'utf8');
 const onboardingSource = await readFile(new URL('../public/onboarding.mjs', import.meta.url), 'utf8');
@@ -44,6 +45,8 @@ class Element {
   get value() { return this.tagName === 'select' ? this.children.find(child => child.selected)?.value ?? this._value : this._value; }
   get textContent() { return this._text + this.children.map(child => child.textContent ?? String(child)).join(''); }
   append(...children) { this.children.push(...children.map(child => { if (child instanceof Element) { child.parentNode = this; return child; } const text = new Element('text'); text.textContent = String(child); text.parentNode = this; return text; })); }
+  add(child) { if (!this.children.length) child.selected = true; this.append(child); }
+  get elements() { return Object.fromEntries(descendants(this).filter(node=>node.name).map(node=>[node.name,node])); }
   prepend(...children) { this.children.unshift(...children); }
   get options() { return this.children; }
   replaceChildren(...children) { this._text = ''; this.children = []; this.append(...children); }
@@ -347,6 +350,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat, savedSession = 
     documentElement: new Element('html'),
     body: new Element('body'),
     createElement: tag => new Element(tag),
+    createDocumentFragment: () => new Element('fragment'),
     createElementNS: (_, tag) => new Element(tag),
     createTextNode: value => new Element('text'),
     querySelector(selector) { if (!roots.has(selector)) roots.set(selector, new Element()); return roots.get(selector); },
@@ -355,7 +359,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat, savedSession = 
   };
   document.createTextNode = value => { const node = new Element('text'); node.textContent = value; return node; };
   const context = vm.createContext({
-    createStudyStarter, testAndSaveCapability, localCheckStatus, callFailureReason, AbortController, setTimeout, clearTimeout, setInterval() {}, clearInterval() {}, api, document, request: async () => ({ uploads: [] }), uploadAttachment: (...args) => api.uploadAttachment(...args), initSidebar, createProcessFeedback, parseSourceFile, TextDecoder, Node: Element, URL, Intl: Object.assign(Object.create(Intl), { DateTimeFormat: dateTimeFormat }), Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => `request-ui-${++browserRequestSequence}` },
+    createStudyStarter, testAndSaveCapability, localCheckStatus, callFailureReason, AbortController, setTimeout, clearTimeout, setInterval() {}, clearInterval() {}, api, document, request: (...args) => api.request ? api.request(...args) : Promise.resolve({ uploads: [] }), uploadAttachment: (...args) => api.uploadAttachment(...args), initSidebar, createProcessFeedback, parseSourceFile, TextDecoder, Node: Element, Option: class extends Element { constructor(text,value){super('option');this.textContent=text;this.value=value;} }, URL, Intl: Object.assign(Object.create(Intl), { DateTimeFormat: dateTimeFormat }), Date, Map, Set, queueMicrotask, crypto: { randomUUID: () => `request-ui-${++browserRequestSequence}` },
     FormData: class {
       constructor(form) { this.form = form; }
       entries() { return descendants(this.form).filter(node => node.name && !node.disabled && ['input', 'textarea', 'select'].includes(node.tagName)).map(node => [node.name, String(node.tagName === 'select' ? node.children.find(option => option.selected)?.value || '' : node.value)]); }
@@ -369,6 +373,7 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat, savedSession = 
   vm.runInContext(fileUiSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') +
     '\ncreateFilePicker = async (_input, options) => { api.onImagePicker?.(options); return { getFiles: () => [] }; };\nthis.attachmentUrl = (id, asset, download = false) => "/api/notes/" + id + "/attachments?asset=" + asset + (download ? "&download=1" : "");', context);
   loadLegacyUi(context);
+  vm.runInContext(classificationReviewSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', ''), context);
   vm.runInContext('\n' + discoverySource + '\n' + ('const renderMarkdown = (() => {\n' + markdownSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn renderMarkdown;\n})();') + '\nconst createMarkdownEditor = (() => {\n' + editorSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn createMarkdownEditor;\n})();\n' + knowledgeViewSource + '\n' + sourceMapSource + '\n' + relatedSourceUi + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { attachModelDiscovery, renderSourceGroupDrawer, conversationReading, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
   context.createRestoreSelection = createRestoreSelection;
   context.app.dataPanel = vm.runInContext('dataPanel', context);
@@ -382,6 +387,8 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat, savedSession = 
   context.app.refreshBootstrap = vm.runInContext('refreshBootstrap', context);
   context.app.processFeedback = vm.runInContext('processFeedback', context);
   context.app.renderSourceGroupDrawer = vm.runInContext('renderSourceGroupDrawer', context);
+  context.app.renderNoteDrawer = vm.runInContext('renderNoteDrawer', context);
+  context.app.mistakeRow = vm.runInContext('mistakeRow', context);
   context.app.toasts = document.querySelector('#toast-region');
   context.app.document = document;
   context.app.window = context.window;
@@ -421,6 +428,43 @@ const libraryAdvice = { suggestions: [
   { id: 'advice-beta', noteId: 'beta', type: 'merge', relatedId: 'other', title: '建议乙', reason: '乙理由' },
 ] };
 const suggestionTitles = app => descendants(app.refs.main).filter(node => node.tagName === 'h3' && node.textContent.startsWith('建议')).map(node => node.textContent);
+
+test('legacy reader reviews only unknown classification without exposing learning actions', async()=>{
+ let note={id:'synthetic',kind:'knowledge',title:'合成待核对',body:'合成原文',hash:'hash-1',meta:{stage:'learning',depth:'constructor'}};
+ const requests=[];
+ const app=browser({note:async()=>note,bootstrap:async()=>({notes:[note],jobs:[],settings:{}}),request:async(path,options)=>{
+   requests.push({path,options});note={...note,hash:'hash-2',meta:{...note.meta,depth:options.body.classification.depth}};return note;
+ }});
+ app.state.bootstrap={notes:[note],jobs:[],settings:{}};
+ app.renderNoteDrawer(note);
+ assert.match(app.refs.drawerBody.textContent,/分类待确认/);
+ assert.equal(findButton(app.refs.drawerBody,'开始学习'),undefined);
+ await findButton(app.refs.drawerBody,'核对分类').events.click();
+ const form=descendants(app.refs.drawerBody).find(node=>node.tagName==='form');
+ assert.match(form.textContent,/constructor/);
+ assert.equal(control(form,'stage'),undefined);
+ const depth=control(form,'depth');assert.equal(depth.required,true);assert.equal(depth.value,'');depth.value='apply';
+ await form.events.submit({preventDefault(){}});
+ assert.equal(requests[0].path,'/api/notes/synthetic/classification');
+ assert.deepEqual(JSON.parse(JSON.stringify(requests[0].options.body)),{expectedHash:'hash-1',classification:{depth:'apply'}});
+ assert.equal(note.body,'合成原文');assert.equal(note.meta.stage,'learning');
+});
+
+test('legacy mistake actions block unknown classifications and link to each affected record',async()=>{
+ const reads=[];
+ const app=browser({note:async id=>{reads.push(id);return {id,kind:'knowledge',title:id,body:'合成原文',meta:{depth:'constructor'}};}});
+ const good={id:'good',kind:'knowledge',meta:{stage:'learning',depth:'explain'}};
+ const bad={id:'bad',kind:'knowledge',meta:{stage:'learning',depth:'constructor'}};
+ app.state.bootstrap={notes:[good,bad],settings:{}};
+ const make=(id,noteId,depth)=>({id,kind:'mistake',title:id,meta:{noteId,...(depth?{depth}:{})}});
+ const normal=app.mistakeRow(make('normal','good')),own=app.mistakeRow(make('own','good','constructor')),related=app.mistakeRow(make('related','bad'));
+ assert.ok(findButton(normal,'专项练习'));
+ assert.equal(findButton(own,'专项练习'),undefined);assert.ok(findButton(own,'核对错题分类'));
+ assert.equal(findButton(related,'专项练习'),undefined);assert.ok(findButton(related,'核对关联知识分类'));
+ assert.match(own.textContent,/分类待确认/);assert.match(related.textContent,/分类待确认/);
+ await findButton(own,'核对错题分类').events.click();await findButton(related,'核对关联知识分类').events.click();
+ assert.deepEqual(reads,['own','bad']);
+});
 
 test('library advice uses exact matches and expands children only for a matching original source', async () => {
   let data = libraryFixture(['alpha']);

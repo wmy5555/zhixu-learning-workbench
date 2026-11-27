@@ -2,10 +2,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import YAML from 'yaml';
+import { sourceParentIds } from '../public/source-membership.mjs';
 import { fail, hash } from './core.mjs';
 import { readAttachment, attachmentPath } from './attachments.mjs';
 
-const metadata = raw => YAML.parseDocument(raw.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] || '{}').toJS({ maxAliasCount: 50 });
+const metadata = raw => YAML.parseDocument(raw.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1] || '{}').toJS({ maxAliasCount: 50 });
 const attachments = meta => [meta.sourceFile, ...(meta.attachments || [])].filter(Boolean);
 
 // Only explicit user deletions of sources belong here. Version history and
@@ -64,9 +65,25 @@ export function createRecycleBin(store) {
     });
     // Shared attachments, surviving records, and surviving history retain ownership.
     const uploads = store.records('attachmentUploads').filter(item => ids.has(item.noteId));
+    const currentNotes = store.db.prepare("SELECT raw, json_extract(json, '$.meta') AS meta FROM notes").all();
+    const survivingVersions = store.db.prepare('SELECT noteId,raw FROM versions').all().filter(row => !ids.has(row.noteId));
+    const referencedIds = new Set();
+    const rememberReferences = meta => {
+      for (const id of sourceParentIds({ meta })) {
+        if (ids.has(id)) referencedIds.add(id);
+      }
+    };
+    if (ids.size) {
+      for (const note of currentNotes) rememberReferences(JSON.parse(note.meta));
+      // A retained version can restore an input to a current or deleted note.
+      for (const version of survivingVersions) {
+        if (referencedIds.size === ids.size) break;
+        rememberReferences(metadata(version.raw));
+      }
+    }
     const surviving = [
-      ...store.db.prepare('SELECT raw FROM notes').all().map(row => row.raw),
-      ...store.db.prepare('SELECT noteId,raw FROM versions').all().filter(row => !ids.has(row.noteId)).map(row => row.raw),
+      ...currentNotes.map(row => row.raw),
+      ...survivingVersions.map(row => row.raw),
       ...store.db.prepare('SELECT namespace,key,json FROM records').all().filter(row =>
         !(row.namespace === 'deleted' && ids.has(row.key)) &&
         !(row.namespace === 'fileRecovery' && claims.some(item => item.id === row.key)) &&
@@ -85,6 +102,8 @@ export function createRecycleBin(store) {
     try {
       if (purge.files.length) store.put('recyclePurge', purge.id, purge);
       for (const id of ids) {
+        // The stable key keeps surviving links distinguishable from never-indexed references.
+        if (referencedIds.has(id)) store.put('purgedSourceIds', id, {});
         store.db.prepare('DELETE FROM versions WHERE noteId=?').run(id);
         store.remove('deleted', id);
       }

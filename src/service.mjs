@@ -1,4 +1,4 @@
-import { learningStages as stages, learningDepths as depths } from '../public/note-classification.mjs';
+import { hasUnknownClassification, unknownClassificationFields, isClassificationValue, learningStages as stages, learningDepths as depths } from '../public/note-classification.mjs';
 import { discoveryFindings, discoveryMarkdown } from './discovery-guidance.mjs';
 import { importedContext, readImportedView } from './chatgpt-structure.mjs';
 import { makeLearningPractice, learningSourceIds } from './learning-guidance.mjs';
@@ -21,7 +21,7 @@ import { createChatgptBridge } from './chatgpt.mjs';
 import { createChatgptUndo } from './chatgpt-undo.mjs';
 import { buildUsageReport } from './usage.mjs';
 import { callPurpose, callPurposes } from './call-purpose.mjs';
-import { groupSourceChildren, sourceParentIds } from '../public/source-membership.mjs';
+import { groupSourceChildren, hasInvalidSourceBinding, missingLocalSourceWarning, processKeyBinding, sourceBindingWarning, sourceParentIds, sourceReferences } from '../public/source-membership.mjs';
 import { structureBasis, structureRecord, structureView } from './source-structure.mjs';
 import { createSourceFiles } from './source-files.mjs';
 import { assertTextSource, processingText } from './attachments.mjs';
@@ -154,15 +154,24 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   const putJob = job => store.put('jobs', job.id, { ...job, updatedAt: now() });
   const getNote = id => { store.scan(); return store.read(id); };
   const privacyFor = n => store.outboundPrivacy(n);
-  const materialLimitations = n => {
+  function sourceBindingIssue(meta, missingLocalSource = store.missingLocalSourceCheck()) {
+    if (hasInvalidSourceBinding(meta)) return sourceBindingWarning;
+    return missingLocalSource(meta) ? missingLocalSourceWarning : '';
+  }
+  const materialLimitations = (n, missingLocalSource) => {
     const issues = [...(n.meta.researchLimitations || [])];
     if (n.meta.reviewAfter && n.meta.reviewAfter < learningNow()) issues.push('材料可能陈旧，需要重新研究。');
-    if (n.meta.processKey) { const [sourceId,sourceHash] = n.meta.processKey.split(':'); if (store.row(sourceId)?.hash !== sourceHash) issues.push('底层原始资料已修改或删除，需要重新加工。'); }
+    const bindingIssue = sourceBindingIssue(n.meta, missingLocalSource);
+    if (bindingIssue) issues.push(bindingIssue);
+    else {
+      const binding = processKeyBinding(n.meta.processKey);
+      if (binding && store.row(binding.sourceId)?.hash !== binding.sourceHash) issues.push('底层原始资料已修改或删除，需要重新加工。');
+    }
     return issues;
   };
-  const eligible = n => usable(n, learningNow()) && !materialLimitations(n).length;
+  const eligible = (n, missingLocalSource) => usable(n, learningNow()) && !materialLimitations(n, missingLocalSource).length;
   // Practising a material does not certify its claims for retrieval or generated answers.
-  const learnable = n => n.kind === 'knowledge' && n.meta.stage !== 'retired' && !n.meta.supersededBy;
+  const learnable = n => n.kind === 'knowledge' && !hasUnknownClassification(n) && n.meta.stage !== 'retired' && !n.meta.supersededBy;
   const needsMaterialScope = (type, payload) => type === 'index' || type === 'topics' || ['relate','discover'].includes(type) && payload?.useAI === true;
   const validMaterialSnapshots = snapshots => Array.isArray(snapshots) && snapshots.every(n => typeof n?.noteId === 'string' && n.noteId && typeof n.hash === 'string' && n.hash);
   function materialSnapshots(type) {
@@ -271,11 +280,14 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     if (!needsTitle(current)) fail('标题已经填写，保留当前标题。', 'TITLE_ALREADY_SET');
     if (!validSourceTitle(value)) fail('标题结果缺失或格式不正确；原文与临时标题已保留。', 'MODEL_FORMAT');
     const structure = store.get('sourceStructures', source.id), children = storedSourceChildren(source.id);
-    const structureCurrent = structure && JSON.stringify(structure.basis) === JSON.stringify(structureBasis(source, children));
+    const missingLocalSource = store.missingLocalSourceCheck();
+    const affected = child => sourceBindingIssue(child.meta, missingLocalSource);
+    const structureCurrent = structure && !children.some(affected)
+      && JSON.stringify(structure.basis) === JSON.stringify(structureBasis(source, children));
     const saved = store.update(source.id, { title: value.trim(), expectedHash: source.hash, meta: { titlePending: false, titleOrigin: 'ai' } });
     // Only this strictly checked automatic title change can carry body-derived evidence forward.
     const prefix = `${source.id}:${source.hash}:`, claims = new Set(), bindings = new Map();
-    for (const child of children.filter(note => note.meta.processKey?.startsWith(prefix))) {
+    for (const child of children.filter(note => !affected(note) && note.meta.processKey?.startsWith(prefix))) {
       for (const claim of child.meta.claims || []) claims.add(claim);
       const processKey = child.meta.processKey.replace(prefix, `${source.id}:${saved.hash}:`);
       const updated = store.update(child.id, { expectedHash: child.hash, meta: { processKey } });
@@ -374,9 +386,10 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
         if (id && !titleJobs.has(id)) titleJobs.set(id, job);
       }
     }
-    return notes.map(note => projectNote(note, titleJobs));
+    const missingLocalSource = store.missingLocalSourceCheck();
+    return notes.map(note => projectNote(note, titleJobs, missingLocalSource));
   }
-  function projectNote(note, titleJobs) {
+  function projectNote(note, titleJobs, missingLocalSource) {
     const n = structuredClone(note);
     delete n.meta.privacy;
     delete n.meta.effectivePrivacy;
@@ -386,9 +399,12 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
       const job = titleJobs ? titleJobs.get(n.id) : store.records('jobs').find(item => titleJobSource(item) === n.id);
       n.titleGeneration = { state: job?.state || 'idle', code: job?.code || null };
     } else if (n.meta.titleOrigin === 'ai') n.titleGeneration = { state: 'done' };
-    n.meta.sources = (n.meta.sources || []).filter(s => s.role === 'input' || !store.row(s.id) || !store.read(s.id).meta.excerptOnly);
+    const bindingIssue = sourceBindingIssue(n.meta, missingLocalSource);
+    if (bindingIssue) n.sourceBindingInvalid = true;
+    n.meta.sources = sourceReferences(n.meta).filter(s => s.role === 'input' || !store.row(s.id) || !store.read(s.id).meta.excerptOnly);
     n.meta.researchLimitations = [...new Set((n.meta.researchLimitations || []).map(l => operationalIssue(l) ? (l.match(/^“[^”]+”/)?.[0] || '该事实')+'尚待核验。' : l))];
-    if (n.meta.processKey && !n.meta.userEdited && (!n.meta.generatedBodyHash || hash(n.body) === n.meta.generatedBodyHash)) {
+    if (bindingIssue === missingLocalSourceWarning && !n.meta.researchLimitations.includes(bindingIssue)) n.meta.researchLimitations.push(bindingIssue);
+    if (!n.sourceBindingInvalid && n.meta.processKey && !n.meta.userEdited && (!n.meta.generatedBodyHash || hash(n.body) === n.meta.generatedBodyHash)) {
       const original = n.body.split('\n\n## 证据与适用范围')[0];
       const conclusions = (n.meta.researchConclusions || n.body.split('## 证据与适用范围\n\n')[1]?.split('\n\n- [')[0]?.split('### 研究范围')[0]?.split('## 尚需补充的研究')[0] || '').replace('此条未取得可引用的外部正文。','').trim();
       n.body = `${original}${conclusions ? '\n\n## 核验结论\n\n'+conclusions : ''}`;
@@ -397,20 +413,30 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   }
   const parentId = n => sourceParentIds(n)[0];
   const storedSourceChildren = id => groupSourceChildren(store.list(), [id]).get(id);
+  function analysisChildren(source) {
+    const notes = storedSourceChildren(source.id);
+    const missingLocalSource = store.missingLocalSourceCheck();
+    for (const note of [source, ...notes]) {
+      const issue = sourceBindingIssue(note.meta, missingLocalSource);
+      if (issue) fail(issue, 'SOURCE_BINDING_INVALID', 409);
+    }
+    return notes;
+  }
   function requestSourceStructure(id) {
-    const source = getNote(id), notes = storedSourceChildren(id);
+    const source = getNote(id);
     assertTextSource(source);
     if (source.kind !== 'source' || source.meta.excerptOnly) fail('请选择原始资料。');
+    const notes = analysisChildren(source);
     if (!notes.length) fail('请先拆解或手动整理资料，再分析逻辑关系。');
     const basis = structureBasis(source, notes);
     return processReply(queue('structure', { noteId: id, basis }, `structure:${id}:${hash(JSON.stringify(basis))}`));
   }
   async function analyzeSourceStructure(job, signal) {
-    const source = getNote(job.payload.noteId), notes = storedSourceChildren(source.id);
+    const source = getNote(job.payload.noteId), notes = analysisChildren(source);
     const assertCurrent = () => {
       store.scan();
       if (!store.row(source.id)) fail('原始资料已删除。', 'SOURCE_CHANGED');
-      const current = store.read(source.id), children = storedSourceChildren(source.id);
+      const current = store.read(source.id), children = analysisChildren(current);
       if (current.kind !== 'source' || current.meta.excerptOnly || !children.length) fail('资料组已变化，请先确认当前条目。', 'SOURCE_CHANGED');
       if ([current, ...children].some(n => privacyFor(n) !== 'cloud')) fail('原文或参与分析的引用已变化，请重新核对。', 'PRIVACY_LOCAL');
       if (JSON.stringify(structureBasis(current, children)) !== JSON.stringify(job.payload.basis)) fail('资料已变化，请重试以分析当前版本。', 'SOURCE_CHANGED');
@@ -479,11 +505,12 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   }
   function noteEvidence(id) {
     const note = getNote(id);
+    const sources = sourceReferences(note.meta);
     const evidence = (note.meta.evidence || []).map(ev => {
-      const ref = (note.meta.sources || []).find(s => s.role !== 'input' && store.row(s.id) && store.read(s.id).meta.url === ev.url);
+      const ref = sources.find(s => s.role !== 'input' && store.row(s.id) && store.read(s.id).meta.url === ev.url);
       return { sourceId: ref?.id, title: ev.title || ev.url || '来源摘录', url: ev.url, excerpt: ev.excerpt, locator: ev.locator, fetchedAt: ev.fetchedAt, role: ev.role, rationale: ev.rationale };
     });
-    for (const ref of note.meta.sources || []) {
+    for (const ref of sources) {
       if (!store.row(ref.id) || evidence.some(e => e.sourceId === ref.id)) continue;
       const source = store.read(ref.id);
       evidence.push({ sourceId: source.id, title: source.title, url: source.meta.url, excerpt: source.body, locator: ref.locator || source.meta.locator, fetchedAt: source.meta.fetchedAt || source.meta.acquiredAt, role: ref.role, rationale: ref.rationale });
@@ -538,6 +565,9 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   }
   function editNote(id, input) {
     const old = getNote(id), meta = { ...(input.meta || {}) };
+    if (unknownClassificationFields(old).some(key => Object.hasOwn(meta, key) && JSON.stringify(meta[key]) !== JSON.stringify(old.meta[key]))) {
+      fail('请先核对并确认未知分类。', 'CLASSIFICATION_REQUIRED', 409);
+    }
     for (const key of ['sourceFile', 'textExtraction', 'attachments']) {
       if (Object.hasOwn(meta, key)) fail('附件与转换来源只能通过专用导入接口更新。');
     }
@@ -560,14 +590,32 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     if (old.kind === 'knowledge') requestRelations(id);
     return result;
   }
+  function confirmClassification(id, { expectedHash, classification } = {}) {
+    const note = getNote(id);
+    if (note.meta.excerptOnly) fail('内部核验资料不作为知识条目展示。', 'NOT_FOUND', 404);
+    if (!expectedHash || note.hash !== expectedHash) fail('资料已变化，请刷新后重新核对分类。', 'CONFLICT', 409);
+    const missing = unknownClassificationFields(note);
+    if (!missing.length) fail('这份资料没有待确认的分类。', 'CONFLICT', 409);
+    if (!classification || typeof classification !== 'object' || Array.isArray(classification) ||
+        Object.keys(classification).length !== missing.length ||
+        !missing.every(key => Object.hasOwn(classification, key) && isClassificationValue(key, classification[key]))) {
+      fail('请为每个待确认字段选择现有分类，已知字段不能随本次确认修改。');
+    }
+    if (['integrated', 'core'].includes(classification.stage) && !note.meta.confirmedAt)
+      fail('选择个人理解或重点知识前，请先以自己的语言确认个人理解。');
+    const { kind: confirmedKind, ...meta } = classification;
+    return publicNote(store.update(id, { expectedHash, meta }, { confirmedKind }));
+  }
   function promote(id, { stage, reason = '', depth = 'explain' }) {
     const note = getNote(id); if (note.kind !== 'knowledge') fail('只有知识条目能进入学习阶段。');
+    if (hasUnknownClassification(note)) fail('请先核对并确认未知分类。', 'CLASSIFICATION_REQUIRED', 409);
     if (!stages.includes(stage) || !depths.includes(depth)) fail('阶段或学习目标无效。');
     if (['integrated','core'].includes(stage) && !note.meta.confirmedAt) fail('请先以自己的语言确认个人理解。');
     return store.update(id, { expectedHash: note.hash, meta: { stage, depth, promotionReason: reason, promotedAt: learningNow() } });
   }
   function confirmNote(id, { body, expectedHash }) {
     const note = getNote(id); if (note.kind !== 'knowledge') fail('请先把资料整理为知识条目。');
+    if (hasUnknownClassification(note)) fail('请先核对并确认未知分类。', 'CLASSIFICATION_REQUIRED', 409);
     if (!String(body || '').trim()) fail('请填写你自己的理解。');
     const managed = note.body.match(/<!-- zhixu-managed-links:start -->[\s\S]*?<!-- zhixu-managed-links:end -->/)?.[0] || '';
     const original = managed ? note.body.replace(managed, '').trimEnd() : note.body;
@@ -908,11 +956,15 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     }
     async function saveResults(research) {
       assertCurrent();
+      const missingLocalSource = store.missingLocalSourceCheck();
       for (let i=0;i<extracted.candidates.length;i++) {
         if (signal.aborted) throw new Error('任务已取消');
         const candidate = extracted.candidates[i];
         if (research && !candidate.claims.some(claim => changedClaims.has(claim))) continue;
         if (typeof candidate.title !== 'string' || typeof candidate.body !== 'string' || !Array.isArray(candidate.claims) || candidate.claims.some(x => typeof x !== 'string')) fail('待选学知识格式不正确。', 'MODEL_FORMAT');
+        const processKey = `${source.id}:${source.hash}:${i}`, savedId = job.payload.savedCandidates.ids[i];
+        const existing = store.list().find(n => savedId ? n.id === savedId : n.meta.processKey === processKey);
+        if (existing && (!research || sourceBindingIssue(existing.meta, missingLocalSource))) continue;
         const evidence = [], limitations = [], conclusions = [], notices = [];
         for (const claim of candidate.claims) {
           if (!research) { limitations.push(`“${claim}”尚待核验（未执行联网检验）。`); continue; }
@@ -929,13 +981,10 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
           const e = existing || store.create({ kind: 'source', title: ev.title || ev.url, body: ev.excerpt, meta: { url: ev.url, locator: ev.locator, fetchedAt: ev.fetchedAt, excerptHash: hash(ev.excerpt), excerptOnly: true } });
           sourceRefs.push({ id: e.id, role: ['support','oppose','limit'].includes(ev.role) ? ev.role : 'support', locator: ev.locator });
         }
-        const processKey = `${source.id}:${source.hash}:${i}`, savedId = job.payload.savedCandidates.ids[i];
-        const existing = store.list().find(n => savedId ? n.id === savedId : n.meta.processKey === processKey);
         const body = `## 原资料拆解（AI 整理）\n\n${candidate.body}\n\n## 证据与适用范围\n\n${conclusions.join('\n\n')}\n\n${evidence.map(e => `- [${e.title || e.url}](${e.url})（${e.role}，读取于 ${e.fetchedAt}）\n  ${e.excerpt}${e.rationale ? '\n  对应关系：'+e.rationale : ''}`).join('\n\n') || '此条未取得可引用的外部正文。'}${notices.length ? '\n\n### 研究范围\n'+notices.join('\n') : ''}${limitations.length ? '\n\n## 尚需补充的研究\n'+limitations.map(l=>`- ${l}`).join('\n') : ''}`;
         const meta = { stage: 'candidate', sources: sourceRefs, topic: candidate.topic || '', prerequisites: candidate.prerequisites || [], promotionReason: candidate.reason || '', depth: depths.includes(candidate.depth) ? candidate.depth : 'explain', claims: candidate.claims, evidence, researchConclusions: conclusions.join('\n\n'), researchLimitations: limitations, researchedAt: research ? now() : null, reviewAfter: research && candidate.claims.length ? new Date(learningDate().getTime()+(Number.isInteger(source.meta.researchIntervalDays)&&source.meta.researchIntervalDays>=1&&source.meta.researchIntervalDays<=365?source.meta.researchIntervalDays:30)*86400000).toISOString() : null, processKey, generatedBodyHash: hash(body) };
         const practicePlan = makeLearningPractice(candidate.practice, body);
         if (practicePlan) meta.learningPractice = practicePlan;
-        if (existing && !research) continue;
         const activeStudy = existing && store.records('sessions').some(session => session.noteId === existing.id && session.status !== 'completed');
         const wasEdited = existing && (existing.meta.userEdited || existing.meta.acceptedResearchProposal || existing.meta.confirmedAt || activeStudy || !existing.meta.generatedBodyHash || hash(existing.body) !== existing.meta.generatedBodyHash);
         if (existing && existing.body === body && JSON.stringify(existing.meta.evidence || []) === JSON.stringify(evidence) && JSON.stringify(existing.meta.researchLimitations || []) === JSON.stringify(limitations)) { continue; }
@@ -957,6 +1006,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
       store.scan();
       if (store.row(source.id)?.hash === source.hash) {
         const children = storedSourceChildren(source.id);
+        if (children.some(note => sourceBindingIssue(note.meta, missingLocalSource))) return;
         const keys = new Map(extracted.candidates.flatMap((candidate, index) => {
           const note = children.find(n => n.meta.processKey === `${source.id}:${source.hash}:${index}`);
           return note && note.body.includes(candidate.body) ? [[String(index), note.id]] : [];
@@ -1090,7 +1140,9 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   }
   async function discover(job, signal) {
     const scope=job.payload.useAI===true ? materialScope(job) : null;
-    store.scan(); const notes=store.list().filter(n=>n.kind==='knowledge'&&n.meta.stage!=='retired');
+    store.scan();
+    const all = store.list(), missingLocalSource = store.missingLocalSourceCheck(new Map(all.map(n => [n.id, n])));
+    const notes=all.filter(n=>n.kind==='knowledge'&&n.meta.stage!=='retired'&&!sourceBindingIssue(n.meta, missingLocalSource));
     const relations=store.records('relations').filter(r=>r.state==='accepted'), linked=new Set(relations.flatMap(r=>[r.fromId,r.toId]));
     const useCounts=new Map();
     if(notes.length)for(const use of store.records('uses'))useCounts.set(use.noteId,(useCounts.get(use.noteId)||0)+1);
@@ -1109,11 +1161,13 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
       body+='\n\n## AI 发现建议（待审阅）\n'+discoveryMarkdown(discoveryResult);
     }catch(error){summaryStatus='failed';discoveryIssue=error;body+='\n\n## AI 探索未完成\n'+error.message;}}
     else body+='\n\n## 探索限制\n当前仅完成本地结构检查，没有生成 AI 发现建议。';
-    const cursor=store.get('schedule','discoveryCursor',{offset:0}).offset, available=notes.filter(eligible);
+    const currentMissingLocalSource = job.payload.useAI === true ? store.missingLocalSourceCheck() : missingLocalSource;
+    const eligibleForDiscovery = n => eligible(n, currentMissingLocalSource);
+    const cursor=store.get('schedule','discoveryCursor',{offset:0}).offset, available=notes.filter(eligibleForDiscovery);
     const batch=[...available.slice(cursor),...available.slice(0,cursor)].slice(0,16);
     for(const n of batch)await relate({payload:{noteId:n.id,useAI:false},snapshot:n},signal);
     store.put('schedule','discoveryCursor',{offset:available.length?(cursor+batch.length)%available.length:0});
-    if(job.payload.useAI===true&&!discoveryIssue)for(const n of selected.filter(eligible).slice(0,2)){try{detailStatus='complete';await relate({payload:{noteId:n.id,useAI:true,snapshots:job.payload.snapshots}},signal);}catch(error){detailStatus='incomplete';discoveryIssue=error;body+=`\n\n## 关联细查未完成\n${error.message}`;break;}}
+    if(job.payload.useAI===true&&!discoveryIssue)for(const n of selected.filter(eligibleForDiscovery).slice(0,2)){try{detailStatus='complete';await relate({payload:{noteId:n.id,useAI:true,snapshots:job.payload.snapshots}},signal);}catch(error){detailStatus='incomplete';discoveryIssue=error;body+=`\n\n## 关联细查未完成\n${error.message}`;break;}}
     body+=`\n\n本次本地比较 ${batch.length} 条；AI 细查最多2条。每次轮换覆盖，不能视为全库穷尽。`;
     const actions=recommendations().suggestions;
     body+='\n\n## 可处理的建议\n'+(actions.map(a=>`- ${a.title}：${a.reason}`).join('\n') || '暂无有记录依据的阶段调整建议。');
@@ -1174,7 +1228,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     catch(error){if(store.get('jobs',job.id)?.state!=='cancelled')putJob({...job,state:['OUTBOUND_INTENT_REQUIRED','PRIVACY_LOCAL','DISABLED','NOT_CONFIGURED','BUDGET_EXCEEDED','SOURCE_BUDGET','BUDGET_UNKNOWN','RESEARCH_INCOMPLETE','AI_DISABLED','MISSING_KEY','CAPABILITY_DISABLED','MISSING_CREDENTIALS','CALL_RECOVERY_REQUIRED','CALL_ACCOUNTING_FAILED','CALL_RESULT_SAVE_FAILED','CALL_PERSISTENCE_FAILED','CALL_RESULT_MISSING'].includes(error.code)?'waiting':'failed',error:String(error.message).slice(0,800),code:error.code||'TASK_FAILED'});}
     finally{processing=false;controller=null;currentJob=null;}
   }
-  function jobAction(id,{action}){if(pausing||stopped)fail('任务正在暂停，请稍后继续。','BUSY',409);const job=store.get('jobs',id);if(!job)fail('任务不存在。','NOT_FOUND',404);if(action==='cancel'){if(currentJob===id)controller?.abort();return putJob({...job,state:'cancelled',error:'用户取消；已保存的输入和回答保留。'});}if(action==='retry'){if(job.type==='structure'&&!['running','done'].includes(job.state)){const source=getNote(job.payload.noteId);job.payload.basis=structureBasis(source,storedSourceChildren(source.id));job.dedupKey=`structure:${source.id}:${hash(JSON.stringify(job.payload.basis))}`;const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}if(['running','done'].includes(job.state))fail('该任务当前不可重试。');if(job.type==='title'){const source=getNote(job.payload.noteId);if(!needsTitle(source))fail('标题已经填写，保留当前标题。','TITLE_ALREADY_SET');job.payload={noteId:source.id,hash:source.hash};job.dedupKey=`title:${source.id}:${source.hash}`;const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}if(job.type==='process'){const source=getNote(job.payload.noteId);if(source.hash!==job.payload.hash){job.payload={noteId:source.id,hash:source.hash,research:job.payload.research===true,...(needsTitle(source)?{titleRequested:true}:{})};job.dedupKey=`process:${source.id}:${source.hash}${job.payload.research ? ':research' : ''}`;job.progress=0;}const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}if(needsMaterialScope(job.type,job.payload))job.payload={...job.payload,snapshots:materialSnapshots(job.type)};return putJob({...job,outboundIntentVersion:1,state:'queued',error:'',code:null});}fail('任务操作无效。');}
+  function jobAction(id,{action}){if(pausing||stopped)fail('任务正在暂停，请稍后继续。','BUSY',409);const job=store.get('jobs',id);if(!job)fail('任务不存在。','NOT_FOUND',404);if(action==='cancel'){if(currentJob===id)controller?.abort();return putJob({...job,state:'cancelled',error:'用户取消；已保存的输入和回答保留。'});}if(action==='retry'){if(job.type==='structure'&&!['running','done'].includes(job.state)){const source=getNote(job.payload.noteId);job.payload.basis=structureBasis(source,analysisChildren(source));job.dedupKey=`structure:${source.id}:${hash(JSON.stringify(job.payload.basis))}`;const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}if(['running','done'].includes(job.state))fail('该任务当前不可重试。');if(job.type==='title'){const source=getNote(job.payload.noteId);if(!needsTitle(source))fail('标题已经填写，保留当前标题。','TITLE_ALREADY_SET');job.payload={noteId:source.id,hash:source.hash};job.dedupKey=`title:${source.id}:${source.hash}`;const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}if(job.type==='process'){const source=getNote(job.payload.noteId);if(source.hash!==job.payload.hash){job.payload={noteId:source.id,hash:source.hash,research:job.payload.research===true,...(needsTitle(source)?{titleRequested:true}:{})};job.dedupKey=`process:${source.id}:${source.hash}${job.payload.research ? ':research' : ''}`;job.progress=0;}const duplicate=store.records('jobs').find(j=>j.id!==id&&j.dedupKey===job.dedupKey&&['queued','running'].includes(j.state));if(duplicate)return duplicate;}if(needsMaterialScope(job.type,job.payload))job.payload={...job.payload,snapshots:materialSnapshots(job.type)};return putJob({...job,outboundIntentVersion:1,state:'queued',error:'',code:null});}fail('任务操作无效。');}
   function pauseJobs() {
     if (pausePromise) return pausePromise;
     pausing = true;
@@ -1197,7 +1251,12 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     if (time >= cfg.scheduleTime) today();
     else store.ensureFresh();
     const last = store.get('schedule', 'discovery');
-    if (store.list().some(n => n.kind === 'knowledge') && (!last || date.getTime() - Date.parse(last.at) > cfg.discoveryDays * 86400000)) queue('discover', {}, `discovery:${localDay(date, cfg.timezone)}`);
+    if (!last || date.getTime() - Date.parse(last.at) > cfg.discoveryDays * 86400000) {
+      const notes = store.list(), missingLocalSource = store.missingLocalSourceCheck(new Map(notes.map(n => [n.id, n])));
+      if (notes.some(n => n.kind === 'knowledge' && !sourceBindingIssue(n.meta, missingLocalSource))) {
+        queue('discover', {}, `discovery:${localDay(date, cfg.timezone)}`);
+      }
+    }
     return runJobs();
   }
   function demo(){const existing=store.list().filter(n=>n.meta.demo);if(existing.length)return{notes:existing};const source=store.create({kind:'source',title:'演示资料 · 小林的读书项目',body:'【虚构演示，不代表用户真实经历】小林正在整理一份读书报告。他保存了原始摘录，希望用自己的话说明观点，再找到能支持或反对它的材料。此条用于体验输入、查找和编辑。',meta:{demo:true,privacy:'local',platform:'内置演示'}});const note=store.create({kind:'knowledge',title:'演示知识 · 给读书报告保留出处',body:'【演示设定】为小林的读书报告记录：一句观点、对应原文、页码，以及哪些条件会限制该观点。\n\n练习：假设你是小林，请用自己的话说明报告中为何要保留出处。这个练习仅针对上述虚构任务，没有预先记录任何学习成绩。',meta:{demo:true,privacy:'local',stage:'candidate',topic:'读书与表达',depth:'explain',sources:[{id:source.id,role:'input'}],promotionReason:'用于试用学习流程，可自行加入学习。'}});return{notes:[source,note]};}
@@ -1286,7 +1345,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   const commitFile = tracked(input => sourceFiles.commit(input));
   const readFile = (id, assetId) => sourceFiles.read(id, assetId);
   const pendingUploads = () => sourceFiles.pending();
-  return { get store(){return store;}, get processing(){return processing;}, get hasPendingOperations(){return processing||activeOperations>0||pausing;}, chatgpt, chatgptUndo, learningNow, settings, updateSettings, capabilityTests, getPrompts, updatePrompts, usage, usageReport, updateUsageSettings, callRecovery, recoverCall, ai, importItems, processNote, requestSourceStructure, editSourceStructure, listNotes, publicNote, publicNotes, publicJob, library, readPublicNote, noteEvidence, linksPreview, syncLinks, getNote, editNote, extractNote, promote, confirmNote, merge, search:tracked(search), today, planAction, startStudy, session, answerStudy, hintStudy, confirmStudy, finishStudy, mistakeAction, topics, createTopic, updateTopic, topicAction, recommendations, recommendationAction, requestRelations, relationReview, relationAction, related, ask:tracked(ask), updateDraft, propose, proposalAction, queue, runJobs, pauseJobs, jobAction, tick, demo, diagnostics, backup, restore,
+  return { get store(){return store;}, get processing(){return processing;}, get hasPendingOperations(){return processing||activeOperations>0||pausing;}, chatgpt, chatgptUndo, learningNow, settings, updateSettings, capabilityTests, getPrompts, updatePrompts, usage, usageReport, updateUsageSettings, callRecovery, recoverCall, ai, importItems, processNote, requestSourceStructure, editSourceStructure, listNotes, publicNote, publicNotes, publicJob, library, readPublicNote, noteEvidence, linksPreview, syncLinks, getNote, editNote, extractNote, promote, confirmClassification, confirmNote, merge, search:tracked(search), today, planAction, startStudy, session, answerStudy, hintStudy, confirmStudy, finishStudy, mistakeAction, topics, createTopic, updateTopic, topicAction, recommendations, recommendationAction, requestRelations, relationReview, relationAction, related, ask:tracked(ask), updateDraft, propose, proposalAction, queue, runJobs, pauseJobs, jobAction, tick, demo, diagnostics, backup, restore,
     jobStatuses, rebuildLocalSearch,
     bootstrap() {
       const config = settings(), before = store.list();

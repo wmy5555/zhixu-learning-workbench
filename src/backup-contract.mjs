@@ -43,7 +43,14 @@ export function validateBackupMarkdown(raw, id) {
   if (!backupObject(meta)) invalid('备份 Markdown 属性必须为键值对象。');
   if (meta.id !== undefined && meta.id !== id) invalid('备份 Markdown 的稳定身份不一致。');
   const enums = { kind: noteKinds, privacy: ['local','cloud'], stage: learningStages, depth: learningDepths };
-  for (const [key, values] of Object.entries(enums)) if (meta[key] !== undefined && !values.includes(meta[key])) invalid(`备份 Markdown 的 ${key} 属性无效。`);
+  for (const [key, values] of Object.entries(enums)) {
+    const value = meta[key];
+    if (value === undefined || values.includes(value)) continue;
+    // External classification labels are passive text. Permissions and other metadata retain their own contracts.
+    if (key !== 'privacy' && typeof value === 'string' && value.trim() && !/[\u0000-\u001f\u007f]/u.test(value) &&
+        !Object.hasOwn(Object.prototype, value) && value !== 'prototype') continue;
+    invalid(`备份 Markdown 的 ${key} 属性无效。`);
+  }
   for (const key of ['title','processKey','generatedBodyHash','reviewAfter','confirmedAt','topic','supersededBy']) if (meta[key] !== undefined && meta[key] !== null && typeof meta[key] !== 'string') invalid(`备份 Markdown 的 ${key} 属性无效。`);
   for (const key of ['createdAt','updatedAt']) if (meta[key] !== undefined && !date(meta[key])) invalid(`备份 Markdown 的 ${key} 时间无效。`);
   for (const key of ['paused','userEdited','userStructured','excerptOnly','titlePending']) if (meta[key] !== undefined && typeof meta[key] !== 'boolean') invalid(`备份 Markdown 的 ${key} 属性无效。`);
@@ -63,6 +70,7 @@ export function validateBackupRecord(row) {
     return value;
   }
   if (!backupObject(value)) invalid('备份运行记录必须为键值对象。');
+  if (row.namespace === 'purgedSourceIds' && (!validBackupId(row.key) || Object.keys(value).length)) invalid('备份缺失来源记录无效。');
   if (value.id !== undefined && (typeof value.id !== 'string' || !value.id || value.id !== row.key)) invalid('备份运行记录身份不一致。');
   for (const key of ['noteId','fromId','toId']) if (value[key] !== undefined && !validBackupId(value[key])) invalid('备份运行记录引用身份无效。');
   if (row.namespace === 'jobs' && (!validBackupId(value.id) || typeof value.type !== 'string' || !backupObject(value.payload) || !['queued','running','waiting','failed','done','cancelled'].includes(value.state) || !Number.isInteger(value.attempts) || value.attempts < 0)) invalid('备份任务记录无效。');

@@ -1,11 +1,12 @@
 import { createRestoreSelection } from './restore-selection.mjs';
 import { createStudyStarter } from './study-start.mjs';
-import { noteKinds, learningStages, learningDepths, learningDepthNames } from './note-classification.mjs';
+import { noteKinds, learningStages, learningDepths, learningDepthNames, unknownClassificationFields, hasUnknownClassification } from './note-classification.mjs';
+import { classificationInputs } from './classification-review.mjs';
 import { localCheckStatus, callFailureReason } from "./mcp-status.mjs";
 import { renderRecycleBin } from './recycle-bin.mjs';
 import { attachModelDiscovery } from "./model-discovery.mjs";
 import { testAndSaveCapability } from "./capability-test.mjs";
-import { api, ApiError, startSession } from "./api.mjs";
+import { api, ApiError, startSession, request } from "./api.mjs";
 import { parseSourceFile } from "./source-exchange.mjs";
 import { renderMarkdown } from "./markdown-reader.mjs";
 import { createMarkdownEditor } from "./markdown-editor.mjs";
@@ -214,6 +215,7 @@ function noteMeta(note) {
   return el("div", { class: "item-meta" }, [
     badge(labels.kind(note.kind)),
     badge(labels.stage(meta.stage), stateTone(meta.stage)),
+    hasUnknownClassification(note) ? badge('分类待确认', 'warn') : null,
     state.bootstrap?.settings?.mcp?.chatgptEnabled && state.bootstrap?.settings?.mcp?.chatgptAllowRead ? badge("另已授权 ChatGPT 读取", "warn") : null,
     meta.topic ? badge(meta.topic, "accent") : null,
   ]);
@@ -654,7 +656,7 @@ async function renderLibrary() {
   form.addEventListener('change', keepLatestFilters);
   const groupCards = groups.map((group) => sourceGroupCard(group));
   const standaloneCards = standalone.map((note) => el("article", { class: "card" }, [
-    el("div", { class: "card-head" }, [badge(labels.kind(note.kind)), badge(labels.stage(note.meta?.stage), stateTone(note.meta?.stage))]),
+    el("div", { class: "card-head" }, [badge(labels.kind(note.kind)), badge(labels.stage(note.meta?.stage), stateTone(note.meta?.stage)), hasUnknownClassification(note) ? badge('分类待确认','warn') : null]),
     el("h3", { text: note.title || "未命名" }),
     note.kind === 'source' ? sourceReadingBody(sourceBodyPreview(note.body), 'markdown-preview', '暂无原文', note) : el("p", { text: truncate(readableBody(note.body), 135) || "暂无正文" }),
     el("div", { class: "card-foot" }, [el("span", { text: formatDate(note.updatedAt, true) }), button("查看", { kind: "text", onClick: () => openNote(note.id) })]),
@@ -836,6 +838,7 @@ function sourceGroupCard(group) {
     childPreview.length ? el("div", { class: "group-child-preview" }, childPreview.map((child) => el("div", { class: "group-child-preview-item" }, [
       el("span", { text: child.title || "未命名拆解" }),
       badge(labels.stage(child.meta?.stage), stateTone(child.meta?.stage)),
+      hasUnknownClassification(child) ? badge('分类待确认','warn') : null,
     ]))) : el("p", { class: "group-empty", text: "尚未形成拆解" }),
     children.length > childPreview.length ? el("p", { class: "fine-print", text: `另有 ${children.length - childPreview.length} 条拆解` }) : null,
     activeJob ? el("div", { class: "group-job" }, [badge(labels.state(activeJob.state), stateTone(activeJob.state)), el("span", { text: groupJobSummary(activeJob) })]) : null,
@@ -890,6 +893,7 @@ function renderSourceGroupDrawer(source) {
     button("查看版本", { onClick: () => renderHistory(source, { returnToSourceId: source.id }) }),
     button("移入回收站", { kind: "danger", onClick: () => deleteNote(source) }),
   ]);
+  if(hasUnknownClassification(source))headActions.prepend(button('核对分类',{onClick:()=>reviewClassification(source)}));
   content.append(noteMeta(source), headActions);
   if (source.meta?.titlePending) content.append(el('p', { class: 'muted', text: '暂用原文片段作为标题，标题尚未生成。可手动编辑，或在主动 AI 拆解时生成。' }));
 
@@ -1022,7 +1026,8 @@ async function analyzeStructure(source) {
 function childSection(note, source, index) {
   const meta = asObject(note.meta);
   const limitations = asArray(meta.researchLimitations);
-  const actions = el("div", { class: "child-actions", dataset: { tour: "note-lifecycle" } }, [
+  const unknown=hasUnknownClassification(note);
+  const actions = el("div", { class: "child-actions", dataset: { tour: "note-lifecycle" } }, unknown ? [button('核对分类',{onClick:()=>reviewClassification(note)}),button('编辑',{kind:'quiet compact',onClick:()=>renderNoteEditor(note,{returnToSourceId:source.id})})] : [
     button("开始学习", { kind: "primary compact", onClick: event => beginStudy(note.id, undefined, {}, event.currentTarget || event.target) }),
     button("编辑", { kind: "quiet compact", onClick: () => renderNoteEditor(note, { returnToSourceId: source.id }) }),
     button("设为仅供查阅", { kind: "text compact", onClick: () => promoteNote(note, "reference", source.id) }),
@@ -1033,10 +1038,10 @@ function childSection(note, source, index) {
     el("summary", { text: "更多操作" }),
     el("div", { class: "form-actions" }, [
       button("查看条目详情与其他核验依据", { onClick: () => openNote(note.id) }),
-      button("确认个人理解", { onClick: () => confirmDirect(note, source.id) }),
-      button("标记已整理个人理解", { onClick: () => promoteNote(note, "integrated", source.id) }),
-      button("设为重点知识", { onClick: () => promoteNote(note, "core", source.id) }),
-      button("不再使用", { kind: "danger", onClick: () => promoteNote(note, "retired", source.id) }),
+      !unknown ? button("确认个人理解", { onClick: () => confirmDirect(note, source.id) }) : null,
+      !unknown ? button("标记已整理个人理解", { onClick: () => promoteNote(note, "integrated", source.id) }) : null,
+      !unknown ? button("设为重点知识", { onClick: () => promoteNote(note, "core", source.id) }) : null,
+      !unknown ? button("不再使用", { kind: "danger", onClick: () => promoteNote(note, "retired", source.id) }) : null,
       button("查看版本", { onClick: () => renderHistory(note, { returnToSourceId: source.id }) }),
       button("删除", { kind: "danger", onClick: () => deleteNote(note, source.id) }),
     ]),
@@ -1044,7 +1049,7 @@ function childSection(note, source, index) {
   return el("section", { class: "child-note" }, [
     el("div", { class: "child-note-head" }, [
       el("div", {}, [el("p", { class: "eyebrow", text: `拆解 ${index + 1}` }), el("h3", { text: note.title || "未命名拆解" })]),
-      el("div", { class: "item-meta" }, [badge(labels.stage(meta.stage), stateTone(meta.stage)), meta.topic ? badge(meta.topic, "accent") : null]),
+      el("div", { class: "item-meta" }, [badge(labels.stage(meta.stage), stateTone(meta.stage)), unknown ? badge('分类待确认','warn') : null, meta.topic ? badge(meta.topic, "accent") : null]),
     ]),
     sourceReadingBody(readableBody(note.body), 'child-note-body', '暂无正文'),
     relatedSourceDetails(note, source),
@@ -1066,6 +1071,24 @@ async function refreshSourceGroup(sourceId, { refreshLibrary = true } = {}) {
   return source;
 }
 
+function reviewClassification(note) {
+  const fields=unknownClassificationFields(note), context=api.getContext();
+  if(!fields.length)return;
+  const form=el('form',{class:'page-stack'}), save=el('button',{type:'submit',class:'primary',text:'确认保存'});
+  form.append(el('p',{text:note.title||'未命名'}),classificationInputs(note),save);
+  form.addEventListener('submit',async event=>{
+    event.preventDefault();
+    const latest=api.getContext();
+    if(latest.version!==context.version||latest.practiceId!==context.practiceId){toast('知识库已切换，请重新打开资料。','error');return;}
+    const classification=Object.fromEntries(fields.map(key=>[key,form.elements[key].value]));
+    save.disabled=true;
+    try {
+      await request(`/api/notes/${encodeURIComponent(note.id)}/classification`,{method:'POST',body:{expectedHash:note.hash,classification}});
+      await refreshBootstrap();await openNote(note.id);toast('分类已更新。','success');
+    } catch(error){handleError(error);} finally {save.disabled=false;}
+  });
+  openDrawer('核对分类','资料分类',form);
+}
 function renderNoteDrawer(note) {
   refs.drawerBody.dataset.tour = "note-detail";
   const meta = asObject(note.meta);
@@ -1077,6 +1100,7 @@ function renderNoteDrawer(note) {
     button("查看版本", { onClick: () => renderHistory(note) }),
     button("删除", { kind: "danger", onClick: () => deleteNote(note) }),
   ]);
+  if(hasUnknownClassification(note))headActions.prepend(button('核对分类',{onClick:()=>reviewClassification(note)}));
   if (note.kind === "knowledge") headActions.insertBefore(button("合并", { onClick: () => renderMerge(note) }), headActions.lastChild);
   content.append(noteMeta(note), headActions, sourceReadingBody(readableBody(note.body), '', '暂无正文'));
   if (note.kind === "knowledge") content.append(evidenceDetails(note.id), relationControls(note));
@@ -1133,7 +1157,7 @@ function renderNoteDrawer(note) {
     processControls(note),
     button("手动整理为待选学", { disabled: !canProcessFile(note), onClick: () => manualExtract(note) }),
   );
-  if (note.kind === "knowledge") nextActions.append(
+  if (note.kind === "knowledge" && !hasUnknownClassification(note)) nextActions.append(
     button("开始学习", { kind: "primary", onClick: event => beginStudy(note.id, undefined, {}, event.currentTarget || event.target) }),
     button("设为仅供查阅", { onClick: () => promoteNote(note, "reference") }),
     button("设为待选学", { onClick: () => promoteNote(note, "candidate") }),
@@ -1366,6 +1390,7 @@ function manualExtract(source, returnToSourceId = "") {
 }
 
 async function promoteNote(note, stage, returnToSourceId = "") {
+  if(hasUnknownClassification(note)){reviewClassification(note);return;}
   const reason = await promptAction({
     title: stage === "retired" ? "标记为不再使用" : `调整为${labels.stage(stage)}`,
     message: stage === "retired"
@@ -1479,7 +1504,7 @@ const learningGoals = {
   apply: { summary: "用于新的问题", description: "换一个不同于原文例子的问题，说明怎么用、需要哪些条件，以及什么时候不适用。" },
 };
 function depthLabel(value) {
-  return Object.hasOwn(learningDepthNames, value) ? learningDepthNames[value] : value;
+  return typeof value === 'string' && Object.hasOwn(learningDepthNames, value) ? learningDepthNames[value] : '分类待确认';
 }
 function learningGoalField(value) {
   const selected = Object.hasOwn(learningDepthNames, value) ? value : "explain";
@@ -1561,7 +1586,7 @@ function tabButton(value, label) {
 async function studyQueuePanel() {
   const [todayData, notesData, sessionsData] = await Promise.all([api.today(), api.notes({ stage: "learning" }), api.studySessions()]);
   const today = asArray(todayData.items).filter((item) => item.noteId);
-  const learning = asArray(notesData.notes);
+  const learning = asArray(notesData.notes).filter(note=>!hasUnknownClassification(note));
   const byId = new Map();
   today.forEach((item) => byId.set(item.noteId, { ...item, inToday: true }));
   learning.forEach((note) => { if (!byId.has(note.id)) byId.set(note.id, { id: `note-${note.id}`, noteId: note.id, title: note.title, reason: "已加入学习", minutes: 0, state: "available" }); });
@@ -1761,16 +1786,22 @@ async function mistakesPanel() {
 function mistakeRow(mistake) {
   const meta = asObject(mistake.meta);
   const status = mistake.status || meta.correctionState || meta.status || "open";
+  const ownUnknown=hasUnknownClassification(mistake);
+  const relatedId=meta.noteId || mistake.noteId;
+  const related=asArray(state.bootstrap?.notes).find(note=>note.id===relatedId);
+  const relatedUnknown=related && hasUnknownClassification(related);
   const actions = el("div", { class: "item-actions wrap" }, [
-    button("查看", { kind: "quiet compact", onClick: () => { recordTourEvent("mistake-open"); return mistake.noteId || mistake.kind ? openNote(mistake.noteId || mistake.id) : showMistake(mistake); } }),
-    status === "open" ? button("专项练习", { kind: "primary compact", disabled: !(meta.noteId || mistake.noteId), onClick: event => beginStudy(meta.noteId || mistake.noteId, undefined, { mistakeId: mistake.id }, event.currentTarget || event.target) }) : null,
+    button("查看", { kind: "quiet compact", onClick: () => { recordTourEvent("mistake-open"); return mistake.noteId || mistake.kind ? openNote(ownUnknown ? mistake.id : mistake.noteId || mistake.id) : showMistake(mistake); } }),
+    ownUnknown ? button('核对错题分类',{onClick:()=>openNote(mistake.id)}) : null,
+    relatedUnknown ? button('核对关联知识分类',{onClick:()=>openNote(relatedId)}) : null,
+    status === "open" && !ownUnknown && !relatedUnknown ? button("专项练习", { kind: "primary compact", disabled: !(meta.noteId || mistake.noteId), onClick: event => beginStudy(meta.noteId || mistake.noteId, undefined, { mistakeId: mistake.id }, event.currentTarget || event.target) }) : null,
     status === "disputed" ? button("重新打开", { kind: "text compact", onClick: () => actMistake(mistake.id, "reopen") }) : status !== "revoked" ? button("质疑判定", { kind: "text compact", onClick: () => actMistake(mistake.id, "dispute") }) : null,
     status !== "resolved" && status !== "revoked" ? button("手动标记已纠正", { kind: "primary compact", onClick: () => actMistake(mistake.id, "resolve") }) : status === "resolved" ? badge("已标记纠正", "good") : null,
     status !== "revoked" ? button("撤销记录", { kind: "text compact", onClick: () => actMistake(mistake.id, "revoke") }) : badge("已撤销"),
   ]);
   return el("article", { class: "list-item" }, [
     el("div", { class: "item-symbol", text: "错" }),
-    el("div", { class: "item-copy" }, [el("h3", { text: mistake.title || mistake.question || "未命名错误记录" }), el("p", { text: truncate(mistake.error || mistake.body || mistake.feedback, 160) || "等待补充错误说明" }), el("div", { class: "item-meta" }, [badge(labels.state(status), stateTone(status)), meta.category ? badge(meta.category) : null])]),
+    el("div", { class: "item-copy" }, [el("h3", { text: mistake.title || mistake.question || "未命名错误记录" }), el("p", { text: truncate(mistake.error || mistake.body || mistake.feedback, 160) || "等待补充错误说明" }), el("div", { class: "item-meta" }, [badge(labels.state(status), stateTone(status)), ownUnknown || relatedUnknown ? badge('分类待确认','warn') : null, meta.category ? badge(meta.category) : null])]),
     actions,
   ]);
 }

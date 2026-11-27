@@ -329,7 +329,7 @@ test('source reads keep an explicit member with an externally edited legacy key,
   const graph = JSON.parse(service.chatgpt.readStructure(source.id).body);
   assert.deepEqual(graph.nodes.map(note => note.id), [child.id]);
 
-  assert.throws(() => service.requestSourceStructure(source.id), TypeError);
+  assert.throws(() => service.requestSourceStructure(source.id), { code: 'SOURCE_BINDING_INVALID' });
   assert.equal(service.store.records('jobs').length, 0);
 });
 
