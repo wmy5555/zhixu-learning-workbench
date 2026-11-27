@@ -23,7 +23,7 @@ import { captureFilesHTML, mountCaptureFiles } from './capture-files.mjs';
 installInputModality(document.documentElement, document);
 
 const navigation = [['home','今日','today'],['plus','收集与加工','capture'],['book','知识库','library'],['check','学习与错题','study'],['layers','主题学习包','topics'],['network','检索与发现','search'],['chat','问答与输出','output']];
-const state = { boot:null, route:'today', sequence:0, dirty:false, saving:0, readerReturn:'library', note:null, session:null, jobs:[], scroll:new Map() };
+const state = { boot:null, route:'today', sequence:0, dirty:false, saving:0, readerReturn:'library', note:null, session:null, scroll:new Map() };
 const context={api,state,go,refreshBoot,formModal,submit,watchForm,savedForm,processSource,noteCard:note=>noteCard(note)};
 const parity=createParity(context),management=createManagement(context,initializeAccent()),focus=createFocus(context);
 const onboarding=createWebOnboarding({api,state,go,refreshBoot,beforeLeave});
@@ -157,12 +157,6 @@ function capturePage() {
       });
     }};
 }
-async function libraryPage() {
-  const notes=list((await api.get('/api/notes')).notes);
-  return {html:heading('YOUR GROWING LIBRARY','让每一个想法，有处可寻。',`${notes.filter(n=>n.kind==='source').length} 份原文 · ${notes.filter(n=>n.kind==='knowledge').length} 条知识，慢慢长成自己的理解。`,link(`${icon('plus')} 收集资料`,'capture','primary'))+
-    `<div class="library-toolbar"><div class="segmented" aria-label="内容类型">${[['all','全部'],['source','原始资料'],['knowledge','知识'],['mistake','错题']].map(([value,label])=>btn(label,'library-filter','',`data-kind="${value}" aria-pressed="${value==='all'}"`)).join('')}</div><label class="inline-search">${icon('search')}<input id="library-query" type="search" placeholder="在这些想法里找一找" aria-label="筛选知识库"></label></div><div id="library-notes" class="library-grid">${notes.map(noteCard).join('')||empty('书架还空着','从一份真正想理解的材料开始。',link('收集第一份资料','capture','primary'))}</div>`,
-    bind(){let selected='all';const update=()=>{const query=$('#library-query').value.trim().toLowerCase();const visible=notes.filter(n=>(selected==='all'||n.kind===selected)&&`${n.title}\n${n.body}\n${n.meta?.topic||''}`.toLowerCase().includes(query));$('#library-notes').innerHTML=visible.map(noteCard).join('')||empty('这里暂时没有找到','换一个词，或者看看其他内容分类。');};$$('[data-action="library-filter"]').forEach(b=>{b.onclick=()=>{selected=b.dataset.kind;$$('[data-action="library-filter"]').forEach(other=>other.setAttribute('aria-pressed',String(other===b)));update();};});$('#library-query').oninput=update;}};
-}
 function readPage(id) {
   const sequence=state.sequence,boot=state.boot,key=libraryKey();
   const current=()=>sequence===state.sequence&&boot===state.boot&&key===libraryKey();
@@ -239,11 +233,6 @@ async function topicsPage() {
   return {html:heading('FOLLOW YOUR CURIOSITY','沿着一个问题，慢慢深入。','让分散的资料围绕一个问题，形成可以继续探索的路径。',btn(`${icon('plus')} 新建学习包`,'new-topic','primary'))+
     `<div class="topic-grid">${topics.map((topic,index)=>`<article class="topic-cover"><p class="topic-number">${String(index+1).padStart(2,'0')}</p><h2>${e(topic.title)}</h2><p>${e(String(topic.body||'').replace(/[#>*]/g,'').slice(0,90))}</p><footer><span>${list(topic.meta?.noteIds||topic.noteIds).length} 条知识</span>${btn('打开学习路径 ↗','open-topic','text-button',`data-id="${e(topic.id)}"`)}</footer></article>`).join('')||empty('想围绕什么，学得更深入？','选一个你反复想起的问题，把相关的知识放在一起。',btn('建立第一个学习包','new-topic','primary'))}</div>`};
 }
-async function searchPage() {
-  return {html:heading('CONNECT THE DOTS','找回一个想法，发现新的联系。','用一个词、一段描述，重新遇见保存过的内容。')+
-    `<form id="search-form" class="search-composer"><div>${icon('search')}<input name="q" type="search" required placeholder="你在找什么？" aria-label="搜索内容"><button class="primary" type="submit">搜索 ${icon('arrow')}</button></div><div class="search-options"><label><input type="radio" name="mode" value="keyword" checked> 本地文字检索</label><label><input type="radio" name="mode" value="hybrid"> 语义与文字（需嵌入服务）</label></div></form><div id="search-results"><p class="search-pause">有时候，新的理解来自两个旧想法的相遇。</p></div>`,
-    bind(){let request=0;submit($('#search-form'),async values=>{const revision=++request,route=state.sequence;const result=await api.get(`/api/search?${new URLSearchParams({q:values.q,mode:values.mode})}`);if(revision!==request||route!==state.sequence)return;$('#search-results').innerHTML=`<div class="section-title"><h2>找到 ${list(result.results).length} 个线索</h2></div><div class="search-results">${list(result.results).map(note=>`<article class="search-result"><p class="eyebrow">${e(kind(note.kind))} / ${e(note.meta?.topic||'我的知识空间')}</p><h2>${link(e(note.title),`read/${note.id}`,'result-title')}</h2><p>${e(note.snippet||note.body||'')}</p>${link('沿着原文继续 ↗',`read/${note.id}`,'text-button')}</article>`).join('')||empty('还没有找到这个线索','换一个词，或试着缩短描述。')}</div>`;});}};
-}
 async function outputPage() {
   const drafts=list((await api.get('/api/drafts')).drafts);
   return {html:heading('MAKE SOMETHING OF IT','让已有的理解，成为新的表达。','从自己的资料出发，整理成答案、提纲或一份草稿。')+
@@ -264,10 +253,6 @@ async function settingsPage() {
     </div></div>`,
     bind(){mountSoftwareUpdate();const rhythm=$('#rhythm-form');watchForm(rhythm);submit(rhythm,async values=>{await api.put('/api/settings',{dailyMinutes:Number(values.dailyMinutes),focusTopics:values.focusTopics.split(/[,，]/).map(s=>s.trim()).filter(Boolean)});savedForm(rhythm);await refreshBoot();notify('学习节奏已保存。');});
       const form=$('#ai-form');watchForm(form);form.dataset.connectionValues=aiConnectionValues(form);submit(form,async values=>{await api.put('/api/settings',{ai:{enabled:form.elements.enabled.checked,baseUrl:values.baseUrl,model:values.model,...(values.apiKey?{apiKey:values.apiKey}:{}),dailyCallLimit:Number(values.dailyCallLimit)}});form.elements.apiKey.value='';form.dataset.connectionValues=aiConnectionValues(form);savedForm(form);await refreshBoot();$('#ai-result').textContent='设置已保存。尚未测试连接。';notify('连接设置已保存。');});}};
-}
-async function jobsPage() {
-  const jobs=list((await api.get('/api/jobs')).jobs);state.jobs=jobs;
-  return {html:heading('THINGS IN PROGRESS','每一步，都有迹可循。','查看实际处理进度。等待、失败与完成会分别记录。',btn('刷新进度','reload','secondary'))+`<div class="jobs-list">${jobs.slice(0,50).map(job=>`<article class="job-row"><span class="job-state state-${e(job.state)}">${e(jobState(job.state))}</span><div><h2>${e(({process:'资料拆解',grade:'学习反馈',structure:'知识结构',relate:'知识关联',discover:'发现联系',index:'更新索引',topics:'主题整理',title:'整理标题'})[job.type]||'后台处理')}</h2><p>${e(job.error||job.message||'本机已保留处理记录。')}</p></div>${['failed','waiting','cancelled'].includes(job.state)?btn('重新尝试','retry-job','text-button',`data-id="${e(job.id)}"`):''}</article>`).join('')||empty('现在，没有后台任务','你可以安心阅读，或者留下一份新资料。')}</div>`};
 }
 
 function formModal(title, contents, save, { wide = false } = {}) {
@@ -389,28 +374,9 @@ async function understanding(id, sessionId = '') {
     await api.post(sessionId?endpoint('study',sessionId,'confirm'):endpoint('notes',id,'confirm'),{body:values.body,...(!sessionId?{expectedHash:note.hash}:{})});await refreshBoot();notify('你的理解已单独确认保存。');
   },{wide:true});
 }
-async function newTopic() {
-  const notes=list(state.boot.notes).filter(n=>n.kind==='knowledge');
-  formModal('围绕一个问题，开始学习',`${field('想深入的主题','title',{required:true,placeholder:'一个你反复想起的问题'})}${area('想弄清什么','body',{rows:4})}<fieldset class="note-picker"><legend>选择相关知识</legend>${notes.map(n=>`<label class="check"><input type="checkbox" name="member" value="${e(n.id)}">${e(n.title)}</label>`).join('')||'<p class="muted">还没有知识条目。可以先建立主题，之后补充。</p>'}</fieldset>${field('预计投入（分钟）','minutes',{value:20,type:'number',extra:'min="5" max="240"'})}`,async(values,form)=>{
-    await api.post('/api/topics',{title:values.title,body:values.body,noteIds:[...form.querySelectorAll('[name="member"]:checked')].map(n=>n.value),prerequisites:[],minutes:Number(values.minutes)});await refreshBoot();await go('topics',{force:true,replace:true});notify('新的学习包已建立。');
-  },{wide:true});
-}
-async function openTopic(id) {
-  const topic=list((await api.get('/api/topics')).topics).find(t=>t.id===id);
-  if(!topic)throw new Error('这个学习包暂时无法找到。');
-  const ids=list(topic.meta?.noteIds||topic.noteIds),notes=ids.map(id=>list(state.boot.notes).find(n=>n.id===id)).filter(Boolean);
-  modal(topic.title,`<div class="article-prose">${markdown(topic.body).html}</div><h3 class="dialog-section">沿着这些知识继续</h3>${notes.length?noteRows(notes):'<p class="muted">这个学习包还没有成员。</p>'}`,{wide:true});
-}
 async function evidence(id) {
   const data=await api.get(endpoint('notes',id,'evidence'));
   modal('回到依据与出处',evidenceHTML(list(data.evidence).map(item=>({...item,researchedAt:item.researchedAt||data.researchedAt})),data.limitations),{wide:true});
-}
-async function openDraft(id) {
-  const draft=list((await api.get('/api/drafts')).drafts).find(item=>item.id===id);
-  if(!draft)throw new Error('这份草稿暂时无法找到。');
-  formModal(draft.question||'继续写这份草稿',`${area('输出草稿','body',{value:draft.body,required:true,rows:15})}<p class="form-note">保存草稿不会自动确认成个人知识。</p>`,async values=>{
-    await api.put(endpoint('drafts',id),{body:values.body,usedIds:list(draft.usedIds)});notify('草稿已保存。');
-  },{wide:true});
 }
 async function recycle() {
   const result=await api.get('/api/recycle-bin');
