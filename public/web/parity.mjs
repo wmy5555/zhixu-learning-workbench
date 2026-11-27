@@ -1,40 +1,11 @@
 import { createLibraryPreferences } from './library-preferences.mjs';
-import { escape as e, markdown, safeLink } from './markdown.mjs';
-import { $, $$, icon, button as btn, routeButton as link, field, area, heading, kind, stage, jobState, modal, confirm, busy, notify } from './ui.mjs';
+import { escape as e, markdown } from './markdown.mjs';
+import { $, $$, icon, button as btn, routeButton as link, field, area, heading, kind, stage, jobState, modal, confirm, busy, notify, list, select, details, readable, facts, paginate } from './ui.mjs';
 import { endpoint } from './api.mjs';
+import { evidenceHTML } from './learning-display.mjs';
 
-export const list = value => Array.isArray(value) ? value : [];
-export const select = (label, name, options, value = '') => `<label class="field"><span>${e(label)}</span><select name="${name}">${options.map(([id,text])=>`<option value="${e(id)}" ${String(value)===String(id)?'selected':''}>${e(text)}</option>`).join('')}</select></label>`;
 export const types = [['','全部类别'],['source','原始资料'],['knowledge','知识'],['topic','主题学习包'],['report','AI 整理建议'],['mistake','错题']];
 export const stages = [['','全部学习状态'],...['reference','candidate','learning','integrated','core','retired'].map(v=>[v,stage(v)])];
-export const details = (title, body, open = false) => `<details class="quiet-details" ${open?'open':''}><summary>${e(title)}</summary><div class="disclosure-body">${body}</div></details>`;
-export const readable = value => value == null ? '未记录' : typeof value === 'object' ? JSON.stringify(value,null,2) : String(value);
-export const facts = pairs => `<dl class="parity-facts">${pairs.filter(([,v])=>v!==undefined&&v!==null&&v!=='').map(([k,v])=>`<div><dt>${e(k)}</dt><dd>${e(readable(v))}</dd></div>`).join('')}</dl>`;
-export function evidenceHTML(items, limitations = []) {
-  return list(limitations).map(v=>`<p class="notice">${e(v)}</p>`).join('') + (list(items).map(item=>{
-    const id=item.sourceId||item.noteId||item.id,url=safeLink(item.url);
-    return `<section class="evidence-entry"><h3>${e(item.title||'出处')}</h3><div class="preserve-text">${e(item.excerpt||'尚无摘录')}</div>${facts([['定位',item.locator],['角色',item.role],['理由',item.rationale],['读取时间',item.fetchedAt],['核验时间',item.researchedAt]])}<div class="actions">${id?link('阅读保存的原文 ↗',`read/${id}`,'text-button'):''}${url?`<a class="text-button" href="${e(url)}" target="_blank" rel="noopener noreferrer">外部原文 ↗</a>`:''}</div>${list(item.sources).length?details('底层来源',evidenceHTML(item.sources)):''}</section>`;
-  }).join('')||'<p class="notice">没有可追溯引用；这份内容不能视为有据回答。</p>');
-}
-export function feedbackHTML(feedback) {
-  if(!feedback)return '';
-  const labels={correct:'回答正确',partial:'仍有遗漏',incorrect:'需要修正',ambiguous:'存在不确定性'};
-  const section=(title,value)=>value?`<section>${title?`<h3>${title}</h3>`:''}<div class="article-prose">${markdown(readable(value)).html}</div></section>`:'';
-  return `<div class="learning-feedback"><p class="nav-label">AI 反馈 · ${e(labels[feedback.assessment]||feedback.assessment)}</p>${section('',feedback.feedback)}${details('查看解析',section('关键缺口',feedback.omission)+section('修正与依据',feedback.correction)+section('可修改的建议',feedback.suggestion)+section('后续练习',feedback.nextQuestion))}</div>`;
-}
-export function completionHTML(completion) {
-  if(!completion)return '';
-  const d=completion.evidence||{},yes=value=>value===true?'是':value===false?'否':'未记录';
-  return details('本次完成的证据',facts([['记录时间',d.completedAt],['独立作答',yes(d.independent)],['使用提示',yes(d.usedHints)],['观察到错误',yes(d.errorObserved)],['存在争议',yes(d.ambiguous)],['复习已结算',yes(completion.reviewSettled)],['复习间隔',completion.interval==null?'未更新':`${completion.interval} 天`],['跨日回忆',yes(d.spacedRecall)],['解释练习',yes(d.explanationPractice)],['应用练习',yes(d.applicationPractice)],['学习深度',d.depth],['依据轮次',list(d.turnIds).join('、')]]));
-}
-export function paginate(host, rows, render, {size=20,filter=()=>true}={}) {
-  let page=0;
-  const draw=()=>{
-    const visible=rows.filter(filter),pages=Math.max(1,Math.ceil(visible.length/size));page=Math.min(page,pages-1);
-    host.innerHTML=`<div>${visible.slice(page*size,(page+1)*size).map(render).join('')||'<p class="empty">没有符合条件的记录。</p>'}</div><div class="parity-pagination"><button type="button" class="text-button" data-page="previous" ${page?'':'disabled'}>上一页</button><span>${page+1} / ${pages} · 共 ${visible.length} 条</span><button type="button" class="text-button" data-page="next" ${page+1<pages?'':'disabled'}>下一页</button></div>`;
-    host.querySelector('[data-page="previous"]').onclick=()=>{page--;draw();};host.querySelector('[data-page="next"]').onclick=()=>{page++;draw();};
-  };draw();return ()=>{page=0;draw();};
-}
 export function createParity(ctx) {
   const {api,state,go,refreshBoot,formModal,submit,watchForm}=ctx;
   const topicIntents=new Map();

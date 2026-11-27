@@ -1,7 +1,6 @@
 import {freshClock,readClock,transition,elapsed,clampPosition,dailyFocus} from './focus-model.mjs';
 import {escape as e} from './markdown.mjs';
-import {button as btn,routeButton as link,heading,modal,notify} from './ui.mjs';
-import {paginate} from './parity.mjs';
+import {button as btn,routeButton as link,heading,modal,notify, paginate} from './ui.mjs';
 import {dialMarkup,bindDial} from './focus-dial.mjs';
 
 const display=ms=>`${String(Math.floor(Math.max(0,ms)/60000)).padStart(2,'0')}:${String(Math.floor(Math.max(0,ms)/1000)%60).padStart(2,'0')}`;

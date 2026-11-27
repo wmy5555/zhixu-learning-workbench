@@ -1,6 +1,5 @@
 import { escape as e, markdown } from './markdown.mjs';
-import { $, button as btn, routeButton as link, field, area, heading, modal, confirm, busy, notify } from './ui.mjs';
-import { list, details, facts } from './parity.mjs';
+import { $, button as btn, routeButton as link, field, area, heading, modal, confirm, busy, notify, list, details, facts } from './ui.mjs';
 import { endpoint } from './api.mjs';
 
 export const validAccent = value => /^#[\da-f]{6}$/i.test(value||'');

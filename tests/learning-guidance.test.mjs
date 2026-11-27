@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { makeLearningPractice, learningPractice, learningSourceIds } from '../src/learning-guidance.mjs';
 import { createService } from '../src/service.mjs';
-import { feedbackHTML } from '../public/web/parity.mjs';
+import { feedbackHTML } from '../public/web/learning-display.mjs';
 const body='读完一段，合上书，用自己的话写出主张和理由，再对照原文核对。';
 const plan={depth:'explain',question:'合上书后要写哪两项，随后怎样核对？',criteria:[{point:'用自己的话写主张和理由',quote:'用自己的话写出主张和理由'},{point:'随后对照原文',quote:'再对照原文核对'}]};
 test('questions only use valid material quotes and become stale after an edit',()=>{

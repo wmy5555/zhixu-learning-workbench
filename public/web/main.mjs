@@ -4,14 +4,15 @@ import {createWebOnboarding} from './onboarding.mjs';
 import { installInputModality } from './input-modality.mjs';
 import { api, endpoint, pendingPlan, capturePayload } from './api.mjs';
 import { escape as e, markdown } from './markdown.mjs';
-import { $, $$, icon, button as btn, routeButton as link, field, area, empty, heading, kind, stage, jobState, calendar, notify, modal, confirm, busy } from './ui.mjs';
+import { $, $$, icon, button as btn, routeButton as link, field, area, empty, heading, kind, stage, jobState, calendar, notify, modal, confirm, busy, list, paginate, details } from './ui.mjs';
 import { reader, updateReader } from './reader.mjs';
 import { createReaderData, sameReaderData } from './reader-data.mjs';
 import { learningReadiness, learningHelp, readerMenu, credibilityNotice } from './reader-actions.mjs';
 import { processOutcome, createProcessOutcomeRenderer } from './process-outcome.mjs';
 import { springEnter } from './cds/motion-bridge.mjs';
 import { mountNoteEditor, noteEditSession } from './note-editor.mjs';
-import { createParity, feedbackHTML, completionHTML, evidenceHTML, paginate, details } from './parity.mjs';
+import { createParity } from './parity.mjs';
+import { feedbackHTML, completionHTML, evidenceHTML } from './learning-display.mjs';
 import { createManagement, initializeAccent } from './management.mjs';
 import { createFocus } from './focus.mjs';
 import { watchStudyFeedback, feedbackPending } from './study-feedback.mjs';
@@ -32,7 +33,6 @@ async function beforeLeave(){
  for(const d of [...$$('dialog[open]')].reverse())if(d.beforeClose&&!await d.beforeClose())return false;
  return !state.dirty||await confirm('离开未保存的输入？','先保存页面输入，或确认放弃后继续引导。','放弃输入并继续');
 }
-const list = value => Array.isArray(value) ? value : [];
 const formData = form => Object.fromEntries(new FormData(form));
 const aiConnectionValues = form => { const {enabled,...values}=formData(form); return JSON.stringify(values); };
 const noteTitle = id => list(state.boot?.notes).find(note=>note.id===id)?.title || '继续上次的学习';
