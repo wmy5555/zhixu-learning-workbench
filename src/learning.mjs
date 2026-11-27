@@ -34,6 +34,7 @@ export function createLearning(dependencies) {
       ...(all ?? store.list()).filter(n => n.kind === 'knowledge' && n.meta.confirmedAt).map(n => n.id),
     ]);
   };
+  const usablePlanContext = note => !hasUnknownClassification(note) && !hasInvalidSourceBinding(note.meta);
   const topicPaused = topic => topic.meta.paused ?? storage().get('topics', topic.id, {}).paused ?? false;
   function topicPath(topic, all) {
     const notes = new Map(all.filter(n => n.kind === 'knowledge').map(n => [n.id, n]));
@@ -59,7 +60,7 @@ export function createLearning(dependencies) {
     // A missing/inactive prerequisite remains a visible gap, rather than being silently skipped.
     const nextId = path.find(id => !done.has(id));
     const next = nextId ? byId.get(nextId) : null;
-    const canStart = next && eligible(next) && isStudyStage(next.meta.stage) && !pausedIds.includes(next.id) && !topicPaused(topic);
+    const canStart = next && !hasUnknownClassification(topic) && eligible(next) && isStudyStage(next.meta.stage) && !pausedIds.includes(next.id) && !topicPaused(topic);
     return {
       ...topic, ...topic.meta, paused: topicPaused(topic), members,
       progress: { total: members.length, completedCount: members.filter(m => m.completed).length, completedNoteIds: members.filter(m => m.completed).map(m => m.id), nextNoteId: canStart ? next.id : null, nextNoteTitle: canStart ? next.title : null, blockedNoteId: next && !canStart ? next.id : null },
@@ -88,10 +89,10 @@ export function createLearning(dependencies) {
     const reviews = new Map(store.records('reviews').map(r => [r.noteId, r]));
     // Older review records may not carry noteId; read by key for compatibility.
     for (const n of candidates) if (!reviews.has(n.id)) { const review = store.get('reviews', n.id); if (review) reviews.set(n.id, review); }
-    const mistakes = new Map(all.filter(n => n.kind === 'mistake' && n.meta.correctionState === 'open').map(n => [n.meta.noteId, n]));
+    const mistakes = new Map(all.filter(n => n.kind === 'mistake' && n.meta.correctionState === 'open' && usablePlanContext(n)).map(n => [n.meta.noteId, n]));
     // Paths depend only on each topic and this notes snapshot, not on candidates.
     const bundleFor = new Map(), bundlePaths = new Map();
-    for (const bundle of bundles.filter(n => !topicPaused(n))) {
+    for (const bundle of bundles.filter(n => !topicPaused(n) && usablePlanContext(n))) {
       const path = topicPath(bundle, all);
       bundlePaths.set(bundle, path);
       for (const id of path) if (!bundleFor.has(id)) bundleFor.set(id, bundle);
@@ -230,7 +231,9 @@ export function createLearning(dependencies) {
       if (topicPaused(topic)) fail('这个主题学习包已暂停。');
     }
     const depth = depthOf(note), goal = goals[depth].label;
-    const materialWarnings = dependencies.limitationsFor?.(note) || note.meta.researchLimitations || [];
+    const damagedContext = [mistake, topic].some(item => item && hasInvalidSourceBinding(item.meta));
+    const warnings = dependencies.limitationsFor?.(note) || note.meta.researchLimitations || [];
+    const materialWarnings = damagedContext && !warnings.includes(sourceBindingWarning) ? [...warnings, sourceBindingWarning] : warnings;
     const mistakeContext = mistake ? {
       id: mistake.id, omission: mistake.meta.omission || mistakeSection(mistake, 'AI 指出的误解或遗漏（可质疑）'),
       correction: mistake.meta.correction || mistakeSection(mistake, '修正与依据'),
@@ -241,8 +244,8 @@ export function createLearning(dependencies) {
     const question = mistake ? mistakeContext.nextQuestion || `请针对上次的误解「${mistakeContext.omission || mistake.title}」重新解释，并说明修正依据和适用边界。` : customQuestion || practicePlan?.question || goals[depth].question(note.title);
     const id = randomUUID();
     const damagedSource = hasInvalidSourceBinding(note.meta);
-    const privacy = !damagedSource && privacyFor(note) === 'cloud' && (!mistake || privacyFor(mistake) === 'cloud') ? 'cloud' : 'local';
-    const outboundIntent = damagedSource ? {} : { outboundIntentVersion: 1 };
+    const privacy = !damagedSource && !damagedContext && privacyFor(note) === 'cloud' && (!mistake || privacyFor(mistake) === 'cloud') ? 'cloud' : 'local';
+    const outboundIntent = damagedSource || damagedContext ? { sourceBindingInvalid: true } : { outboundIntentVersion: 1 };
     store.put('sessions', id, { id, noteId, planId, ...outboundIntent, ...(requestId ? { startRequestId: requestId, startIntent } : {}), status: 'reading', question, ...(practicePlan && !mistake ? { practiceQuestion: question, practiceCriteria: practicePlan.criteria } : {}), material: note.body, materialWarnings, sourceHash: note.hash, depth, goal, privacy, turns: [], createdAt: now(), hintCount: 0, ...practiceTags(mistake, note), ...(topic ? { topicId, topicIndex: textList(topic.meta.noteIds).indexOf(noteId) } : {}), ...(mistake ? { mistakeId, mistakeContext } : {}) });
     return session(id);
   }
@@ -393,6 +396,15 @@ export function createLearning(dependencies) {
     store.put('topics', id, { id, noteIds: n.meta.noteIds || [], paused: action === 'pause' });
     return topicDetails(result);
   }
+  function localStudyContext(session, store) {
+    // Earlier mistake sessions could carry an intent marker even when their captured
+    // mistake text was explicitly local. Repairing the current file does not authorize that snapshot.
+    if (session.sourceBindingInvalid || (session.mistakeId && session.privacy === 'local')) return true;
+    for (const id of [session.mistakeId, session.topicId]) {
+      if (id && store.row(id) && !usablePlanContext(store.read(id))) return true;
+    }
+    return false;
+  }
   async function grade(job, signal) {
     const store = storage();
     let s = session(job.payload.sessionId), t = s.turns.find(turn => turn.id === job.payload.turnId);
@@ -403,10 +415,11 @@ export function createLearning(dependencies) {
     checkSessionClassification(s, n);
     if (n.hash !== s.sourceHash) fail('学习材料已有更新；本次回答已保存，请按当前材料重新开始。', 'SOURCE_CHANGED');
     if (hasInvalidSourceBinding(n.meta)) fail('资料来源尚待核对，回答已保存。', 'PRIVACY_LOCAL');
+    if (localStudyContext(s, store)) fail('练习来源尚待核对，已保留本地回答。', 'PRIVACY_LOCAL');
     const currentMistake = s.mistakeId && store.row(s.mistakeId) ? store.read(s.mistakeId) : null;
     if (s.mistakeId && (!currentMistake || ['disputed', 'revoked'].includes(currentMistake.meta.correctionState))) fail('这条错题已被质疑、撤销或删除，请重新选择学习材料。', 'MISTAKE_INACTIVE');
     // Retained local/unknown histories are not newly authorized by removing material labels.
-    const allowedHistory = other => (other.outboundIntentVersion === 1 || other.privacy === 'cloud') && (!other.mistakeId || store.row(other.mistakeId) && privacyFor(store.read(other.mistakeId)) === 'cloud');
+    const allowedHistory = other => !localStudyContext(other, store) && (other.outboundIntentVersion === 1 || other.privacy === 'cloud') && (!other.mistakeId || store.row(other.mistakeId) && privacyFor(store.read(other.mistakeId)) === 'cloud');
     const previous = store.records('sessions').filter(other => other.noteId === s.noteId && other.id !== s.id && allowedHistory(other)).slice(0, 2).flatMap(other => other.turns.slice(-2));
     const history = JSON.stringify([...previous, ...s.turns.filter(turn => turn.id !== t.id && (s.outboundIntentVersion === 1 || s.privacy === 'cloud' || turn.outboundIntentVersion === 1)).slice(-4)].map(turn => ({ question: turn.question, answer: outboundText(String(turn.answer)).slice(0, 2000), hintUsed: turn.hintUsed, feedback: turn.feedback })));
     const goal = `${s.goal || goals[s.depth || 'explain'].label}；${goals[s.depth || 'explain'].hint}`;
@@ -422,6 +435,7 @@ export function createLearning(dependencies) {
     if (t.feedback) return;
     const currentNote = getNote(s.noteId);
     checkSessionClassification(s, currentNote);
+    if (localStudyContext(s, store)) fail('练习来源已变化，已保留本地回答。', 'PRIVACY_LOCAL');
     if (currentNote.hash !== s.sourceHash) fail('学习材料已有更新；本次回答已保存，请按当前材料重新开始。', 'SOURCE_CHANGED');
     t.feedback = result; s.feedback = result; s.question = result.nextQuestion || goals[s.depth || 'explain'].question(n.title); s.status = 'feedback'; s.pendingJobId = null;
     store.put('sessions', s.id, s);
