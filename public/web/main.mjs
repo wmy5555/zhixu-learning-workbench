@@ -339,7 +339,8 @@ async function actions(control) {
   if(action==='generate') {state.boot.today=await api.post('/api/today/generate');return go('today',{replace:true});}
   if(action==='start-plan') {const plan=pendingPlan(state.boot.today).items.find(item=>item.id===id);if(plan)return study.start(plan.noteId,plan.id);return;}
   if(action==='start-note')return study.start(id);
-  if(action==='start-mistake') {const session=await api.post('/api/study/start',{mistakeId:id,noteId:control.dataset.note,requestId:crypto.randomUUID()});return go(`study/${session.id}`);}
+  if(action==='start-mistake')return study.start(control.dataset.note, undefined, { mistakeId: id });
+  if(action==='topic-next')return study.start(control.dataset.note, undefined, { topicId: id, dialog: control.closest('dialog') });
   if(action==='mistake-state')return formModal('重新看待这次误解',`<label class="field"><span>你的判断</span><select name="action"><option value="resolve">我已修正</option><option value="dispute">我对反馈有疑问</option><option value="reopen">仍需继续练习</option><option value="revoke">撤销这条错题（保留撤销记录）</option></select></label>${area('理由与依据','reason',{required:true,rows:5})}`,async values=>{await api.post(endpoint('mistakes',id,'action'),values);await refreshBoot();notify('你的判断已记录。');});
   if(action==='defer') {await api.post(endpoint('today',id,'action'),{action:'defer',days:1});await refreshBoot();await go('today',{replace:true});notify('已留到以后，按自己的节奏来。');return;}
   if(action==='budget')return formModal('今天想留多少时间？',field('可用时间（分钟）','dailyMinutes',{value:state.boot.today?.budget||25,type:'number',required:true,extra:'min="1" max="1440"'}),async values=>{await api.put('/api/settings',{dailyMinutes:Number(values.dailyMinutes)});await refreshBoot();await go('today',{force:true,replace:true});notify('可用时间已更新。');});

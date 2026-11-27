@@ -7,7 +7,6 @@ import { kind, stage, kindOptions, stageOptions, quickKindOptions } from './clas
 
 export function createParity(ctx) {
   const {api,state,go,refreshBoot,formModal,submit,watchForm}=ctx;
-  const topicIntents=new Map();
   const libraryPreferences=createLibraryPreferences();
   const title=id=>list(state.boot?.notes).find(n=>n.id===id)?.title||id;
   const refresh=async()=>{await refreshBoot();if(!state.dirty)await go(state.route,{force:true,replace:true});};
@@ -141,7 +140,6 @@ export function createParity(ctx) {
       paginate(d.querySelector('[data-deleted-versions]'),list(data.versions),n=>`<article class="parity-card"><p>${e(n.createdAt)}</p>${details('版本正文',`<pre class="preserve-text">${e(n.raw)}</pre>`)}${btn('恢复这个版本','version-restore','secondary',`data-id="${e(id)}" data-version="${e(n.versionId)}"`)}</article>`);
     }
     else if(a==='topic-edit'||a==='topic-copy'){control.closest('dialog')?.close();await editTopic(id,a==='topic-copy');}
-    else if(a==='topic-next'){const key=`${id}:${control.dataset.note}`,requestId=topicIntents.get(key)||crypto.randomUUID();topicIntents.set(key,requestId);const s=await api.post('/api/study/start',{noteId:control.dataset.note,topicId:id,requestId});topicIntents.delete(key);control.closest('dialog')?.close();await go(`study/${s.id}`);}
     else if(a==='topic-toggle'){await api.post(endpoint('topics',id,'action'),{action:v});control.closest('dialog')?.close();await refresh();await openTopic(id);}
     else if(a==='metadata')await metadata(id);
     else if(a==='versions')await versions(id);

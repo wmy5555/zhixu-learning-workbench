@@ -1,10 +1,105 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import path from 'node:path';
+import { createService } from '../src/service.mjs';
+import { createStudyStarter } from '../public/study-start.mjs';
 import { createStudyWorkspace } from '../public/web/study-workspace.mjs';
 import { learningReadiness, learningHelp, readerMenu } from '../public/web/reader-actions.mjs';
 import { reader } from '../public/web/reader.mjs';
 
 const source={id:'source-1',kind:'source',title:'合成原始资料'};
+
+test('topic and mistake starts keep uncertain receipts and a later success retires earlier intentions', async () => {
+  const writes = [], routes = [];
+  let version = 1, fail = true;
+  const api = { getContext: () => ({ version, practiceId: version === 1 ? '' : 'practice' }),
+    async post(path, body) {
+      assert.equal(path, '/api/study/start'); writes.push(body);
+      if (fail) throw new Error('回执丢失');
+      return { id: 'accepted' };
+    } };
+  const study = createStudyWorkspace({ api, view: () => ({ sequence: 1 }), go: route => routes.push(route) });
+  const topic = () => study.start('note', undefined, { topicId: 'same' });
+  const mistake = () => study.start('note', undefined, { mistakeId: 'same' });
+  await assert.rejects(topic(), /回执丢失/);
+  await assert.rejects(mistake(), /回执丢失/);
+  await assert.rejects(topic(), /回执丢失/);
+  assert.equal(writes[2].requestId, writes[0].requestId);
+  assert.notEqual(writes[1].requestId, writes[0].requestId);
+  fail = false; await mistake(); await topic();
+  assert.deepEqual(writes[3], writes[1]);
+  assert.notEqual(writes[4].requestId, writes[0].requestId);
+  fail = true; await assert.rejects(topic(), /回执丢失/);
+  version++; await assert.rejects(topic(), /回执丢失/);
+  assert.notEqual(writes[5].requestId, writes[6].requestId);
+  assert.deepEqual(routes, ['study/accepted', 'study/accepted']);
+});
+
+test('another start acknowledged during a pending write cannot discard a subsequently lost receipt', async () => {
+  const pending = Promise.withResolvers(), writes = [];
+  const api = { getContext: () => ({ version: 1 }), async post(path, input) {
+    writes.push(input);
+    if (writes.length === 1) return pending.promise;
+    return { id: input.noteId };
+  } };
+  const study = createStudyWorkspace({ api, view: () => ({ sequence: 1 }), go: async () => {} });
+  const mistake = () => study.start('first', undefined, { mistakeId: 'm' });
+  const first = mistake();
+  await study.start('other', undefined, { topicId: 't' });
+  pending.reject(new Error('response lost'));
+  await assert.rejects(first, /response lost/);
+  await mistake();
+  assert.deepEqual(writes[2], writes[0]);
+});
+
+test('a late acknowledgement cannot retire another overlapping start already saved in SQLite', async t => {
+  const parent = path.resolve(import.meta.dirname, '../.tmp');
+  await mkdir(parent, { recursive: true });
+  const root = await mkdtemp(path.join(parent, 'study-start-'));
+  const service = createService({ dataDir: path.join(root, 'data'), vaultDir: path.join(root, 'vault') });
+  t.after(async () => { await service.close(); await rm(root, { recursive: true, force: true }); });
+  const makeNote = title => service.store.create({ kind: 'knowledge', title, body: title, meta: { stage: 'learning' } });
+  const a = makeNote('合成甲'), b = makeNote('合成乙'), first = Promise.withResolvers();
+  const sessions = [];
+  let loseReply = true;
+  const start = createStudyStarter(() => ({ version: 0 }), async input => {
+    const saved = service.startStudy(input);
+    sessions.push(saved.id);
+    if (input.noteId === a.id) await first.promise;
+    if (input.noteId === b.id && loseReply) { loseReply = false; throw Error('回执丢失'); }
+    return saved;
+  });
+  const older = start({ noteId: a.id });
+  await assert.rejects(start({ noteId: b.id }), /回执丢失/);
+  first.resolve(); await older;
+  await start({ noteId: b.id });
+  assert.equal(sessions[2], sessions[1]);
+  assert.equal(service.store.records('sessions').length, 2);
+  await start({ noteId: b.id });
+  assert.notEqual(sessions[3], sessions[2]);
+});
+
+test('duplicate contextual starts write once; dismissed dialogs, changed routes and changed spaces cannot navigate', async () => {
+  for (const leave of ['stay', 'dismiss', 'navigate', 'switch']) {
+    const response = Promise.withResolvers(), routes = [];
+    let writes = 0, version = 1, sequence = 1, closes = 0;
+    const dialog = { isConnected: true, open: true, close() { this.open = false; closes++; } };
+    const api = { getContext: () => ({ version }),
+      async post() { writes++; return response.promise; } };
+    const study = createStudyWorkspace({ api, view: () => ({ sequence }), go: route => routes.push(route) });
+    const context = leave === 'dismiss' || leave === 'stay' ? { topicId: 'topic', dialog } : { mistakeId: 'mistake' };
+    const first = study.start('note', undefined, context), second = study.start('note', undefined, context);
+    assert.equal(writes, 1);
+    if (leave === 'dismiss') dialog.open = false;
+    if (leave === 'navigate') sequence++;
+    if (leave === 'switch') version++;
+    response.resolve({ id: 'session' });
+    await Promise.all([first, second]);
+    assert.deepEqual(routes, leave === 'stay' ? ['study/session'] : []);
+    assert.equal(closes, leave === 'stay' ? 1 : 0);
+  }
+});
 const knowledge=(meta={})=>({id:'knowledge-1',kind:'knowledge',title:'合成知识',body:'完整正文',meta:{stage:'candidate',sources:[{id:source.id,role:'input'}],...meta}});
 
 test('unselected material exposes arrangement and optional research separately',()=>{
@@ -50,7 +145,7 @@ function harness({limitations=[],stage='learning',postError,hold=false}={}) {
   const writes=[],dialogs=[],state={sequence:1,route:'read/knowledge-1',boot:{notes:[source]}};
   let release;
   const gate=hold?new Promise(resolve=>{release=resolve;}):Promise.resolve();
-  const api={get:async path=>{await gate;return path.endsWith('/evidence')?{limitations}:knowledge({stage});},post:async(path,body)=>{writes.push({path,body});if(postError)throw postError;return {id:'session-1'};}};
+  const api={getContext:()=>({version:0,practiceId:''}),get:async path=>{await gate;return path.endsWith('/evidence')?{limitations}:knowledge({stage});},post:async(path,body)=>{writes.push({path,body});if(postError)throw postError;return {id:'session-1'};}};
   const { start } = createStudyWorkspace({
     api, getNotes: () => state.boot.notes, view: () => state,
     go: async route => { state.route = route; },

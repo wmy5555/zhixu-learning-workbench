@@ -1,3 +1,4 @@
+import { createStudyStarter } from './study-start.mjs';
 import { noteKinds, learningStages, learningDepths, learningDepthNames } from './note-classification.mjs';
 import { localCheckStatus, callFailureReason } from "./mcp-status.mjs";
 import { renderRecycleBin } from './recycle-bin.mjs';
@@ -1502,27 +1503,32 @@ function sourceRole(value) {
 }
 
 let studyStartPending = false;
-// Retain uncertain POST results for retries; any successful start retires them.
-const studyStartRequests = new Map();
+const startStudyRequest = createStudyStarter(() => api.getContext(), body => api.startStudy(body));
 async function beginStudy(noteId, planId, context = {}, control) {
   if (!noteId) { toast("这项任务没有关联知识，暂时无法开始", "error"); return; }
   if (studyStartPending) return;
   studyStartPending = true;
+  const view = state.view, page = refs.main.children[0];
+  const openDrawerContent = () => refs.drawer.classList.contains("is-open") ? refs.drawerBody.children[0] : null;
+  const drawer = openDrawerContent(), { practiceId, version } = api.getContext();
+  const isCurrent = () => {
+    const latest = api.getContext();
+    return latest.practiceId === practiceId && latest.version === version && state.view === view
+      && refs.main.children[0] === page && openDrawerContent() === drawer;
+  };
   const wasDisabled = control?.disabled;
   if (control) control.disabled = true;
   try {
-    const library = api.getContext();
-    const intentKey = JSON.stringify([library.practiceId || '', library.version, noteId, planId || null, context.topicId || null, context.mistakeId || null]);
-    let requestId = studyStartRequests.get(intentKey);
-    if (!requestId) { requestId = crypto.randomUUID(); studyStartRequests.set(intentKey, requestId); }
-    state.currentStudy = await api.startStudy({ requestId, noteId, ...(planId ? { planId } : {}), ...(context.topicId ? { topicId: context.topicId } : {}), ...(context.mistakeId ? { mistakeId: context.mistakeId } : {}) });
-    studyStartRequests.clear();
+    const session = await startStudyRequest({ noteId, ...(planId ? { planId } : {}),
+      ...(context.topicId ? { topicId: context.topicId } : {}), ...(context.mistakeId ? { mistakeId: context.mistakeId } : {}) });
+    if (!isCurrent()) return;
+    state.currentStudy = session;
     if (context.topicId) recordTourEvent("topic-study");
     closeDrawer();
     state.studyMaterialVisible = true;
     state.studyTab = "session";
     await navigate("study");
-  } catch (error) { handleError(error); }
+  } catch (error) { if (isCurrent()) handleError(error); }
   finally { studyStartPending = false; if (control) control.disabled = wasDisabled; }
 }
 
