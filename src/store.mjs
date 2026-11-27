@@ -1,4 +1,5 @@
 import { noteFolders as folders } from '../public/note-classification.mjs';
+import { hasInvalidSourceBinding } from '../public/source-membership.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -399,7 +400,7 @@ export class Store {
         ({ meta, body } = parse(raw));
       } catch { return 'local'; }
       // Legacy privacy is retained in Markdown for rollback, but is no longer a material classification.
-      if (meta.id !== undefined && meta.id !== id) return 'local';
+      if ((meta.id !== undefined && meta.id !== id) || hasInvalidSourceBinding(meta)) return 'local';
       const ids = meta.managedLinkIds ?? [], start = body.indexOf(linkStart), end = body.indexOf(linkEnd);
       if (!Array.isArray(ids) || ids.some(target => typeof target !== 'string' || !target)) return 'local';
       if (meta.managedLinksHash || ids.length || start !== -1 || end !== -1) {

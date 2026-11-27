@@ -1,11 +1,12 @@
 import { hash, now, fail } from './core.mjs';
+import { hasInvalidSourceBinding, processKeyBinding, sourceReferences } from '../public/source-membership.mjs';
 
 // These are reviewable suggestions from recorded behaviour, never mastery scores.
 export function createLifecycle(deps) {
   function recommendations() {
     const store = deps.store;
     store.scan();
-    const notes = store.list().filter(n => n.kind === 'knowledge' && n.meta.stage !== 'retired' && !n.meta.supersededBy);
+    const notes = store.list().filter(n => n.kind === 'knowledge' && n.meta.stage !== 'retired' && !n.meta.supersededBy && !hasInvalidSourceBinding(n.meta));
     const uses = store.records('uses').filter(u => u.actualUse === true);
     const evidence = store.records('studyEvidence');
     const topicIds = new Set(store.list().filter(n => n.kind === 'topic' && !n.meta.paused).flatMap(n => n.meta.noteIds || []));
@@ -20,7 +21,7 @@ export function createLifecycle(deps) {
       const used = uses.filter(u => u.noteId === n.id);
       const learned = evidence.filter(e => e.noteId === n.id);
       const review = store.get('reviews', n.id);
-      const sourceId = (n.meta.sources || []).find(s => s.role === 'input')?.id || n.meta.processKey?.split(':')[0];
+      const sourceId = sourceReferences(n.meta).find(s => s.role === 'input')?.id || processKeyBinding(n.meta.processKey)?.sourceId;
       if (limitations.length && sourceId && store.row(sourceId)) {
         add(n, 'research', n.meta.stage, '资料已有变化或仍有待核验内容，先复查依据。', limitations, { sourceId });
         continue;

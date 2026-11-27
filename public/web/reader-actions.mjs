@@ -1,16 +1,19 @@
 import { isStudyStage, hasUnknownClassification } from '../note-classification.mjs';
 import { escape as e } from './markdown.mjs';
+import { hasInvalidSourceBinding, reprocessingSourceId, sourceBindingWarning } from '../source-membership.mjs';
 import { button, routeButton, icon } from './ui.mjs';
 
 // Reasons come from the existing evidence endpoint; eligibility stays on the server.
 export function learningReadiness(note, notes = [], limitations = note.meta?.researchLimitations || []) {
   const meta = note.meta || {};
   if (hasUnknownClassification(note)) return { ready:false, classification:true, heading:'分类待确认', reasons:['请先核对原有分类，再选择有效的分类。'] };
-  const reasons = [...new Set(limitations.filter(value => typeof value === 'string' && value.trim()))];
+  const damaged = note.sourceBindingInvalid === true || hasInvalidSourceBinding(meta);
+  const warnings = limitations.filter(value => typeof value === 'string' && value.trim());
+  if (damaged) warnings.push(sourceBindingWarning);
+  const reasons = [...new Set(warnings)];
   if (meta.supersededBy) return { ready:false, heading:'这条知识已有替代条目', reasons:['请查看保留的知识，旧条目不能继续学习。'], replacementId:meta.supersededBy };
   if (meta.stage === 'retired') return { ready:false, heading:'这条知识已暂停使用', reasons:['如需继续，请在学习安排中重新选择用途，理由可选填。'], arrange:true };
-  const inputIds = [...new Set((meta.sources || []).filter(ref => ref.role === 'input').map(ref => ref.id))];
-  const sourceId = meta.processKey ? meta.processKey.split(':')[0] : inputIds.length === 1 ? inputIds[0] : null;
+  const sourceId = damaged ? null : reprocessingSourceId(meta);
   const source = notes.find(item => item.id === sourceId && item.kind === 'source');
   const credibility = { warnings:reasons, sourceId:source?.id, sourceTitle:source?.title };
   if (!isStudyStage(meta.stage)) return { ...credibility, ready:false, heading:'还未加入学习', reasons:['选择学习目标后就可以开始，理由可选填。联网核验可以稍后补充。'], arrange:true };

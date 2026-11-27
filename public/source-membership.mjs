@@ -1,14 +1,47 @@
+const invalidProcessKey = Object.freeze({ invalid: true });
+const isSourceId = id => typeof id === 'string' && /^[a-zA-Z0-9_-]{1,100}$/.test(id);
+export const sourceBindingWarning = '来源关联损坏，请先核对原始资料和来源记录。';
+
+export function processKeyBinding(value) {
+  if (value == null || value === '') return null;
+  if (typeof value !== 'string') return invalidProcessKey;
+  const parts = value.split(':');
+  const [sourceId, sourceHash] = parts;
+  if (!isSourceId(sourceId) || !sourceHash?.trim()) return invalidProcessKey;
+  return { sourceId, sourceHash, order: Number(parts.at(-1)) || 0 };
+}
+
+const isSourceReference = ref => isSourceId(ref?.id) && typeof ref.role === 'string';
+
+export function sourceReferences(meta) {
+  return Array.isArray(meta?.sources) ? meta.sources.filter(isSourceReference) : [];
+}
+
+export function hasInvalidSourceBinding(meta) {
+  const sources = meta?.sources;
+  return processKeyBinding(meta?.processKey)?.invalid === true
+    || (sources != null && (!Array.isArray(sources) || sources.some(ref => !isSourceReference(ref))));
+}
+
+export function reprocessingSourceId(meta) {
+  if (hasInvalidSourceBinding(meta)) return null;
+  const legacy = processKeyBinding(meta?.processKey);
+  if (legacy) return legacy.sourceId;
+  const inputs = new Set(sourceReferences(meta).filter(ref => ref.role === 'input').map(ref => ref.id));
+  return inputs.size === 1 ? inputs.values().next().value : null;
+}
+
 function* sourceLinks(note) {
-  for (const ref of (note.meta.sources || []).values()) {
-    if (ref.role === 'input' && ref.id) yield ref.id;
+  for (const ref of sourceReferences(note.meta)) {
+    if (ref.role === 'input') yield ref.id;
   }
-  const legacy = note.meta.processKey?.split(':')[0];
+  const legacy = processKeyBinding(note.meta?.processKey)?.sourceId;
   if (legacy) yield legacy;
 }
 
 export const sourceParentIds = note => [...new Set(sourceLinks(note))];
 const isMember = note => note.kind === 'knowledge' && !note.meta.excerptOnly;
-const childOrder = note => Number(note.meta.processKey?.split(':').at(-1)) || 0;
+const childOrder = note => processKeyBinding(note.meta.processKey)?.order ?? 0;
 const inSourceOrder = (left, right) => childOrder(left) - childOrder(right);
 
 export function groupSourceChildren(notes, sourceIds) {
@@ -24,8 +57,7 @@ export function groupSourceChildren(notes, sourceIds) {
 }
 
 export function sourceChildren(notes, sourceId) {
-  // The imported graph reader can use an explicit input without consulting an
-  // unrelated, externally edited legacy key. Processing examines every binding.
+  // Reading can still use a valid explicit source when the legacy key is damaged.
   return notes.filter(note => {
     if (note.meta && isMember(note)) {
       for (const id of sourceLinks(note)) if (id === sourceId) return true;

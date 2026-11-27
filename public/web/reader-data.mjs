@@ -37,16 +37,7 @@ export function createReaderData(api, { limit = 6 } = {}) {
     if (cache.has(id)) return remember(id, cache.get(id));
     const notes = boot?.notes || [], note = notes.find(n => n.id === id);
     if (!note || typeof note.body !== 'string') return null;
-    let visible = note;
-    if (note.kind === 'source') {
-      try { visible = { ...note, children: sourceChildren(notes, id) }; }
-      catch (error) {
-        // An externally edited legacy binding may be unreadable in this snapshot.
-        // Let the detail request resolve it or report the authoritative error.
-        if (!(error instanceof TypeError)) throw error;
-        return remember(id, null);
-      }
-    }
+    const visible = note.kind === 'source' ? { ...note, children: sourceChildren(notes, id) } : note;
     return remember(id, project(visible, notes));
   }
   function load(id, boot) {

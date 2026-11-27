@@ -328,7 +328,7 @@ async function processSource(id, { research = false } = {}) {
       if(!['queued','running'].includes(job.state)){
         const [proposals,latestBoot]=await Promise.all([api.get('/api/proposals'),bootstrap.read()]);
         boot=latestBoot;
-        pendingProposals=list(proposals.proposals).filter(p=>p.state==='pending'&&p.meta?.processKey?.startsWith(`${id}:`)).length;
+        pendingProposals=list(proposals.proposals).filter(p=>p.state==='pending'&&typeof p.meta?.processKey==='string'&&p.meta.processKey.startsWith(`${id}:`)).length;
       }
       if(!current())return;
       if(boot&&bootstrap.publish(boot))shell();
