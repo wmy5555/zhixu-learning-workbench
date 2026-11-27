@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import {createClient} from '../public/web/api.mjs';
+import {createStudyWorkspace} from '../public/web/study-workspace.mjs';
 import {createReaderData} from '../public/web/reader-data.mjs';
 const source=fs.readFileSync(new URL('../public/web/main.mjs',import.meta.url),'utf8');
 function harness(){
@@ -10,10 +11,10 @@ function harness(){
  const main={dataset:{},childNodes:[],style:{},focus(){},set innerHTML(value){if(value.includes('page-loading'))counts.loading++;this.childNodes=[{html:value}];},replaceChildren(...nodes){this.childNodes=nodes;}};
  const state={route:'today',sequence:0,dirty:false,saving:0,scroll:new Map()},window={scrollY:0,scrollTo({top}){this.scrollY=top;},dispatchEvent(){}};
  const page=async()=>({html:'reader'});
- const sandbox={state,window,document:{documentElement:{classList:{toggle(){},remove(){}}}},history:{pushState(){},replaceState(){}},matchMedia:()=>({matches:true}),CustomEvent:class{},api:{getContext:()=>context,get:async()=>({})},onboarding:{travelling:false,prepareRoute:async()=>{}},focus:{capture(){},mount(){}},shell(){},$:()=>main,$$:()=>[],notify(){},confirm:async()=>true,empty:(_title,message)=>{throw Error(message);},btn(){},link(){},springEnter(){},parity:{library:async()=>{counts.library++;return {html:'library',bind(){counts.bind++;}};}},management:{},readPage:page};
+ const sandbox={state,window,document:{documentElement:{classList:{toggle(){},remove(){}}}},history:{pushState(){},replaceState(){}},matchMedia:()=>({matches:true}),CustomEvent:class{},api:{getContext:()=>context,get:async()=>({})},onboarding:{travelling:false,prepareRoute:async()=>{}},focus:{capture(){},mount(){}},study:{leave(){},page},shell(){},$:()=>main,$$:()=>[],notify(){},confirm:async()=>true,empty:(_title,message)=>{throw Error(message);},btn(){},link(){},springEnter(){},parity:{library:async()=>{counts.library++;return {html:'library',bind(){counts.bind++;}};}},management:{},readPage:page};
  sandbox.readerData=createReaderData(sandbox.api);
- for(const name of ['todayPage','capturePage','editPage','studyPage','topicsPage','outputPage','settingsPage'])sandbox[name]=page;
- vm.createContext(sandbox);vm.runInContext(source.slice(source.indexOf('let stopStudyFeedback'),source.indexOf('function watchForm'))+';globalThis.goPage=go;globalThis.refresh=refreshBoot;',sandbox);
+ for(const name of ['todayPage','capturePage','editPage','topicsPage','outputPage','settingsPage'])sandbox[name]=page;
+ vm.createContext(sandbox);vm.runInContext(source.slice(source.indexOf('let librarySnapshot'),source.indexOf('function watchForm'))+';globalThis.goPage=go;globalThis.refresh=refreshBoot;',sandbox);
  return {sandbox,counts,context,main,window};
 }
 test('returning from a reader restores the same library nodes without requests, loading screen or rebinding',async()=>{
@@ -39,4 +40,40 @@ test('navigation buttons cached off-document release their busy state',async()=>
  await busy(control,async()=>{assert.equal(control.disabled,true);control.isConnected=false;});
  assert.equal(control.disabled,false);assert.equal(control.attributes.has('aria-busy'),false);
  let calls=0;await busy(control,async()=>calls++);assert.equal(calls,1);
+});
+
+test('late study responses cannot change the mounted session or undo a departure', async t => {
+  const oldDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  Object.defineProperty(globalThis, 'document', { configurable: true, value: { querySelector: () => null } });
+  t.after(() => {
+    if (oldDocument) Object.defineProperty(globalThis, 'document', oldDocument);
+    else delete globalThis.document;
+  });
+  for (const destination of ['study/B', 'capture']) {
+    const { sandbox, main } = harness();
+    const { state } = sandbox;
+    const started = Promise.withResolvers(), response = Promise.withResolvers();
+    const session = id => ({ id, noteId: id, status: 'completed', material: '合成材料', question: 'Question ' + id, turns: [] });
+    const mounted = [];
+    sandbox.study = createStudyWorkspace({
+      api: { get: async path => {
+        if (path === '/api/study/A') { started.resolve(); return response.promise; }
+        assert.equal(path, '/api/study/B');
+        return session('B');
+      } },
+      noteTitle: id => id,
+      setSession: value => { mounted.push(value.id); state.session = value; },
+    });
+    const first = sandbox.goPage('study/A');
+    await started.promise;
+    assert.equal(await sandbox.goPage(destination), true);
+    if (destination === 'study/B') assert.match(main.childNodes[0].html, /Question B/);
+    const mountedPage = main.childNodes[0];
+    response.resolve(session('A'));
+    assert.equal(await first, false);
+    assert.equal(main.childNodes[0], mountedPage);
+    assert.equal(state.route, destination);
+    assert.deepEqual(mounted, destination === 'study/B' ? ['B'] : []);
+    assert.equal(state.session?.id, destination === 'study/B' ? 'B' : undefined);
+  }
 });

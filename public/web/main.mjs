@@ -4,19 +4,18 @@ import {createWebOnboarding} from './onboarding.mjs';
 import { installInputModality } from './input-modality.mjs';
 import { api, endpoint, pendingPlan, capturePayload } from './api.mjs';
 import { escape as e, markdown } from './markdown.mjs';
-import { $, $$, icon, button as btn, routeButton as link, field, area, empty, heading, kind, stage, jobState, calendar, notify, modal, confirm, busy, list, paginate, details } from './ui.mjs';
+import { $, $$, icon, button as btn, routeButton as link, field, area, empty, heading, kind, stage, calendar, notify, modal, confirm, busy, list, paginate, details } from './ui.mjs';
 import { reader, updateReader } from './reader.mjs';
 import { createReaderData, sameReaderData } from './reader-data.mjs';
-import { learningReadiness, learningHelp, readerMenu, credibilityNotice } from './reader-actions.mjs';
+import { readerMenu } from './reader-actions.mjs';
 import { processOutcome, createProcessOutcomeRenderer } from './process-outcome.mjs';
 import { springEnter } from './cds/motion-bridge.mjs';
 import { mountNoteEditor, noteEditSession } from './note-editor.mjs';
 import { createParity } from './parity.mjs';
-import { feedbackHTML, completionHTML, evidenceHTML } from './learning-display.mjs';
+import { evidenceHTML } from './learning-display.mjs';
 import { createManagement, initializeAccent } from './management.mjs';
 import { createFocus } from './focus.mjs';
-import { watchStudyFeedback, feedbackPending } from './study-feedback.mjs';
-import { aidUsed, markAid, clearAid } from './study-aid.mjs';
+import { createStudyWorkspace } from './study-workspace.mjs';
 import { batchImport, prepareTexts } from './batch-import.mjs';
 import { captureFilesHTML, mountCaptureFiles } from './capture-files.mjs';
 
@@ -37,7 +36,19 @@ const formData = form => Object.fromEntries(new FormData(form));
 const aiConnectionValues = form => { const {enabled,...values}=formData(form); return JSON.stringify(values); };
 const noteTitle = id => list(state.boot?.notes).find(note=>note.id===id)?.title || '继续上次的学习';
 const noteCard = note => `<article class="library-note"><div class="note-kind">${icon(note.kind==='source'?'file':'book')}<span>${e(kind(note.kind))}</span><small>${e(stage(note.meta?.stage))}</small></div><h2>${e(note.title)}</h2><p>${e(String(note.body||'').replace(/<!-- zhixu-managed-links:start -->[\s\S]*?<!-- zhixu-managed-links:end -->/g,'').replace(/<!--[\s\S]*?-->/g,'').replace(/[#>*`]/g,'').replace(/\s+/g,' ').slice(0,135))}</p><footer><span>${e(note.meta?.topic || '未归入主题')}</span>${link('打开阅读 ↗',`read/${note.id}`,'text-button')}</footer></article>`;
-const noteRows = notes => notes.map((note,index)=>`<article class="knowledge-row"><span class="task-index">${String(index+1).padStart(2,'0')}</span><div><h3>${e(note.title)}</h3><p>${e(kind(note.kind))} · ${e(stage(note.meta?.stage))}</p></div>${link('阅读 ↗',`read/${note.id}`,'text-button')}</article>`).join('');
+const study = createStudyWorkspace({
+  api, getNotes: () => state.boot.notes, noteTitle, go,
+  view: () => ({ sequence: state.sequence, route: state.route }),
+  setSession: session => { state.session = session; },
+  bindAnswer(form, id, save) {
+    watchForm(form);
+    submit(form, async values => {
+      await save(values.answer);
+      state.dirty = false;
+      await go(`study/${id}`, { replace: true, force: true });
+    });
+  },
+});
 function shell() {
   const view = state.route.split('/')[0], pending = pendingPlan(state.boot?.today).items.length;
   const topics = [...new Set(list(state.boot?.notes).map(note=>note.meta?.topic).filter(Boolean))].slice(0,5);
@@ -49,7 +60,6 @@ function shell() {
   theme.setAttribute('aria-label', dark ? '切换日间模式' : '切换夜间模式');
   theme.title = dark ? '切换日间模式' : '切换夜间模式';
 }
-let stopStudyFeedback = () => {};
 let librarySnapshot=null;
 const libraryKey=()=>{const {version,revision}=api.getContext();return `${version}:${revision}`;};
 async function refreshBoot() { librarySnapshot=null;state.boot = await api.get('/api/bootstrap'); return state.boot; }
@@ -64,7 +74,7 @@ async function go(route, { replace = false, force = false, guide = false, speed 
   const main=$('#main'),reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
   let ghost;
   if(guide&&!reduce){ghost=main.cloneNode(true);ghost.removeAttribute('id');ghost.classList.add('onboard-page-ghost');ghost.inert=true;ghost.setAttribute('aria-hidden','true');ghost.querySelectorAll('[id]').forEach(n=>n.removeAttribute('id'));const r=main.getBoundingClientRect();Object.assign(ghost.style,{left:r.x+'px',top:r.y+'px',width:r.width+'px',height:r.height+'px'});document.body.append(ghost);main.style.opacity='0';}
-  stopStudyFeedback();
+  study.leave();
   dialogs.forEach(dialog=>dialog.isConnected&&dialog.close());
   focus.capture();
   state.dirty = false;
@@ -81,7 +91,7 @@ async function go(route, { replace = false, force = false, guide = false, speed 
   if(!cachedLibrary&&!immediateReader)$('#main').innerHTML = '<div class="page-loading" role="status"><span></span>正在把内容放到书桌上…</div>';
   try {
     const [view,id] = state.route.split('/');
-    const page = cachedLibrary?null:await ({ today:todayPage, capture:capturePage, library:parity.library, read:()=>readPage(id), edit:()=>editPage(id), study:()=>studyPage(id), topics:topicsPage, search:parity.search, output:outputPage, settings:settingsPage, jobs:parity.jobs, relations:parity.relations, history:parity.history, manage:()=>management.page(id), focus:focus.page }[view] || todayPage)();
+    const page = cachedLibrary?null:await ({ today:todayPage, capture:capturePage, library:parity.library, read:()=>readPage(id), edit:()=>editPage(id), study:()=>study.page(id), topics:topicsPage, search:parity.search, output:outputPage, settings:settingsPage, jobs:parity.jobs, relations:parity.relations, history:parity.history, manage:()=>management.page(id), focus:focus.page }[view] || todayPage)();
     if (sequence !== state.sequence) {ghost?.remove();main.style.opacity='';return false;}
     if(cachedLibrary)main.replaceChildren(...cachedLibrary.nodes);
     else{main.innerHTML=page.html;page.bind?.();}
@@ -191,43 +201,6 @@ async function editPage(id) {
       });
     }};
 }
-async function studyPage(id) {
-  if(id)return sessionPage(id);
-  const sessions=list((await api.get('/api/study')).sessions), notes=list(state.boot.notes).filter(n=>n.kind==='knowledge'&&['learning','integrated','core'].includes(n.meta?.stage));
-  const mistakes=list((await api.get('/api/mistakes')).mistakes);
-  return {html:heading('UNDERSTANDING TAKES PRACTICE','慢一点，把理解说清楚。','先尝试回忆，再核对材料。回答、反馈与自己确认的理解分别保留。')+
-    `<div class="study-overview"><section><div class="section-title"><h2>正在学习 <small>${notes.length} 条</small></h2></div>${notes.map((note,index)=>`<article class="task-row"><span class="task-index">${String(index+1).padStart(2,'0')}</span><div class="task-copy"><h3>${e(note.title)}</h3><div class="task-meta">${e(note.meta?.topic||'我的学习')}</div></div>${btn(`开始 ${icon('arrow')}`,'start-note','start',`data-id="${e(note.id)}"`)}</article>`).join('')||empty('还没选好要学什么','在知识的书桌中选择“加入学习”，再从这里开始。',link('去知识库看看','library','text-button'))}</section>
-    <aside class="study-history"><p class="eyebrow">PICK UP WHERE YOU LEFT OFF</p><h2>接着上一次思考</h2><div class="actions">${link('完整学习历史 ↗','history','text-button')}${link('学习时长 ↗','focus','text-button')}</div>${sessions.slice(0,6).map(s=>link(`<strong>${e(noteTitle(s.noteId))}</strong><small>${e(jobState(s.status))} · ${list(s.turns).length} 次回答</small>`,`study/${s.id}`,'history-item')).join('')||'<p class="muted">开始之后，你的思考会留在这里。</p>'}</aside></div>
-    <section class="recent"><div class="section-title"><h2>再想一想 <small>${mistakes.length} 条错题</small></h2></div>${mistakes.length?noteRows(mistakes):'<p class="muted">遇到的误解会保留下来，成为下一次理解的起点。</p>'}</section>`};
-}
-async function sessionPage(id, loaded) {
-  const session=loaded || await api.get(endpoint('study',id));state.session=session;
-  const turns=list(session.turns), waiting=feedbackPending(session), completed=session.status==='completed';
-  const title=noteTitle(session.noteId), material=markdown(session.material).html;
-  return {html:heading('ONE THOUGHT AT A TIME',title,`${e(session.goal||'用自己的话解释')} · ${jobState(session.status)}`,link('回到学习池','study','text-button'))+
-    `${credibilityNotice(session.materialWarnings,session.noteId)}<div class="learning-workspace"><section class="learning-page">${!turns.length?`<div class="learning-material" id="learning-material"><p class="eyebrow">先阅读，然后合上材料</p><div class="article-prose">${material}</div><div class="actions">${btn('合上材料，试着解释','hide-material','primary')}${link('在书桌里读',`read/${session.noteId}`,'text-button')}</div></div>`:''}
-    <div id="answer-workspace" ${!turns.length?'hidden':''}><div class="learning-question"><p class="eyebrow">这一次，试着回答</p><h2>${e(session.question)}</h2></div>
-    ${turns.map((turn,index)=>`<section class="learning-turn"><p class="nav-label">第 ${index+1} 次 · 我的回答 · ${turn.hintUsed?'使用过提示或原文':'独立作答'}</p><div class="answer-prose">${e(turn.answer).replaceAll('\n','<br>')}</div>${feedbackHTML(turn.feedback)}</section>`).join('')}
-    ${waiting?`<div class="waiting-note" role="status"><span class="status-pulse"></span><div><strong>你的回答已保存</strong><p>正在等待 AI 反馈，返回后会自动显示。可以离开，之后从学习记录继续。</p><div class="actions">${btn('查看最新反馈','reload','text-button')} ${link('处理动态 ↗','jobs','text-button')}${btn('结束本轮学习','finish','text-button',`data-id="${e(id)}" disabled title="收到反馈后即可结束"`)}</div></div></div>`:completed?`<div class="completion-note"><h2>这一次思考，已经留下来了。</h2><p>${e(session.completion?.reason||'学习记录已保存。')}</p>${completionHTML(session.completion)}${link('回到今天','today','text-button')}</div>`:`<form id="answer-form">${area('我的解释','answer',{placeholder:'不用完美。先写下此刻的理解，再找一个自己的例子。',required:true,rows:9})}<div class="answer-actions"><div class="answer-aids">${btn('需要一点提示','hint','text-button',`data-id="${e(id)}"`)}${btn('再看原文','study-material','text-button',`data-id="${e(id)}"`)}</div><div class="answer-submit">${btn('结束本轮学习','finish','text-button',`data-id="${e(id)}" ${!turns.length?'disabled title="先保存一次回答并收到反馈"':''}`)}<button type="submit" class="primary">保存回答，获取反馈 ${icon('arrow')}</button></div></div><p class="form-note">回答会保存到本机；AI 反馈使用已配置的服务，可能计费。未配置时保留回答并等待。</p></form>`}</div></section>
-    <aside class="learning-companion"><p class="eyebrow">给思考一点空间</p><h2>不是把答案写对，<br>而是看见自己怎么想。</h2><p>先说出结论，再补充理由。对不确定的部分，也可以明确写下。</p><div id="study-hint">${aidUsed(session)?'<p class="form-note">本轮已使用提示或回看原文，回答会如实记录。</p>':''}</div>${turns.length?`<div class="margin-actions">${btn('确认我的理解','session-understanding','text-button',`data-id="${e(id)}"`)}</div>`:''}</aside></div>`,
-    bind(){
-      if(waiting){
-        const sequence=state.sequence, host=$('#main');
-        const isCurrent=()=>state.sequence===sequence && state.route===`study/${id}` && host.isConnected;
-        stopStudyFeedback=watchStudyFeedback({
-          read:signal=>api.get(endpoint('study',id),{signal}),isCurrent,
-          async onReady(next){
-            if(!isCurrent())return;
-            const page=await sessionPage(id,next);
-            if(!isCurrent())return;
-            const scroll=window.scrollY;
-            host.innerHTML=page.html;page.bind?.();
-            window.scrollTo({top:scroll,behavior:'instant'});
-          }
-        });
-      }
-      const form=$('#answer-form');if(form){watchForm(form);const requestId=crypto.randomUUID();submit(form,async values=>{await api.post(endpoint('study',id,'answer'),{answer:values.answer,hintUsed:aidUsed(session),requestId});clearAid(session);state.dirty=false;await go(`study/${id}`,{replace:true,force:true});});}}};
-}
 async function topicsPage() {
   const topics=list((await api.get('/api/topics')).topics);
   return {html:heading('FOLLOW YOUR CURIOSITY','沿着一个问题，慢慢深入。','让分散的资料围绕一个问题，形成可以继续探索的路径。',btn(`${icon('plus')} 新建学习包`,'new-topic','primary'))+
@@ -265,40 +238,6 @@ function formModal(title, contents, save, { wide = false } = {}) {
   dialog.hasUnsavedInput=()=>dirty;
   submit(form,async(values,node)=>{await save(values,node);dirty=false;dialog.close();});
   return dialog;
-}
-async function startStudy(noteId, planId) {
-  const key=`${noteId}:${planId||''}`;
-  const intent=startStudy.intents.get(key)||{requestId:crypto.randomUUID(),pending:null};
-  if(intent.pending)return intent.pending;
-  startStudy.intents.set(key,intent);
-  intent.pending=(async()=>{
-    const sequence=state.sequence;
-    const note=await api.get(endpoint('notes',noteId)),readiness=await readReadiness(note);
-    if(sequence!==state.sequence)return;
-    if(!readiness.ready){modal(readiness.heading,learningHelp(note,readiness));return;}
-    try {
-      const session=await api.post('/api/study/start',{noteId,...(planId?{planId}:{}),requestId:intent.requestId});
-      if(sequence===state.sequence)await go(`study/${session.id}`);
-      startStudy.intents.delete(key);
-    } catch(error) {
-      if(sequence!==state.sequence)return;
-      if(error.code==='NOTE_UNAVAILABLE'){await prepareLearning(noteId);return;}
-      throw error;
-    }
-  })();
-  try{return await intent.pending;}finally{intent.pending=null;}
-}
-startStudy.intents=new Map();
-async function readReadiness(note) {
-  const data=await api.get(endpoint('notes',note.id,'evidence'));
-  return learningReadiness(note,list(state.boot.notes),list(data.limitations));
-}
-async function prepareLearning(id) {
-  const sequence=state.sequence;
-  const note=await api.get(endpoint('notes',id)),readiness=await readReadiness(note);
-  if(sequence!==state.sequence)return;
-  if(readiness.ready){notify('可以开始学习；可信度提示会随材料保留。');return go(state.route,{replace:true});}
-  modal(readiness.heading,learningHelp(note,readiness));
 }
 async function processSource(id, { research = false } = {}) {
   const sequence=state.sequence,returnTo=state.route.startsWith('read/')?state.route:`read/${id}`;
@@ -397,8 +336,8 @@ async function actions(control) {
   if(action==='menu') {const open=document.documentElement.classList.toggle('nav-open');$('#mobile-menu').setAttribute('aria-expanded',String(open));return;}
   if(action==='reload') {if(state.dirty&&!await confirm('刷新前放弃输入？','当前输入还没有保存。','放弃并刷新'))return;state.dirty=false;await refreshBoot();return go(state.route,{replace:true});}
   if(action==='generate') {state.boot.today=await api.post('/api/today/generate');return go('today',{replace:true});}
-  if(action==='start-plan') {const plan=pendingPlan(state.boot.today).items.find(item=>item.id===id);if(plan)return startStudy(plan.noteId,plan.id);return;}
-  if(action==='start-note')return startStudy(id);
+  if(action==='start-plan') {const plan=pendingPlan(state.boot.today).items.find(item=>item.id===id);if(plan)return study.start(plan.noteId,plan.id);return;}
+  if(action==='start-note')return study.start(id);
   if(action==='start-mistake') {const session=await api.post('/api/study/start',{mistakeId:id,noteId:control.dataset.note,requestId:crypto.randomUUID()});return go(`study/${session.id}`);}
   if(action==='mistake-state')return formModal('重新看待这次误解',`<label class="field"><span>你的判断</span><select name="action"><option value="resolve">我已修正</option><option value="dispute">我对反馈有疑问</option><option value="reopen">仍需继续练习</option><option value="revoke">撤销这条错题（保留撤销记录）</option></select></label>${area('理由与依据','reason',{required:true,rows:5})}`,async values=>{await api.post(endpoint('mistakes',id,'action'),values);await refreshBoot();notify('你的判断已记录。');});
   if(action==='defer') {await api.post(endpoint('today',id,'action'),{action:'defer',days:1});await refreshBoot();await go('today',{replace:true});notify('已留到以后，按自己的节奏来。');return;}
@@ -407,7 +346,7 @@ async function actions(control) {
   if(action==='reader-abstract') {const expanded=control.closest('.desk-abstract').classList.toggle('is-expanded');control.setAttribute('aria-expanded',String(expanded));control.textContent=expanded?'收起摘要':'阅读完整摘要';return;}
   if(action==='reader-focus') {const active=$('.reader-shell').classList.toggle('focus-reading');control.setAttribute('aria-pressed',String(active));return;}
   if(action==='reader-section') {const target=document.getElementById(control.dataset.target);target?.scrollIntoView({block:'start',behavior:'instant'});target?.focus({preventScroll:true});$$('.reader-toc button').forEach(node=>node.removeAttribute('aria-current'));control.setAttribute('aria-current','location');return;}
-  if(action==='prepare-learning')return prepareLearning(id);
+  if(action==='prepare-learning')return study.prepare(id);
   if(action==='research-source')return processSource(id,{research:true});
   if(action==='reader-actions') {const note=state.note;if(!note||note.id!==id)return;modal('资料操作',readerMenu(note,state.readiness));return;}
   if(action==='trash-source') {const note=await api.get(endpoint('notes',id));if(note.kind!=='source')return;if(!await confirm('把这份原文暂时放下？','原始资料会进入回收站，可以恢复。','移入回收站'))return;await api.remove(endpoint('notes',id),{expectedHash:note.hash});$$('dialog[open]').forEach(dialog=>dialog.close());await refreshBoot();await go('library');notify('原文已移入回收站。');return;}
@@ -417,9 +356,8 @@ async function actions(control) {
   if(action==='understanding')return understanding(id);
   if(action==='session-understanding')return understanding(state.session.noteId,id);
   if(action==='evidence')return evidence(id);
-  if(action==='hide-material') {$('#learning-material').hidden=true;$('#answer-workspace').hidden=false;$('#answer-form textarea')?.focus();if(api.getContext().practiceId)await api.post('/api/onboarding/event',{practiceId:api.getContext().practiceId,event:'study-hide'});return;}
-  if(action==='hint') {const current=state.session;const result=await api.post(endpoint('study',id,'hint'));markAid(current);if(state.route!==`study/${id}`)return;$('#study-hint').innerHTML=`<div class="hint-note"><p class="nav-label">这次使用了提示</p><p>${e(result.hint)}</p></div>`;return;}
-  if(action==='study-material'){const current=state.session;await api.post(endpoint('study',id,'hint'));markAid(current);if(state.route!==`study/${id}`)return;modal('回到本轮原文',`<p class="form-note">本轮回看原文已记录，下一轮重新独立判断。</p><div class="article-prose">${markdown(current.material).html}</div>`,{wide:true});return;}
+  if(action==='hide-material')return study.hideMaterial();
+  if(action==='hint'||action==='study-material')return study.useAid(state.session,id,action==='study-material');
   if(action==='finish') {
     if(state.dirty && !await confirm('结束本轮学习？','输入框中尚未保存的回答不会计入本轮。取消可继续编辑。','结束本轮学习'))return;
     const sequence=state.sequence, form=control.closest('form'), wasInert=form?.inert;

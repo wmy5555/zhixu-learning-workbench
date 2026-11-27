@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import vm from 'node:vm';
+import { createStudyWorkspace } from '../public/web/study-workspace.mjs';
 import { learningReadiness, learningHelp, readerMenu } from '../public/web/reader-actions.mjs';
 import { reader } from '../public/web/reader.mjs';
 
@@ -52,10 +51,12 @@ function harness({limitations=[],stage='learning',postError,hold=false}={}) {
   let release;
   const gate=hold?new Promise(resolve=>{release=resolve;}):Promise.resolve();
   const api={get:async path=>{await gate;return path.endsWith('/evidence')?{limitations}:knowledge({stage});},post:async(path,body)=>{writes.push({path,body});if(postError)throw postError;return {id:'session-1'};}};
-  const context={api,state,crypto:{randomUUID:()=> 'one-intent'},endpoint:(resource,id,action='')=>`/api/${resource}/${id}${action?'/'+action:''}`,list:value=>Array.isArray(value)?value:[],learningReadiness,learningHelp,modal:(...args)=>dialogs.push(args),notify:()=>{},go:async route=>{state.route=route;}};
-  const sourceText=fs.readFileSync(new URL('../public/web/main.mjs',import.meta.url),'utf8');
-  const snippet=sourceText.slice(sourceText.indexOf('async function startStudy('),sourceText.indexOf('async function processSource('));
-  vm.runInNewContext(snippet+'\nglobalThis.start=startStudy;',context);
+  const { start } = createStudyWorkspace({
+    api, getNotes: () => state.boot.notes, view: () => state,
+    go: async route => { state.route = route; },
+    showHelp: (note, readiness) => dialogs.push([readiness.heading, learningHelp(note, readiness)]),
+  });
+  const context = { api, state, start };
   return {context,writes,dialogs,release};
 }
 
@@ -65,7 +66,17 @@ test('start redirects unmet conditions to recovery, coalesces clicks, and preser
   }
   const h=harness({hold:true,limitations:['待核验']}),one=h.context.start('knowledge-1'),two=h.context.start('knowledge-1');
   h.release();await Promise.all([one,two]);assert.equal(h.writes.length,1);
-  assert.equal(h.writes[0].body.requestId,'one-intent');assert.equal(h.context.state.route,'study/session-1');
+  assert.match(h.writes[0].body.requestId,/^[0-9a-f-]{36}$/);assert.equal(h.context.state.route,'study/session-1');
+});
+
+test('retrying a failed start keeps the request ID and planned item', async () => {
+  const h = harness({ postError: new Error('temporary failure') });
+  await assert.rejects(h.context.start('knowledge-1', 'plan-1'), /temporary failure/);
+  h.context.api.post = async (path, body) => { h.writes.push({ path, body }); return { id: 'session-1' }; };
+  await h.context.start('knowledge-1', 'plan-1');
+  assert.equal(h.writes.length, 2);
+  assert.equal(h.writes[0].body.planId, 'plan-1');
+  assert.deepEqual(h.writes[1], h.writes[0]);
 });
 
 test('late readiness is ignored after navigation; backend eligibility races still open recovery',async()=>{

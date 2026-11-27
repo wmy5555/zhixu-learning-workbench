@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createStudyWorkspace } from '../public/web/study-workspace.mjs';
 import { watchStudyFeedback, feedbackPending } from '../public/web/study-feedback.mjs';
 
 function harness(read) {
@@ -52,6 +53,40 @@ test('temporary read failure retries with backoff and recovers without AI writes
 test('navigation cancels a scheduled read before it starts', () => {
   const h = harness(() => assert.fail('must not read after navigation'));
   h.stop(); assert.equal(h.timers.size, 0);
+});
+
+test('mounting the study page publishes the session and gives each answer form one request ID', async t => {
+  const session = { id: 'session-1', noteId: 'n1', status: 'reading', turns: [], material: '一份材料', question: '为什么？' };
+  const loaded = [], writes = [], form = {};
+  const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  Object.defineProperty(globalThis, 'document', { configurable: true, value: { querySelector: selector => selector === '#answer-form' ? form : null } });
+  t.after(() => {
+    if (previousDocument) Object.defineProperty(globalThis, 'document', previousDocument);
+    else delete globalThis.document;
+  });
+  let save;
+  const study = createStudyWorkspace({
+    api: {
+      get: async path => { assert.equal(path, '/api/study/session-1'); return session; },
+      post: async (path, body) => { writes.push({ path, body }); },
+    },
+    noteTitle: () => '我的知识',
+    setSession: value => loaded.push(value),
+    bindAnswer(node, id, handler) { assert.equal(node, form); assert.equal(id, session.id); save = handler; },
+  });
+  const page = await study.page(session.id);
+  assert.deepEqual(loaded, []);
+  assert.match(page.html, /id="learning-material"/);
+  page.bind();
+  assert.deepEqual(loaded, [session]);
+  await save('我的解释');
+  await save('我的解释');
+  assert.equal(writes.length, 2);
+  assert.deepEqual(writes[0], writes[1]);
+  assert.equal(writes[0].path, '/api/study/session-1/answer');
+  assert.equal(writes[0].body.answer, '我的解释');
+  assert.equal(writes[0].body.hintUsed, false);
+  assert.match(writes[0].body.requestId, /^[0-9a-f-]{36}$/);
 });
 
 // Exercise the real finish handler without booting the rest of the application.
