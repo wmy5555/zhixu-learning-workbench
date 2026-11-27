@@ -7,6 +7,7 @@ import test from 'node:test';
 import { createApp } from '../src/server.mjs';
 import { createRecycleBin } from '../src/recycle-bin.mjs';
 import { decodeFile, writeAttachment, attachmentPath } from '../src/attachments.mjs';
+import { missingLocalSourceWarning } from '../public/source-membership.mjs';
 
 const tempRoot = path.resolve(import.meta.dirname, '../.tmp');
 fs.mkdirSync(tempRoot, { recursive: true });
@@ -96,6 +97,66 @@ test('pending physical cleanup still requires owner authorization', async t => {
   assert.deepEqual(snapshot(store), before);
   assert.equal((await req('/api/recycle-bin', 'DELETE', { confirmed: true, revision: before.list.revision }, token)).status, 200);
   assert.equal(bin.list().pendingCleanup, 0);
+});
+
+test('purging originals preserves links in recoverable note versions across web history restore and backup', async t => {
+  const token = randomBytes(32).toString('base64url'), primary = await fixture(t, token), { app, req } = primary;
+  const store = app.service.store;
+  app.service.updateSettings({ dailyMinutes: 120 });
+  const source = (title, meta = {}) => store.create({ kind: 'source', title, body: `待永久清除的合成原文 ${title}`, meta });
+  const input = original => ({ id: original.id, role: 'input' });
+  const knowledge = (title, meta) => store.create({ kind: 'knowledge', title, body: `保留的合成知识正文 ${title}`, meta: { stage: 'learning', depth: 'explain', ...meta } });
+  const editedSource = source('仅在已有笔记的一次旧版本中引用');
+  const deletedSource = source('仅在已移除的知识中引用');
+  const discardedSource = source('仅被随同清除的版本引用');
+  let discardedDependent = source('随同清除的资料', { sources: [input(discardedSource)] });
+  discardedDependent = store.update(discardedDependent.id, { expectedHash: discardedDependent.hash, meta: { sources: [] } });
+  let edited = knowledge('可恢复旧版本的在库知识', { processKey: `${editedSource.id}:${editedSource.hash}:旧顺序` });
+  const originalEditHash = edited.hash;
+  edited = store.update(edited.id, { expectedHash: edited.hash, meta: { processKey: null } });
+  edited = store.update(edited.id, { expectedHash: edited.hash, body: edited.body + '\n更新后没有本地输入。' });
+  const deleted = knowledge('可恢复的已移除知识', { sources: [input(deletedSource)] });
+  const external = knowledge('从未收录的对照', { sources: [{ id: 'never-seen-purge-history', role: 'input' }] });
+
+  for (const item of [deleted, editedSource, deletedSource, discardedSource, discardedDependent]) {
+    assert.equal((await req(`/api/notes/${item.id}`, 'DELETE', { expectedHash: item.hash })).status, 200);
+  }
+  const { body: trash } = await req('/api/recycle-bin');
+  assert.deepEqual(await req('/api/recycle-bin', 'DELETE', { confirmed: true, revision: trash.revision }, token), { status: 200, body: { cleared: 4 } });
+  const backup = JSON.parse(JSON.stringify(app.service.backup()));
+
+  async function checkRestores({ app, req }) {
+    const { body: before } = await req('/api/today');
+    assert.deepEqual(new Set(before.items.map(item => item.noteId)), new Set([edited.id, external.id]));
+    const history = (await req(`/api/history/${edited.id}`)).body.versions;
+    assert.ok(history.length >= 2, 'older surviving versions also count');
+    const editedVersion = history.find(version => version.hash === originalEditHash);
+    const deletedVersion = (await req('/api/deleted-notes')).body.items.find(note => note.id === deleted.id);
+    assert.equal((await req(`/api/history/${edited.id}/restore`, 'POST', { versionId: editedVersion.versionId, expectedHash: edited.hash })).status, 200);
+    assert.equal((await req(`/api/history/${deleted.id}/restore`, 'POST', { versionId: deletedVersion.versionId })).status, 200);
+    const { body: after } = await req('/api/today');
+    assert.deepEqual(after.items.map(item => item.noteId), [external.id]);
+    for (const note of [edited, deleted]) {
+      assert.equal(after.unavailable.find(item => item.noteId === note.id).reason, missingLocalSourceWarning);
+      assert.match((await req(`/api/notes/${note.id}`)).body.body, /保留的合成知识正文/);
+      assert.equal(app.service.store.outboundPrivacy(app.service.getNote(note.id)), 'local');
+    }
+    assert.equal(app.service.store.outboundPrivacy(app.service.getNote(external.id)), 'cloud');
+  }
+
+  await checkRestores(primary);
+  assert.deepEqual(new Set(backup.records.filter(row => row.namespace === 'purgedSourceIds').map(row => row.key)), new Set([editedSource.id, deletedSource.id]));
+  const originals = [editedSource, deletedSource, discardedSource, discardedDependent];
+  assert.ok(backup.versions.every(version => originals.every(original => original.id !== version.noteId)));
+  for (const original of originals) {
+    assert.equal(fs.existsSync(path.join(store.vaultDir, original.path)), false);
+    assert.ok(!JSON.stringify(backup).includes(original.body));
+  }
+  const restored = await fixture(t);
+  const preview = await restored.req('/api/restore', 'POST', { backup });
+  assert.equal(preview.status, 200);
+  assert.equal((await restored.req('/api/restore', 'POST', { backup, preview: false, token: preview.body.token })).status, 200);
+  await checkRestores(restored);
 });
 
 test('invalid owner configuration fails before creating data or starting a server', () => {
