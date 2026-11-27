@@ -1,3 +1,4 @@
+import { createRestoreSelection } from '../public/restore-selection.mjs';
 import { createStudyStarter } from '../public/study-start.mjs';
 import { loadLegacyUi } from './fixtures/legacy-ui.mjs';
 import assert from 'node:assert/strict';
@@ -369,6 +370,8 @@ function browser(api = {}, dateTimeFormat = Intl.DateTimeFormat, savedSession = 
     '\ncreateFilePicker = async (_input, options) => { api.onImagePicker?.(options); return { getFiles: () => [] }; };\nthis.attachmentUrl = (id, asset, download = false) => "/api/notes/" + id + "/attachments?asset=" + asset + (download ? "&download=1" : "");', context);
   loadLegacyUi(context);
   vm.runInContext('\n' + discoverySource + '\n' + ('const renderMarkdown = (() => {\n' + markdownSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn renderMarkdown;\n})();') + '\nconst createMarkdownEditor = (() => {\n' + editorSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn createMarkdownEditor;\n})();\n' + knowledgeViewSource + '\n' + sourceMapSource + '\n' + relatedSourceUi + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\n' + stripped + '\nthis.app = { attachModelDiscovery, renderSourceGroupDrawer, conversationReading, confirmDirect, confirmUnderstanding, noteMeta, renderCurrent, openDraft, navigateTutorial, renderCapture, evidenceDetails, relationControls, renderRelationsPanel, topicEditor, renderStudy, renderOutput, renderNoteEditor, studySessionPanel, renderAnswer, recommendationsPanel, previewNoteLinks, diagnosticsPanel, settingsPanel, todayItem, state, refs };', context);
+  context.createRestoreSelection = createRestoreSelection;
+  context.app.dataPanel = vm.runInContext('dataPanel', context);
   context.app.beginStudy = vm.runInContext('beginStudy', context);
   context.app.mcpSettingsPanel = vm.runInContext('mcpSettingsPanel', context);
   context.app.callHistoryPanel = vm.runInContext('callHistoryPanel', context);
@@ -2868,4 +2871,64 @@ test('floating source reader Escape closes only the top reader and retains drawe
   assert.equal(event.prevented, true);
   await app.document.events.keydown({ key: 'Escape' });
   assert.equal(app.refs.drawer.classList.contains('is-open'), false, 'a later Escape may close the drawer normally');
+});
+
+test('restore preview follows the selected file across delayed reads, previews, confirmation and panel changes', async () => {
+  const gates = [], calls = [], scope = { practiceId: '', version: 0 };
+  const app = browser({ getContext: () => scope, restore: body => {
+    calls.push(plain(body));
+    const gate = Promise.withResolvers(); gates.push(gate); return gate.promise;
+  } });
+  const panel = app.dataPanel(), input = descendants(panel).find(n => n.type === 'file');
+  input.isConnected = true;
+  const preview = findButton(panel, '先预览恢复');
+  const select = file => { input.files = [file]; return input.events.change(); };
+  const file = name => ({ name, text: async () => JSON.stringify({ name }) });
+  const first = Promise.withResolvers();
+  const oldRead = select({ name: 'A', text: () => first.promise });
+  assert.equal(preview.disabled, true);
+  await select(file('B')); first.resolve('{"name":"A"}'); await oldRead;
+  const oldPreview = click(preview);
+  assert.deepEqual(calls[0], { backup: { name: 'B' }, preview: true });
+  await select(file('C')); const nextPreview = click(preview);
+  gates[1].resolve({ token: 'token-C' }); await nextPreview;
+  const applyC = findButton(panel, '确认恢复');
+  gates[0].resolve({ token: 'token-B' }); await oldPreview;
+  assert.equal(findButton(panel, '确认恢复'), applyC);
+
+  for (const change of ['file', 'closed', 'space']) {
+    if (change !== 'file') {
+      await select(file(change)); const pending = click(preview);
+      gates.at(-1).resolve({ token: 'test-' + change }); await pending;
+    }
+    const confirming = click(findButton(panel, '确认恢复'));
+    const ok = findButton(app.document.body, '确认恢复');
+    if (change === 'file') await select(file('D'));
+    if (change === 'closed') input.isConnected = false;
+    if (change === 'space') { scope.practiceId = 'other'; scope.version++; }
+    await click(ok); await confirming;
+    assert.equal(calls.filter(call => !call.preview).length, 0);
+    input.isConnected = true;
+  }
+});
+
+test('a late restore completion leaves the newly previewed backup intact', async () => {
+  const writes = [], done = Promise.withResolvers();
+  const app = browser({
+    restore: async body => {
+      if (body.preview) return { token: 'token-' + body.backup.name };
+      writes.push(plain(body)); return done.promise;
+    },
+    bootstrap: async () => ({ jobs: [] }),
+  });
+  const panel = app.dataPanel(), picker = descendants(panel).find(n => n.type === 'file');
+  picker.isConnected = true;
+  const select = async name => { picker.files = [{ text: async () => JSON.stringify({ name }) }]; await picker.events.change(); await click(findButton(panel, '先预览恢复')); };
+  await select('A');
+  const restoring = click(findButton(panel, '确认恢复'));
+  await click(findButton(app.document.body, '确认恢复'));
+  await select('B'); const applyB = findButton(panel, '确认恢复');
+  done.resolve({ ok: true }); await restoring;
+  assert.deepEqual(writes, [{ backup: { name: 'A' }, preview: false, token: 'token-A' }]);
+  assert.equal(findButton(panel, '确认恢复'), applyB);
 });

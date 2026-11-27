@@ -1,3 +1,4 @@
+import { createRestoreSelection } from './restore-selection.mjs';
 import { createStudyStarter } from './study-start.mjs';
 import { noteKinds, learningStages, learningDepths, learningDepthNames } from './note-classification.mjs';
 import { localCheckStatus, callFailureReason } from "./mcp-status.mjs";
@@ -65,8 +66,6 @@ const state = {
   studyTab: "queue",
   lastOutput: null,
   lastCapture: null,
-  restoreBackup: null,
-  restoreToken: "",
   sourceMaps: new Map(),
   libraryFoldState: new Map(),
 };
@@ -2639,20 +2638,61 @@ function dataPanel() {
   const backupInput = el("input", { type: "file", accept: ".json,application/json" });
   const previewArea = el("div");
   const restoreButton = button("先预览恢复", { kind: "primary", disabled: true });
+  const selection = createRestoreSelection(api, backupInput);
+  let parsed = null;
+
   backupInput.addEventListener("change", async () => {
-    state.restoreToken = "";
+    const entry = selection.begin();
+    parsed = null;
+    restoreButton.disabled = true;
     clear(previewArea);
-    restoreButton.disabled = !backupInput.files.length;
-    if (!backupInput.files.length) return;
-    try { state.restoreBackup = JSON.parse(await backupInput.files[0].text()); }
-    catch { state.restoreBackup = null; restoreButton.disabled = true; previewArea.append(el("div", { class: "notice danger", text: "无法解析这个 JSON 备份文件。" })); }
+    if (!entry) return;
+    try {
+      const backup = JSON.parse(await entry.file.text());
+      if (!entry.current()) return;
+      parsed = { entry, backup };
+      restoreButton.disabled = false;
+    } catch {
+      if (entry.current()) previewArea.append(el("div", { class: "notice danger", text: "无法解析这个 JSON 备份文件。" }));
+    }
   });
   restoreButton.addEventListener("click", async () => {
+    if (restoreButton.disabled || !parsed?.entry.current()) return;
+    const { backup } = parsed, entry = selection.begin();
+    if (!entry) return;
+    parsed = { entry, backup };
+    restoreButton.disabled = true;
+    clear(previewArea);
     try {
-      const result = await api.restore({ backup: state.restoreBackup, preview: true });
-      state.restoreToken = result.token || "";
-      clear(previewArea).append(el("section", { class: "panel soft" }, [sectionHeading("恢复预览", "正式恢复前还会生成安全备份"), el("pre", { class: "mono-block", text: JSON.stringify(result, null, 2) }), button("确认恢复", { kind: "danger", disabled: !state.restoreToken, onClick: confirmRestore })]));
-    } catch (error) { handleError(error); }
+      const result = await api.restore({ backup, preview: true });
+      if (!entry.current()) return;
+      const confirmed = entry.confirmation(backup, result.token);
+      const apply = button("确认恢复", { kind: "danger", disabled: !confirmed });
+      apply.addEventListener("click", async () => {
+        if (apply.disabled || !confirmed || !entry.current()) return;
+        apply.disabled = true;
+        try {
+          const ok = await confirmAction({ title: "执行恢复？", message: "应用会先生成安全备份，再恢复资料与记录。恢复后的外部能力默认关闭，未完成任务等待你确认；本机未结清调用仍保留。", confirmText: "确认恢复", danger: true });
+          const request = ok && confirmed();
+          if (!request) return;
+          await api.restore(request);
+          if (!selection.sameSpace()) return;
+          if (entry.current()) {
+            parsed = null; selection.clear(); backupInput.value = ""; restoreButton.disabled = true;
+            clear(previewArea);
+            toast("恢复已完成", "success");
+          }
+          try { await refreshBootstrap(); }
+          catch { if (backupInput.isConnected && selection.sameSpace() && !backupInput.files[0]) toast("恢复已完成，但页面未刷新。请刷新页面查看，无需再次恢复。", "info"); }
+        } catch (error) { if (entry.current()) handleError(error); }
+        finally { if (entry.current()) apply.disabled = false; }
+      });
+      previewArea.append(el("section", { class: "panel soft" }, [
+        sectionHeading("恢复预览", "正式恢复前还会生成安全备份"),
+        el("pre", { class: "mono-block", text: JSON.stringify(result, null, 2) }), apply,
+      ]));
+    } catch (error) { if (entry.current()) handleError(error); }
+    finally { if (entry.current()) restoreButton.disabled = false; }
   });
   return el("div", { class: "two-column" }, [
     el("section", { class: "panel", dataset: { tour: "system-backup" } }, [sectionHeading("完整备份", "开放 JSON 包含知识与运行状态，不含密钥和会话令牌"), el("p", { class: "muted", text: "建议在大批量修改、合并或恢复前下载一份。" }), el("div", { class: "form-actions" }, [button("下载备份", { kind: "primary", onClick: downloadBackup }), button("导入演示资料", { onClick: importDemo })]), el("p", { class: "fine-print", text: "演示内容会明确标识，不会生成虚假的个人掌握记录。被删除内容的历史版本和备份保留策略可在导出内容中核对。" })]),
@@ -2677,17 +2717,7 @@ async function importDemo() {
   catch (error) { handleError(error); }
 }
 
-async function confirmRestore() {
-  const ok = await confirmAction({ title: "执行恢复？", message: "应用会先生成安全备份，再恢复资料与记录。恢复后的外部能力默认关闭，未完成任务等待你确认；本机未结清调用仍保留。", confirmText: "确认恢复", danger: true });
-  if (!ok) return;
-  try {
-    await api.restore({ backup: state.restoreBackup, preview: false, token: state.restoreToken });
-    state.restoreBackup = null; state.restoreToken = "";
-    toast("恢复已完成", "success");
-    await refreshBootstrap();
-    await renderSystem();
-  } catch (error) { handleError(error); }
-}
+
 
 function diagnosticCount(value) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : "未知";
@@ -3203,7 +3233,6 @@ async function init() {
           state.lastCapture = null;
           closeDrawer(); state.currentStudy = null; state.studyMaterialVisible = true; state.studyTab = "queue";
           state.lastOutput = null;
-          state.restoreBackup = null; state.restoreToken = "";
           state.libraryFilters = { q: "", kind: "", stage: "" };
           state.searchFilters = { q: "", mode: "keyword", kind: "", stage: "", topic: "", source: "", from: "", to: "", privacy: "local" };
           try { await refreshBootstrap(); await renderCurrent(); }

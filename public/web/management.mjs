@@ -1,3 +1,4 @@
+import { createRestoreSelection } from '../restore-selection.mjs';
 import { escape as e, markdown } from './markdown.mjs';
 import { $, button as btn, routeButton as link, field, area, heading, modal, confirm, busy, notify, list, details, facts } from './ui.mjs';
 import { endpoint } from './api.mjs';
@@ -88,10 +89,42 @@ export function createManagement(ctx,appearance) {
   }
   async function restore() {
     return {html:heading('KEEP A WAY BACK','给知识，留一条回来的路。','完整备份先预览，再确认恢复。不会恢复连接密钥。',link('回到设置','settings','text-button'))+nav()+`<div class="writing-page"><a class="secondary" href="${api.url('/api/backup')}" download>下载完整备份</a><form id="restore-form"><label class="field"><span>选择完整 JSON 备份（最大 100 MB）</span><input type="file" name="backup" accept=".json,application/json" required></label><button class="primary" type="submit">预览恢复差异</button></form><div id="restore-preview"></div></div>`,
-      bind(){const form=$('#restore-form');let revision=0,snapshot=null;form.elements.backup.onchange=()=>{revision++;snapshot=null;$('#restore-preview').innerHTML='';};
-        submit(form,async()=>{const file=form.elements.backup.files[0];if(!file||file.size>100000000)throw Error('请选择不超过 100 MB 的完整 JSON 备份。');const current=revision,input=JSON.parse(await file.text()),p=await api.post('/api/restore',{backup:input,preview:true});if(current!==revision)return;snapshot={input,p};const host=$('#restore-preview');host.innerHTML=`<h2>核对恢复差异</h2><pre class="parity-json">${e(JSON.stringify(p,null,2))}</pre><p class="notice">恢复后外部能力关闭，排队任务等待再次确认。当前库与备份的变化请逐项核对。</p>${btn('确认恢复当前预览','restore-confirm','primary')}`;
-          host.querySelector('button').onclick=ev=>busy(ev.currentTarget,async()=>{if(!snapshot||current!==revision)throw Error('文件已改变，请重新预览。');if(!await confirm('确认恢复这个备份？','将按预览恢复当前独立知识库。此操作可能替换当前记录，请先保留当前备份。','确认恢复'))return;await api.post('/api/restore',{backup:snapshot.input,preview:false,token:snapshot.p.token});snapshot=null;host.innerHTML='<p role="status">恢复完成。外部能力保持关闭。</p>';await refreshBoot();});
-        });}};
+      bind() {
+        const form = $('#restore-form'), picker = form.elements.backup, host = $('#restore-preview');
+        const selection = createRestoreSelection(api, picker);
+        picker.onchange = () => { selection.clear(); host.innerHTML = ''; };
+        submit(form, async () => {
+          const entry = selection.begin();
+          host.innerHTML = '';
+          if (!entry || entry.file.size > 100000000) throw Error('请选择不超过 100 MB 的完整 JSON 备份。');
+          try {
+            const backup = JSON.parse(await entry.file.text());
+            if (!entry.current()) return;
+            const result = await api.post('/api/restore', { backup, preview: true });
+            if (!entry.current()) return;
+            host.innerHTML = `<h2>核对恢复差异</h2><pre class="parity-json">${e(JSON.stringify(result,null,2))}</pre><p class="notice">恢复后外部能力关闭，排队任务等待再次确认。当前库与备份的变化请逐项核对。</p>${btn('确认恢复当前预览','restore-confirm','primary')}`;
+            const apply = host.querySelector('button');
+            const confirmed = entry.confirmation(backup, result.token);
+            apply.disabled = !confirmed;
+            apply.onclick = ev => busy(ev.currentTarget, async () => {
+              if (!confirmed || !entry.current()) return;
+              const ok = await confirm('确认恢复这个备份？','将按预览恢复当前独立知识库。此操作可能替换当前记录，请先保留当前备份。','确认恢复');
+              const request = ok && confirmed();
+              if (!request) return;
+              try {
+                await api.post('/api/restore', request);
+                if (!selection.sameSpace()) return;
+                if (entry.current()) { selection.clear(); host.innerHTML = '<p role="status">恢复完成。外部能力保持关闭。</p>'; }
+                try { await refreshBoot(); }
+                catch {
+                  if (form.isConnected && selection.sameSpace() && picker.files[0] === entry.file)
+                    host.textContent = '恢复已完成，但页面未刷新。请刷新页面查看，无需再次恢复。';
+                }
+              } catch (error) { if (entry.current()) throw error; }
+            });
+          } catch (error) { if (entry.current()) throw error; }
+        });
+      }};
   }
   async function handle(control) {
     const a=control.dataset.action;
