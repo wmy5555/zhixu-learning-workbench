@@ -1,3 +1,4 @@
+import { loadLegacyUi } from './fixtures/legacy-ui.mjs';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
@@ -5,7 +6,6 @@ import vm from 'node:vm';
 import { buildUsageReport } from '../src/usage.mjs';
 import { createAI } from '../src/ai.mjs';
 
-const uiSource = await readFile(new URL('../public/ui.mjs', import.meta.url), 'utf8');
 const usageSource = await readFile(new URL('../public/usage.mjs', import.meta.url), 'utf8');
 
 class Element {
@@ -58,7 +58,8 @@ function browser(api = {}) {
     ApiError: class extends Error {}, startSession: async () => {},
     window: { history: { replaceState() {} }, location: { hash: '' }, setTimeout() {}, addEventListener() {} },
   });
-  vm.runInContext(uiSource.replaceAll('export ', '') + '\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\nthis.app = {createUsagePanel};', context);
+  loadLegacyUi(context);
+  vm.runInContext('\n' + usageSource.replace(/^import.*;$/m, '').replaceAll('export ', '') + '\nthis.app = {createUsagePanel};', context);
   return context.app;
 }
 

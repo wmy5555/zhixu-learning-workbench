@@ -1,3 +1,4 @@
+import { loadLegacyUi } from './fixtures/legacy-ui.mjs';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
@@ -26,7 +27,8 @@ function fixture() {
   }
   document={createElement:t=>new Element(t),createElementNS:(_,t)=>new Element(t),createTextNode:text=>Object.assign(new Element('text'),{textContent:text})};
   const context=vm.createContext({document,Node:Element,queueMicrotask:()=>{}});
-  const code=fs.readFileSync(new URL('../public/ui.mjs',import.meta.url),'utf8')+'\n'+fs.readFileSync(new URL('../public/source-map.mjs',import.meta.url),'utf8').replace(/^import .*;\r?\n/gm,'');
+  loadLegacyUi(context);
+  const code=fs.readFileSync(new URL('../public/source-map.mjs',import.meta.url),'utf8').replace(/^import .*;\r?\n/gm,'');
   vm.runInContext(code.replaceAll('export ', '')+'\nthis.createMap=createSourceMap;',context);
   const children=[{id:'a',title:'长中文节点标题'.repeat(14)},{id:'b',title:'统一接口端点'},{id:'c',title:'无关节点'}];
   const edges=[{id:'e1',from:'a',to:'b',type:'explain',label:'解释统一接口与底层包装的长关系',explanation:'完整关系解释'.repeat(100),sourceRefs:[{quote:'合成来源证据',start:0,end:6}]},{id:'e2',from:'b',to:'c',type:'example',label:'第二关系'}];

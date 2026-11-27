@@ -1,3 +1,4 @@
+import { loadLegacyUi } from './fixtures/legacy-ui.mjs';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
@@ -6,7 +7,6 @@ import { chapters, flatSteps, coreChapters, coreSteps, extensionChapters, getCur
 import { materials, customMaterial, customSample, getMaterial, materialSample } from '../public/onboarding-materials.mjs';
 
 const apiSource = await readFile(new URL('../public/api.mjs', import.meta.url), 'utf8');
-const uiSource = await readFile(new URL('../public/ui.mjs', import.meta.url), 'utf8');
 const markdownSource = await readFile(new URL('../public/markdown-reader.mjs', import.meta.url), 'utf8');
 const onboardingSource = await readFile(new URL('../public/onboarding.mjs', import.meta.url), 'utf8');
 const store = initial => {
@@ -189,7 +189,8 @@ async function tutorialBrowser({ modelReady = true, exists = true, narrow = fals
     window: { location: { search: query }, matchMedia: query => ({ matches: query.includes('prefers-reduced-motion') ? reducedMotion : narrow }), addEventListener(type, handler) { windowEvents[type] = handler; }, setTimeout() {}, clearTimeout() {}, setInterval(handler) { intervals.push(handler); }, clearInterval() {} },
   });
   const stripped = onboardingSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '');
-  vm.runInContext(uiSource.replaceAll('export ', '') + '\nconst renderMarkdown = (() => {\n' + markdownSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn renderMarkdown;\n})();\n' + stripped + '\nthis.make = createOnboarding; this.progress = getStepProgress;', context);
+  loadLegacyUi(context);
+  vm.runInContext('\nconst renderMarkdown = (() => {\n' + markdownSource.replace(/^import .*;\s*$/gm, '').replaceAll('export ', '') + '\nreturn renderMarkdown;\n})();\n' + stripped + '\nthis.make = createOnboarding; this.progress = getStepProgress;', context);
   const adapter = { navigate: async step => { navigations.push(step.id || step.view); }, contextChanged: async () => {}, refresh: async () => {}, fillSample: async () => {}, processStatus: () => null };
   const tutorial = context.make(adapter); await tutorial.init();
   return { tutorial, adapter, api, body, workspace, main, drawer, drawerBody, toasts, requests, navigations, contexts, intervals, document, setNarrow(value) { narrow = value; windowEvents.resize?.(); }, progress: context.progress, get state() { return state; }, setState: value => { state = { ...state, ...value }; } };

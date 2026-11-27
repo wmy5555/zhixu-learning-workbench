@@ -1,3 +1,4 @@
+import { learningStages as stages, learningDepths as depths } from '../public/note-classification.mjs';
 import { discoveryFindings, discoveryMarkdown } from './discovery-guidance.mjs';
 import { importedContext, readImportedView } from './chatgpt-structure.mjs';
 import { makeLearningPractice, learningSourceIds } from './learning-guidance.mjs';
@@ -26,8 +27,8 @@ import { assertTextSource, processingText } from './attachments.mjs';
 import { outboundText, outboundTitle } from './outbound-text.mjs';
 import { searchContext } from './search-index.mjs';
 import { performance } from 'node:perf_hooks';
-
 import { sourceTitlePlaceholder, needsTitle, validSourceTitle } from './source-title.mjs';
+
 export const defaults = {
   dailyMinutes: 25, timezone: 'Asia/Shanghai', scheduleTime: '08:00', focusTopics: [], pausedIds: [],
   ai: { enabled: false, baseUrl: '', model: '', timeoutMs: 180000, dailyCallLimit: 500, sourceCallLimit: 120, monthlyBudget: 0, inputPrice: null, outputPrice: null, cachedInputPrice: null },
@@ -35,8 +36,6 @@ export const defaults = {
   search: { enabled: false, baseUrl: 'https://api.tavily.com', requestPrice: null }, fetch: { enabled: false },
   mcp: { enabled: false, allowProposals: false, chatgptEnabled: false, chatgptAllowRead: false }, discoveryDays: 7, prompts: {},
 };
-const stages = ['reference','candidate','learning','integrated','core','retired'];
-const depths = ['aware','find','explain','apply'];
 const usable = (n, timestamp) => n.kind === 'knowledge' && !['retired'].includes(n.meta.stage) && !n.meta.supersededBy && !(n.meta.researchLimitations?.length) && (!n.meta.reviewAfter || n.meta.reviewAfter >= timestamp);
 const practicePurpose = 'onboarding-practice';
 const practicePreferences = ['dailyMinutes','timezone','scheduleTime','focusTopics','pausedIds','discoveryDays','prompts'];

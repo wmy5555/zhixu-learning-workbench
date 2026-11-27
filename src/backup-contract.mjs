@@ -1,3 +1,4 @@
+import { noteKinds, learningStages, learningDepths } from '../public/note-classification.mjs';
 import path from 'node:path';
 import YAML from 'yaml';
 
@@ -41,7 +42,7 @@ export function validateBackupMarkdown(raw, id) {
   } catch { invalid('备份 Markdown 属性格式错误。', 'FRONTMATTER'); }
   if (!backupObject(meta)) invalid('备份 Markdown 属性必须为键值对象。');
   if (meta.id !== undefined && meta.id !== id) invalid('备份 Markdown 的稳定身份不一致。');
-  const enums = { kind: ['source','knowledge','mistake','topic','report'], privacy: ['local','cloud'], stage: ['reference','candidate','learning','integrated','core','retired'], depth: ['aware','find','explain','apply'] };
+  const enums = { kind: noteKinds, privacy: ['local','cloud'], stage: learningStages, depth: learningDepths };
   for (const [key, values] of Object.entries(enums)) if (meta[key] !== undefined && !values.includes(meta[key])) invalid(`备份 Markdown 的 ${key} 属性无效。`);
   for (const key of ['title','processKey','generatedBodyHash','reviewAfter','confirmedAt','topic','supersededBy']) if (meta[key] !== undefined && meta[key] !== null && typeof meta[key] !== 'string') invalid(`备份 Markdown 的 ${key} 属性无效。`);
   for (const key of ['createdAt','updatedAt']) if (meta[key] !== undefined && !date(meta[key])) invalid(`备份 Markdown 的 ${key} 时间无效。`);

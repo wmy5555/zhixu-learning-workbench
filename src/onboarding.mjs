@@ -1,3 +1,4 @@
+import { isStudyStage, learningDepths } from '../public/note-classification.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -291,7 +292,7 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
   function selectKnowledge(id, { noteId, role = 'explain' }) {
     const p = requirePractice(id); assertIdle();
     if (p.status !== 'active') fail('请先继续练习。', 'PRACTICE_PAUSED', 409);
-    if (!p.materialId || !['aware', 'find', 'explain', 'apply'].includes(role)) fail('学习目标无效。', 'INVALID');
+    if (!p.materialId || !learningDepths.includes(role)) fail('学习目标无效。', 'INVALID');
     const service = open().service;
     const note = service.getNote(noteId);
     if (note.kind !== 'knowledge' || note.meta.presetCase || note.meta.supersededBy || !note.meta.sources?.some(ref => ref.id === p.roles.capturedSource && ref.role === 'input')) fail('请选择当前原文下的实际候选知识，不能使用预设案例。', 'ONBOARDING_KNOWLEDGE', 409);
@@ -318,7 +319,7 @@ export function createOnboarding({ dataDir, mainService, serviceFactory = create
         if (!exists(r.noteId) || paused.has(r.noteId) || r.presetCase) return false;
         const note = service.getNote(r.noteId);
         // Match study scheduling: material warnings remain visible, not a second eligibility gate.
-        return note.kind === 'knowledge' && !note.meta.presetCase && !note.meta.supersededBy && ['learning', 'integrated', 'core'].includes(note.meta.stage);
+        return note.kind === 'knowledge' && !note.meta.presetCase && !note.meta.supersededBy && isStudyStage(note.meta.stage);
       });
       const mainReview = reviews.find(r => r.noteId === p.roles.explain);
       const due = (mainReview ? [mainReview] : reviews).map(r => Date.parse(r.dueAt)).filter(n => Number.isFinite(n));

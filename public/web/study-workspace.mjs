@@ -1,3 +1,4 @@
+import { isStudyStage } from '../note-classification.mjs';
 import { endpoint } from './api.mjs';
 import { escape as e, markdown } from './markdown.mjs';
 import { $, icon, button as btn, routeButton as link, area, empty, heading, jobState, notify, modal, list } from './ui.mjs';
@@ -16,7 +17,7 @@ export function createStudyWorkspace({ api, getNotes, noteTitle, view, go, setSe
 
   async function studyPage(id) {
     if(id)return sessionPage(id);
-    const sessions=list((await api.get('/api/study')).sessions), notes=list(getNotes()).filter(n=>n.kind==='knowledge'&&['learning','integrated','core'].includes(n.meta?.stage));
+    const sessions=list((await api.get('/api/study')).sessions), notes=list(getNotes()).filter(n=>n.kind==='knowledge'&&isStudyStage(n.meta?.stage));
     const mistakes=list((await api.get('/api/mistakes')).mistakes);
     return {html:heading('UNDERSTANDING TAKES PRACTICE','慢一点，把理解说清楚。','先尝试回忆，再核对材料。回答、反馈与自己确认的理解分别保留。')+
       `<div class="study-overview"><section><div class="section-title"><h2>正在学习 <small>${notes.length} 条</small></h2></div>${notes.map((note,index)=>`<article class="task-row"><span class="task-index">${String(index+1).padStart(2,'0')}</span><div class="task-copy"><h3>${e(note.title)}</h3><div class="task-meta">${e(note.meta?.topic||'我的学习')}</div></div>${btn(`开始 ${icon('arrow')}`,'start-note','start',`data-id="${e(note.id)}"`)}</article>`).join('')||empty('还没选好要学什么','在知识的书桌中选择“加入学习”，再从这里开始。',link('去知识库看看','library','text-button'))}</section>

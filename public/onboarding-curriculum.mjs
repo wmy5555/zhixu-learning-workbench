@@ -1,3 +1,4 @@
+import { learningDepthNames as goalNames } from './note-classification.mjs';
 // Shared by the browser and the practice manager. This module has no side effects.
 import { getMaterial, materialSample } from './onboarding-materials.mjs';
 const step = (id, title, instruction, why, expected, view, target, extra = {}) => ({
@@ -212,7 +213,6 @@ const scenarioQueries = {
   life: ['资产', '大家一起选图，却不该把所有资料给所有人，该先想什么？'],
   custom: ['', '怎样把这条知识用于不同于原文的问题？'],
 };
-const goalNames = { aware: '了解用途', find: '会查资料', explain: '讲清原理', apply: '换场景应用' };
 const curriculumCache = new Map();
 export function getCurriculum(materialId) {
   const material = getMaterial(materialId);

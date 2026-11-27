@@ -1,3 +1,4 @@
+import { noteKinds, learningStages, learningDepths, learningDepthNames } from './note-classification.mjs';
 import { localCheckStatus, callFailureReason } from "./mcp-status.mjs";
 import { renderRecycleBin } from './recycle-bin.mjs';
 import { attachModelDiscovery } from "./model-discovery.mjs";
@@ -629,8 +630,8 @@ async function renderLibrary() {
   const q = el("input", { name: "q", value: filters.q, placeholder: "搜索标题和正文" });
   form.append(
     el("div", { class: "search-input" }, q),
-    selectControl([["", "内容类别"], ["source", "原始资料"], ["knowledge", "知识"], ["mistake", "错题"], ["topic", "主题学习包"], ["report", "AI 整理建议"]], filters.kind, "kind"),
-    selectControl([["", "学习状态"], ["reference", "仅供查阅"], ["candidate", "待选学"], ["learning", "正在学习"], ["integrated", "已整理个人理解"], ["core", "重点知识"], ["retired", "不再使用"]], filters.stage, "stage"),
+    selectControl([["", "内容类别"], ...noteKinds.map(id => [id, labels.kind(id)])], filters.kind, "kind"),
+    selectControl([["", "学习状态"], ...learningStages.map(id => [id, labels.stage(id)])], filters.stage, "stage"),
     button("筛选", { kind: "primary", type: "submit" }),
   );
   form.addEventListener("submit", (event) => {
@@ -1472,17 +1473,17 @@ async function restoreVersion(note, version, returnToSourceId = "") {
 }
 
 const learningGoals = {
-  aware: { label: "了解用途", summary: "知道何时会用到", description: "知道它有什么用，遇到什么问题时会想到它；不要求记住原理和细节。" },
-  find: { label: "会查资料", summary: "需要时能找到", description: "需要时能用关键词或出处找到资料，并核对适用条件；不要求脱离资料背出内容。" },
-  explain: { label: "讲清原理", summary: "用自己的话说明", description: "不看原文，用自己的话说明它为什么成立、适用条件，并举一个例子。" },
-  apply: { label: "换场景应用", summary: "用于新的问题", description: "换一个不同于原文例子的问题，说明怎么用、需要哪些条件，以及什么时候不适用。" },
+  aware: { summary: "知道何时会用到", description: "知道它有什么用，遇到什么问题时会想到它；不要求记住原理和细节。" },
+  find: { summary: "需要时能找到", description: "需要时能用关键词或出处找到资料，并核对适用条件；不要求脱离资料背出内容。" },
+  explain: { summary: "用自己的话说明", description: "不看原文，用自己的话说明它为什么成立、适用条件，并举一个例子。" },
+  apply: { summary: "用于新的问题", description: "换一个不同于原文例子的问题，说明怎么用、需要哪些条件，以及什么时候不适用。" },
 };
 function depthLabel(value) {
-  return Object.hasOwn(learningGoals, value) ? learningGoals[value].label : value;
+  return Object.hasOwn(learningDepthNames, value) ? learningDepthNames[value] : value;
 }
 function learningGoalField(value) {
-  const selected = Object.hasOwn(learningGoals, value) ? value : "explain";
-  const select = selectControl(Object.entries(learningGoals).map(([key, goal]) => [key, `${goal.label} · ${goal.summary}`]), selected, "depth");
+  const selected = Object.hasOwn(learningDepthNames, value) ? value : "explain";
+  const select = selectControl(learningDepths.map(key => [key, `${learningDepthNames[key]} · ${learningGoals[key].summary}`]), selected, "depth");
   const hint = el("small", { class: "field-hint", id: "learning-goal-hint", ariaLive: "polite" });
   select.setAttribute("aria-describedby", "learning-goal-hint");
   const updateHint = () => { hint.textContent = learningGoals[select.value].description; };
@@ -1602,8 +1603,8 @@ async function studySessionPanel() {
   const turns = asArray(session.turns);
   const latest = turns.at(-1);
   const goalPanel = () => el("div", { class: "notice info" }, [
-    el("strong", { text: `本次目标：${Object.hasOwn(learningGoals, session.depth) ? depthLabel(session.depth) + (session.presetCase ? "（预设演示案例）" : "") : session.goal || depthLabel("explain")}` }),
-    Object.hasOwn(learningGoals, session.depth) ? el("p", { text: learningGoals[session.depth].description }) : null,
+    el("strong", { text: `本次目标：${Object.hasOwn(learningDepthNames, session.depth) ? depthLabel(session.depth) + (session.presetCase ? "（预设演示案例）" : "") : session.goal || depthLabel("explain")}` }),
+    Object.hasOwn(learningDepthNames, session.depth) ? el("p", { text: learningGoals[session.depth].description }) : null,
     session.mistakeId ? el("p", { text: "误解专项练习：重点检查此前的遗漏或错误，实际反馈会保留为后续纠正依据。" }) : null,
     session.topicId ? el("p", { text: "本次属于主题学习包，结束后可按顺序继续。" }) : null,
     el("p", { text: "结束练习保存本轮表现；确认个人理解保存你自己的表达。这两项记录分别保留，均不等于永久掌握。" }),
@@ -1944,8 +1945,8 @@ async function renderDiscover() {
   form.append(sectionHeading("检索知识库", "关键词适合精确术语，语义检索适合不同措辞，混合检索结合两者"), el("div", { class: "filter-bar" }, [
     el("div", { class: "search-input" }, query),
     searchMode,
-    selectControl([["", "内容类别"], ["source", "原始资料"], ["knowledge", "知识"], ["mistake", "错题"], ["topic", "主题学习包"], ["report", "AI 整理建议"]], state.searchFilters.kind, "kind"),
-    selectControl([["", "学习状态"], ["reference", "仅供查阅"], ["candidate", "待选学"], ["learning", "正在学习"], ["integrated", "已整理个人理解"], ["core", "重点知识"], ["retired", "不再使用"]], state.searchFilters.stage, "stage"),
+    selectControl([["", "内容类别"], ...noteKinds.map(id => [id, labels.kind(id)])], state.searchFilters.kind, "kind"),
+    selectControl([["", "学习状态"], ...learningStages.map(id => [id, labels.stage(id)])], state.searchFilters.stage, "stage"),
     button("搜索", { kind: "primary", type: "submit" }),
   ]), el("label", { class: "check-field" }, [allowCloudQuery, el("span", { text: "允许将本次查询发给已配置的外部服务" })]), el("p", { class: "fine-print", text: "默认关闭：只运行本地关键词检索。开启后，本次查询可用于语义检索；仅在主动操作中发送所需材料，不因保存资料自动建外部索引。" }), el("details", {}, [el("summary", { text: "按来源、主题与时间进一步筛选" }), el("div", { class: "form-grid" }, [
     field("来源", selectControl([["", "全部来源"], ...sources.map((source) => [source.id, source.title || source.id])], state.searchFilters.source, "source")),
@@ -2987,7 +2988,7 @@ async function navigateTutorial(step, tutorial) {
     if (step.noteRole === "createdTopic") return prerequisite("topic-create", "尚未找到对应主题，请先创建并保存一个练习主题。");
     if (step.noteRole === "capturedSource") return prerequisite("capture-save", "尚未找到收集的资料，请先保存练习资料。");
     if (tutorial?.materialId && step.noteRole === "source") return prerequisite("capture-save", "尚未找到本场景原文，请先保存练习资料。");
-    if (tutorial?.materialId && ["aware", "find", "explain", "apply"].includes(step.noteRole) && !value) return { target: "onboarding-knowledge", message: "请在引导中选择本原文的一条实际候选，再查看内容并设置学习目标；待核验事实先联网加工。" };
+    if (tutorial?.materialId && learningDepths.includes(step.noteRole) && !value) return { target: "onboarding-knowledge", message: "请在引导中选择本原文的一条实际候选，再查看内容并设置学习目标；待核验事实先联网加工。" };
     return { target: "onboarding-reset", message: "初始示例已删除或缺失。可点击框选的“重置练习”重新准备；确认后会清理当前练习进度，正式资料不受影响。" };
   };
   const value = tutorial?.roles?.[step.noteRole];

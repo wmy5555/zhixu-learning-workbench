@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createLibraryPreferences } from '../public/web/library-preferences.mjs';
-import { kind, stage, kindOptions, stageOptions, quickKindOptions, purposeOptions } from '../public/web/classification.mjs';
+import { labels } from '../public/ui.mjs';
+import { noteKinds, learningStages, learningDepths, isStudyStage } from '../public/note-classification.mjs';
+import { kind, stage, kindOptions, stageOptions, quickKindOptions, purposeOptions, depthOptions } from '../public/web/classification.mjs';
 import { createParity } from '../public/web/parity.mjs';
 function memory(initial) { let value=initial; return {getItem:()=>value,setItem:(_,v)=>{value=v;}}; }
 test('all library choices survive recreation and explicit clearing',()=>{
@@ -57,4 +59,18 @@ test('classification choices preserve labels, order, subsets and old preferences
   assert.equal(kind('missing'), '资料'); assert.equal(stage('missing'), '尚未分类');
   for (const [value] of kindOptions) assert.equal(createLibraryPreferences(()=>memory(JSON.stringify({kind:value}))).read().kind,value);
   for (const [value] of stageOptions) assert.equal(createLibraryPreferences(()=>memory(JSON.stringify({stage:value}))).read().stage,value);
+});
+
+test('both web generations retain their display language while preferences use persisted identifiers', () => {
+  assert.deepEqual(kindOptions.slice(1).map(([id]) => id), ['source', 'knowledge', 'topic', 'report', 'mistake']);
+  assert.deepEqual(stageOptions.slice(1).map(([id]) => id), learningStages);
+  assert.deepEqual(depthOptions.map(([id]) => id), learningDepths);
+  assert.deepEqual(learningStages.filter(isStudyStage), ['learning', 'integrated', 'core']);
+  for (const id of noteKinds) assert.equal(kind(id), labels.kind(id));
+  assert.equal(stage('integrated'), '个人理解');
+  assert.equal(labels.stage('integrated'), '已整理个人理解');
+  assert.equal(labels.stage('future-stage'), 'future-stage');
+  assert.equal(stage('future-stage'), '尚未分类');
+  assert.equal(kind(['source']), '资料');
+  assert.equal(createLibraryPreferences(() => memory(JSON.stringify({ kind: 'constructor', stage: 'future-stage' }))).read().kind, '');
 });

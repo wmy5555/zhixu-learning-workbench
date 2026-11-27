@@ -1,3 +1,4 @@
+import { isStudyStage } from '../note-classification.mjs';
 import { escape as e } from './markdown.mjs';
 import { button, routeButton, icon } from './ui.mjs';
 
@@ -11,7 +12,7 @@ export function learningReadiness(note, notes = [], limitations = note.meta?.res
   const sourceId = meta.processKey ? meta.processKey.split(':')[0] : inputIds.length === 1 ? inputIds[0] : null;
   const source = notes.find(item => item.id === sourceId && item.kind === 'source');
   const credibility = { warnings:reasons, sourceId:source?.id, sourceTitle:source?.title };
-  if (!['learning','integrated','core'].includes(meta.stage)) return { ...credibility, ready:false, heading:'还未加入学习', reasons:['选择学习目标后就可以开始，理由可选填。联网核验可以稍后补充。'], arrange:true };
+  if (!isStudyStage(meta.stage)) return { ...credibility, ready:false, heading:'还未加入学习', reasons:['选择学习目标后就可以开始，理由可选填。联网核验可以稍后补充。'], arrange:true };
   return { ...credibility, ready:true, reasons:[] };
 }
 

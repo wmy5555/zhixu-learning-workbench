@@ -1,3 +1,4 @@
+import { noteFolders as folders } from '../public/note-classification.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -24,7 +25,6 @@ function durableWrite(file, content) {
   const fd = fs.openSync(file, 'r+');
   try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
 }
-const folders = { source: '01 原始资料', knowledge: '02 知识', mistake: '03 错题修正', topic: '04 主题', report: '05 发现' };
 const reserved = new Set(['id', 'kind', 'title', 'createdAt', 'updatedAt']);
 const linkStart = '<!-- zhixu-managed-links:start -->';
 const linkEnd = '<!-- zhixu-managed-links:end -->';

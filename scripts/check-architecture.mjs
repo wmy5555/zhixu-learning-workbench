@@ -88,7 +88,7 @@ function cycles(graph) {
 
 // Both environments consume these data-only files. Their dependencies must also
 // belong to this set so importing one cannot bring a browser page into Node.
-const shared = new Set(['public/source-file-limits.mjs', 'public/onboarding-curriculum.mjs',
+const shared = new Set(['public/note-classification.mjs', 'public/source-file-limits.mjs', 'public/onboarding-curriculum.mjs',
   'public/onboarding-materials.mjs', 'public/web/onboarding-model.mjs']);
 
 export function inspectServerModules(sources, webGraph, dependencies) {

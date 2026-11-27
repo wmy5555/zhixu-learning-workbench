@@ -1,3 +1,4 @@
+import { isStudyStage } from '../note-classification.mjs';
 // Resolve the active substep without changing the selected knowledge or form values.
 export function learningTarget({root,route,noteId,visible}){
  const id=String(noteId||'').replace(/[^a-zA-Z0-9_-]/g,'');
@@ -7,7 +8,7 @@ export function learningTarget({root,route,noteId,visible}){
  if(dialog){
   if(dialog.dataset.guideForm==='learning'&&dialog.dataset.guideNote===id){
    const stage=pick('[name="stage"]'),depth=pick('[name="depth"]');
-   if(stage&&!['learning','integrated','core'].includes(stage.value))return stage;
+   if(stage&&!isStudyStage(stage.value))return stage;
    if(depth&&depth.value!=='explain')return depth;
    return pick('form button[type="submit"]');
   }
