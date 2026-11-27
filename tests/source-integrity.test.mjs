@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createService } from '../src/service.mjs';
+import { createRecycleBin } from '../src/recycle-bin.mjs';
 import { missingLocalSourceWarning, sourceBindingWarning } from '../public/source-membership.mjs';
 import { createReaderData } from '../public/web/reader-data.mjs';
 
@@ -265,4 +266,66 @@ test('confirmed local source removals isolate only their existing references and
   assert.equal(store.get('jobs', saved.pendingJobId).code, 'PRIVACY_LOCAL');
   assert.equal(service.session(localStudy.id).turns[0].answer, '原件恢复前的本人本地回答');
   assert.equal(prompts.length, beforeRestore);
+});
+
+test('emptying the recycle bin retains only the identity needed by surviving source references', async t => {
+  const { service, vaultDir } = library(t), store = service.store, bin = createRecycleBin(store);
+  const original = store.create({ kind: 'source', title: '需要确实删除的合成标题', body: '需要确实删除的合成正文', meta: { custom: '需要确实删除的合成属性' } });
+  const unused = store.create({ kind: 'source', title: '没有入站引用的合成文件', body: '无引用合成正文' });
+  const explicit = note(service, '仍有显式来源关联', original);
+  const legacy = note(service, '仍有旧加工键关联', null, { processKey: key(original, '旧顺序') });
+  const external = note(service, '从未收录的外部引用', null, { sources: [{ id: 'never-seen-local-original', role: 'input' }] });
+  const originalPath = path.join(vaultDir, original.path), raw = fs.readFileSync(originalPath);
+  store.delete(original.id, original.hash);
+  store.delete(unused.id, unused.hash);
+  assert.deepEqual(pendingIds(service.today()), new Set([external.id]));
+  const preview = bin.list(), trashed = preview.items.find(item => item.id === original.id);
+  const claims = store.records('fileRecovery').map(item => path.join(vaultDir, item.holdingPath));
+  const remove = store.remove.bind(store), failure = new Error('合成事务中断');
+  const interruption = t.mock.method(store, 'remove', (namespace, id) => {
+    if (namespace === 'deleted' && id === original.id) throw failure;
+    return remove(namespace, id);
+  });
+  assert.throws(() => bin.clear({ confirmed: true, revision: preview.revision }), error => error === failure);
+  interruption.mock.restore();
+  assert.equal(store.get('purgedSourceIds', original.id), null);
+  assert.equal(bin.list().revision, preview.revision);
+  assert.ok(claims.every(file => fs.existsSync(file)));
+  assert.deepEqual(bin.clear({ confirmed: true, revision: preview.revision }), { cleared: 2 });
+
+  assert.deepEqual(pendingIds(service.today()), new Set([external.id]));
+  for (const child of [explicit, legacy]) {
+    assert.equal(store.outboundPrivacy(service.getNote(child.id)), 'local');
+    assert.deepEqual(service.noteEvidence(child.id).limitations, [missingLocalSourceWarning]);
+    assert.match(service.readPublicNote(child.id).body, /原样可读的末段/);
+  }
+  assert.equal(store.outboundPrivacy(service.getNote(external.id)), 'cloud');
+  assert.deepEqual(service.getNote(explicit.id).meta.sources, [ref(original)]);
+  assert.deepEqual(store.history(original.id), []);
+  assert.equal(store.get('deleted', original.id), null);
+  assert.ok([originalPath, ...claims].every(file => !fs.existsSync(file)));
+  assert.equal(bin.list().pendingCleanup, 0);
+  assert.throws(() => bin.restore(original.id, trashed.versionId), { code: 'RECYCLE_CONFLICT' });
+
+  const serialized = JSON.stringify(service.backup());
+  const backup = JSON.parse(serialized), marker = { namespace: 'purgedSourceIds', key: original.id, json: '{}' };
+  assert.deepEqual(backup.records.filter(r => r.namespace === marker.namespace), [marker]);
+  for (const text of [original.title, original.body, original.meta.custom, original.path]) assert.ok(!serialized.includes(text));
+  const { service: restored } = library(t);
+  const invalid = { ...backup, records: backup.records.map(r => r.namespace === marker.namespace ? { ...r, json: '{"title":"合成多余属性"}' } : r) };
+  assert.throws(() => restored.restore({ backup: invalid }), /备份缺失来源记录无效/);
+  const { token } = restored.restore({ backup });
+  restored.restore({ backup, preview: false, token });
+  assert.deepEqual(pendingIds(restored.today()), new Set([external.id]));
+  assert.equal(restored.store.outboundPrivacy(restored.getNote(explicit.id)), 'local');
+
+  fs.writeFileSync(originalPath, raw);
+  assert.deepEqual(pendingIds(service.today()), new Set([explicit.id, legacy.id, external.id]));
+  assert.equal(store.outboundPrivacy(service.getNote(explicit.id)), 'cloud');
+  store.delete(original.id, original.hash);
+  const next = bin.list();
+  assert.deepEqual(bin.purge(original.id, next.items[0].versionId, { confirmed: true, revision: next.revision }), { cleared: 1 });
+  assert.deepEqual(bin.clear({ confirmed: true, revision: bin.list().revision }), { cleared: 0 });
+  assert.deepEqual(pendingIds(service.today()), new Set([external.id]));
+  assert.deepEqual(service.backup().records.filter(r => r.namespace === marker.namespace).map(r => ({ ...r })), [marker]);
 });

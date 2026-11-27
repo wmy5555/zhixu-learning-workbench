@@ -554,6 +554,10 @@ export class Store {
       if (checked.has(id)) return checked.get(id);
       let missing = false;
       if (currentNotesById || !(current ??= this.db.prepare('SELECT 1 FROM notes WHERE id=?')).get(id)) {
+        if (this.get('purgedSourceIds', id) !== null) {
+          checked.set(id, true);
+          return true;
+        }
         // Both UI deletion and external removal record a version. A never-seen
         // reference, or an active file conflict, is insufficient to prove removal.
         removed ??= this.db.prepare(`SELECT path, raw FROM versions WHERE noteId=?

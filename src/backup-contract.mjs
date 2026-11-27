@@ -70,6 +70,7 @@ export function validateBackupRecord(row) {
     return value;
   }
   if (!backupObject(value)) invalid('备份运行记录必须为键值对象。');
+  if (row.namespace === 'purgedSourceIds' && (!validBackupId(row.key) || Object.keys(value).length)) invalid('备份缺失来源记录无效。');
   if (value.id !== undefined && (typeof value.id !== 'string' || !value.id || value.id !== row.key)) invalid('备份运行记录身份不一致。');
   for (const key of ['noteId','fromId','toId']) if (value[key] !== undefined && !validBackupId(value[key])) invalid('备份运行记录引用身份无效。');
   if (row.namespace === 'jobs' && (!validBackupId(value.id) || typeof value.type !== 'string' || !backupObject(value.payload) || !['queued','running','waiting','failed','done','cancelled'].includes(value.state) || !Number.isInteger(value.attempts) || value.attempts < 0)) invalid('备份任务记录无效。');

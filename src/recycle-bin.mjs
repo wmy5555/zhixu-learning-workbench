@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import YAML from 'yaml';
+import { sourceParentIds } from '../public/source-membership.mjs';
 import { fail, hash } from './core.mjs';
 import { readAttachment, attachmentPath } from './attachments.mjs';
 
@@ -64,8 +65,15 @@ export function createRecycleBin(store) {
     });
     // Shared attachments, surviving records, and surviving history retain ownership.
     const uploads = store.records('attachmentUploads').filter(item => ids.has(item.noteId));
+    const currentNotes = store.db.prepare("SELECT raw, json_extract(json, '$.meta') AS meta FROM notes").all();
+    const referencedIds = new Set();
+    if (ids.size) for (const note of currentNotes) {
+      for (const id of sourceParentIds({ meta: JSON.parse(note.meta) })) {
+        if (ids.has(id)) referencedIds.add(id);
+      }
+    }
     const surviving = [
-      ...store.db.prepare('SELECT raw FROM notes').all().map(row => row.raw),
+      ...currentNotes.map(row => row.raw),
       ...store.db.prepare('SELECT noteId,raw FROM versions').all().filter(row => !ids.has(row.noteId)).map(row => row.raw),
       ...store.db.prepare('SELECT namespace,key,json FROM records').all().filter(row =>
         !(row.namespace === 'deleted' && ids.has(row.key)) &&
@@ -85,6 +93,8 @@ export function createRecycleBin(store) {
     try {
       if (purge.files.length) store.put('recyclePurge', purge.id, purge);
       for (const id of ids) {
+        // The stable key keeps surviving links distinguishable from never-indexed references.
+        if (referencedIds.has(id)) store.put('purgedSourceIds', id, {});
         store.db.prepare('DELETE FROM versions WHERE noteId=?').run(id);
         store.remove('deleted', id);
       }
