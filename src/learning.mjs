@@ -1,4 +1,4 @@
-import { isStudyStage, learningDepthNames } from '../public/note-classification.mjs';
+import { hasUnknownClassification, isStudyStage, learningDepthNames } from '../public/note-classification.mjs';
 import { randomUUID } from 'node:crypto';
 import { hash, fail } from './core.mjs';
 import { outboundText } from './outbound-text.mjs';
@@ -145,6 +145,8 @@ export function createLearning(dependencies) {
       if (p.state !== state) store.put('plans', p.id, { ...p, state });
     }
     const unavailable = all.filter(n => n.kind === 'knowledge' && !scheduledIds.has(n.id)).map(note => {
+      if (hasUnknownClassification(note)) return { noteId: note.id, title: note.title, code: 'material',
+        reason: '分类尚未确认，请先核对资料类型、学习阶段或学习目标。' };
       const materialIssues = dependencies.limitationsFor?.(note) || note.meta.researchLimitations || [];
       const result = (code, reason) => {
         const inputs = uniqueStrings(textList(note.meta.sources?.filter(ref => ref.role === 'input').map(ref => ref.id)));
@@ -209,17 +211,20 @@ export function createLearning(dependencies) {
     let mistake;
     if (mistakeId) {
       mistake = getNote(mistakeId);
+      assertStudyClassification(mistake);
       if (mistake.kind !== 'mistake' || mistake.meta.correctionState !== 'open') fail('只有未解决且未被质疑或撤销的错题可以进入纠错练习。', 'MISTAKE_INACTIVE');
       if (noteId && noteId !== mistake.meta.noteId) fail('错题与知识不一致。');
       noteId = mistake.meta.noteId;
     }
     const note = getNote(noteId);
+    assertStudyClassification(note);
     if (!eligible(note)) fail('这条知识已停用、被替代或不是可学习的知识，请先调整学习安排。', 'NOTE_UNAVAILABLE');
     if (!isStudyStage(note.meta.stage)) fail('请先将知识加入学习。');
     if (planId && (plan?.noteId !== noteId || plan.state !== 'pending')) fail('学习安排已变化，请刷新今日清单。');
     let topic;
     if (topicId) {
       topic = getNote(topicId);
+      assertStudyClassification(topic);
       if (topic.kind !== 'topic' || !topicPath(topic, store.list()).includes(noteId)) fail('主题学习包不包含这项知识。');
       if (topicPaused(topic)) fail('这个主题学习包已暂停。');
     }
@@ -238,6 +243,26 @@ export function createLearning(dependencies) {
     store.put('sessions', id, { id, noteId, planId, outboundIntentVersion: 1, ...(requestId ? { startRequestId: requestId, startIntent } : {}), status: 'reading', question, ...(practicePlan && !mistake ? { practiceQuestion: question, practiceCriteria: practicePlan.criteria } : {}), material: note.body, materialWarnings, sourceHash: note.hash, depth, goal, privacy, turns: [], createdAt: now(), hintCount: 0, ...practiceTags(mistake, note), ...(topic ? { topicId, topicIndex: textList(topic.meta.noteIds).indexOf(noteId) } : {}), ...(mistake ? { mistakeId, mistakeContext } : {}) });
     return session(id);
   }
+  function assertStudyClassification(note) {
+    if (note && hasUnknownClassification(note)) fail('这份资料的分类尚未确认，请先核对后再学习。', 'CLASSIFICATION_REQUIRED', 409);
+  }
+  function checkSessionClassification(s, note) {
+    const store = storage();
+    for (const id of [s.noteId, s.mistakeId, s.topicId]) {
+      if (!id) continue;
+      let current = note;
+      if (id !== note?.id) {
+        try { current = store.readPersisted(id); }
+        catch (error) {
+          if (error.code === 'PERSISTED_UNAVAILABLE') continue;
+          if (error.code !== 'PERSISTED_MISMATCH') throw error;
+          store.scan();
+          current = store.row(id) && store.read(id);
+        }
+      }
+      assertStudyClassification(current);
+    }
+  }
   function answerStudy(id, { answer, hintUsed = false, requestId }) {
     const store = storage(), s = session(id);
     if (!String(answer || '').trim()) fail('请先填写自己的回答。');
@@ -245,6 +270,7 @@ export function createLearning(dependencies) {
     if (s.turns.some(t => t.requestId === requestId)) return s;
     if (s.status === 'completed') fail('这次练习已经结束；可开始一次新的练习。', 'SESSION_COMPLETED', 409);
     if (s.status === 'awaiting_feedback' || s.pendingJobId) fail('上一轮反馈仍在等待处理；你的上一份回答已保存。', 'BUSY', 409);
+    checkSessionClassification(s);
     const turn = { id: randomUUID(), requestId, outboundIntentVersion: 1, question: s.question, answer, goal: s.goal || goals[s.depth || 'explain'].label, hintUsed: !!hintUsed || s.hintCount > 0, createdAt: now() };
     s.turns.push(turn); s.status = 'awaiting_feedback'; s.hintCount = 0;
     // Persist the answer and its queued work together; neither may outlive the other.
@@ -259,6 +285,7 @@ export function createLearning(dependencies) {
   function hintStudy(id) {
     const store = storage(), s = session(id);
     if (s.status === 'completed') fail('这次练习已经结束。', 'SESSION_COMPLETED', 409);
+    checkSessionClassification(s);
     s.hintCount++; store.put('sessions', id, s);
     const first = s.mistakeContext ? `先检查上次遗漏之处：${s.mistakeContext.omission || '比较问题条件与自己的回答。'}` : goals[s.depth || 'explain'].hint;
     return { hint: s.hintCount === 1 ? first : s.mistakeContext?.correction || s.material.slice(0, 600), hintUsed: true };
@@ -270,6 +297,7 @@ export function createLearning(dependencies) {
     if (!s.turns.length) fail('请先留下至少一次自己的回答。');
     if (s.pendingJobId || s.status === 'awaiting_feedback' || s.turns.some(t => !t.feedback)) fail('反馈尚未完成，回答已保存；收到反馈后再结束练习。', 'FEEDBACK_PENDING', 409);
     const timestamp = now(), date = dayAt(new Date(timestamp), settings().timezone), note = getNote(s.noteId);
+    checkSessionClassification(s, note);
     if (note.hash !== s.sourceHash) fail('学习材料已有更新，请按当前材料重新开始。', 'SOURCE_CHANGED');
     const old = store.get('reviews', s.noteId, {}), depth = s.depth || depthOf(note);
     const usedHints = s.hintCount > 0 || s.turns.some(t => t.hintUsed), errors = s.turns.some(t => ['partial', 'incorrect'].includes(t.feedback.assessment));
@@ -305,7 +333,9 @@ export function createLearning(dependencies) {
   function confirmStudy(id, { body }) {
     const store = storage(), s = session(id);
     if (!s.turns.length) fail('请先留下至少一次自己的解释。');
-    const n = getNote(s.noteId), wasCurrent = n.hash === s.sourceHash, result = confirmNote(n.id, { body, expectedHash: n.hash });
+    const n = getNote(s.noteId);
+    checkSessionClassification(s, n);
+    const wasCurrent = n.hash === s.sourceHash, result = confirmNote(n.id, { body, expectedHash: n.hash });
     s.confirmedNoteId = result.id;
     // The explicit confirmation appends the user's own note; the original teaching snapshot stays separate.
     if (wasCurrent) s.sourceHash = result.hash;
@@ -367,6 +397,7 @@ export function createLearning(dependencies) {
     if (!t) fail('找不到对应的学习回答。', 'NOT_FOUND', 404);
     if (t.feedback) return;
     const n = getNote(s.noteId);
+    checkSessionClassification(s, n);
     if (n.hash !== s.sourceHash) fail('学习材料已有更新；本次回答已保存，请按当前材料重新开始。', 'SOURCE_CHANGED');
     const currentMistake = s.mistakeId && store.row(s.mistakeId) ? store.read(s.mistakeId) : null;
     if (s.mistakeId && (!currentMistake || ['disputed', 'revoked'].includes(currentMistake.meta.correctionState))) fail('这条错题已被质疑、撤销或删除，请重新选择学习材料。', 'MISTAKE_INACTIVE');
@@ -385,7 +416,9 @@ export function createLearning(dependencies) {
     // Another user action may have confirmed their understanding while the model was running.
     s = session(s.id); t = s.turns.find(turn => turn.id === t.id);
     if (t.feedback) return;
-    if (getNote(s.noteId).hash !== s.sourceHash) fail('学习材料已有更新；本次回答已保存，请按当前材料重新开始。', 'SOURCE_CHANGED');
+    const currentNote = getNote(s.noteId);
+    checkSessionClassification(s, currentNote);
+    if (currentNote.hash !== s.sourceHash) fail('学习材料已有更新；本次回答已保存，请按当前材料重新开始。', 'SOURCE_CHANGED');
     t.feedback = result; s.feedback = result; s.question = result.nextQuestion || goals[s.depth || 'explain'].question(n.title); s.status = 'feedback'; s.pendingJobId = null;
     store.put('sessions', s.id, s);
     if (['partial', 'incorrect'].includes(result.assessment) && result.omission) {

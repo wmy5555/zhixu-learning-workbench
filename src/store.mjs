@@ -200,7 +200,7 @@ export class Store {
       const stat = fs.statSync(file);
       if (!stat.isFile() || stat.size > 5_000_000) throw new Error('invalid persisted file');
       const bytes = fs.readFileSync(file), raw = bytes.toString('utf8'), digest = hash(bytes), { meta, body } = parse(raw);
-      const fresh = { id, kind: folders[meta.kind || 'knowledge'] ? (meta.kind || 'knowledge') : 'knowledge',
+      const fresh = { id, kind: meta.kind === undefined ? 'knowledge' : meta.kind,
         title: String(meta.title || path.basename(file, '.md')), body,
         meta: Object.fromEntries(Object.entries(meta).filter(([key]) => !reserved.has(key))),
         hash: digest, path: path.relative(this.vaultDir, file).replaceAll('\\', '/'),
@@ -239,8 +239,7 @@ export class Store {
     const { meta, body } = parsed || parse(raw);
     const existing = this.row(id), digest = hash(raw);
     const cleanMeta = Object.fromEntries(Object.entries(meta).filter(([key]) => !reserved.has(key)));
-    const note = { id, kind: meta.kind || 'knowledge', title: String(meta.title || path.basename(file, '.md')), body, meta: cleanMeta, hash: digest, path: path.relative(this.vaultDir, file).replaceAll('\\', '/'), updatedAt: meta.updatedAt || fs.statSync(file).mtime.toISOString() };
-    if (!folders[note.kind]) note.kind = 'knowledge';
+    const note = { id, kind: meta.kind === undefined ? 'knowledge' : meta.kind, title: String(meta.title || path.basename(file, '.md')), body, meta: cleanMeta, hash: digest, path: path.relative(this.vaultDir, file).replaceAll('\\', '/'), updatedAt: meta.updatedAt || fs.statSync(file).mtime.toISOString() };
     if (existing?.hash === digest && existing.path === note.path && existing.raw === raw && existing.json === JSON.stringify(note)) return note;
     // A controlled write already saved this exact before-image. Scans and any
     // different indexed version must still retain their own history event.
@@ -478,7 +477,7 @@ export class Store {
     return this.update(id, { expectedHash, body: preview.body, meta: preview.meta });
   }
   create({ id = randomUUID(), kind = 'knowledge', title, body, meta = {}, exclusive = false }) {
-    if (!folders[kind]) fail('不支持的知识文件类型。');
+    if (typeof kind !== 'string' || !Object.hasOwn(folders, kind)) fail('不支持的知识文件类型。');
     if (!String(title || '').trim() || !String(body || '').trim()) fail('标题和正文不能为空。');
     if (this.row(id)) fail('内容 id 已存在。', 'CONFLICT', 409);
     const file = assertTree(path.join(this.vaultDir, folders[kind], `${id}.md`), this.vaultDir);
@@ -488,13 +487,13 @@ export class Store {
     catch (error) { if (exclusive && error.code === 'EEXIST') fail('目标文件已被占用，未覆盖已有内容。', 'CONFLICT', 409); throw error; }
     const result = this.upsert(file, raw, id); this.version(this.row(id), kind === 'source' ? '原始输入快照' : '首次创建'); this.syncMirrors(); return result;
   }
-  update(id, { body, title, meta = {}, expectedHash }) {
+  update(id, { body, title, meta = {}, expectedHash }, { confirmedKind } = {}) {
     this.scan(); const old = this.row(id), note = this.read(id);
     if (!expectedHash || note.hash !== expectedHash) fail('文件已发生变化。请查看当前版本，再合并你的修改。', 'CONFLICT', 409);
     const file = assertTree(path.resolve(this.vaultDir, old.path), this.vaultDir);
     if (hash(fs.readFileSync(file)) !== expectedHash) fail('外部编辑冲突，未覆盖文件。', 'CONFLICT', 409);
     const safeMeta = Object.fromEntries(Object.entries(meta).filter(([key]) => !reserved.has(key)));
-    const raw = serialize(old.raw, { ...safeMeta, id, kind: note.kind, title: title ?? note.title, updatedAt: now() }, body ?? note.body);
+    const raw = serialize(old.raw, { ...safeMeta, id, kind: confirmedKind === undefined ? note.kind : confirmedKind, title: title ?? note.title, updatedAt: now() }, body ?? note.body);
     this.version(old, 'Web 修改前'); atomicWrite(file, raw); const result = this.upsert(file, raw, id, undefined, { versionedHash: old.hash }); this.syncMirrors(); return result;
   }
   beginFileOperation(id, relative, { operationId = randomUUID(), kind, beforeHash = null, afterHash = null, undoId = null } = {}) {
@@ -576,7 +575,7 @@ export class Store {
     const version = this.db.prepare('SELECT * FROM versions WHERE id=? AND noteId=?').get(versionId, id);
     if (!version || hash(version.raw) !== version.hash) fail('恢复所需的原始版本缺失或无法核对。', 'EXACT_RESTORE_UNAVAILABLE', 409);
     const parsed = parse(version.raw);
-    if (parsed.meta.id !== id || !folders[parsed.meta.kind]) fail('原始版本的身份无法核对。', 'EXACT_RESTORE_INVALID', 409);
+    if (parsed.meta.id !== id || typeof parsed.meta.kind !== 'string' || !Object.hasOwn(folders, parsed.meta.kind)) fail('原始版本的身份无法核对。', 'EXACT_RESTORE_INVALID', 409);
     this.scan();
     const row = this.row(id);
     if (this.conflicts.some(conflict => conflict.id === id || conflict.path === version.path)) fail('恢复目标存在文件冲突。', 'EXACT_RESTORE_CONFLICT', 409);
@@ -673,7 +672,7 @@ export class Store {
       for (const row of backup.records) candidate.put(row.namespace, row.key, JSON.parse(row.json));
       for (const item of backup.notes) {
         const { meta, body } = parse(item.raw);
-        candidate.db.prepare('INSERT INTO notes VALUES(?)').run(JSON.stringify({ id: item.id, path: item.path, kind: meta.kind || 'knowledge', title: meta.title || path.basename(item.path, '.md'), body, meta }));
+        candidate.db.prepare('INSERT INTO notes VALUES(?)').run(JSON.stringify({ id: item.id, path: item.path, kind: meta.kind === undefined ? 'knowledge' : meta.kind, title: meta.title || path.basename(item.path, '.md'), body, meta }));
       }
       candidate.syncMirrors([]);
       if (candidate.conflicts.length) fail('备份包含不一致的主题或关系镜像；请先在原知识库处理冲突。', 'RESTORE_CONFLICT', 409);

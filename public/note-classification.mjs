@@ -25,3 +25,13 @@ export const isStudyStage = id => studyStages.has(id);
 
 export const learningDepthNames = Object.freeze({ aware: '了解用途', find: '会查资料', explain: '讲清原理', apply: '换场景应用' });
 export const learningDepths = Object.freeze(Object.keys(learningDepthNames));
+
+const classifications = Object.freeze({ kind: noteKinds, stage: learningStages, depth: learningDepths });
+const fields = Object.freeze(Object.keys(classifications));
+export const isClassificationValue = (field, value) => Object.hasOwn(classifications, field) && classifications[field].includes(value);
+function unknownField(note, field) {
+  const value = field === 'kind' ? note.kind : note.meta?.[field];
+  return value !== undefined && !isClassificationValue(field, value);
+}
+export const hasUnknownClassification = note => fields.some(field => unknownField(note, field));
+export const unknownClassificationFields = note => fields.filter(field => unknownField(note, field));

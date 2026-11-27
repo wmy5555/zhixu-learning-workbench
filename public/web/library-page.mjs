@@ -3,8 +3,9 @@ import { escape as e } from './markdown.mjs';
 import { $, $$, icon, button as btn, routeButton as link, heading, list, select, details } from './ui.mjs';
 import { kind, stage, kindOptions, stageOptions, quickKindOptions } from './classification.mjs';
 import { knowledgeRow, recommendationsHTML } from './knowledge-display.mjs';
+import { hasUnknownClassification } from '../note-classification.mjs';
 
-const noteCard = note => `<article class="library-note"><div class="note-kind">${icon(note.kind==='source'?'file':'book')}<span>${e(kind(note.kind))}</span><small>${e(stage(note.meta?.stage))}</small></div><h2>${e(note.title)}</h2><p>${e(String(note.body||'').replace(/<!-- zhixu-managed-links:start -->[\s\S]*?<!-- zhixu-managed-links:end -->/g,'').replace(/<!--[\s\S]*?-->/g,'').replace(/[#>*`]/g,'').replace(/\s+/g,' ').slice(0,135))}</p><footer><span>${e(note.meta?.topic || '未归入主题')}</span>${link('打开阅读 ↗',`read/${note.id}`,'text-button')}</footer></article>`;
+const noteCard = note => `<article class="library-note"><div class="note-kind">${icon(note.kind==='source'?'file':'book')}<span>${e(kind(note.kind))}</span><small>${hasUnknownClassification(note)?'分类待确认':e(stage(note.meta?.stage))}</small></div><h2>${e(note.title)}</h2><p>${e(String(note.body||'').replace(/<!-- zhixu-managed-links:start -->[\s\S]*?<!-- zhixu-managed-links:end -->/g,'').replace(/<!--[\s\S]*?-->/g,'').replace(/[#>*`]/g,'').replace(/\s+/g,' ').slice(0,135))}</p><footer><span>${e(note.meta?.topic || '未归入主题')}</span>${link('打开阅读 ↗',`read/${note.id}`,'text-button')}</footer></article>`;
 
 export function createLibraryPage(api) {
   const libraryPreferences = createLibraryPreferences();

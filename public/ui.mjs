@@ -85,8 +85,8 @@ const STATES = {
 };
 
 export const labels = {
-  stage: (value) => STAGES[value] || value || "未分层",
-  kind: (value) => noteKindNames[value] || value || "资料",
+  stage: (value) => typeof value === 'string' && Object.hasOwn(STAGES,value) ? STAGES[value] : (value === undefined ? '未分层' : '分类待确认'),
+  kind: (value) => typeof value === 'string' && Object.hasOwn(noteKindNames,value) ? noteKindNames[value] : (value === undefined ? '资料' : '分类待确认'),
   state: (value) => STATES[value] || value || "未知",
 };
 

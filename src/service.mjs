@@ -1,4 +1,4 @@
-import { learningStages as stages, learningDepths as depths } from '../public/note-classification.mjs';
+import { hasUnknownClassification, unknownClassificationFields, isClassificationValue, learningStages as stages, learningDepths as depths } from '../public/note-classification.mjs';
 import { discoveryFindings, discoveryMarkdown } from './discovery-guidance.mjs';
 import { importedContext, readImportedView } from './chatgpt-structure.mjs';
 import { makeLearningPractice, learningSourceIds } from './learning-guidance.mjs';
@@ -162,7 +162,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   };
   const eligible = n => usable(n, learningNow()) && !materialLimitations(n).length;
   // Practising a material does not certify its claims for retrieval or generated answers.
-  const learnable = n => n.kind === 'knowledge' && n.meta.stage !== 'retired' && !n.meta.supersededBy;
+  const learnable = n => n.kind === 'knowledge' && !hasUnknownClassification(n) && n.meta.stage !== 'retired' && !n.meta.supersededBy;
   const needsMaterialScope = (type, payload) => type === 'index' || type === 'topics' || ['relate','discover'].includes(type) && payload?.useAI === true;
   const validMaterialSnapshots = snapshots => Array.isArray(snapshots) && snapshots.every(n => typeof n?.noteId === 'string' && n.noteId && typeof n.hash === 'string' && n.hash);
   function materialSnapshots(type) {
@@ -538,6 +538,9 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   }
   function editNote(id, input) {
     const old = getNote(id), meta = { ...(input.meta || {}) };
+    if (unknownClassificationFields(old).some(key => Object.hasOwn(meta, key) && JSON.stringify(meta[key]) !== JSON.stringify(old.meta[key]))) {
+      fail('请先核对并确认未知分类。', 'CLASSIFICATION_REQUIRED', 409);
+    }
     for (const key of ['sourceFile', 'textExtraction', 'attachments']) {
       if (Object.hasOwn(meta, key)) fail('附件与转换来源只能通过专用导入接口更新。');
     }
@@ -560,14 +563,32 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
     if (old.kind === 'knowledge') requestRelations(id);
     return result;
   }
+  function confirmClassification(id, { expectedHash, classification } = {}) {
+    const note = getNote(id);
+    if (note.meta.excerptOnly) fail('内部核验资料不作为知识条目展示。', 'NOT_FOUND', 404);
+    if (!expectedHash || note.hash !== expectedHash) fail('资料已变化，请刷新后重新核对分类。', 'CONFLICT', 409);
+    const missing = unknownClassificationFields(note);
+    if (!missing.length) fail('这份资料没有待确认的分类。', 'CONFLICT', 409);
+    if (!classification || typeof classification !== 'object' || Array.isArray(classification) ||
+        Object.keys(classification).length !== missing.length ||
+        !missing.every(key => Object.hasOwn(classification, key) && isClassificationValue(key, classification[key]))) {
+      fail('请为每个待确认字段选择现有分类，已知字段不能随本次确认修改。');
+    }
+    if (['integrated', 'core'].includes(classification.stage) && !note.meta.confirmedAt)
+      fail('选择个人理解或重点知识前，请先以自己的语言确认个人理解。');
+    const { kind: confirmedKind, ...meta } = classification;
+    return publicNote(store.update(id, { expectedHash, meta }, { confirmedKind }));
+  }
   function promote(id, { stage, reason = '', depth = 'explain' }) {
     const note = getNote(id); if (note.kind !== 'knowledge') fail('只有知识条目能进入学习阶段。');
+    if (hasUnknownClassification(note)) fail('请先核对并确认未知分类。', 'CLASSIFICATION_REQUIRED', 409);
     if (!stages.includes(stage) || !depths.includes(depth)) fail('阶段或学习目标无效。');
     if (['integrated','core'].includes(stage) && !note.meta.confirmedAt) fail('请先以自己的语言确认个人理解。');
     return store.update(id, { expectedHash: note.hash, meta: { stage, depth, promotionReason: reason, promotedAt: learningNow() } });
   }
   function confirmNote(id, { body, expectedHash }) {
     const note = getNote(id); if (note.kind !== 'knowledge') fail('请先把资料整理为知识条目。');
+    if (hasUnknownClassification(note)) fail('请先核对并确认未知分类。', 'CLASSIFICATION_REQUIRED', 409);
     if (!String(body || '').trim()) fail('请填写你自己的理解。');
     const managed = note.body.match(/<!-- zhixu-managed-links:start -->[\s\S]*?<!-- zhixu-managed-links:end -->/)?.[0] || '';
     const original = managed ? note.body.replace(managed, '').trimEnd() : note.body;
@@ -1286,7 +1307,7 @@ export function createService({ dataDir, vaultDir, aiOverride, learningClock = (
   const commitFile = tracked(input => sourceFiles.commit(input));
   const readFile = (id, assetId) => sourceFiles.read(id, assetId);
   const pendingUploads = () => sourceFiles.pending();
-  return { get store(){return store;}, get processing(){return processing;}, get hasPendingOperations(){return processing||activeOperations>0||pausing;}, chatgpt, chatgptUndo, learningNow, settings, updateSettings, capabilityTests, getPrompts, updatePrompts, usage, usageReport, updateUsageSettings, callRecovery, recoverCall, ai, importItems, processNote, requestSourceStructure, editSourceStructure, listNotes, publicNote, publicNotes, publicJob, library, readPublicNote, noteEvidence, linksPreview, syncLinks, getNote, editNote, extractNote, promote, confirmNote, merge, search:tracked(search), today, planAction, startStudy, session, answerStudy, hintStudy, confirmStudy, finishStudy, mistakeAction, topics, createTopic, updateTopic, topicAction, recommendations, recommendationAction, requestRelations, relationReview, relationAction, related, ask:tracked(ask), updateDraft, propose, proposalAction, queue, runJobs, pauseJobs, jobAction, tick, demo, diagnostics, backup, restore,
+  return { get store(){return store;}, get processing(){return processing;}, get hasPendingOperations(){return processing||activeOperations>0||pausing;}, chatgpt, chatgptUndo, learningNow, settings, updateSettings, capabilityTests, getPrompts, updatePrompts, usage, usageReport, updateUsageSettings, callRecovery, recoverCall, ai, importItems, processNote, requestSourceStructure, editSourceStructure, listNotes, publicNote, publicNotes, publicJob, library, readPublicNote, noteEvidence, linksPreview, syncLinks, getNote, editNote, extractNote, promote, confirmClassification, confirmNote, merge, search:tracked(search), today, planAction, startStudy, session, answerStudy, hintStudy, confirmStudy, finishStudy, mistakeAction, topics, createTopic, updateTopic, topicAction, recommendations, recommendationAction, requestRelations, relationReview, relationAction, related, ask:tracked(ask), updateDraft, propose, proposalAction, queue, runJobs, pauseJobs, jobAction, tick, demo, diagnostics, backup, restore,
     jobStatuses, rebuildLocalSearch,
     bootstrap() {
       const config = settings(), before = store.list();

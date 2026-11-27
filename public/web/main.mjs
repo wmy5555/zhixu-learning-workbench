@@ -21,6 +21,8 @@ import { createFocus } from './focus.mjs';
 import { createStudyWorkspace } from './study-workspace.mjs';
 import { batchImport, prepareTexts } from './batch-import.mjs';
 import { captureFilesHTML, mountCaptureFiles } from './capture-files.mjs';
+import { unknownClassificationFields } from '../note-classification.mjs';
+import { classificationInputs } from '../classification-review.mjs';
 
 installInputModality(document.documentElement, document);
 
@@ -278,6 +280,20 @@ function formModal(title, contents, save, { wide = false } = {}) {
   submit(form,async(values,node)=>{await save(values,node);dirty=false;dialog.close();});
   return dialog;
 }
+async function reviewClassification(id) {
+  const sequence=state.sequence, context=api.getContext();
+  const note=await api.get(endpoint('notes',id));
+  if(sequence!==state.sequence||context.version!==api.getContext().version)return;
+  const fields=unknownClassificationFields(note);
+  if(!fields.length){notify('分类已是可识别的值。');return;}
+  const dialog=formModal('核对分类',`<p>${e(note.title)}</p><div data-classification-fields></div>`,async values=>{
+    if(context.version!==api.getContext().version)throw Error('知识库已切换，请重新打开资料。');
+    const classification=Object.fromEntries(fields.map(key=>[key,values[key]]));
+    await api.post(endpoint('notes',id,'classification'),{expectedHash:note.hash,classification});
+    await refreshBoot();await go(state.route,{force:true,replace:true});notify('分类已更新。');
+  });
+  dialog.querySelector('[data-classification-fields]').append(classificationInputs(note));
+}
 async function processSource(id, { research = false } = {}) {
   const sequence=state.sequence,returnTo=state.route.startsWith('read/')?state.route:`read/${id}`;
   const note=await api.get(endpoint('notes',id));
@@ -365,6 +381,7 @@ async function actions(control) {
   const action=control.dataset.action,id=control.dataset.id;
   if(control.closest('.reader-menu')&&action!=='navigate')control.closest('dialog').close();
   if(action==='edit-return')return go(editReturn(id));
+  if(action==='classification-review')return reviewClassification(id);
   if(action==='navigate') {
     const dialog=control.closest('dialog');
     if(dialog){if(dialog.beforeClose&&!await dialog.beforeClose())return;dialog.close();}
