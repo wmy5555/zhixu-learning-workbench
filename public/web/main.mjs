@@ -28,6 +28,7 @@ const navigation = [['home','今日','today'],['plus','收集与加工','capture
 const state = { boot:null, route:'today', sequence:0, dirty:false, saving:0, readerReturn:'library', note:null, session:null, scroll:new Map() };
 const context={api,state,go,refreshBoot,formModal,submit,watchForm,savedForm,processSource};
 const library = createLibraryPage(api);
+const bootstrap = createBootstrapLoader(api, state);
 const search = createSearchPage({ api, getNotes: () => state.boot.notes, getSequence: () => state.sequence, go, submit });
 const parity=createParity(context),management=createManagement(context,initializeAccent()),focus=createFocus(context);
 const onboarding=createWebOnboarding({api,state,go,refreshBoot,beforeLeave});
@@ -64,7 +65,26 @@ function shell() {
   theme.setAttribute('aria-label', dark ? '切换日间模式' : '切换夜间模式');
   theme.title = dark ? '切换日间模式' : '切换夜间模式';
 }
-async function refreshBoot() { library.invalidate();state.boot = await api.get('/api/bootstrap'); return state.boot; }
+function createBootstrapLoader(api, state) {
+  let nextRead = 0, publishedRead = 0;
+  return {
+    async read() {
+      const read = ++nextRead, { version } = api.getContext();
+      return { read, version, data: await api.get('/api/bootstrap') };
+    },
+    publish({ read, version, data }) {
+      if (version !== api.getContext().version || read <= publishedRead) return false;
+      publishedRead = read;
+      state.boot = data;
+      return true;
+    },
+  };
+}
+async function refreshBoot() {
+  library.invalidate();
+  bootstrap.publish(await bootstrap.read());
+  return state.boot;
+}
 async function go(route, { replace = false, force = false, guide = false, speed = 1 } = {}) {
   if(onboarding.travelling&&!guide)return false;
   if(state.saving&&!force){notify('正在保存，请等这次操作返回后再切换。');return false;}
@@ -285,12 +305,12 @@ async function processSource(id, { research = false } = {}) {
       const changed=JSON.stringify(job)!==JSON.stringify({...job,...latest});job={...job,...latest};
       let pendingProposals=0,boot;
       if(!['queued','running'].includes(job.state)){
-        const [proposals,latestBoot]=await Promise.all([api.get('/api/proposals'),api.get('/api/bootstrap')]);
+        const [proposals,latestBoot]=await Promise.all([api.get('/api/proposals'),bootstrap.read()]);
         boot=latestBoot;
         pendingProposals=list(proposals.proposals).filter(p=>p.state==='pending'&&p.meta?.processKey?.startsWith(`${id}:`)).length;
       }
       if(!current())return;
-      if(boot){state.boot=boot;shell();}
+      if(boot&&bootstrap.publish(boot))shell();
       if(changed||!['queued','running'].includes(job.state))render(pendingProposals);
       if(['queued','running'].includes(job.state))timer=setTimeout(read,1800);
     }catch(error){if(current())dialog.querySelector('[data-process-error]').textContent=`状态读取未完成：${error.message}。可点击“刷新状态”，不会重新发起核验。`;}
