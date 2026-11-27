@@ -1,6 +1,7 @@
 import {api} from './api.mjs';
 import { escape as e, markdown, safeLink } from './markdown.mjs';
-import { icon, button, routeButton, kind, stage } from './ui.mjs';
+import { icon, button, routeButton } from './ui.mjs';
+import { kind, stage } from './classification.mjs';
 import { learningReadiness, learningNotice } from './reader-actions.mjs';
 import { readingContent, readingGroups } from './reading-content.mjs';
 

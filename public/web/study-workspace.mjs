@@ -1,6 +1,7 @@
 import { endpoint } from './api.mjs';
 import { escape as e, markdown } from './markdown.mjs';
-import { $, icon, button as btn, routeButton as link, area, empty, heading, kind, stage, jobState, notify, modal, list } from './ui.mjs';
+import { $, icon, button as btn, routeButton as link, area, empty, heading, jobState, notify, modal, list } from './ui.mjs';
+import { kind, stage } from './classification.mjs';
 import { learningReadiness, learningHelp, credibilityNotice } from './reader-actions.mjs';
 import { feedbackHTML, completionHTML } from './learning-display.mjs';
 import { watchStudyFeedback, feedbackPending } from './study-feedback.mjs';

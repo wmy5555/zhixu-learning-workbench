@@ -23,8 +23,6 @@ const shapes = {
 export const icon = name => `<svg viewBox="0 0 24 24" aria-hidden="true">${shapes[name] || shapes.book}</svg>`;
 export const $ = selector => document.querySelector(selector);
 export const $$ = selector => [...document.querySelectorAll(selector)];
-export const kind = value => ({ source:'原始资料', knowledge:'知识', topic:'主题学习包', mistake:'错题', report:'AI 整理建议' }[value] || '资料');
-export const stage = value => ({ reference:'仅供查阅', candidate:'待选学', learning:'正在学习', integrated:'个人理解', core:'重点知识', retired:'不再使用' }[value] || '尚未分类');
 export const jobState = value => ({ queued:'等待处理', running:'正在处理', waiting:'等待条件', failed:'未完成', done:'已完成', cancelled:'已取消', reading:'正在阅读', awaiting_feedback:'等待反馈', feedback:'可继续练习', completed:'已结束' }[value] || value || '');
 export const button = (label, action, css = '', attributes = '') => `<button type="button" class="${css}" data-action="${action}" ${attributes}>${label}</button>`;
 export const routeButton = (label, route, css = '') => button(label, 'navigate', css, `data-route="${e(route)}"`);

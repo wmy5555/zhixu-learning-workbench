@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createLibraryPreferences } from '../public/web/library-preferences.mjs';
+import { kind, stage, kindOptions, stageOptions, quickKindOptions, purposeOptions } from '../public/web/classification.mjs';
 import { createParity } from '../public/web/parity.mjs';
 function memory(initial) { let value=initial; return {getItem:()=>value,setItem:(_,v)=>{value=v;}}; }
 test('all library choices survive recreation and explicit clearing',()=>{
@@ -45,4 +46,15 @@ test('real library binding saves user events and restores controls on navigation
     assert.doesNotMatch((await parity().library()).html,/name="sourceGroups" checked/);
     assert.doesNotMatch((await parity().library()).html,/<details data-library-options class="quiet-details" open/);
   } finally {globalThis.document=previousDocument;globalThis.localStorage=previousStorage;}
+});
+
+
+test('classification choices preserve labels, order, subsets and old preferences', () => {
+  assert.deepEqual(kindOptions, [['','全部类别'],['source','原始资料'],['knowledge','知识'],['topic','主题学习包'],['report','AI 整理建议'],['mistake','错题']]);
+  assert.deepEqual(quickKindOptions, [['','全部'],['source','原始资料'],['knowledge','知识'],['mistake','错题']]);
+  assert.deepEqual(stageOptions, [['','全部学习状态'],['reference','仅供查阅'],['candidate','待选学'],['learning','正在学习'],['integrated','个人理解'],['core','重点知识'],['retired','不再使用']]);
+  assert.deepEqual(purposeOptions, [['reference','先留作查阅'],['candidate','放进待选学'],['learning','加入学习'],['integrated','已整理个人理解'],['core','重点知识'],['retired','暂时不再使用']]);
+  assert.equal(kind('missing'), '资料'); assert.equal(stage('missing'), '尚未分类');
+  for (const [value] of kindOptions) assert.equal(createLibraryPreferences(()=>memory(JSON.stringify({kind:value}))).read().kind,value);
+  for (const [value] of stageOptions) assert.equal(createLibraryPreferences(()=>memory(JSON.stringify({stage:value}))).read().stage,value);
 });
