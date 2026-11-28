@@ -17,10 +17,11 @@ function inline(text, presentation = false) {
     .replace(/<(?:cite|memorycite)\b[^<>]*\/>/gi, '')
     .replace(/\[\$[^\]]+\]\(app:\/\/[^)]+\)/g, '')
     .replace(/(?:cite|navlist|image_group)[^]*/g, '')).join('');
-  const parts = String(text).split(/(\\[\\\[\]_*`<>]|`[^`\n]+`|\[(?:\\[\\\[\]_*`<>]|[^\]\\\n])+\]\([^\s)]+\)|!\[[^\]\n]*\]\([^\n)]+\)|\*\*[^*\n]+\*\*|__[^_\n]+__)/g);
+  const parts = String(text).split(/(\\[\\\[\]_*`<>]|`[^`\n]+`|\[(?:\\[\\\[\]_*`<>]|[^\]\\\n])+\]\([^\s)]+\)|!\[[^\]\n]*\]\([^\n)]+\)|\*\*[^*\n]+\*\*|__[^_\n]+__|(?<!\*)\*(?=\S)(?:\\[\\\[\]_*`<>]|[^*\\\n])+(?<!\s)\*(?!\*))/g);
   return parts.map(part => {
     if (/^`[^`]+`$/.test(part)) return `<code>${escape(part.slice(1, -1))}</code>`;
     if (/^(\*\*|__)/.test(part)) return `<strong>${escape(part.slice(2, -2))}</strong>`;
+    if (/^\*(?=\S)(?:\\[\\\[\]_*`<>]|[^*\\\n])+(?<!\s)\*$/.test(part)) return `<em>${escape(unescapeInline(part.slice(1, -1)))}</em>`;
     const image = part.match(/^!\[([^\]]*)\]\((.+)\)$/);
     if (image) return `<span class="image-caption">[图片：${escape(image[1] || '原文附件')}]</span>`;
     const link = part.match(/^\[((?:\\[\\\[\]_*`<>]|[^\]\\\n])+)\]\((.+)\)$/);
